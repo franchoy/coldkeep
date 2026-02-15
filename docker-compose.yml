@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: capsule_postgres
+    environment:
+      POSTGRES_USER: capsule
+      POSTGRES_PASSWORD: capsule
+      POSTGRES_DB: capsule
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  app:
+    build: ./app
+    container_name: capsule_app
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: capsule
+      DB_PASSWORD: capsule
+      DB_NAME: capsule
+    volumes:
+      - ./storage:/storage
+    command: ["tail", "-f", "/dev/null"] # keep container alive for now
+
+volumes:
+  pgdata:
