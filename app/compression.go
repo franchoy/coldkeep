@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 
@@ -16,12 +17,7 @@ const (
 	CompressionZstd CompressionType = "zstd"
 )
 
-//
-// ===================== COMPRESS =====================
-//
-
 func CompressFile(path string, algo CompressionType) (string, int64, error) {
-
 	// No compression
 	if algo == CompressionNone {
 		info, err := os.Stat(path)
@@ -59,20 +55,18 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 		writer = encoder
 
 	default:
-		return "", 0, nil
+		return "", 0, fmt.Errorf("unknown compression algorithm: %q", algo)
 	}
 
-	_, err = io.Copy(writer, input)
-	if err != nil {
-		writer.Close()
+	if _, err = io.Copy(writer, input); err != nil {
+		_ = writer.Close()
 		return "", 0, err
 	}
 
-	writer.Close()
+	_ = writer.Close()
 
 	// Remove original uncompressed container
-	err = os.Remove(path)
-	if err != nil {
+	if err := os.Remove(path); err != nil {
 		return "", 0, err
 	}
 
@@ -83,10 +77,6 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 
 	return outputPath, info.Size(), nil
 }
-
-//
-// ===================== DECOMPRESS =====================
-//
 
 // zstd wrapper to satisfy io.ReadCloser
 type zstdReadCloser struct {
@@ -103,10 +93,19 @@ func (z *zstdReadCloser) Close() error {
 	return z.file.Close()
 }
 
+type gzipReadCloser struct {
+	gr *gzip.Reader
+	f  *os.File
+}
+
+func (g *gzipReadCloser) Read(p []byte) (int, error) { return g.gr.Read(p) }
+func (g *gzipReadCloser) Close() error {
+	_ = g.gr.Close()
+	return g.f.Close()
+}
+
 func OpenDecompressionReader(path string, algo CompressionType) (io.ReadCloser, error) {
-
 	switch algo {
-
 	case CompressionNone:
 		return os.Open(path)
 
@@ -115,21 +114,12 @@ func OpenDecompressionReader(path string, algo CompressionType) (io.ReadCloser, 
 		if err != nil {
 			return nil, err
 		}
-
 		gr, err := gzip.NewReader(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
-
-		// Return wrapper so closing also closes file
-		return struct {
-			io.Reader
-			io.Closer
-		}{
-			Reader: gr,
-			Closer: f,
-		}, nil
+		return &gzipReadCloser{gr: gr, f: f}, nil
 
 	case CompressionZstd:
 		f, err := os.Open(path)
@@ -139,14 +129,11 @@ func OpenDecompressionReader(path string, algo CompressionType) (io.ReadCloser, 
 
 		decoder, err := zstd.NewReader(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
 
-		return &zstdReadCloser{
-			decoder: decoder,
-			file:    f,
-		}, nil
+		return &zstdReadCloser{decoder: decoder, file: f}, nil
 
 	default:
 		return os.Open(path)
