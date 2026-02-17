@@ -1,156 +1,146 @@
-package main
+package app
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 type chunkRef struct {
-	Order    int
-	Offset   int64
-	Size     int
-	Filename string
-	Algo     CompressionType
+	containerFilename string
+	chunkOffset       int64
+	chunkSize         int
 }
 
-func restoreFile(idStr string, outputPath string) {
-	db := connectDB()
-	defer db.Close()
+// restoreFile restores a logical file by name
+func restoreFile(db *sql.DB, name string, outputPath string) error {
 
-	rows, err := db.Query(`
-		SELECT fc.chunk_order,
-		       c.chunk_offset,
-		       c.size,
-		       ct.filename,
-		       ct.compression_algorithm
-		FROM file_chunk fc
-		JOIN chunk c ON fc.chunk_id = c.id
-		JOIN container ct ON c.container_id = ct.id
-		WHERE fc.file_id = $1
-		ORDER BY fc.chunk_order ASC
-	`, idStr)
+	// ------------------------------------------------------------
+	// 1) Fetch logical file ID
+	// ------------------------------------------------------------
+	var logicalFileID int64
+
+	err := db.QueryRow(`
+        SELECT id
+        FROM logical_file
+        WHERE original_name = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+    `, name).Scan(&logicalFileID)
+
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("logical file not found: %w", err)
+	}
+
+	// ------------------------------------------------------------
+	// 2) Fetch ordered chunks
+	// ------------------------------------------------------------
+	rows, err := db.Query(`
+        SELECT c.container_id,
+               c.chunk_offset,
+               c.size,
+               ct.filename
+        FROM file_chunk fc
+        JOIN chunk c ON fc.chunk_id = c.id
+        JOIN container ct ON c.container_id = ct.id
+        WHERE fc.logical_file_id = $1
+        ORDER BY fc.chunk_order ASC
+    `, logicalFileID)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
 
-	// Collect all chunks first
 	var chunks []chunkRef
 
 	for rows.Next() {
-		var r chunkRef
-		var algo sql.NullString
+		var ref chunkRef
+		var containerID int64
 
-		if err := rows.Scan(&r.Order, &r.Offset, &r.Size, &r.Filename, &algo); err != nil {
-			log.Fatal(err)
+		err := rows.Scan(
+			&containerID,
+			&ref.chunkOffset,
+			&ref.chunkSize,
+			&ref.containerFilename,
+		)
+		if err != nil {
+			return err
 		}
 
-		r.Algo = CompressionNone
-		if algo.Valid && algo.String != "" {
-			r.Algo = CompressionType(algo.String)
-		}
-
-		chunks = append(chunks, r)
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Fatal(err)
+		chunks = append(chunks, ref)
 	}
 
 	if len(chunks) == 0 {
-		log.Fatal("no chunks found for file")
+		return fmt.Errorf("no chunks found for file")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0777); err != nil {
-		log.Fatal(err)
+	// ------------------------------------------------------------
+	// 3) Prepare output file
+	// ------------------------------------------------------------
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return err
 	}
 
-	out, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	outFile, err := os.Create(outputPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer out.Close()
+	defer outFile.Close()
 
-	// Group chunks by container filename
-	containerMap := make(map[string][]chunkRef)
+	// ------------------------------------------------------------
+	// 4) Restore sequentially (ORDERED)
+	// ------------------------------------------------------------
+	containerCache := make(map[string][]byte)
 
-	for _, c := range chunks {
-		containerMap[c.Filename] = append(containerMap[c.Filename], c)
-	}
+	for _, ch := range chunks {
 
-	// Process containers one by one
-	for filename, chunkList := range containerMap {
+		// Load + decompress container only once
+		data, ok := containerCache[ch.containerFilename]
+		if !ok {
 
-		algo := chunkList[0].Algo
+			containerPath := filepath.Join("/storage/containers", ch.containerFilename)
 
-		containerPath := filepath.Join("/storage/containers", filename)
-		if algo != CompressionNone {
-			containerPath = containerPath + "." + string(algo)
+			f, err := os.Open(containerPath)
+			if err != nil {
+				return err
+			}
+
+			reader, err := zstd.NewReader(f)
+			if err != nil {
+				f.Close()
+				return err
+			}
+
+			fullData, err := io.ReadAll(reader)
+			reader.Close()
+			f.Close()
+
+			if err != nil {
+				return err
+			}
+
+			containerCache[ch.containerFilename] = fullData
+			data = fullData
 		}
 
-		reader, err := OpenDecompressionReader(containerPath, algo)
+		// Bounds check (important safety)
+		if int(ch.chunkOffset)+ch.chunkSize > len(data) {
+			return fmt.Errorf("chunk exceeds container bounds")
+		}
+
+		// Write chunk slice in strict order
+		_, err := outFile.Write(
+			data[ch.chunkOffset : ch.chunkOffset+int64(ch.chunkSize)],
+		)
 		if err != nil {
-			log.Fatal(err)
-		}
-
-		fullData, err := io.ReadAll(reader)
-		_ = reader.Close()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		for _, c := range chunkList {
-
-			offset := c.Offset
-			expectedSize := c.Size
-
-			const recordHeaderSize = 32 + 4
-
-			if offset < 0 || offset+recordHeaderSize > int64(len(fullData)) {
-				log.Fatalf("invalid chunk offset %d in container %s", offset, filename)
-			}
-
-			// Read stored hash
-			storedHash := fullData[offset : offset+32]
-
-			// Read stored size
-			sizeBuf := fullData[offset+32 : offset+36]
-			storedSize := int(binary.LittleEndian.Uint32(sizeBuf))
-
-			if storedSize != expectedSize {
-				log.Fatalf(
-					"chunk size mismatch at offset %d in container %s (db=%d header=%d)",
-					offset, filename, expectedSize, storedSize,
-				)
-			}
-
-			dataStart := offset + recordHeaderSize
-			dataEnd := dataStart + int64(storedSize)
-
-			if dataEnd > int64(len(fullData)) {
-				log.Fatalf("chunk data out of bounds at offset %d in container %s", offset, filename)
-			}
-
-			chunkData := fullData[dataStart:dataEnd]
-
-			// Verify hash integrity
-			computed := sha256.Sum256(chunkData)
-			if !bytes.Equal(storedHash, computed[:]) {
-				log.Fatalf("chunk hash mismatch at offset %d in container %s", offset, filename)
-			}
-
-			if _, err := out.Write(chunkData); err != nil {
-				log.Fatal(err)
-			}
+			return err
 		}
 	}
 
-	fmt.Println("File restored.")
+	return nil
 }
