@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 )
 
-const maxContainerSize = 64 * 1024 * 1024 // 64MB container max size
-
 func storeFile(filePath string) {
 	db := connectDB()
 	defer db.Close()
@@ -98,7 +96,7 @@ func storeFile(filePath string) {
 			// New chunk path
 			containerMutex.Lock()
 
-			containerID, filename, currentSize := getOrCreateOpenContainer(db, maxContainerSize)
+			containerID, filename, currentSize := getOrCreateOpenContainer(db)
 
 			offset, err := appendChunk(db, containerID, filename, currentSize, chunkData)
 			if err != nil {
@@ -149,7 +147,7 @@ func storeFile(filePath string) {
 
 		// Map file → chunk
 		_, err = db.Exec(
-			"INSERT INTO file_chunk (file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)",
+			"INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)",
 			fileID, chunkID, index,
 		)
 		if err != nil {

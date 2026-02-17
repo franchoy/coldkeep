@@ -11,7 +11,18 @@ import (
 	"time"
 )
 
-func getOrCreateOpenContainer(db *sql.DB, containerMaxSize int64) (int64, string, int64) {
+const containerMaxSize int64 = 64 * 1024 * 1024
+
+var storageDir = getEnv("CAPSULE_STORAGE_DIR", "./storage/containers")
+
+func getEnv(key, fallback string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return fallback
+}
+
+func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64) {
 	var id int64
 	var filename string
 	var currentSize int64
@@ -49,12 +60,12 @@ func getOrCreateOpenContainer(db *sql.DB, containerMaxSize int64) (int64, string
 	}
 
 	// 3️⃣ Create physical file
-	containerDir := "/storage/containers"
-	if err := os.MkdirAll(containerDir, 0755); err != nil {
+
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
 		log.Fatal(err)
 	}
 
-	fullPath := filepath.Join(containerDir, filename)
+	fullPath := filepath.Join(storageDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
@@ -96,7 +107,7 @@ func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int
 	}
 
 	var sealed bool
-	err := db.QueryRow(`SELECT sealed FROM container WHERE id = $1`, containerID).Scan(&sealed)
+	err = db.QueryRow(`SELECT sealed FROM container WHERE id = $1`, containerID).Scan(&sealed)
 	if err != nil {
 		return 0, err
 	}
@@ -174,11 +185,6 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 	// Compress file
 	compressedPath, _, err := CompressFile(originalPath, CompressionZstd)
 	if err != nil {
-		return err
-	}
-
-	// Remove original uncompressed container
-	if err := os.Remove(originalPath); err != nil {
 		return err
 	}
 

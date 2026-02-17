@@ -26,8 +26,6 @@ Immutable sealed containers
 
 Versioned container format
 
-Integrity verification during restore
-
 Database-backed logical file mapping
 
 🏗 Architecture Overview

@@ -1,37 +1,34 @@
-package app
+package main
 
 import (
-	"bytes"
-	"database/sql"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/klauspost/compress/zstd"
 )
 
 type chunkRef struct {
 	containerFilename string
-	chunkOffset       int64
-	chunkSize         int
+	algo              string
+	chunkOffset       int64 // start of record
+	chunkSize         int   // data size only
 }
 
-// restoreFile restores a logical file by name
-func restoreFile(db *sql.DB, name string, outputPath string) error {
-
+func restoreFile(name string, outputPath string) error {
+	db := connectDB()
+	defer db.Close()
 	// ------------------------------------------------------------
-	// 1) Fetch logical file ID
+	// 1) Resolve logical file ID (latest version)
 	// ------------------------------------------------------------
 	var logicalFileID int64
 
 	err := db.QueryRow(`
-        SELECT id
-        FROM logical_file
-        WHERE original_name = $1
-        ORDER BY created_at DESC
-        LIMIT 1
-    `, name).Scan(&logicalFileID)
+		SELECT id
+		FROM logical_file
+		WHERE original_name = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, name).Scan(&logicalFileID)
 
 	if err != nil {
 		return fmt.Errorf("logical file not found: %w", err)
@@ -41,16 +38,17 @@ func restoreFile(db *sql.DB, name string, outputPath string) error {
 	// 2) Fetch ordered chunks
 	// ------------------------------------------------------------
 	rows, err := db.Query(`
-        SELECT c.container_id,
-               c.chunk_offset,
-               c.size,
-               ct.filename
-        FROM file_chunk fc
-        JOIN chunk c ON fc.chunk_id = c.id
-        JOIN container ct ON c.container_id = ct.id
-        WHERE fc.logical_file_id = $1
-        ORDER BY fc.chunk_order ASC
-    `, logicalFileID)
+		SELECT
+			ct.filename,
+			ct.compression_algorithm,
+			ch.chunk_offset,
+			ch.size
+		FROM file_chunk fc
+		JOIN chunk ch ON fc.chunk_id = ch.id
+		JOIN container ct ON ch.container_id = ct.id
+		WHERE fc.logical_file_id = $1
+		ORDER BY fc.chunk_order ASC
+	`, logicalFileID)
 	if err != nil {
 		return err
 	}
@@ -60,18 +58,14 @@ func restoreFile(db *sql.DB, name string, outputPath string) error {
 
 	for rows.Next() {
 		var ref chunkRef
-		var containerID int64
-
-		err := rows.Scan(
-			&containerID,
+		if err := rows.Scan(
+			&ref.containerFilename,
+			&ref.algo,
 			&ref.chunkOffset,
 			&ref.chunkSize,
-			&ref.containerFilename,
-		)
-		if err != nil {
+		); err != nil {
 			return err
 		}
-
 		chunks = append(chunks, ref)
 	}
 
@@ -93,51 +87,53 @@ func restoreFile(db *sql.DB, name string, outputPath string) error {
 	defer outFile.Close()
 
 	// ------------------------------------------------------------
-	// 4) Restore sequentially (ORDERED)
+	// 4) Restore sequentially (preserve order)
 	// ------------------------------------------------------------
 	containerCache := make(map[string][]byte)
 
 	for _, ch := range chunks {
 
-		// Load + decompress container only once
-		data, ok := containerCache[ch.containerFilename]
+		// Build physical path
+		containerPath := filepath.Join(storageDir, ch.containerFilename)
+
+		if ch.algo != "" && ch.algo != "none" {
+			containerPath += "." + ch.algo
+		}
+
+		data, ok := containerCache[containerPath]
 		if !ok {
-
-			containerPath := filepath.Join("/storage/containers", ch.containerFilename)
-
-			f, err := os.Open(containerPath)
+			reader, err := OpenDecompressionReader(containerPath, CompressionType(ch.algo))
 			if err != nil {
-				return err
-			}
-
-			reader, err := zstd.NewReader(f)
-			if err != nil {
-				f.Close()
 				return err
 			}
 
 			fullData, err := io.ReadAll(reader)
-			reader.Close()
-			f.Close()
-
+			_ = reader.Close()
 			if err != nil {
 				return err
 			}
 
-			containerCache[ch.containerFilename] = fullData
+			containerCache[containerPath] = fullData
 			data = fullData
 		}
 
-		// Bounds check (important safety)
-		if int(ch.chunkOffset)+ch.chunkSize > len(data) {
-			return fmt.Errorf("chunk exceeds container bounds")
+		// ---- IMPORTANT PART ----
+		// Record layout:
+		// [32 bytes sha256][4 bytes size][chunk data]
+
+		const recordHeaderSize = int64(32 + 4)
+
+		start := ch.chunkOffset + recordHeaderSize
+		end := start + int64(ch.chunkSize)
+
+		if start < 0 || end > int64(len(data)) {
+			return fmt.Errorf(
+				"chunk exceeds container bounds (start=%d end=%d len=%d)",
+				start, end, len(data),
+			)
 		}
 
-		// Write chunk slice in strict order
-		_, err := outFile.Write(
-			data[ch.chunkOffset : ch.chunkOffset+int64(ch.chunkSize)],
-		)
-		if err != nil {
+		if _, err := outFile.Write(data[start:end]); err != nil {
 			return err
 		}
 	}

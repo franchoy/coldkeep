@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-const containerMaxSize int64 = 64 * 1024 * 1024
+
 
 var defaultCompression = CompressionZstd // change if needed
 var containerMutex sync.Mutex

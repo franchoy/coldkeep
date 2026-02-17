@@ -33,7 +33,7 @@ func removeFile(fileID string) {
 	rows, err := tx.Query(`
 		SELECT chunk_id
 		FROM file_chunk
-		WHERE file_id = $1
+		WHERE logical_file_id = $1
 	`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
@@ -62,7 +62,7 @@ func removeFile(fileID string) {
 	}
 
 	// Remove mappings
-	_, err = tx.Exec(`DELETE FROM file_chunk WHERE file_id = $1`, fileID)
+	_, err = tx.Exec(`DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
 		log.Fatal(err)
