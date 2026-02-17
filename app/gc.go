@@ -28,7 +28,7 @@ func runGC() {
 	var deletedContainers int
 
 	for rows.Next() {
-		var containerID int
+		var containerID int64
 		var filename string
 		var algo string
 

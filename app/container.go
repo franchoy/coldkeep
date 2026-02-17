@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -9,41 +11,75 @@ import (
 	"time"
 )
 
-func getOrCreateOpenContainer(db *sql.DB) (int, string, int64) {
-	var id int
+func getOrCreateOpenContainer(db *sql.DB, containerMaxSize int64) (int64, string, int64) {
+	var id int64
 	var filename string
 	var currentSize int64
 
+	// 1️⃣ Try to find an existing open container
 	err := db.QueryRow(`
 		SELECT id, filename, current_size
 		FROM container
-		WHERE sealed=FALSE
+		WHERE sealed = FALSE
 		LIMIT 1
 	`).Scan(&id, &filename, &currentSize)
 
 	if err == nil {
+		// Found existing open container
 		return id, filename, currentSize
 	}
 
+	if err != sql.ErrNoRows {
+		log.Fatal(err)
+	}
+
+	// 2️⃣ No open container found → create new one
+
 	filename = fmt.Sprintf("container_%d.bin", time.Now().UnixNano())
 
+	// Insert DB row with current_size initialized to header size
 	err = db.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed)
-		VALUES ($1, 0, $2, FALSE)
+		VALUES ($1, $2, $3, FALSE)
 		RETURNING id
-	`, filename, containerMaxSize).Scan(&id)
+	`, filename, ContainerHdrLenV0, containerMaxSize).Scan(&id)
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	return id, filename, 0
+	// 3️⃣ Create physical file
+	containerDir := "/storage/containers"
+	if err := os.MkdirAll(containerDir, 0755); err != nil {
+		log.Fatal(err)
+	}
+
+	fullPath := filepath.Join(containerDir, filename)
+
+	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	// 4️⃣ Write V0 header
+	if err := writeNewContainerHeaderV0(f, containerMaxSize); err != nil {
+		log.Fatal(err)
+	}
+
+	// Ensure header is flushed
+	if err := f.Sync(); err != nil {
+		log.Fatal(err)
+	}
+
+	currentSize = ContainerHdrLenV0
+
+	return id, filename, currentSize
 }
+func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int64, chunk []byte) (int64, error) {
+	fullPath := filepath.Join("/storage/containers", filename)
 
-func appendChunk(db *sql.DB, containerID int, filename string, currentSize int64, data []byte) (int64, error) {
-	path := filepath.Join("/storage/containers", filename)
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return 0, err
 	}
@@ -51,29 +87,66 @@ func appendChunk(db *sql.DB, containerID int, filename string, currentSize int64
 
 	offset := currentSize
 
-	if _, err := f.Write(data); err != nil {
+	// Compute chunk hash (must match what you store in DB)
+	hash := sha256.Sum256(chunk)
+
+	// Write hash (32 bytes)
+	if _, err := f.Write(hash[:]); err != nil {
 		return 0, err
 	}
 
-	newSize := currentSize + int64(len(data))
+	var sealed bool
+	err := db.QueryRow(`SELECT sealed FROM container WHERE id = $1`, containerID).Scan(&sealed)
+	if err != nil {
+		return 0, err
+	}
+	if sealed {
+		return 0, fmt.Errorf("attempt to write to sealed container")
+	}
 
-	_, err = db.Exec(`UPDATE container SET current_size=$1 WHERE id=$2`, newSize, containerID)
+	// Write chunk size (4 bytes)
+	sizeBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(sizeBuf, uint32(len(chunk)))
+
+	if _, err := f.Write(sizeBuf); err != nil {
+		return 0, err
+	}
+
+	// Write chunk data
+	if _, err := f.Write(chunk); err != nil {
+		return 0, err
+	}
+
+	// Update container size
+	newSize := currentSize + int64(32+4+len(chunk))
+
+	_, err = db.Exec(`
+		UPDATE container
+		SET current_size = $1
+		WHERE id = $2
+	`, newSize, containerID)
 	if err != nil {
 		return 0, err
 	}
 
-	if newSize >= containerMaxSize {
-		_, err = db.Exec(`UPDATE container SET sealed=TRUE WHERE id=$1`, containerID)
-		if err != nil {
+	// Check if container reached max size
+	var maxSize int64
+	err = db.QueryRow(`SELECT max_size FROM container WHERE id = $1`, containerID).Scan(&maxSize)
+	if err != nil {
+		return 0, err
+	}
+
+	if newSize >= maxSize {
+		if err := sealContainer(db, containerID, filename); err != nil {
 			return 0, err
 		}
-		compressAndMark(db, containerID, filename)
 	}
 
 	return offset, nil
+
 }
 
-func compressAndMark(db *sql.DB, containerID int, filename string) {
+func compressAndMark(db *sql.DB, containerID int64, filename string) {
 	path := filepath.Join("/storage/containers", filename)
 
 	newPath, size, err := CompressFile(path, defaultCompression)
@@ -92,4 +165,36 @@ func compressAndMark(db *sql.DB, containerID int, filename string) {
 	}
 
 	fmt.Println("Container compressed:", newPath)
+}
+
+func sealContainer(db *sql.DB, containerID int64, filename string) error {
+	containerDir := "/storage/containers"
+	originalPath := filepath.Join(containerDir, filename)
+
+	// Compress file
+	compressedPath, _, err := CompressFile(originalPath, CompressionZstd)
+	if err != nil {
+		return err
+	}
+
+	// Remove original uncompressed container
+	if err := os.Remove(originalPath); err != nil {
+		return err
+	}
+
+	// Update DB
+	_, err = db.Exec(`
+		UPDATE container
+		SET sealed = TRUE,
+		    compression_algorithm = $1
+		WHERE id = $2
+	`, string(CompressionZstd), containerID)
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Container %d sealed and compressed: %s\n", containerID, compressedPath)
+
+	return nil
 }

@@ -1,41 +1,74 @@
-DROP TABLE IF EXISTS file_chunk;
-DROP TABLE IF EXISTS logical_file;
-DROP TABLE IF EXISTS chunk;
-DROP TABLE IF EXISTS container;
+-- ============================================================
+-- Capsule V0 Alpha - Initial Schema
+-- ============================================================
 
-CREATE TABLE logical_file (
-    id SERIAL PRIMARY KEY,
-    original_name TEXT NOT NULL,
-    total_size BIGINT NOT NULL,
-    file_hash CHAR(64) NOT NULL UNIQUE,
-    created_at TIMESTAMP DEFAULT NOW()
+-- ============================================================
+-- Schema Version
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
 );
 
-CREATE TABLE container (
-    id SERIAL PRIMARY KEY,
-    filename TEXT NOT NULL,
+INSERT INTO schema_version (version)
+SELECT 1
+WHERE NOT EXISTS (SELECT 1 FROM schema_version);
+
+
+-- ============================================================
+-- Containers
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS container (
+    id BIGSERIAL PRIMARY KEY,
+    filename TEXT NOT NULL UNIQUE,
     current_size BIGINT NOT NULL,
     max_size BIGINT NOT NULL,
-    sealed BOOLEAN DEFAULT FALSE,
-    compression_algorithm TEXT DEFAULT 'none',
-    compressed_size BIGINT,
+    sealed BOOLEAN NOT NULL DEFAULT FALSE,
+    compression_algorithm TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE chunk (
-    id SERIAL PRIMARY KEY,
-    sha256 CHAR(64) NOT NULL UNIQUE,
+
+-- ============================================================
+-- Chunks
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS chunk (
+    id BIGSERIAL PRIMARY KEY,
+    hash BYTEA NOT NULL,
     size INTEGER NOT NULL,
-    container_id INTEGER REFERENCES container(id),
+    container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE CASCADE,
     chunk_offset BIGINT NOT NULL,
-    ref_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Prevent duplicate chunk storage (dedup core rule)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_unique ON chunk(hash);
+
+
+-- ============================================================
+-- Files (Logical Files)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS file (
+    id BIGSERIAL PRIMARY KEY,
+    filename TEXT NOT NULL,
+    size BIGINT NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
 
-CREATE TABLE file_chunk (
-    file_id INTEGER REFERENCES logical_file(id) ON DELETE CASCADE,
-    chunk_id INTEGER REFERENCES chunk(id),
+-- ============================================================
+-- File ↔ Chunk Mapping (Ordered)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS file_chunk (
+    file_id BIGINT NOT NULL REFERENCES file(id) ON DELETE CASCADE,
+    chunk_id BIGINT NOT NULL REFERENCES chunk(id) ON DELETE CASCADE,
     chunk_order INTEGER NOT NULL,
     PRIMARY KEY (file_id, chunk_order)
 );
+
+CREATE INDEX IF NOT EXISTS idx_file_chunk_file ON file_chunk(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_chunk_chunk ON file_chunk(chunk_id);
