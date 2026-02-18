@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +14,7 @@ type chunkRef struct {
 	algo              string
 	chunkOffset       int64 // start of record
 	chunkSize         int   // data size only
+	sha256            string
 }
 
 func restoreFile(name string, outputPath string) error {
@@ -42,7 +45,8 @@ func restoreFile(name string, outputPath string) error {
 			ct.filename,
 			ct.compression_algorithm,
 			ch.chunk_offset,
-			ch.size
+			ch.size,
+			ch.sha256
 		FROM file_chunk fc
 		JOIN chunk ch ON fc.chunk_id = ch.id
 		JOIN container ct ON ch.container_id = ct.id
@@ -133,9 +137,15 @@ func restoreFile(name string, outputPath string) error {
 			)
 		}
 
+		sum := sha256.Sum256(data[start:end])
+		if hex.EncodeToString(sum[:]) != ch.sha256 {
+			return fmt.Errorf("chunk hash mismatch")
+		}
+
 		if _, err := outFile.Write(data[start:end]); err != nil {
 			return err
 		}
+
 	}
 
 	return nil
