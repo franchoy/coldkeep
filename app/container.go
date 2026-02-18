@@ -88,7 +88,16 @@ func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64) {
 	return id, filename, currentSize
 }
 func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int64, chunk []byte) (int64, error) {
-	fullPath := filepath.Join("/storage/containers", filename)
+	fullPath := filepath.Join(storageDir, filename)
+
+	var sealed bool
+	err := db.QueryRow(`SELECT sealed FROM container WHERE id = $1`, containerID).Scan(&sealed)
+	if err != nil {
+		return 0, err
+	}
+	if sealed {
+		return 0, fmt.Errorf("attempt to write to sealed container")
+	}
 
 	f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
@@ -104,15 +113,6 @@ func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int
 	// Write hash (32 bytes)
 	if _, err := f.Write(hash[:]); err != nil {
 		return 0, err
-	}
-
-	var sealed bool
-	err = db.QueryRow(`SELECT sealed FROM container WHERE id = $1`, containerID).Scan(&sealed)
-	if err != nil {
-		return 0, err
-	}
-	if sealed {
-		return 0, fmt.Errorf("attempt to write to sealed container")
 	}
 
 	// Write chunk size (4 bytes)
@@ -158,7 +158,7 @@ func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int
 }
 
 func compressAndMark(db *sql.DB, containerID int64, filename string) {
-	path := filepath.Join("/storage/containers", filename)
+	path := filepath.Join(storageDir, filename)
 
 	newPath, size, err := CompressFile(path, defaultCompression)
 	if err != nil {
@@ -179,7 +179,7 @@ func compressAndMark(db *sql.DB, containerID int64, filename string) {
 }
 
 func sealContainer(db *sql.DB, containerID int64, filename string) error {
-	containerDir := "/storage/containers"
+	containerDir := storageDir
 	originalPath := filepath.Join(containerDir, filename)
 
 	// Compress file

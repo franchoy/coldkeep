@@ -67,6 +67,7 @@ func restoreFile(name string, outputPath string) error {
 			&ref.algo,
 			&ref.chunkOffset,
 			&ref.chunkSize,
+			&ref.sha256,
 		); err != nil {
 			return err
 		}

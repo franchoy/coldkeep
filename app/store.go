@@ -31,7 +31,7 @@ func storeFile(filePath string) {
 	fileHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
 	// ---- File-level dedup ----
-	var existingID int
+	var existingID int64
 	err = db.QueryRow(
 		"SELECT id FROM logical_file WHERE file_hash=$1",
 		fileHash,
@@ -50,7 +50,7 @@ func storeFile(filePath string) {
 
 	fileInfo, _ := os.Stat(filePath)
 
-	var fileID int
+	var fileID int64
 	err = db.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash)
 		 VALUES ($1, $2, $3) RETURNING id`,
@@ -73,7 +73,7 @@ func storeFile(filePath string) {
 	for index, chunkData := range chunks {
 		hash := fmt.Sprintf("%x", sha256.Sum256(chunkData))
 
-		var chunkID int
+		var chunkID int64
 
 		// First check if chunk exists
 		err := db.QueryRow(

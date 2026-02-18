@@ -34,7 +34,7 @@ func runGC() {
 
 		_ = rows.Scan(&containerID, &filename, &algo)
 
-		containerPath := filepath.Join("/storage/containers", filename)
+		containerPath := filepath.Join(storageDir, filename)
 		if algo != "" && algo != string(CompressionNone) {
 			containerPath += "." + algo
 		}
