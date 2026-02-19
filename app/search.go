@@ -6,8 +6,12 @@ import (
 	"time"
 )
 
-func searchFiles(args []string) {
-	db := connectDB()
+func searchFiles(args []string) error {
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return err
+	}
 	defer db.Close()
 
 	query := `
@@ -44,7 +48,7 @@ func searchFiles(args []string) {
 
 	rows, err := db.Query(query, params...)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer rows.Close()
 
@@ -58,7 +62,7 @@ func searchFiles(args []string) {
 		var created time.Time
 
 		if err := rows.Scan(&id, &name, &size, &created); err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		fmt.Printf("%-6d %-25s %-15d %-20s\n",
@@ -68,4 +72,5 @@ func searchFiles(args []string) {
 			created.Format("2006-01-02 15:04:05"),
 		)
 	}
+	return nil
 }

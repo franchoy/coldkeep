@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,7 +21,7 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64) {
+func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64, error) {
 	var id int64
 	var filename string
 	var currentSize int64
@@ -37,11 +36,11 @@ func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64) {
 
 	if err == nil {
 		// Found existing open container
-		return id, filename, currentSize
+		return id, filename, currentSize, nil
 	}
 
 	if err != sql.ErrNoRows {
-		log.Fatal(err)
+		return 0, "", 0, err
 	}
 
 	// 2️⃣ No open container found → create new one
@@ -56,36 +55,36 @@ func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64) {
 	`, filename, ContainerHdrLenV0, containerMaxSize).Scan(&id)
 
 	if err != nil {
-		log.Fatal(err)
+		return 0, "", 0, err
 	}
 
 	// 3️⃣ Create physical file
 
 	if err := os.MkdirAll(storageDir, 0755); err != nil {
-		log.Fatal(err)
+		return 0, "", 0, err
 	}
 
 	fullPath := filepath.Join(storageDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
-		log.Fatal(err)
+		return 0, "", 0, err
 	}
 	defer f.Close()
 
 	// 4️⃣ Write V0 header
 	if err := writeNewContainerHeaderV0(f, containerMaxSize); err != nil {
-		log.Fatal(err)
+		return 0, "", 0, err
 	}
 
 	// Ensure header is flushed
 	if err := f.Sync(); err != nil {
-		log.Fatal(err)
+		return 0, "", 0, err
 	}
 
 	currentSize = ContainerHdrLenV0
 
-	return id, filename, currentSize
+	return id, filename, currentSize, nil
 }
 func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int64, chunk []byte) (int64, error) {
 	fullPath := filepath.Join(storageDir, filename)

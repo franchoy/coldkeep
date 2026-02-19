@@ -5,28 +5,32 @@ import (
 	"log"
 )
 
-func removeFile(fileID string) {
-	db := connectDB()
+func removeFile(fileID string) error {
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return err
+	}
 	defer db.Close()
 
 	// Check existence first
 	var exists bool
-	err := db.QueryRow(
+	err = db.QueryRow(
 		"SELECT EXISTS (SELECT 1 FROM logical_file WHERE id=$1)",
 		fileID,
 	).Scan(&exists)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	if !exists {
 		fmt.Println("File ID", fileID, "not found.")
-		return
+		return fmt.Errorf("file ID %s not found", fileID)
 	}
 
 	tx, err := db.Begin()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	// Get chunk IDs
@@ -37,7 +41,7 @@ func removeFile(fileID string) {
 	`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
-		log.Fatal(err)
+		return err
 	}
 	defer rows.Close()
 
@@ -46,7 +50,7 @@ func removeFile(fileID string) {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			_ = tx.Rollback()
-			log.Fatal(err)
+			return err
 		}
 		chunkIDs = append(chunkIDs, id)
 	}
@@ -60,7 +64,7 @@ func removeFile(fileID string) {
 		`, chunkID)
 		if err != nil {
 			_ = tx.Rollback()
-			log.Fatal(err)
+			return err
 		}
 	}
 
@@ -68,19 +72,20 @@ func removeFile(fileID string) {
 	_, err = tx.Exec(`DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
-		log.Fatal(err)
+		return err
 	}
 
 	// Remove logical file
 	_, err = tx.Exec(`DELETE FROM logical_file WHERE id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
-		log.Fatal(err)
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	fmt.Println("Logical file", fileID, "removed. Ref counts updated.")
+	return nil
 }

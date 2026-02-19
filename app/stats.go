@@ -6,8 +6,12 @@ import (
 	"log"
 )
 
-func runStats() {
-	db := connectDB()
+func runStats()(error) {
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return err
+	}
 	defer db.Close()
 
 	var totalFiles int64
@@ -78,7 +82,7 @@ func runStats() {
 		ORDER BY c.id
 	`)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer rows.Close()
 
@@ -90,9 +94,9 @@ func runStats() {
 		var dead int64
 
 		if err := rows.Scan(&id, &filename, &totalSize, &live, &dead); err != nil {
-			log.Fatal(err)
+			return err
 		}
-		
+
 		liveRatio := 0.0
 		if totalSize > 0 {
 			liveRatio = float64(live) / float64(totalSize) * 100
@@ -107,4 +111,5 @@ func runStats() {
 			liveRatio,
 		)
 	}
+	return nil
 }

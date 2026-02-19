@@ -6,8 +6,12 @@ import (
 	"time"
 )
 
-func listFiles() {
-	db := connectDB()
+func listFiles() error {
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return err
+	}
 	defer db.Close()
 
 	rows, err := db.Query(`
@@ -16,7 +20,7 @@ func listFiles() {
 		ORDER BY created_at DESC
 	`)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer rows.Close()
 
@@ -30,7 +34,7 @@ func listFiles() {
 		var created time.Time
 
 		if err := rows.Scan(&id, &name, &size, &created); err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		fmt.Printf("%-6d %-25s %-15d %-20s\n",
@@ -40,4 +44,5 @@ func listFiles() {
 			created.Format("2006-01-02 15:04:05"),
 		)
 	}
+	return nil
 }

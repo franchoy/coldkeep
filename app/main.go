@@ -19,18 +19,27 @@ func main() {
 		return
 	}
 
+	var err error
+
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return
+	}
+	defer db.Close()
+
 	switch os.Args[1] {
 	case "store":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: capsule store <filePath>")
 		}
-		storeFile(os.Args[2])
+		err = storeFile(os.Args[2])
 
 	case "store-folder":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: capsule store-folder <folderPath>")
 		}
-		storeFolder(os.Args[2])
+		err = storeFolder(os.Args[2])
 
 	case "restore":
 		if len(os.Args) < 4 {
@@ -40,21 +49,19 @@ func main() {
 		if err != nil {
 			log.Fatal("Invalid fileID: ", err)
 		}
-		if err := restoreFile(fileID, os.Args[3]); err != nil {
-			log.Fatal(err)
-		}
+		err = restoreFile(fileID, os.Args[3])
 
 	case "remove":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: capsule remove <fileID>")
 		}
-		removeFile(os.Args[2])
+		err = removeFile(os.Args[2])
 
 	case "gc":
-		runGC()
+		err = runGC()
 
 	case "stats":
-		runStats()
+		err = runStats()
 
 	case "help", "-h", "--help":
 		printHelp()
@@ -63,10 +70,10 @@ func main() {
 		fmt.Println("Capsule version", version)
 
 	case "list":
-		listFiles()
+		err = listFiles()
 
 	case "search":
-		searchFiles(os.Args[2:])
+		err = searchFiles(os.Args[2:])
 
 	default:
 		fmt.Println("Unknown command:", os.Args[1])
@@ -74,6 +81,12 @@ func main() {
 		printHelp()
 
 	}
+
+	if err != nil {
+		log.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
 }
 
 func printHelp() {

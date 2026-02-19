@@ -2,9 +2,11 @@ package main
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -18,8 +20,20 @@ type chunkRef struct {
 }
 
 func restoreFile(id int64, outputPath string) error {
-	db := connectDB()
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return err
+	}
 	defer db.Close()
+
+	if err := restoreFileWithDB(db, id, outputPath); err != nil {
+		log.Fatal(err)
+	}
+	return nil
+}
+
+func restoreFileWithDB(db *sql.DB, id int64, outputPath string) error {
 	// ------------------------------------------------------------
 	// 1) Resolve logical file ID (latest version)
 	// ------------------------------------------------------------

@@ -7,8 +7,12 @@ import (
 	"path/filepath"
 )
 
-func runGC() {
-	db := connectDB()
+func runGC() error {
+	db, err := connectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to DB:", err)
+		return err
+	}
 	defer db.Close()
 
 	rows, err := db.Query(`
@@ -21,7 +25,7 @@ func runGC() {
 		)
 	`)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer rows.Close()
 
@@ -33,7 +37,7 @@ func runGC() {
 		var algo string
 
 		if err := rows.Scan(&containerID, &filename, &algo); err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		containerPath := filepath.Join(storageDir, filename)
@@ -50,13 +54,13 @@ func runGC() {
 		// Delete chunk rows
 		_, err = db.Exec(`DELETE FROM chunk WHERE container_id = $1`, containerID)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		// Delete container row
 		_, err = db.Exec(`DELETE FROM container WHERE id = $1`, containerID)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		deletedContainers++
@@ -64,4 +68,6 @@ func runGC() {
 	}
 
 	fmt.Printf("GC completed. Containers deleted: %d\n", deletedContainers)
+
+	return nil
 }
