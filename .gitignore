@@ -22,7 +22,7 @@ go.work
 # =========================
 capsule
 app/capsule
-
+app/capsule-poc
 # =========================
 # Local storage directories
 # =========================

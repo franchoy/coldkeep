@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -10,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func storeFile(path string) {
@@ -38,11 +38,6 @@ func storeFile(path string) {
 	}
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
 
-	// Reset file pointer
-	if _, err := file.Seek(0, 0); err != nil {
-		log.Fatal(err)
-	}
-
 	// ------------------------------------------------------------
 	// Check if logical file already exists
 	// ------------------------------------------------------------
@@ -56,9 +51,8 @@ func storeFile(path string) {
 		log.Printf("File already stored with ID %d\n", existingID)
 		return
 	}
-
 	if err != sql.ErrNoRows {
-		log.Fatal(err) // real DB error
+		log.Fatal(err)
 	}
 
 	// ------------------------------------------------------------
@@ -81,19 +75,16 @@ func storeFile(path string) {
 	log.Printf("Storing file ID %d\n", fileID)
 
 	// ------------------------------------------------------------
-	// Process chunks
+	// Chunk file using CDC
 	// ------------------------------------------------------------
-	chunkOrder := 0
-	reader := bufio.NewReader(file)
+	chunks, err := chunkFile(path)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	for {
-		chunkData, err := readNextChunk(reader)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
+	chunkOrder := 0
+
+	for _, chunkData := range chunks {
 
 		sum := sha256.Sum256(chunkData)
 		hash := hex.EncodeToString(sum[:])
@@ -110,7 +101,7 @@ func storeFile(path string) {
 		).Scan(&chunkID, &refCount)
 
 		if err == nil {
-			// Chunk already exists — increment ref_count
+			// Existing chunk → increment ref_count
 			_, err = db.Exec(
 				"UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1",
 				chunkID,
@@ -118,11 +109,79 @@ func storeFile(path string) {
 			if err != nil {
 				log.Fatal(err)
 			}
+
 		} else if err == sql.ErrNoRows {
+
 			// ----------------------------------------------------
-			// New chunk — append to container
+			// NEW CHUNK → find or create open container
 			// ----------------------------------------------------
-			containerID, offset, err := appendChunk(db, hash, chunkData)
+			var containerID int64
+			var currentSize int64
+			var maxSize int64
+			var filename string
+
+			err = db.QueryRow(`
+				SELECT id, filename, current_size, max_size
+				FROM container
+				WHERE sealed = FALSE
+				ORDER BY id DESC
+				LIMIT 1
+			`).Scan(&containerID, &filename, &currentSize, &maxSize)
+
+			if err == sql.ErrNoRows {
+				// Create new container
+				filename = fmt.Sprintf("container_%d.bin", time.Now().UnixNano())
+
+				err = db.QueryRow(`
+					INSERT INTO container (filename, current_size, max_size, sealed, compression_algorithm, compressed_size)
+					VALUES ($1, 0, $2, FALSE, 'none', 0)
+					RETURNING id, current_size, max_size
+				`, filename, containerMaxSize).Scan(&containerID, &currentSize, &maxSize)
+
+				if err != nil {
+					log.Fatal(err)
+				}
+			} else if err != nil {
+				log.Fatal(err)
+			}
+
+			recordSize := int64(32+4) + int64(len(chunkData))
+
+			// If container full → seal and create new
+			if currentSize+recordSize > maxSize {
+
+				if err := sealContainer(db, containerID, filename); err != nil {
+					log.Fatal(err)
+				}
+
+				// Create new container
+				filename = fmt.Sprintf("container_%d.bin", time.Now().UnixNano())
+
+				err = db.QueryRow(`
+					INSERT INTO container (filename, current_size, max_size, sealed, compression_algorithm, compressed_size)
+					VALUES ($1, 0, $2, FALSE, 'none', 0)
+					RETURNING id, current_size, max_size
+				`, filename, containerMaxSize).Scan(&containerID, &currentSize, &maxSize)
+
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+
+			offset := currentSize
+
+			writtenOffset, err := appendChunk(db, containerID, hash, offset, chunkData)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			newSize := offset + recordSize
+
+			_, err = db.Exec(
+				"UPDATE container SET current_size = $1 WHERE id = $2",
+				newSize,
+				containerID,
+			)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -130,36 +189,19 @@ func storeFile(path string) {
 			err = db.QueryRow(
 				`INSERT INTO chunk (sha256, size, container_id, chunk_offset, ref_count)
 				 VALUES ($1, $2, $3, $4, 1)
-				 ON CONFLICT (sha256) DO NOTHING
 				 RETURNING id`,
 				hash,
 				len(chunkData),
 				containerID,
-				offset,
+				writtenOffset,
 			).Scan(&chunkID)
 
-			if err == sql.ErrNoRows {
-				// Another process inserted it first — fetch ID + increment
-				err = db.QueryRow(
-					"SELECT id FROM chunk WHERE sha256=$1",
-					hash,
-				).Scan(&chunkID)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				_, err = db.Exec(
-					"UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1",
-					chunkID,
-				)
-				if err != nil {
-					log.Fatal(err)
-				}
-			} else if err != nil {
+			if err != nil {
 				log.Fatal(err)
 			}
+
 		} else {
-			log.Fatal(err) // real DB failure
+			log.Fatal(err)
 		}
 
 		// --------------------------------------------------------
@@ -180,7 +222,6 @@ func storeFile(path string) {
 	}
 
 	log.Println("File stored successfully")
-
 }
 
 func storeFolder(root string) {
