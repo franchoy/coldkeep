@@ -30,13 +30,15 @@ func main() {
 
 	case "restore":
 		if len(os.Args) < 4 {
-			log.Fatal("Usage: capsule restore <fileID> <outputPath>")
+			log.Fatal("Usage: capsule restore <fileID> <outputDir>")
 		}
 		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
 		if err != nil {
 			log.Fatal("Invalid fileID: ", err)
 		}
-		restoreFile(fileID, os.Args[3])
+		if err := restoreFile(fileID, os.Args[3]); err != nil {
+			log.Fatal(err)
+		}
 
 	case "remove":
 		if len(os.Args) < 3 {

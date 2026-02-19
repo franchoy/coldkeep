@@ -89,8 +89,10 @@ func runStats() {
 		var live int64
 		var dead int64
 
-		_ = rows.Scan(&id, &filename, &totalSize, &live, &dead)
-
+		if err := rows.Scan(&id, &filename, &totalSize, &live, &dead); err != nil {
+			log.Fatal(err)
+		}
+		
 		liveRatio := 0.0
 		if totalSize > 0 {
 			liveRatio = float64(live) / float64(totalSize) * 100

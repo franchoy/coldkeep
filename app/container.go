@@ -162,7 +162,7 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 	originalPath := filepath.Join(containerDir, filename)
 
 	// Compress file
-	compressedPath, compressed_size, err := CompressFile(originalPath, CompressionZstd)
+	compressedPath, compressed_size, err := CompressFile(originalPath, defaultCompression)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 		    compression_algorithm = $1,
 			compressed_size = $2
 		WHERE id = $3
-	`, string(CompressionZstd), compressed_size, containerID)
+	`, string(defaultCompression), compressed_size, containerID)
 
 	if err != nil {
 		return err

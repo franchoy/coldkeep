@@ -83,7 +83,7 @@ func restoreFile(id int64, outputPath string) error {
 	// ------------------------------------------------------------
 	// 3) Prepare output file
 	// ------------------------------------------------------------
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
 		return err
 	}
 
