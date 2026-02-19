@@ -1,32 +1,71 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+
+# =========================
+# Go build artifacts
+# =========================
+bin/
+dist/
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
-coverage.*
+coverage.out
 *.coverprofile
-profile.cov
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
 
 # Go workspace file
 go.work
-go.work.sum
 
-# env file
+# =========================
+# Capsule specific binaries
+# =========================
+capsule
+app/capsule
+
+# =========================
+# Local storage directories
+# =========================
+storage/
+storage/containers/
+pgdata/
+
+# =========================
+# Environment files
+# =========================
 .env
+.env.local
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# =========================
+# VSCode
+# =========================
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+.history/
+
+# =========================
+# GitHub Codespaces
+# =========================
+.devcontainer/.env
+.devcontainer/docker-compose.override.yml
+
+# =========================
+# macOS / Windows system files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.swp
+*.swo

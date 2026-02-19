@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -10,165 +12,175 @@ import (
 	"path/filepath"
 )
 
-func storeFile(filePath string) {
+func storeFile(path string) {
 	db := connectDB()
 	defer db.Close()
 
-	// ---- Compute full file hash ----
-	file, err := os.Open(filePath)
+	file, err := os.Open(path)
 	if err != nil {
-		log.Println("Error opening file:", err)
-		return
+		log.Fatal(err)
 	}
 	defer file.Close()
 
-	hasher := sha256.New()
-	totalSize, err := io.Copy(hasher, file)
+	fileInfo, err := file.Stat()
 	if err != nil {
-		log.Println("Hash error:", err)
-		return
+		log.Fatal(err)
 	}
-	fileHash := fmt.Sprintf("%x", hasher.Sum(nil))
 
-	// ---- File-level dedup ----
+	totalSize := fileInfo.Size()
+
+	// ------------------------------------------------------------
+	// Compute full file hash
+	// ------------------------------------------------------------
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		log.Fatal(err)
+	}
+	fileHash := hex.EncodeToString(hasher.Sum(nil))
+
+	// Reset file pointer
+	if _, err := file.Seek(0, 0); err != nil {
+		log.Fatal(err)
+	}
+
+	// ------------------------------------------------------------
+	// Check if logical file already exists
+	// ------------------------------------------------------------
 	var existingID int64
 	err = db.QueryRow(
 		"SELECT id FROM logical_file WHERE file_hash=$1",
 		fileHash,
 	).Scan(&existingID)
+
 	if err == nil {
-		fmt.Println("File already exists. ID:", existingID)
+		log.Printf("File already stored with ID %d\n", existingID)
 		return
 	}
 
-	// ---- Run CDC ----
-	chunks, err := chunkFile(filePath)
-	if err != nil {
-		log.Println("CDC error:", err)
-		return
+	if err != sql.ErrNoRows {
+		log.Fatal(err) // real DB error
 	}
 
-	fileInfo, _ := os.Stat(filePath)
-
+	// ------------------------------------------------------------
+	// Insert logical file
+	// ------------------------------------------------------------
 	var fileID int64
 	err = db.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash)
-		 VALUES ($1, $2, $3) RETURNING id`,
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
 		fileInfo.Name(),
 		totalSize,
 		fileHash,
 	).Scan(&fileID)
+
 	if err != nil {
-		log.Println("Insert logical_file error:", err)
-		return
+		log.Fatal(err)
 	}
 
-	fmt.Println("Logical file ID:", fileID)
+	log.Printf("Storing file ID %d\n", fileID)
 
-	totalChunks := len(chunks)
-	reusedChunks := 0
-	newChunks := 0
-	newBytes := 0
+	// ------------------------------------------------------------
+	// Process chunks
+	// ------------------------------------------------------------
+	chunkOrder := 0
+	reader := bufio.NewReader(file)
 
-	for index, chunkData := range chunks {
-		hash := fmt.Sprintf("%x", sha256.Sum256(chunkData))
+	for {
+		chunkData, err := readNextChunk(reader)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		sum := sha256.Sum256(chunkData)
+		hash := hex.EncodeToString(sum[:])
 
 		var chunkID int64
+		var refCount int64
 
-		// First check if chunk exists
-		err := db.QueryRow(
-			"SELECT id FROM chunk WHERE sha256=$1",
+		// --------------------------------------------------------
+		// Try to find existing chunk
+		// --------------------------------------------------------
+		err = db.QueryRow(
+			"SELECT id, ref_count FROM chunk WHERE sha256=$1",
 			hash,
-		).Scan(&chunkID)
+		).Scan(&chunkID, &refCount)
 
 		if err == nil {
-			// Reuse
-			_, err = db.Exec(`
-				UPDATE chunk
-				SET ref_count = ref_count + 1
-				WHERE id = $1
-			`, chunkID)
+			// Chunk already exists — increment ref_count
+			_, err = db.Exec(
+				"UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1",
+				chunkID,
+			)
 			if err != nil {
 				log.Fatal(err)
 			}
-			reusedChunks++
-		} else {
-			// New chunk path
-			containerMutex.Lock()
-
-			containerID, filename, currentSize := getOrCreateOpenContainer(db)
-
-			offset, err := appendChunk(db, containerID, filename, currentSize, chunkData)
+		} else if err == sql.ErrNoRows {
+			// ----------------------------------------------------
+			// New chunk — append to container
+			// ----------------------------------------------------
+			containerID, offset, err := appendChunk(db, hash, chunkData)
 			if err != nil {
-				containerMutex.Unlock()
 				log.Fatal(err)
 			}
 
-			// Insert chunk row (dedup race handled via ON CONFLICT)
-			err = db.QueryRow(`
-				INSERT INTO chunk (sha256, size, container_id, chunk_offset, ref_count)
-				VALUES ($1, $2, $3, $4, 1)
-				ON CONFLICT (sha256) DO NOTHING
-				RETURNING id
-			`, hash, len(chunkData), containerID, offset).Scan(&chunkID)
+			err = db.QueryRow(
+				`INSERT INTO chunk (sha256, size, container_id, chunk_offset, ref_count)
+				 VALUES ($1, $2, $3, $4, 1)
+				 ON CONFLICT (sha256) DO NOTHING
+				 RETURNING id`,
+				hash,
+				len(chunkData),
+				containerID,
+				offset,
+			).Scan(&chunkID)
 
 			if err == sql.ErrNoRows {
-				// Conflict → another goroutine inserted it, reuse instead
+				// Another process inserted it first — fetch ID + increment
 				err = db.QueryRow(
 					"SELECT id FROM chunk WHERE sha256=$1",
 					hash,
 				).Scan(&chunkID)
 				if err != nil {
-					containerMutex.Unlock()
 					log.Fatal(err)
 				}
 
-				_, err = db.Exec(`
-					UPDATE chunk
-					SET ref_count = ref_count + 1
-					WHERE id = $1
-				`, chunkID)
+				_, err = db.Exec(
+					"UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1",
+					chunkID,
+				)
 				if err != nil {
-					containerMutex.Unlock()
 					log.Fatal(err)
 				}
-
-				reusedChunks++
 			} else if err != nil {
-				containerMutex.Unlock()
 				log.Fatal(err)
-			} else {
-				newChunks++
-				newBytes += len(chunkData)
 			}
-
-			containerMutex.Unlock()
+		} else {
+			log.Fatal(err) // real DB failure
 		}
 
-		// Map file → chunk
+		// --------------------------------------------------------
+		// Insert mapping
+		// --------------------------------------------------------
 		_, err = db.Exec(
-			"INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)",
-			fileID, chunkID, index,
+			`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+			 VALUES ($1, $2, $3)`,
+			fileID,
+			chunkID,
+			chunkOrder,
 		)
 		if err != nil {
 			log.Fatal(err)
 		}
+
+		chunkOrder++
 	}
 
-	// ---- Stats ----
-	dedupRatio := 0.0
-	if totalChunks > 0 {
-		dedupRatio = float64(reusedChunks) / float64(totalChunks) * 100
-	}
+	log.Println("File stored successfully")
 
-	fmt.Println("\nCDC Summary:")
-	fmt.Printf("  File ID:             %d\n", fileID)
-	fmt.Printf("  Total chunks:        %d\n", totalChunks)
-	fmt.Printf("  Reused chunks:       %d\n", reusedChunks)
-	fmt.Printf("  New chunks:          %d\n", newChunks)
-	fmt.Printf("  Logical size:        %.2f MB\n", float64(totalSize)/(1024*1024))
-	fmt.Printf("  New physical bytes:  %.2f MB\n", float64(newBytes)/(1024*1024))
-	fmt.Printf("  Dedup ratio:         %.2f%%\n", dedupRatio)
 }
 
 func storeFolder(root string) {
