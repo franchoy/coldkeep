@@ -17,21 +17,23 @@ type chunkRef struct {
 	sha256            string
 }
 
-func restoreFile(name string, outputPath string) error {
+func restoreFile(id int64, outputPath string) error {
 	db := connectDB()
 	defer db.Close()
 	// ------------------------------------------------------------
 	// 1) Resolve logical file ID (latest version)
 	// ------------------------------------------------------------
 	var logicalFileID int64
+	var originalName string
 
 	err := db.QueryRow(`
-		SELECT id
+		SELECT id,
+		original_name
 		FROM logical_file
-		WHERE original_name = $1
+		WHERE id = $1
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, name).Scan(&logicalFileID)
+	`, id).Scan(&logicalFileID, &originalName)
 
 	if err != nil {
 		return fmt.Errorf("logical file not found: %w", err)
@@ -85,7 +87,7 @@ func restoreFile(name string, outputPath string) error {
 		return err
 	}
 
-	outFile, err := os.Create(outputPath)
+	outFile, err := os.Create(filepath.Join(outputPath, originalName))
 	if err != nil {
 		return err
 	}

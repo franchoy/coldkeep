@@ -157,33 +157,12 @@ func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int
 
 }
 
-func compressAndMark(db *sql.DB, containerID int64, filename string) {
-	path := filepath.Join(storageDir, filename)
-
-	newPath, size, err := CompressFile(path, defaultCompression)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = db.Exec(`
-		UPDATE container
-		SET compression_algorithm=$1,
-		    compressed_size=$2
-		WHERE id=$3
-	`, defaultCompression, size, containerID)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Container compressed:", newPath)
-}
-
 func sealContainer(db *sql.DB, containerID int64, filename string) error {
 	containerDir := storageDir
 	originalPath := filepath.Join(containerDir, filename)
 
 	// Compress file
-	compressedPath, _, err := CompressFile(originalPath, CompressionZstd)
+	compressedPath, compressed_size, err := CompressFile(originalPath, CompressionZstd)
 	if err != nil {
 		return err
 	}
@@ -192,9 +171,10 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 	_, err = db.Exec(`
 		UPDATE container
 		SET sealed = TRUE,
-		    compression_algorithm = $1
-		WHERE id = $2
-	`, string(CompressionZstd), containerID)
+		    compression_algorithm = $1,
+			compressed_size = $2
+		WHERE id = $3
+	`, string(CompressionZstd), compressed_size, containerID)
 
 	if err != nil {
 		return err

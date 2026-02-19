@@ -3,10 +3,9 @@ package main
 import (
 	"log"
 	"os"
+	"strconv"
 	"sync"
 )
-
-
 
 var defaultCompression = CompressionZstd // change if needed
 var containerMutex sync.Mutex
@@ -33,7 +32,11 @@ func main() {
 		if len(os.Args) < 4 {
 			log.Fatal("Usage: capsule restore <fileID> <outputPath>")
 		}
-		restoreFile(os.Args[2], os.Args[3])
+		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
+		if err != nil {
+			log.Fatal("Invalid fileID: ", err)
+		}
+		restoreFile(fileID, os.Args[3])
 
 	case "remove":
 		if len(os.Args) < 3 {

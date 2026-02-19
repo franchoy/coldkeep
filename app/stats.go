@@ -10,9 +10,9 @@ func runStats() {
 	db := connectDB()
 	defer db.Close()
 
-	var totalFiles int
+	var totalFiles int64
 	var totalLogicalSize sql.NullInt64
-	var totalContainers int
+	var totalContainers int64
 	var totalContainerSize sql.NullInt64
 	var totalCompressedSize sql.NullInt64
 	var liveBytes sql.NullInt64
@@ -83,7 +83,7 @@ func runStats() {
 	defer rows.Close()
 
 	for rows.Next() {
-		var id int
+		var id int64
 		var filename string
 		var totalSize int64
 		var live int64

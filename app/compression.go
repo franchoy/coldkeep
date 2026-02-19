@@ -136,6 +136,7 @@ func OpenDecompressionReader(path string, algo CompressionType) (io.ReadCloser, 
 		return &zstdReadCloser{decoder: decoder, file: f}, nil
 
 	default:
-		return os.Open(path)
+		return nil, fmt.Errorf("unknown compression algorithm: %q", algo)
+
 	}
 }
