@@ -1,189 +1,230 @@
-📦 Capsule
+📦 Capsule POC (V0)
 
-Capsule is a deduplicated, container-based storage engine written in Go.
-It uses content-defined chunking (CDC), content-addressed storage, and container packing with compression.
+A normalized, deduplicated incremental backup engine written in Go.
 
-⚠ Alpha Version – Not production ready.
+Capsule stores files as content-defined chunks inside append-only containers, enabling:
 
-🚀 What Capsule Does
+Global chunk deduplication
 
-Capsule stores files using the following pipeline:
+Incremental backups
 
-File
- → Content-Defined Chunking (CDC)
- → SHA-256 hashing per chunk
- → Deduplication (global chunk index)
- → Append to container
- → Seal container when full
- → Compress container
+Container-level compression
 
+Reference-count-based garbage collection
 
-Key properties:
+Integrity verification during restore
 
-Global chunk-level deduplication
+This is a V0 alpha public release intended for experimentation and architectural feedback.
 
-Immutable sealed containers
+🚀 Features (V0)
 
-Versioned container format
+Content-defined chunking (CDC)
 
-Database-backed logical file mapping
+SHA-256 chunk deduplication
+
+Append-only container format
+
+Container-level compression (Zstandard)
+
+Reference counting for chunks
+
+Garbage collection of unreferenced containers
+
+Restore by file ID
+
+Integrity verification during restore
 
 🏗 Architecture Overview
+Storage Model
 
-Capsule separates:
+Logical file
+→ ordered list of chunks
+→ chunks stored in containers
+→ containers optionally compressed when sealed
 
-1️⃣ Logical Layer
+Container Record Format
 
-Files are represented as ordered lists of chunk IDs.
+Each chunk is stored inside a container as:
 
-Stored in PostgreSQL tables (file, file_chunk).
+[32 bytes SHA256][4 bytes chunk_size][chunk_data]
 
-2️⃣ Physical Layer
 
-Chunks are packed into containers.
+Containers are compressed only when sealed.
 
-Containers are sealed and compressed.
+🗄 Database Schema (PostgreSQL)
 
-Each container is immutable once sealed.
+Main tables:
 
-3️⃣ Index Layer
+logical_file
 
-The database maps:
+chunk
 
-chunk_hash → container_id + offset
+file_chunk
 
-file → ordered chunks
+container
 
-📂 Storage Model
-Containers (V0 Format)
+logical_file
 
-Each container file has the following layout:
+Stores user-visible files.
 
-[64-byte header]
-[chunk_record]
-[chunk_record]
-...
+column	type
+id	BIGSERIAL
+original_name	TEXT
+total_size	BIGINT
+file_hash	TEXT
+created_at	TIMESTAMP
+chunk
 
-Container Header (64 bytes)
-Field	Description
-Magic	"CAPSULE0"
-Version	Major / Minor
-Header Length	Always 64 (V0)
-Flags	Reserved for future use
-Created Timestamp	Unix nanoseconds
-Max Container Size	Policy at creation
-Container UID	16 random bytes
-CRC32	Header integrity
-Reserved	Future extension
+Deduplicated physical chunks.
 
-The header allows future format evolution while maintaining backward compatibility.
+column	type
+id	BIGSERIAL
+sha256	TEXT (unique)
+size	INTEGER
+container_id	BIGINT
+chunk_offset	BIGINT
+ref_count	BIGINT
+file_chunk
 
-Chunk Record (V0)
+Ordered mapping between logical file and chunks.
 
-Each chunk is stored as:
+column	type
+logical_file_id	BIGINT
+chunk_id	BIGINT
+chunk_order	INTEGER
+container
 
-[32 bytes SHA256 hash]
-[4 bytes little-endian size]
-[N bytes raw chunk data]
+Physical container files.
 
+column	type
+id	BIGSERIAL
+filename	TEXT
+current_size	BIGINT
+max_size	BIGINT
+sealed	BOOLEAN
+compression_algorithm	TEXT
+compressed_size	BIGINT
+🛠 Requirements
 
-Important:
+Go 1.21+
 
-Offsets stored in the database refer to the start of this record.
+PostgreSQL 14+
 
-Restore verifies chunk integrity by recomputing SHA256.
+⚙️ Configuration
 
-🗃 Database Schema (V0)
+Environment variables:
 
-Core tables:
+DB_HOST
+DB_PORT
+DB_USER
+DB_PASSWORD
+DB_NAME
+CAPSULE_STORAGE_DIR   (optional, default: ./storage/containers)
 
-container – physical container metadata
+🐳 Quickstart (with Docker)
+docker-compose up -d
 
-chunk – content-addressed chunk index
 
-file – logical file metadata
+Initialize database:
 
-file_chunk – ordered mapping
+psql -h localhost -U capsule -d capsule -f db/init.sql
 
-schema_version – schema contract
 
-Deduplication is enforced by a unique index on chunk.hash.
+Build CLI:
 
-🔒 Container Lifecycle
+go build -o capsule ./app
 
-New container created when no open container exists.
+📥 Usage
+Store a file
+./capsule store myfile.bin
 
-Chunks appended until max_size reached.
+Store a folder
+./capsule store-folder ./myfolder
 
-Container is sealed:
+Restore a file
 
-Marked sealed = TRUE
+Restore by logical file ID into a directory:
 
-Compressed (zstd)
+./capsule restore 12 ./restored
 
-Original uncompressed file removed.
 
-Sealed containers are immutable.
+Result:
 
-Restore automatically decompresses before extracting chunks.
+./restored/<original_filename>
 
-♻ Garbage Collection
 
-When files are removed:
+Integrity of each chunk is verified during restore.
 
-Unreferenced chunks are deleted.
+Remove a file
+./capsule remove 12
 
-Containers with no remaining chunks can be removed.
 
-(Alpha implementation — behavior may evolve.)
+Decrements chunk reference counts.
 
-⚠ Alpha Status
+Run garbage collection
+./capsule gc
 
-Capsule V0 Alpha:
 
-Does not include encryption.
+Deletes:
 
-Does not include block-level container layout.
+chunks with ref_count = 0
 
-Does not include snapshot manifests inside storage.
+containers that no longer contain chunks
 
-Schema may evolve in future versions.
+Show statistics
+./capsule stats
 
-Future releases will maintain backward compatibility with V0 containers.
 
-🧪 Example Usage
-capsule store myfile.bin
-capsule restore <file_id> restored.bin
-capsule stats
-capsule remove <file_id>
-capsule gc
+Displays:
 
-🛣 Roadmap
+total logical files
 
-Planned future milestones:
+total containers
 
-V1: Container-level encryption
+total compressed bytes
 
-V2: Block-based container layout
+per-container stats
 
-Snapshot metadata stored as content-addressed objects
+⚠️ Limitations (V0)
 
-Performance optimizations
+Restore loads full container into memory
 
-Cloud backend support
+No encryption
 
-🎯 Design Principles
+No multi-tenant support
 
-Immutable containers
+No streaming restore
 
-Self-describing physical format
+No container header validation yet
 
-Versioned storage contract
+No concurrent multi-process locking
 
-Separation of logical and physical layers
+🛣 Roadmap (V1+)
 
-Future-proof evolution
+Streaming restore
 
-📌 Version
+Encryption layer
 
-Current version: v0.1.0-alpha
+Container header validation
+
+Snapshot/version support
+
+Multi-tenant isolation
+
+Remote storage backend support
+
+Erasure coding
+
+📄 License
+
+Apache License 2.0
+
+🤝 Contributing
+
+This is an experimental storage engine.
+Issues, feedback, and architectural discussions are welcome.
+
+🎯 Project Status
+
+Capsule POC V0 is a working alpha prototype.
+It is suitable for experimentation and architectural exploration, but not production use.

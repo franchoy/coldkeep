@@ -44,7 +44,10 @@ func removeFile(fileID string) {
 	var chunkIDs []int64
 	for rows.Next() {
 		var id int64
-		_ = rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			_ = tx.Rollback()
+			log.Fatal(err)
+		}
 		chunkIDs = append(chunkIDs, id)
 	}
 

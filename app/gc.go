@@ -32,7 +32,9 @@ func runGC() {
 		var filename string
 		var algo string
 
-		_ = rows.Scan(&containerID, &filename, &algo)
+		if err := rows.Scan(&containerID, &filename, &algo); err != nil {
+			log.Fatal(err)
+		}
 
 		containerPath := filepath.Join(storageDir, filename)
 		if algo != "" && algo != string(CompressionNone) {
