@@ -18,7 +18,7 @@ func storeFile(path string) error {
 	defer db.Close()
 
 	if err := storeFileWithDB(db, path); err != nil {
-		panic(err)
+		return err
 	}
 	return nil
 }
@@ -106,6 +106,7 @@ func storeFileWithDB(db *sql.DB, path string) error {
 		} else if err == sql.ErrNoRows {
 
 			containerMutex.Lock()
+			defer containerMutex.Unlock()
 
 			containerID, filename, currentSize, err := getOrCreateOpenContainer(db)
 			if err != nil {

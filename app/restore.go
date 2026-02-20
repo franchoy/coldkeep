@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type chunkRef struct {
@@ -27,7 +27,7 @@ func restoreFile(id int64, outputPath string) error {
 	defer db.Close()
 
 	if err := restoreFileWithDB(db, id, outputPath); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	return nil
 }
@@ -72,8 +72,14 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	// Prepare output file
 	// ------------------------------------------------------------
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
+	if st, err := os.Stat(outputPath); err == nil && st.IsDir() {
+		outputPath = filepath.Join(outputPath, originalName)
+	} else if strings.HasSuffix(outputPath, string(os.PathSeparator)) {
+		// if user passed a non-existing dir with trailing slash
+		if err := os.MkdirAll(outputPath, 0755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
+		outputPath = filepath.Join(outputPath, originalName)
 	}
 
 	outFile, err := os.Create(outputPath)
