@@ -110,6 +110,7 @@ func storeFileWithDB(db *sql.DB, path string) error {
 
 			containerID, filename, currentSize, err := getOrCreateOpenContainer(db)
 			if err != nil {
+				containerMutex.Unlock()
 				return err
 			}
 			writtenOffset, err := appendChunk(db, containerID, filename, currentSize, chunkData)

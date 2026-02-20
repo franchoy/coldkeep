@@ -9,7 +9,7 @@ import (
 
 const version = "0.1.0"
 
-var defaultCompression = CompressionZstd // change if needed
+var defaultCompression = CompressionNone
 
 func main() {
 	if len(os.Args) < 2 {
