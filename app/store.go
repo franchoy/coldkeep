@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 )
@@ -13,8 +13,7 @@ import (
 func storeFile(path string) error {
 	db, err := connectDB()
 	if err != nil {
-		log.Fatal("Failed to connect to DB:", err)
-		return err
+		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 
@@ -158,26 +157,28 @@ func storeFileWithDB(db *sql.DB, path string) error {
 func storeFolder(root string) error {
 	db, err := connectDB()
 	if err != nil {
-		log.Fatal("Failed to connect to DB:", err)
-		return err
+		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 
 	const workerCount = 4
 
 	fileChan := make(chan string, 100)
-	done := make(chan bool)
+	done := make(chan error, workerCount)
 
 	for i := 0; i < workerCount; i++ {
 		go func() {
 			for path := range fileChan {
-				_ = storeFileWithDB(db, path)
+				if err := storeFileWithDB(db, path); err != nil {
+					done <- err
+					return
+				}
 			}
-			done <- true
+			done <- nil
 		}()
 	}
 
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -186,11 +187,16 @@ func storeFolder(root string) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
 	close(fileChan)
 
 	for i := 0; i < workerCount; i++ {
-		<-done
+		if err := <-done; err != nil {
+			return err
+		}
 	}
 
 	return nil

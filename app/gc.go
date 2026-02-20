@@ -10,8 +10,7 @@ import (
 func runGC() error {
 	db, err := connectDB()
 	if err != nil {
-		log.Fatal("Failed to connect to DB:", err)
-		return err
+		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 

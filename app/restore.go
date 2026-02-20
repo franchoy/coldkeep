@@ -22,8 +22,7 @@ type chunkRef struct {
 func restoreFile(id int64, outputPath string) error {
 	db, err := connectDB()
 	if err != nil {
-		log.Fatal("Failed to connect to DB:", err)
-		return err
+		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 
@@ -33,136 +32,125 @@ func restoreFile(id int64, outputPath string) error {
 	return nil
 }
 
-func restoreFileWithDB(db *sql.DB, id int64, outputPath string) error {
+func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
+
 	// ------------------------------------------------------------
-	// 1) Resolve logical file ID (latest version)
+	// Fetch logical file metadata
 	// ------------------------------------------------------------
-	var logicalFileID int64
+	var expectedFileHash string
 	var originalName string
 
-	err := db.QueryRow(`
-		SELECT id,
-		original_name
-		FROM logical_file
-		WHERE id = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, id).Scan(&logicalFileID, &originalName)
+	err := db.QueryRow(
+		"SELECT original_name, file_hash FROM logical_file WHERE id = $1",
+		fileID,
+	).Scan(&originalName, &expectedFileHash)
 
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("logical file %d not found", fileID)
+	}
 	if err != nil {
-		return fmt.Errorf("logical file not found: %w", err)
+		return fmt.Errorf("query logical_file: %w", err)
 	}
 
 	// ------------------------------------------------------------
-	// 2) Fetch ordered chunks
+	// Fetch chunks in correct order
 	// ------------------------------------------------------------
 	rows, err := db.Query(`
-		SELECT
-			ct.filename,
-			ct.compression_algorithm,
-			ch.chunk_offset,
-			ch.size,
-			ch.sha256
+		SELECT c.container_id, c.chunk_offset, c.size, ct.filename
 		FROM file_chunk fc
-		JOIN chunk ch ON fc.chunk_id = ch.id
-		JOIN container ct ON ch.container_id = ct.id
+		JOIN chunk c ON fc.chunk_id = c.id
+		JOIN container ct ON c.container_id = ct.id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
-	`, logicalFileID)
+	`, fileID)
+
 	if err != nil {
-		return err
+		return fmt.Errorf("query file chunks: %w", err)
 	}
 	defer rows.Close()
 
-	var chunks []chunkRef
-
-	for rows.Next() {
-		var ref chunkRef
-		if err := rows.Scan(
-			&ref.containerFilename,
-			&ref.algo,
-			&ref.chunkOffset,
-			&ref.chunkSize,
-			&ref.sha256,
-		); err != nil {
-			return err
-		}
-		chunks = append(chunks, ref)
-	}
-
-	if len(chunks) == 0 {
-		return fmt.Errorf("no chunks found for file")
-	}
-
 	// ------------------------------------------------------------
-	// 3) Prepare output file
+	// Prepare output file
 	// ------------------------------------------------------------
-	if err := os.MkdirAll(outputPath, 0755); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
 	}
 
-	outFile, err := os.Create(filepath.Join(outputPath, originalName))
+	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("create output file: %w", err)
 	}
 	defer outFile.Close()
 
+	hasher := sha256.New()
+
 	// ------------------------------------------------------------
-	// 4) Restore sequentially (preserve order)
+	// Restore chunk by chunk
 	// ------------------------------------------------------------
-	containerCache := make(map[string][]byte)
+	for rows.Next() {
 
-	for _, ch := range chunks {
+		var containerID int64
+		var offset int64
+		var size int64
+		var filename string
 
-		// Build physical path
-		containerPath := filepath.Join(storageDir, ch.containerFilename)
-
-		if ch.algo != "" && ch.algo != "none" {
-			containerPath += "." + ch.algo
+		if err := rows.Scan(&containerID, &offset, &size, &filename); err != nil {
+			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
-		data, ok := containerCache[containerPath]
-		if !ok {
-			reader, err := OpenDecompressionReader(containerPath, CompressionType(ch.algo))
-			if err != nil {
-				return err
-			}
+		containerPath := filepath.Join(storageDir, filename)
 
-			fullData, err := io.ReadAll(reader)
-			_ = reader.Close()
-			if err != nil {
-				return err
-			}
-
-			containerCache[containerPath] = fullData
-			data = fullData
+		containerFile, err := os.Open(containerPath)
+		if err != nil {
+			return fmt.Errorf("open container %s: %w", filename, err)
 		}
 
-		// ---- IMPORTANT PART ----
-		// Record layout:
-		// [32 bytes sha256][4 bytes size][chunk data]
-
-		const recordHeaderSize = int64(32 + 4)
-
-		start := ch.chunkOffset + recordHeaderSize
-		end := start + int64(ch.chunkSize)
-
-		if start < 0 || end > int64(len(data)) {
-			return fmt.Errorf(
-				"chunk exceeds container bounds (start=%d end=%d len=%d)",
-				start, end, len(data),
-			)
+		// Seek to chunk offset
+		_, err = containerFile.Seek(offset, io.SeekStart)
+		if err != nil {
+			containerFile.Close()
+			return fmt.Errorf("seek container offset: %w", err)
 		}
 
-		sum := sha256.Sum256(data[start:end])
-		if hex.EncodeToString(sum[:]) != ch.sha256 {
-			return fmt.Errorf("chunk hash mismatch")
+		chunkData := make([]byte, size)
+		_, err = io.ReadFull(containerFile, chunkData)
+		containerFile.Close()
+
+		if err != nil {
+			return fmt.Errorf("read chunk data: %w", err)
 		}
 
-		if _, err := outFile.Write(data[start:end]); err != nil {
-			return err
+		// Validate chunk size
+		if int64(len(chunkData)) != size {
+			return fmt.Errorf("chunk size mismatch (expected %d got %d)", size, len(chunkData))
 		}
 
+		// Write to output
+		if _, err := outFile.Write(chunkData); err != nil {
+			return fmt.Errorf("write output file: %w", err)
+		}
+
+		// Update hash
+		if _, err := hasher.Write(chunkData); err != nil {
+			return fmt.Errorf("hash restored data: %w", err)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate chunk rows: %w", err)
+	}
+
+	// ------------------------------------------------------------
+	// Final Integrity Validation
+	// ------------------------------------------------------------
+	restoredHash := hex.EncodeToString(hasher.Sum(nil))
+
+	if restoredHash != expectedFileHash {
+		return fmt.Errorf(
+			"restore integrity check failed: expected %s got %s",
+			expectedFileHash,
+			restoredHash,
+		)
 	}
 
 	return nil

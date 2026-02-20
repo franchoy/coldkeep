@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 const containerMaxSize int64 = 64 * 1024 * 1024
 
 var storageDir = getEnv("CAPSULE_STORAGE_DIR", "./storage/containers")
+
+var containerMutex sync.Mutex
 
 func getEnv(key, fallback string) string {
 	if val, ok := os.LookupEnv(key); ok {
@@ -176,7 +179,7 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 	`, string(defaultCompression), compressed_size, containerID)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
 	fmt.Printf("Container %d sealed and compressed: %s\n", containerID, compressedPath)

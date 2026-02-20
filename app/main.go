@@ -5,13 +5,11 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"sync"
 )
 
 const version = "0.1.0"
 
 var defaultCompression = CompressionZstd // change if needed
-var containerMutex sync.Mutex
 
 func main() {
 	if len(os.Args) < 2 {
@@ -20,13 +18,6 @@ func main() {
 	}
 
 	var err error
-
-	db, err := connectDB()
-	if err != nil {
-		log.Fatal("Failed to connect to DB:", err)
-		return
-	}
-	defer db.Close()
 
 	switch os.Args[1] {
 	case "store":
