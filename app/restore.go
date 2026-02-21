@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -10,14 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 )
-
-type chunkRef struct {
-	containerFilename string
-	algo              string
-	chunkOffset       int64 // start of record
-	chunkSize         int   // data size only
-	sha256            string
-}
 
 func restoreFile(id int64, outputPath string) error {
 	db, err := connectDB()
@@ -54,9 +48,16 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 
 	// ------------------------------------------------------------
 	// Fetch chunks in correct order
+	// NOTE: chunk_offset points to the *start of the record* inside the container:
+	//   [32 bytes sha256][4 bytes little-endian uint32 size][<size> bytes data]
 	// ------------------------------------------------------------
 	rows, err := db.Query(`
-		SELECT c.container_id, c.chunk_offset, c.size, ct.filename
+		SELECT
+			c.chunk_offset,
+			c.size,
+			c.sha256,
+			ct.filename,
+			ct.compression_algorithm
 		FROM file_chunk fc
 		JOIN chunk c ON fc.chunk_id = c.id
 		JOIN container ct ON c.container_id = ct.id
@@ -95,40 +96,94 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	for rows.Next() {
 
-		var containerID int64
 		var offset int64
-		var size int64
+		var expectedSize int64
+		var expectedChunkHash string
 		var filename string
+		var algoStr string
 
-		if err := rows.Scan(&containerID, &offset, &size, &filename); err != nil {
+		if err := rows.Scan(&offset, &expectedSize, &expectedChunkHash, &filename, &algoStr); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
-		containerPath := filepath.Join(storageDir, filename)
+		algo := CompressionType(algoStr)
 
-		containerFile, err := os.Open(containerPath)
-		if err != nil {
-			return fmt.Errorf("open container %s: %w", filename, err)
+		// Container filename changes when compressed (CompressFile removes the original and writes filename.<algo>)
+		containerFilename := filename
+		if algo != CompressionNone {
+			containerFilename = filename + "." + algoStr
 		}
 
-		// Seek to chunk offset
-		_, err = containerFile.Seek(offset, io.SeekStart)
-		if err != nil {
-			containerFile.Close()
-			return fmt.Errorf("seek container offset: %w", err)
+		containerPath := filepath.Join(storageDir, containerFilename)
+
+		// Open as plain file (seek) or as decompressed stream (skip bytes)
+		var r io.ReadCloser
+		var f *os.File
+
+		if algo == CompressionNone {
+			f, err = os.Open(containerPath)
+			if err != nil {
+				return fmt.Errorf("open container %q: %w", containerFilename, err)
+			}
+			// Seek to record start
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("seek container offset: %w", err)
+			}
+			// Use file as reader; close via f.Close() below
+			r = f
+		} else {
+			r, err = OpenDecompressionReader(containerPath, algo)
+			if err != nil {
+				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
+			}
+			// Skip to record offset inside the *uncompressed* stream
+			if _, err := io.CopyN(io.Discard, r, offset); err != nil {
+				_ = r.Close()
+				return fmt.Errorf("skip to chunk offset in decompressed stream: %w", err)
+			}
 		}
 
-		chunkData := make([]byte, size)
-		_, err = io.ReadFull(containerFile, chunkData)
-		containerFile.Close()
+		// Read record header
+		headerHash := make([]byte, 32)
+		if _, err := io.ReadFull(r, headerHash); err != nil {
+			_ = r.Close()
+			return fmt.Errorf("read chunk header hash: %w", err)
+		}
 
-		if err != nil {
+		sizeBuf := make([]byte, 4)
+		if _, err := io.ReadFull(r, sizeBuf); err != nil {
+			_ = r.Close()
+			return fmt.Errorf("read chunk header size: %w", err)
+		}
+		recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
+
+		if recordSize != expectedSize {
+			_ = r.Close()
+			return fmt.Errorf("chunk size mismatch at offset %d (db=%d record=%d)", offset, expectedSize, recordSize)
+		}
+
+		// Read chunk data
+		chunkData := make([]byte, recordSize)
+		if _, err := io.ReadFull(r, chunkData); err != nil {
+			_ = r.Close()
 			return fmt.Errorf("read chunk data: %w", err)
 		}
 
-		// Validate chunk size
-		if int64(len(chunkData)) != size {
-			return fmt.Errorf("chunk size mismatch (expected %d got %d)", size, len(chunkData))
+		// Close container reader
+		if err := r.Close(); err != nil {
+			return fmt.Errorf("close container reader: %w", err)
+		}
+
+		// Validate hashes (DB hash and on-disk record hash)
+		sum := sha256.Sum256(chunkData)
+		sumHex := hex.EncodeToString(sum[:])
+
+		if sumHex != expectedChunkHash {
+			return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s)", offset, expectedChunkHash, sumHex)
+		}
+		if !bytes.Equal(sum[:], headerHash) {
+			return fmt.Errorf("chunk record header hash mismatch at offset %d", offset)
 		}
 
 		// Write to output
@@ -136,7 +191,7 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 			return fmt.Errorf("write output file: %w", err)
 		}
 
-		// Update hash
+		// Update file hash
 		if _, err := hasher.Write(chunkData); err != nil {
 			return fmt.Errorf("hash restored data: %w", err)
 		}
