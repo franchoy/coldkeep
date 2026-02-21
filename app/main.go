@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 )
 
 const version = "0.1.0"
@@ -114,4 +115,12 @@ func printHelp() {
 	fmt.Println("Example:")
 	fmt.Println("  capsule store myfile.bin")
 	fmt.Println("  capsule restore 12 ./restored")
+}
+
+func printSuccess(title string) {
+	fmt.Println(title)
+}
+
+func printDuration(start time.Time) {
+	fmt.Printf("  Time: %v\n", time.Since(start))
 }

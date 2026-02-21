@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 func storeFile(path string) error {
@@ -26,7 +26,7 @@ func storeFile(path string) error {
 }
 
 func storeFileWithDB(db *sql.DB, path string) error {
-
+	start := time.Now()
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -55,7 +55,8 @@ func storeFileWithDB(db *sql.DB, path string) error {
 	).Scan(&existingID)
 
 	if err == nil {
-		log.Printf("File '%s' already stored with ID %d\n", path, existingID)
+		fmt.Printf("File '%s' already stored with ID %d\n", path, existingID)
+		fmt.Printf("  SHA256: %x\n", fileHash)
 		return nil
 	}
 	if err != sql.ErrNoRows {
@@ -105,6 +106,7 @@ func storeFileWithDB(db *sql.DB, path string) error {
 			if err != nil {
 				return err
 			}
+			fmt.Printf("chunk SHA256 %x already stored with ID %d\n", hash, chunkID)
 
 		} else if err == sql.ErrNoRows {
 
@@ -154,11 +156,16 @@ func storeFileWithDB(db *sql.DB, path string) error {
 
 		chunkOrder++
 	}
+	printSuccess("File stored successfully")
+	fmt.Printf("  Path:   %s\n", path)
+	fmt.Printf("  SHA256: %x\n", fileHash)
+	printDuration(start)
 
 	return nil
 }
 
 func storeFolder(root string) error {
+	start_folder := time.Now()
 	db, err := connectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
@@ -202,6 +209,8 @@ func storeFolder(root string) error {
 			return err
 		}
 	}
+	printSuccess("Folder stored successfully")
+	printDuration(start_folder)
 
 	return nil
 }

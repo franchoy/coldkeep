@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func restoreFile(id int64, outputPath string) error {
@@ -27,7 +28,7 @@ func restoreFile(id int64, outputPath string) error {
 }
 
 func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
-
+	start := time.Now()
 	// ------------------------------------------------------------
 	// Fetch logical file metadata
 	// ------------------------------------------------------------
@@ -213,6 +214,10 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 			restoredHash,
 		)
 	}
+	fmt.Printf("File %s restored successfully", originalName)
+	fmt.Printf("  Output: %s\n", outputPath)
+	fmt.Printf("  SHA256: %x\n", restoredHash)
+	printDuration(start)
 
 	return nil
 }
