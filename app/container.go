@@ -182,7 +182,6 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
-	fmt.Printf("Container %d sealed and compressed: %s\n", containerID, compressedPath)
-
+	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, defaultCompression, compressedPath)
 	return nil
 }

@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 func storeFile(path string) error {
@@ -53,7 +55,8 @@ func storeFileWithDB(db *sql.DB, path string) error {
 	).Scan(&existingID)
 
 	if err == nil {
-		return nil // already stored
+		log.Printf("File '%s' already stored with ID %d\n", path, existingID)
+		return nil
 	}
 	if err != sql.ErrNoRows {
 		return err
@@ -106,7 +109,7 @@ func storeFileWithDB(db *sql.DB, path string) error {
 		} else if err == sql.ErrNoRows {
 
 			containerMutex.Lock()
-			defer containerMutex.Unlock()
+			//defer containerMutex.Unlock()
 
 			containerID, filename, currentSize, err := getOrCreateOpenContainer(db)
 			if err != nil {
@@ -129,12 +132,11 @@ func storeFileWithDB(db *sql.DB, path string) error {
 				writtenOffset,
 			).Scan(&chunkID)
 
-			containerMutex.Unlock()
-
 			if err != nil {
+				containerMutex.Unlock()
 				return err
 			}
-
+			containerMutex.Unlock()
 		} else {
 			return err
 		}
@@ -162,8 +164,8 @@ func storeFolder(root string) error {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
-
-	const workerCount = 4
+	// workerCount is set to the number of CPU cores for optimal parallelism
+	workerCount := runtime.NumCPU()
 
 	fileChan := make(chan string, 100)
 	done := make(chan error, workerCount)
