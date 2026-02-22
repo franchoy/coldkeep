@@ -25,12 +25,6 @@ func storeFile(path string) error {
 	return nil
 }
 
-// DBTX is implemented by *sql.DB and *sql.Tx (so we can reuse helpers inside a tx).
-type DBTX interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	QueryRow(query string, args ...any) *sql.Row
-}
-
 func storeFileWithDB(db *sql.DB, path string) (err error) {
 	start := time.Now()
 
@@ -63,39 +57,40 @@ func storeFileWithDB(db *sql.DB, path string) (err error) {
 		}
 	}()
 
-	// Check dedup
-	var existingID int64
-	qerr := tx.QueryRow(
-		"SELECT id FROM logical_file WHERE file_hash=$1",
-		fileHash,
-	).Scan(&existingID)
-
-	if qerr == nil {
-		// Already stored
-		if err = tx.Commit(); err != nil {
-			return err
-		}
-		fmt.Printf("File '%s' already stored\n", path)
-		fmt.Printf("  SHA256: %s\n", fileHash)
-		return nil
-	}
-	if qerr != sql.ErrNoRows {
-		err = qerr
-		return err
-	}
-
-	// Insert logical file
+	// Insert logical file (concurrency-safe)
+	// If another goroutine inserts the same hash at the same time, we won't error.
 	var fileID int64
-	err = tx.QueryRow(
+	insErr := tx.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash)
-		 VALUES ($1, $2, $3)
-		 RETURNING id`,
+		VALUES ($1, $2, $3)
+		ON CONFLICT (file_hash) DO NOTHING
+		RETURNING id`,
 		info.Name(),
 		totalSize,
 		fileHash,
 	).Scan(&fileID)
-	if err != nil {
-		return err
+
+	if insErr == sql.ErrNoRows {
+		// Conflict happened: someone else already stored this file hash
+		var existingID int64
+		if err := tx.QueryRow(
+			`SELECT id FROM logical_file WHERE file_hash = $1`,
+			fileHash,
+		).Scan(&existingID); err != nil {
+			return err
+		}
+
+		// Commit and exit early (don't store chunks again)
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+
+		fmt.Printf("File '%s' already stored\n", path)
+		fmt.Printf("  SHA256: %s\n", fileHash)
+		return nil
+	}
+	if insErr != nil {
+		return insErr
 	}
 
 	chunks, err := chunkFile(path)
@@ -157,17 +152,32 @@ func storeFileWithDB(db *sql.DB, path string) (err error) {
 				}
 			}
 
-			if err2 := tx.QueryRow(
+			// Try insert chunk (concurrency-safe)
+			var insertedChunkID int64
+			insErr := tx.QueryRow(
 				`INSERT INTO chunk (sha256, size, container_id, chunk_offset, ref_count)
-				 VALUES ($1, $2, $3, $4, 1)
-				 RETURNING id`,
+				VALUES ($1, $2, $3, $4, 1)
+				ON CONFLICT (sha256) DO NOTHING
+				RETURNING id`,
 				hash,
 				len(chunkData),
 				containerID,
 				offset,
-			).Scan(&chunkID); err2 != nil {
-				err = err2
-				return err
+			).Scan(&insertedChunkID)
+
+			if insErr == nil {
+				// We won: this chunk is new
+				chunkID = insertedChunkID
+			} else if insErr == sql.ErrNoRows {
+				// Someone else inserted it first; reuse it and bump refcount
+				if err := tx.QueryRow(`SELECT id FROM chunk WHERE sha256 = $1`, hash).Scan(&chunkID); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+					return err
+				}
+			} else {
+				return insErr
 			}
 		} else {
 			err = cerr

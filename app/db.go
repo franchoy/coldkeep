@@ -28,3 +28,9 @@ func connectDB() (*sql.DB, error) {
 
 	return db, nil
 }
+
+// DBTX is implemented by *sql.DB and *sql.Tx (so we can reuse helpers inside a tx).
+type DBTX interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}

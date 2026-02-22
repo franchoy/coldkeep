@@ -47,7 +47,11 @@ func main() {
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: capsule remove <fileID>")
 		}
-		err = removeFile(os.Args[2])
+		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
+		if err != nil {
+			log.Fatal("Invalid fileID: ", err)
+		}
+		err = removeFile(fileID)
 
 	case "gc":
 		err = runGC()

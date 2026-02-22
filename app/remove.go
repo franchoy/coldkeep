@@ -1,19 +1,38 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 )
 
-func removeFile(fileID string) error {
+func removeFile(fileID int64) error {
 	db, err := connectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 
+	if err := removeFileWithDB(db, fileID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeFileWithDB(db *sql.DB, fileID int64) error {
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	// Check existence first
 	var exists bool
-	err = db.QueryRow(
+	err = tx.QueryRow(
 		"SELECT EXISTS (SELECT 1 FROM logical_file WHERE id=$1)",
 		fileID,
 	).Scan(&exists)
@@ -23,12 +42,7 @@ func removeFile(fileID string) error {
 
 	if !exists {
 		fmt.Println("File ID", fileID, "not found.")
-		return fmt.Errorf("file ID %s not found", fileID)
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
+		return fmt.Errorf("file ID %d not found", fileID)
 	}
 
 	// Get chunk IDs
