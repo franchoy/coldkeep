@@ -1,87 +1,95 @@
 # Security Policy
 
-## ⚠️ Project Status
+## Overview
 
-Capsule is currently in **early development (V0 / alpha prototype)**.
+Capsule (V0) is an experimental storage engine prototype designed for:
 
-This version is intended for:
-- Development
-- Testing
-- Architecture validation
-- Community feedback
-
-It is **NOT recommended for production use** or for storing sensitive or critical data.
+- Deduplicated storage
+- Chunk-based container layout
+- Transactional metadata consistency
+- Integrity verification on restore
 
 ---
 
-## 🔐 Current Security Characteristics
+## Security Model (V0)
 
-At this stage, Capsule:
+Capsule V0 provides:
 
-- ✅ Uses SHA-256 for content hashing
-- ✅ Performs deterministic chunking and deduplication
-- ❌ Does NOT implement encryption at rest
-- ❌ Does NOT implement authenticated encryption
-- ❌ Does NOT implement integrity verification on restore
-- ❌ Does NOT implement access control or authentication
-- ❌ Does NOT implement crash-safe atomic writes
-- ❌ Has not undergone security audit or formal review
+- Per-file transactional metadata (atomic store)
+- Chunk-level SHA256 hashing
+- Full-file SHA256 hashing
+- Integrity verification during restore
+- Database row-level locking for concurrent safety
 
-Data stored with this version should be considered **non-confidential and non-critical**.
+Capsule V0 does NOT provide:
 
----
-
-## 🚧 Known Limitations
-
-- Containers are not encrypted.
-- Container files may be readable by any user with filesystem access.
-- Restore trusts database metadata.
-- No tamper detection or MAC validation is implemented.
-- Concurrent writes rely on application-level locking.
-- The system has not been hardened against malicious input.
+- Encryption at rest
+- Authentication or authorization
+- Cryptographic integrity protection of metadata
+- Tamper-evident storage
 
 ---
 
-## 🛣 Planned Security Improvements (Future Versions)
+## Data Integrity
 
-The following are planned for future versions:
+Each chunk is stored with a SHA256 hash.
+Each logical file is stored with a SHA256 hash of the full file.
 
-- Encryption at rest (AES-GCM or similar)
-- Authenticated containers
-- Per-container integrity validation
-- Crash-safe write pipeline
-- Better concurrency safety guarantees
-- Optional access control layer
-- Streaming restore with integrity verification
+During restore:
 
----
+- Chunk payload is verified against stored chunk SHA256.
+- Full restored file is verified against logical file SHA256.
 
-## 📣 Reporting a Vulnerability
+This protects against:
 
-If you discover a security issue, please:
+- Accidental disk corruption
+- Partial container corruption
+- Incorrect chunk offsets
 
-1. Do **NOT** open a public GitHub issue.
-2. Contact the maintainer directly via:
-   - GitHub private message
-   - Or open a security advisory via GitHub's "Report a vulnerability" feature
+It does NOT protect against:
 
-Please include:
-- Clear description of the issue
-- Steps to reproduce
-- Potential impact
-- Suggested remediation (if known)
+- Malicious database tampering
+- Coordinated modification of container files and metadata
+- Insider threats
 
 ---
 
-## 🧾 Responsible Disclosure
+## Concurrency Model
 
-We ask that security vulnerabilities are disclosed responsibly.
-Please allow reasonable time for review and mitigation before public disclosure.
+Capsule V0 supports concurrent store-folder operations.
+
+Concurrency safety is achieved using:
+
+- PostgreSQL transactions per stored file
+- SELECT ... FOR UPDATE SKIP LOCKED for container selection
+- Row-level locking for container size updates
+
+This ensures:
+
+- Only one transaction appends to a specific open container at a time
+- Container size tracking remains consistent
+- No interleaved writes corrupt container layout
 
 ---
 
-## 📌 Disclaimer
+## Known Limitations
 
-Capsule is experimental software provided "as is", without warranty of any kind.
-Use at your own risk.
+Capsule V0 should not be used in production environments handling sensitive or regulated data.
 
+Future security improvements may include:
+
+- Encrypted containers
+- Authenticated metadata
+- Merkle-tree based integrity model
+- Access control layer
+- Background integrity verification
+
+---
+
+## Reporting Security Issues
+
+If you discover a vulnerability:
+
+Do not open a public issue immediately.
+
+Instead, contact the repository maintainer directly.

@@ -31,6 +31,7 @@ app/capsule-poc
 # =========================
 storage/
 storage/containers/
+storage/output/
 pgdata/
 
 # =========================
