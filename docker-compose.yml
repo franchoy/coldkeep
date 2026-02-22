@@ -31,7 +31,7 @@ services:
       CAPSULE_STORAGE_DIR: /storage/containers
     volumes:
       - ./storage:/storage
-    command: ["tail", "-f", "/dev/null"] # keep container alive for now
+    #command: ["tail", "-f", "/dev/null"] # keep container alive for now
 
 volumes:
   pgdata:

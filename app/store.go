@@ -204,6 +204,7 @@ func storeFileWithDB(db *sql.DB, path string) (err error) {
 	}
 
 	printSuccess("File stored successfully")
+	fmt.Printf("  FileID:   %d\n", fileID)
 	fmt.Printf("  Path:   %s\n", path)
 	fmt.Printf("  SHA256: %s\n", fileHash)
 	printDuration(start)

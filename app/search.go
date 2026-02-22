@@ -23,18 +23,27 @@ func searchFiles(args []string) error {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--name":
+			if i+1 >= len(args) {
+				return fmt.Errorf("Missing argument for --name")
+			}
 			i++
 			query += fmt.Sprintf(" AND original_name ILIKE $%d", paramIndex)
 			params = append(params, "%"+args[i]+"%")
 			paramIndex++
 
 		case "--min-size":
+			if i+1 >= len(args) {
+				return fmt.Errorf("Missing argument for --min-size")
+			}
 			i++
 			query += fmt.Sprintf(" AND total_size >= $%d", paramIndex)
 			params = append(params, args[i])
 			paramIndex++
 
 		case "--max-size":
+			if i+1 >= len(args) {
+				return fmt.Errorf("Missing argument for --max-size")
+			}
 			i++
 			query += fmt.Sprintf(" AND total_size <= $%d", paramIndex)
 			params = append(params, args[i])

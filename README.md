@@ -90,7 +90,7 @@ Store a folder:
 
 Restore a file:
 
-    docker compose run --rm app ./capsule restore <file_hash> /output/file.txt
+    docker compose run --rm app ./capsule restore <file_id> /output/file.txt
 
 ---
 
