@@ -214,9 +214,9 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 			restoredHash,
 		)
 	}
-	fmt.Printf("File %s restored successfully", originalName)
+	fmt.Printf("File %s restored successfully\n", originalName)
 	fmt.Printf("  Output: %s\n", outputPath)
-	fmt.Printf("  SHA256: %x\n", restoredHash)
+	fmt.Printf("  SHA256: %s\n", restoredHash)
 	printDuration(start)
 
 	return nil

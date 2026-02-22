@@ -23,6 +23,9 @@ go.work
 capsule
 app/capsule
 app/capsule-poc
+# binaries generated during development
+*.exe
+*.out
 # =========================
 # Local storage directories
 # =========================

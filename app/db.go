@@ -19,5 +19,12 @@ func connectDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	err = db.Ping()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return db, nil
 }

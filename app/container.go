@@ -7,15 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
 const containerMaxSize int64 = 64 * 1024 * 1024
 
 var storageDir = getEnv("CAPSULE_STORAGE_DIR", "./storage/containers")
-
-var containerMutex sync.Mutex
 
 func getEnv(key, fallback string) string {
 	if val, ok := os.LookupEnv(key); ok {
@@ -24,7 +21,7 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64, error) {
+func getOrCreateOpenContainer(db DBTX) (int64, string, int64, error) {
 	var id int64
 	var filename string
 	var currentSize int64
@@ -34,7 +31,9 @@ func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64, error) {
 		SELECT id, filename, current_size
 		FROM container
 		WHERE sealed = FALSE
+		ORDER BY id
 		LIMIT 1
+		FOR UPDATE SKIP LOCKED
 	`).Scan(&id, &filename, &currentSize)
 
 	if err == nil {
@@ -89,77 +88,57 @@ func getOrCreateOpenContainer(db *sql.DB) (int64, string, int64, error) {
 
 	return id, filename, currentSize, nil
 }
-func appendChunk(db *sql.DB, containerID int64, filename string, currentSize int64, chunk []byte) (int64, error) {
-	fullPath := filepath.Join(storageDir, filename)
 
-	var sealed bool
-	err := db.QueryRow(`SELECT sealed FROM container WHERE id = $1`, containerID).Scan(&sealed)
-	if err != nil {
-		return 0, err
-	}
-	if sealed {
-		return 0, fmt.Errorf("attempt to write to sealed container")
-	}
+func appendChunkPhysical(filename string, currentSize int64, chunk []byte) (int64, int64, error) {
+	containerDir := storageDir
+	containerPath := filepath.Join(containerDir, filename)
 
-	f, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_APPEND, 0666)
+	f, err := os.OpenFile(containerPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer f.Close()
 
+	// offset where this chunk starts
 	offset := currentSize
 
-	// Compute chunk hash (must match what you store in DB)
-	hash := sha256.Sum256(chunk)
+	// Write record format:
+	// [32 bytes sha256][4 bytes size][data]
 
-	// Write hash (32 bytes)
-	if _, err := f.Write(hash[:]); err != nil {
-		return 0, err
+	sum := sha256.Sum256(chunk)
+
+	// Write hash
+	if _, err := f.Write(sum[:]); err != nil {
+		return 0, 0, err
 	}
 
-	// Write chunk size (4 bytes)
+	// Write size (little endian uint32)
 	sizeBuf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(sizeBuf, uint32(len(chunk)))
-
 	if _, err := f.Write(sizeBuf); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
-	// Write chunk data
+	// Write data
 	if _, err := f.Write(chunk); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
-	// Update container size
 	newSize := currentSize + int64(32+4+len(chunk))
 
-	_, err = db.Exec(`
-		UPDATE container
-		SET current_size = $1
-		WHERE id = $2
-	`, newSize, containerID)
-	if err != nil {
-		return 0, err
-	}
-
-	// Check if container reached max size
-	var maxSize int64
-	err = db.QueryRow(`SELECT max_size FROM container WHERE id = $1`, containerID).Scan(&maxSize)
-	if err != nil {
-		return 0, err
-	}
-
-	if newSize >= maxSize {
-		if err := sealContainer(db, containerID, filename); err != nil {
-			return 0, err
-		}
-	}
-
-	return offset, nil
-
+	return offset, newSize, nil
 }
 
-func sealContainer(db *sql.DB, containerID int64, filename string) error {
+func updateContainerSize(tx DBTX, containerID int64, newSize int64) error {
+	_, err := tx.Exec(
+		`UPDATE container SET current_size = $1 WHERE id = $2`,
+		newSize,
+		containerID,
+	)
+	return err
+}
+
+func sealContainer(tx DBTX, containerID int64, filename string) error {
 	containerDir := storageDir
 	originalPath := filepath.Join(containerDir, filename)
 
@@ -170,7 +149,7 @@ func sealContainer(db *sql.DB, containerID int64, filename string) error {
 	}
 
 	// Update DB
-	_, err = db.Exec(`
+	_, err = tx.Exec(`
 		UPDATE container
 		SET sealed = TRUE,
 		    compression_algorithm = $1,

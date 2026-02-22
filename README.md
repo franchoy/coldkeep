@@ -93,7 +93,7 @@ Main tables:
 
 ## 🛠 Requirements
 
--   Go 1.24+
+-   Go 1.23+
 -   PostgreSQL 14+
 
 ------------------------------------------------------------------------
@@ -167,7 +167,8 @@ Deletes unreferenced chunks and empty containers.
 
 ## ⚠️ Limitations (V0)
 
--   Restore loads entire container into memory
+-   Restore reopens containers per chunk (slow)
+-   Compressed container restore requires linear skip to offset (slow)
 -   No encryption layer
 -   No multi-tenant support
 -   No container header validation

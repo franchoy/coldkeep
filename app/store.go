@@ -25,20 +25,26 @@ func storeFile(path string) error {
 	return nil
 }
 
-func storeFileWithDB(db *sql.DB, path string) error {
+// DBTX is implemented by *sql.DB and *sql.Tx (so we can reuse helpers inside a tx).
+type DBTX interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func storeFileWithDB(db *sql.DB, path string) (err error) {
 	start := time.Now()
+
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	fileInfo, err := file.Stat()
+	info, err := file.Stat()
 	if err != nil {
 		return err
 	}
-
-	totalSize := fileInfo.Size()
+	totalSize := info.Size()
 
 	// Compute full file hash
 	hasher := sha256.New()
@@ -47,33 +53,47 @@ func storeFileWithDB(db *sql.DB, path string) error {
 	}
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
 
-	// Check if logical file already exists
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Check dedup
 	var existingID int64
-	err = db.QueryRow(
+	qerr := tx.QueryRow(
 		"SELECT id FROM logical_file WHERE file_hash=$1",
 		fileHash,
 	).Scan(&existingID)
 
-	if err == nil {
-		fmt.Printf("File '%s' already stored with ID %d\n", path, existingID)
-		fmt.Printf("  SHA256: %x\n", fileHash)
+	if qerr == nil {
+		// Already stored
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		fmt.Printf("File '%s' already stored\n", path)
+		fmt.Printf("  SHA256: %s\n", fileHash)
 		return nil
 	}
-	if err != sql.ErrNoRows {
+	if qerr != sql.ErrNoRows {
+		err = qerr
 		return err
 	}
 
 	// Insert logical file
 	var fileID int64
-	err = db.QueryRow(
+	err = tx.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash)
 		 VALUES ($1, $2, $3)
 		 RETURNING id`,
-		fileInfo.Name(),
+		info.Name(),
 		totalSize,
 		fileHash,
 	).Scan(&fileID)
-
 	if err != nil {
 		return err
 	}
@@ -86,64 +106,76 @@ func storeFileWithDB(db *sql.DB, path string) error {
 	chunkOrder := 0
 
 	for _, chunkData := range chunks {
-
 		sum := sha256.Sum256(chunkData)
 		hash := hex.EncodeToString(sum[:])
 
 		var chunkID int64
-
-		err = db.QueryRow(
+		cerr := tx.QueryRow(
 			"SELECT id FROM chunk WHERE sha256=$1",
 			hash,
 		).Scan(&chunkID)
 
-		if err == nil {
-
-			_, err = db.Exec(
+		if cerr == nil {
+			// Chunk exists -> bump refcount
+			_, err = tx.Exec(
 				"UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1",
 				chunkID,
 			)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("chunk SHA256 %x already stored with ID %d\n", hash, chunkID)
-
-		} else if err == sql.ErrNoRows {
-
-			containerMutex.Lock()
-			//defer containerMutex.Unlock()
-
-			containerID, filename, currentSize, err := getOrCreateOpenContainer(db)
-			if err != nil {
-				containerMutex.Unlock()
-				return err
-			}
-			writtenOffset, err := appendChunk(db, containerID, filename, currentSize, chunkData)
-			if err != nil {
-				containerMutex.Unlock()
+		} else if cerr == sql.ErrNoRows {
+			// New chunk -> append physically and insert chunk row
+			containerID, filename, currentSize, err2 := getOrCreateOpenContainer(tx)
+			if err2 != nil {
+				err = err2
 				return err
 			}
 
-			err = db.QueryRow(
+			offset, newSize, err2 := appendChunkPhysical(filename, currentSize, chunkData)
+			if err2 != nil {
+				err = err2
+				return err
+			}
+
+			if err2 := updateContainerSize(tx, containerID, newSize); err2 != nil {
+				err = err2
+				return err
+			}
+
+			// Seal if reached max size
+			var maxSize int64
+			if err2 := tx.QueryRow(`SELECT max_size FROM container WHERE id = $1`, containerID).Scan(&maxSize); err2 != nil {
+				err = err2
+				return err
+			}
+
+			if newSize >= maxSize {
+				if err2 := sealContainer(tx, containerID, filename); err2 != nil {
+					err = err2
+					return err
+				}
+			}
+
+			if err2 := tx.QueryRow(
 				`INSERT INTO chunk (sha256, size, container_id, chunk_offset, ref_count)
 				 VALUES ($1, $2, $3, $4, 1)
 				 RETURNING id`,
 				hash,
 				len(chunkData),
 				containerID,
-				writtenOffset,
-			).Scan(&chunkID)
-
-			if err != nil {
-				containerMutex.Unlock()
+				offset,
+			).Scan(&chunkID); err2 != nil {
+				err = err2
 				return err
 			}
-			containerMutex.Unlock()
 		} else {
+			err = cerr
 			return err
 		}
 
-		_, err = db.Exec(
+		// Link file ↔ chunk
+		_, err = tx.Exec(
 			`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
 			 VALUES ($1, $2, $3)`,
 			fileID,
@@ -156,61 +188,70 @@ func storeFileWithDB(db *sql.DB, path string) error {
 
 		chunkOrder++
 	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
 	printSuccess("File stored successfully")
 	fmt.Printf("  Path:   %s\n", path)
-	fmt.Printf("  SHA256: %x\n", fileHash)
+	fmt.Printf("  SHA256: %s\n", fileHash)
 	printDuration(start)
 
 	return nil
 }
 
 func storeFolder(root string) error {
-	start_folder := time.Now()
+	start := time.Now()
+
 	db, err := connectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer db.Close()
-	// workerCount is set to the number of CPU cores for optimal parallelism
+
 	workerCount := runtime.NumCPU()
+	fileChan := make(chan string, 128)
 
-	fileChan := make(chan string, 100)
-	done := make(chan error, workerCount)
+	errChan := make(chan error, workerCount)
 
+	// Workers
 	for i := 0; i < workerCount; i++ {
 		go func() {
-			for path := range fileChan {
-				if err := storeFileWithDB(db, path); err != nil {
-					done <- err
+			for p := range fileChan {
+				if err := storeFileWithDB(db, p); err != nil {
+					errChan <- err
 					return
 				}
 			}
-			done <- nil
+			errChan <- nil
 		}()
 	}
 
-	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	// Producer
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 		if !d.IsDir() {
 			fileChan <- path
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-
 	close(fileChan)
 
+	if walkErr != nil {
+		return walkErr
+	}
+
+	// Wait workers
 	for i := 0; i < workerCount; i++ {
-		if err := <-done; err != nil {
-			return err
+		if werr := <-errChan; werr != nil {
+			return werr
 		}
 	}
-	printSuccess("Folder stored successfully")
-	printDuration(start_folder)
 
+	printSuccess("Folder stored successfully")
+	printDuration(start)
 	return nil
 }
