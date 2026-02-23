@@ -1,5 +1,5 @@
 # Capsule
-
+![CI](https://github.com/franchoy/capsule_poc/actions/workflows/ci.yml/badge.svg)
 Capsule is an experimental container-based storage prototype written in
 Go.
 
