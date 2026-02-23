@@ -39,7 +39,6 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer output.Close()
 
 	var writer io.WriteCloser
 
@@ -50,28 +49,57 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 	case CompressionZstd:
 		encoder, err := zstd.NewWriter(output)
 		if err != nil {
+			output.Close()
 			return "", 0, err
 		}
 		writer = encoder
 
 	default:
+		output.Close()
 		return "", 0, fmt.Errorf("unknown compression algorithm: %q", algo)
 	}
 
+	// Copy data
 	if _, err = io.Copy(writer, input); err != nil {
 		_ = writer.Close()
+		_ = output.Close()
+		_ = os.Remove(outputPath) // cleanup broken file
 		return "", 0, err
 	}
 
-	_ = writer.Close()
-
-	// Remove original uncompressed container
-	if err := os.Remove(path); err != nil {
+	// Close compression writer (flush buffers)
+	if err := writer.Close(); err != nil {
+		_ = output.Close()
+		_ = os.Remove(outputPath)
 		return "", 0, err
 	}
 
+	// Ensure file is flushed to disk
+	if err := output.Sync(); err != nil {
+		_ = output.Close()
+		_ = os.Remove(outputPath)
+		return "", 0, err
+	}
+
+	if err := output.Close(); err != nil {
+		_ = os.Remove(outputPath)
+		return "", 0, err
+	}
+
+	// Validate compressed file
 	info, err := os.Stat(outputPath)
 	if err != nil {
+		_ = os.Remove(outputPath)
+		return "", 0, err
+	}
+
+	if info.Size() == 0 {
+		_ = os.Remove(outputPath)
+		return "", 0, fmt.Errorf("compressed file is empty")
+	}
+
+	// Only now remove original
+	if err := os.Remove(path); err != nil {
 		return "", 0, err
 	}
 

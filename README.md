@@ -1,138 +1,113 @@
-# Capsule (V0)
+# Capsule
 
-Capsule is an experimental deduplicated storage engine prototype.
+Capsule is an experimental container-based storage prototype written in
+Go.
 
-It implements:
+It explores content-defined chunking, containerized storage,
+deduplication concepts, and database-backed metadata indexing.
 
-- Chunk-based file storage
-- Container-based physical layout
-- SHA256 deduplication
-- Transactional metadata consistency
-- Concurrent safe folder ingestion
-- Optional container compression
+------------------------------------------------------------------------
 
-⚠️ Capsule V0 is a research prototype and not production-ready.
+# ⚠️ Research Prototype -- Not Production Ready ⚠️
 
----
+This project is an experimental storage prototype.
 
-# Architecture Overview
+It is **NOT production-ready**.
 
-Capsule stores files using:
+Do NOT use for: - Valuable data - Sensitive data - Irreplaceable data -
+Business workloads
 
-1. Logical files (full-file SHA256)
-2. Chunks (chunk-level SHA256)
-3. Containers (physical append-only files)
+Missing features include: - Encryption - Tamper protection -
+Crash-consistency guarantees - Background compaction - Production-grade
+content-defined chunking - Extensive recovery testing
 
-Each file is:
+Use at your own risk.
 
-- Split into chunks
-- Deduplicated against existing chunks
-- Mapped to container offsets
-- Stored transactionally in PostgreSQL
+------------------------------------------------------------------------
 
-Container selection uses:
+## Project Structure
 
-SELECT ... FOR UPDATE SKIP LOCKED
+Repository layout:
 
-This ensures safe concurrent writes during store-folder.
+    /app            → Application source code
+    /db             → Database initialization scripts
+    / scripts       → Utility scripts (smoke testing)
+    /samples        → Sample test files
+    go.mod          → Go module definition (moved to repository root)
+    go.sum          → Go dependency checksums (moved to repository root)
+    docker-compose.yml
 
----
+> Note: `go.mod` and `go.sum` were intentionally moved to the repository
+> root to align with Go module best practices and improve CI/Docker
+> compatibility.
 
-# Features (V0)
+------------------------------------------------------------------------
 
-- Per-file transactional storage
-- Chunk-level deduplication
-- Container rotation on max size
-- Optional compression on seal
-- Concurrent folder ingestion
-- Integrity verification on restore
-- Garbage collection
-- Storage statistics
+## Requirements
 
----
+-   Go 1.23+
+-   Docker & Docker Compose
+-   PostgreSQL (via Docker)
 
-# Limitations (V0)
+------------------------------------------------------------------------
 
-- No encryption at rest
-- No authenticated metadata
-- No access control
-- No resumable uploads
-- Compression occurs during store transaction
-- Restore of compressed containers requires full decompression
-
----
-
-# Requirements
-
-- Go 1.23+
-- PostgreSQL 14+ (tested with 16)
-- Docker (optional but recommended)
-
----
-
-# Quick Start (Docker)
+## Quick Start (Docker)
 
 Start PostgreSQL:
 
     docker compose up -d postgres
 
-Build Capsule:
-
-    docker compose build
-
 Run stats:
 
-    docker compose run --rm app ./capsule stats
+    docker compose run --rm app capsule stats
 
 Store a folder:
 
-    docker compose run --rm -v ./input:/input app ./capsule store-folder /input
+    docker compose run --rm -v ./input:/input app capsule store-folder /input
 
-Restore a file:
+------------------------------------------------------------------------
 
-    docker compose run --rm app ./capsule restore <file_id> /output/file.txt
-
----
-
-# Local Development
-
-Set environment variables:
-
-    export DB_HOST=localhost
-    export DB_PORT=5432
-    export DB_USER=capsule
-    export DB_PASSWORD=capsule
-    export DB_NAME=capsule
-
-Initialize schema:
-
-    psql -U capsule -d capsule -f db/init.sql
+## Local Development
 
 Build:
 
     go build -o capsule ./app
 
-Run:
+Run tests:
 
-    ./capsule store-folder ./input
+    go test ./...
+    go test -race ./...
 
----
+Run vet:
 
-# Roadmap
+    go vet ./...
 
-Planned improvements beyond V0:
+------------------------------------------------------------------------
 
-- Block-based container layout
-- Background container compression
-- Encryption at rest
-- Authenticated metadata
-- Snapshot support
-- Resumable uploads
-- Compaction and rewrite
-- Pluggable storage backends
+## Known Limitations
 
----
+-   Content-defined chunking uses a simplified rolling hash.
+-   Deduplication efficiency is limited.
+-   Containers are not encrypted.
+-   Compression is synchronous.
+-   No background compaction.
+-   Not optimized for large-scale production workloads.
 
-# License
+------------------------------------------------------------------------
 
-MIT License
+## License
+
+This project is licensed under the Apache License 2.0.
+
+------------------------------------------------------------------------
+
+## Development Note
+
+This project was developed with the assistance of Large Language Models
+(LLMs) as collaborative engineering tools.
+
+All architectural decisions, design trade-offs, and implementation
+validation were reviewed and validated by the project author.
+
+LLMs were used to accelerate iteration and exploration, not to replace
+engineering judgment.
