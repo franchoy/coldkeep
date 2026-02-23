@@ -1,5 +1,11 @@
 # Capsule
+
 ![CI](https://github.com/franchoy/capsule_poc/actions/workflows/ci.yml/badge.svg)
+![Go Version](https://img.shields.io/badge/go-1.23+-blue)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![Status](https://img.shields.io/badge/status-research%20prototype-orange)
+
+Capsule is an experimental container-based storage prototype written in Go.
 Capsule is an experimental container-based storage prototype written in
 Go.
 

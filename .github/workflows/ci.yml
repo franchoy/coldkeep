@@ -25,10 +25,7 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./...
-
-      - name: Race Test
+      - name: Test (race enabled)
         run: go test -race ./...
 
       - name: Build
