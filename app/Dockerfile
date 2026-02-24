@@ -1,24 +1,33 @@
 # ---------- Builder ----------
-FROM golang:1.23-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
-WORKDIR /src
+WORKDIR /app
 
-# Copy module files first (better caching)
-COPY go.mod go.sum ./
+# Install git (required for some Go modules)
+RUN apk add --no-cache git
+
+COPY app/go.mod app/go.sum ./
 RUN go mod download
 
-# Copy the rest of the source
-COPY app/ ./app/
-
-WORKDIR /src/app
-
-RUN go build -o /capsule
+COPY app/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o capsule .
 
 # ---------- Runtime ----------
 FROM alpine:3.19
 
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    bash
+
 WORKDIR /app
 
-COPY --from=builder /capsule /usr/local/bin/capsule
+# Copy binary
+COPY --from=builder /app/capsule /usr/local/bin/capsule
 
+# Copy scripts for smoke/testing
+COPY scripts/ ./scripts/
+
+# Default command
 ENTRYPOINT ["capsule"]
+CMD ["stats"]

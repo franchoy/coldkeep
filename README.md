@@ -1,119 +1,166 @@
-# Capsule
+# Capsule (POC)
 
 ![CI](https://github.com/franchoy/capsule_poc/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-research%20prototype-orange)
 
-Capsule is an experimental container-based storage prototype written in Go.
-Capsule is an experimental container-based storage prototype written in
-Go.
+> **Status:** Research prototype / proof‑of‑concept.  
+> **Not production‑ready. Do not use for real or sensitive data.**
 
-It explores content-defined chunking, containerized storage,
-deduplication concepts, and database-backed metadata indexing.
+Capsule is an experimental local-first content‑addressed file storage prototype written in Go. It stores files as **chunks** inside **container** files on disk, and tracks metadata in Postgres.
 
-------------------------------------------------------------------------
+This repo is meant for learning, experimentation, and discussion — not for operational backup/storage use.
 
-# ⚠️ Research Prototype -- Not Production Ready ⚠️
+---
 
-This project is an experimental storage prototype.
+## What it does (today)
 
-It is **NOT production-ready**.
+- Store a file (or folder) by splitting it into chunks.
+- Deduplicate chunks using SHA‑256.
+- Pack chunks into container files up to a max size.
+- Restore a file by reconstructing it from chunks.
+- Remove a logical file (decrements chunk ref counts).
+- Run GC to delete unreferenced chunks/containers.
+- Basic stats.
 
-Do NOT use for: - Valuable data - Sensitive data - Irreplaceable data -
-Business workloads
+---
 
-Missing features include: - Encryption - Tamper protection -
-Crash-consistency guarantees - Background compaction - Production-grade
-content-defined chunking - Extensive recovery testing
+## Design sketch
 
-Use at your own risk.
+- **logical_file**: user-facing file entry (name, size, root hash)
+- **chunk**: content-addressed chunk (hash, size, ref_count)
+- **file_chunk**: mapping from logical_file → ordered chunk list
+- **container**: physical file on disk that stores records (chunks)
+- **container_chunk**: mapping chunk → container + offset/length
 
-------------------------------------------------------------------------
+**Containers** are plain files under `storage/containers/`.
 
-## Project Structure
+---
 
-Repository layout:
+## Quickstart (Docker)
 
-    /app            → Application source code
-    /db             → Database initialization scripts
-    / scripts       → Utility scripts (smoke testing)
-    /samples        → Sample test files
-    go.mod          → Go module definition (moved to repository root)
-    go.sum          → Go dependency checksums (moved to repository root)
-    docker-compose.yml
+Prereqs: Docker + Docker Compose.
 
-> Note: `go.mod` and `go.sum` were intentionally moved to the repository
-> root to align with Go module best practices and improve CI/Docker
-> compatibility.
+```bash
+docker compose up -d --build
+```
 
-------------------------------------------------------------------------
+Run commands:
 
-## Requirements
+```bash
+docker compose run --rm app store /data/myfile.bin
+docker compose run --rm app restore <logical_name_or_id> /data/restore-output.bin
+docker compose run --rm app stats
+docker compose run --rm app gc
+```
 
--   Go 1.23+
--   Docker & Docker Compose
--   PostgreSQL (via Docker)
+> Tip: In Docker, `/data` is whatever you mount into the container.  
+> You can mount your current folder like:
+>
+> ```bash
+> docker compose run --rm -v "$PWD:/data" app store /data/somefile
+> ```
 
-------------------------------------------------------------------------
+---
 
-## Quick Start (Docker)
+## Quickstart (Local)
 
-Start PostgreSQL:
+Prereqs: Go + Postgres.
 
-    docker compose up -d postgres
+1) Start Postgres (example with Docker):
 
-Run stats:
+```bash
+docker compose up -d postgres
+```
 
-    docker compose run --rm app capsule stats
+2) Build:
 
-Store a folder:
+```bash
+cd app
+go build -o ../capsule .
+cd ..
+```
 
-    docker compose run --rm -v ./input:/input app capsule store-folder /input
+3) Run:
 
-------------------------------------------------------------------------
+```bash
+./capsule store ./somefile.bin
+./capsule restore <logical_name_or_id> ./out.bin
+./capsule stats
+./capsule gc
+```
 
-## Local Development
+---
 
-Build:
+## Configuration
 
-    go build -o capsule ./app
+The app reads DB connection info from environment variables (see `docker-compose.yml` for defaults). Storage goes to `./storage/` by default.
 
-Run tests:
+---
 
-    go test ./...
-    go test -race ./...
+## Known limitations (important)
 
-Run vet:
+### Crash consistency / failure modes
 
-    go vet ./...
+Capsule is **not crash-consistent**. Some operations combine filesystem writes with DB transactions, but the filesystem cannot be rolled back if a DB transaction fails. This means:
 
-------------------------------------------------------------------------
+- A crash or error can leave **orphan container files** on disk.
+- DB state can temporarily **disagree** with what exists on disk.
+- Sealing/compressing a container may be partially applied if interrupted.
 
-## Known Limitations
+If you test this project, do so with disposable data and be prepared to delete `storage/` and re-init the DB.
 
--   Content-defined chunking uses a simplified rolling hash.
--   Deduplication efficiency is limited.
--   Containers are not encrypted.
--   Compression is synchronous.
--   No background compaction.
--   Not optimized for large-scale production workloads.
+### Whole-container compression breaks random access
 
-------------------------------------------------------------------------
+If container compression is enabled (gzip/zstd), restores may become **very slow** because compressed streams are not seekable. The restore path may need to decompress from the beginning and discard bytes to reach an offset.
+
+Default for this POC is **no container compression**.
+
+### Concurrency & integrity
+
+- Concurrency guarantees are minimal; correctness under heavy concurrent store/remove/gc is not a goal for v0.
+- Integrity checking is basic; there is no end-to-end authentication of restored files beyond chunk hashing.
+
+---
+
+## Security
+
+See [SECURITY.md](SECURITY.md).
+
+This project is a prototype. It does not claim to provide strong security guarantees and should not be used to protect sensitive information.
+
+---
+
+## Development
+
+### Tests
+
+- Unit tests run with `go test ./...`
+- Integration tests require Postgres and are gated by environment (see tests for details).
+
+### Smoke script
+
+`scripts/smoke.sh` is intended for **local runs** (it uses `bash` and `./capsule`). If you run it inside Docker, ensure you use a dev container that has bash and your repo mounted.
+
+---
+
+## Roadmap ideas
+
+- Block/record framing that supports random access with compression.
+- Stronger crash consistency (two-phase container state, write-ahead records).
+- Better GC safety and concurrent operations.
+- Segment/block hierarchy, erasure coding experiments, cloud backends.
+- CLI improvements, versioned migrations, richer stats.
+
+---
+
+## Contributing
+
+Contributions and discussion are welcome — especially around format design, correctness, and performance. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
 
 ## License
 
-This project is licensed under the Apache License 2.0.
-
-------------------------------------------------------------------------
-
-## Development Note
-
-This project was developed with the assistance of Large Language Models
-(LLMs) as collaborative engineering tools.
-
-All architectural decisions, design trade-offs, and implementation
-validation were reviewed and validated by the project author.
-
-LLMs were used to accelerate iteration and exploration, not to replace
-engineering judgment.
+Apache-2.0. See [LICENSE](LICENSE).

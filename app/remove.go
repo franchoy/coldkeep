@@ -69,11 +69,19 @@ func removeFileWithDB(db *sql.DB, fileID int64) error {
 
 	// Decrement ref_count
 	for _, chunkID := range chunkIDs {
-		_, err := tx.Exec(`
+		var refCount int64
+		err := tx.QueryRow(`
 			UPDATE chunk
 			SET ref_count = ref_count - 1
 			WHERE id = $1
-		`, chunkID)
+			AND ref_count > 0
+			RETURNING ref_count
+		`, chunkID).Scan(&refCount)
+
+		if err == sql.ErrNoRows {
+			_ = tx.Rollback()
+			return fmt.Errorf("invalid ref_count transition for chunk %d", chunkID)
+		}
 		if err != nil {
 			_ = tx.Rollback()
 			return err

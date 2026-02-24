@@ -10,18 +10,13 @@ import (
 func runGC() error {
 	db, err := connectDB()
 	if err != nil {
-		return fmt.Errorf("Failed to connect to DB: %w", err)
+		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer db.Close()
 
 	rows, err := db.Query(`
-		SELECT c.id, c.filename, c.compression_algorithm
-		FROM container c
-		WHERE NOT EXISTS (
-			SELECT 1 FROM chunk ch
-			WHERE ch.container_id = c.id
-			AND ch.ref_count > 0
-		)
+		SELECT id, filename, compression_algorithm
+		FROM container
 	`)
 	if err != nil {
 		return err
@@ -39,27 +34,59 @@ func runGC() error {
 			return err
 		}
 
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+
+		// Re-check inside transaction
+		var stillEmpty bool
+		err = tx.QueryRow(`
+			SELECT 
+				sealed AND NOT EXISTS (
+					SELECT 1 FROM chunk
+					WHERE container_id = $1
+					AND ref_count > 0
+				)
+			FROM container
+			WHERE id = $1
+		`, containerID).Scan(&stillEmpty)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+
+		if !stillEmpty {
+			_ = tx.Rollback()
+			continue
+		}
+
+		// Delete chunks
+		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1`, containerID)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+
+		// Delete container row
+		_, err = tx.Exec(`DELETE FROM container WHERE id = $1`, containerID)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+
+		// After commit, delete file from disk
 		containerPath := filepath.Join(storageDir, filename)
 		if algo != "" && algo != string(CompressionNone) {
 			containerPath += "." + algo
 		}
 
-		// Delete file from disk
 		if err := os.Remove(containerPath); err != nil {
-			log.Println("Failed to delete file:", err)
-			continue
-		}
-
-		// Delete chunk rows
-		_, err = db.Exec(`DELETE FROM chunk WHERE container_id = $1`, containerID)
-		if err != nil {
-			return err
-		}
-
-		// Delete container row
-		_, err = db.Exec(`DELETE FROM container WHERE id = $1`, containerID)
-		if err != nil {
-			return err
+			log.Println("warning: failed to delete container file:", err)
 		}
 
 		deletedContainers++
@@ -67,6 +94,5 @@ func runGC() error {
 	}
 
 	fmt.Printf("GC completed. Containers deleted: %d\n", deletedContainers)
-
 	return nil
 }
