@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	ContainerMagic    = "CAPSULE0" // must be exactly 8 bytes
+	ContainerMagic    = "coldkeep0" // must be exactly 8 bytes
 	ContainerHdrLenV0 = 64         // fixed header size in bytes
 )
 

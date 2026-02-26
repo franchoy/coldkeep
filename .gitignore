@@ -18,11 +18,11 @@ coverage.out
 go.work
 
 # =========================
-# Capsule specific binaries
+# coldkeep specific binaries
 # =========================
-capsule
-app/capsule
-app/capsule-poc
+coldkeep
+app/coldkeep
+app/coldkeep-poc
 # binaries generated during development
 *.exe
 *.out

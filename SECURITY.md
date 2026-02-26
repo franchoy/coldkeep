@@ -2,7 +2,7 @@
 
 ## Overview
 
-Capsule (V0) is an experimental storage engine prototype designed for:
+coldkeep (V0) is an experimental storage engine prototype designed for:
 
 - Deduplicated storage
 - Chunk-based container layout
@@ -13,7 +13,7 @@ Capsule (V0) is an experimental storage engine prototype designed for:
 
 ## Security Model (V0)
 
-Capsule V0 provides:
+coldkeep V0 provides:
 
 - Per-file transactional metadata (atomic store)
 - Chunk-level SHA256 hashing
@@ -21,7 +21,7 @@ Capsule V0 provides:
 - Integrity verification during restore
 - Database row-level locking for concurrent safety
 
-Capsule V0 does NOT provide:
+coldkeep V0 does NOT provide:
 
 - Encryption at rest
 - Authentication or authorization
@@ -56,7 +56,7 @@ It does NOT protect against:
 
 ## Concurrency Model
 
-Capsule V0 supports concurrent store-folder operations.
+coldkeep V0 supports concurrent store-folder operations.
 
 Concurrency safety is achieved using:
 
@@ -74,7 +74,7 @@ This ensures:
 
 ## Known Limitations
 
-Capsule V0 should not be used in production environments handling sensitive or regulated data.
+coldkeep V0 should not be used in production environments handling sensitive or regulated data.
 
 Future security improvements may include:
 

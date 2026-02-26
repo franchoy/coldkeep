@@ -1,15 +1,15 @@
-# Contributing to Capsule
+# Contributing to coldkeep
 
-Thank you for your interest in contributing to Capsule.
+Thank you for your interest in contributing to coldkeep.
 
-Capsule V0 is an experimental deduplicated storage engine prototype.
+coldkeep V0 is an experimental deduplicated storage engine prototype.
 We welcome improvements, bug reports, and architectural discussions.
 
 ---
 
 ## Project Goals (V0)
 
-Capsule V0 focuses on:
+coldkeep V0 focuses on:
 
 - Correctness over performance
 - Transactional metadata safety
@@ -37,14 +37,14 @@ Start PostgreSQL:
 
     docker compose up -d postgres
 
-Build Capsule:
+Build coldkeep:
 
     docker compose build
 
 Run commands:
 
-    docker compose run --rm app ./capsule stats
-    docker compose run --rm app ./capsule store-folder /input
+    docker compose run --rm app ./coldkeep stats
+    docker compose run --rm app ./coldkeep store-folder /input
 
 ---
 
@@ -54,17 +54,17 @@ Set environment variables:
 
     export DB_HOST=localhost
     export DB_PORT=5432
-    export DB_USER=capsule
-    export DB_PASSWORD=capsule
-    export DB_NAME=capsule
+    export DB_USER=coldkeep
+    export DB_PASSWORD=coldkeep
+    export DB_NAME=coldkeep
 
 Initialize schema:
 
-    psql -U capsule -d capsule -f db/init.sql
+    psql -U coldkeep -d coldkeep -f db/init.sql
 
 Build:
 
-    go build -o capsule ./app
+    go build -o coldkeep ./app
 
 ---
 
@@ -85,7 +85,7 @@ Run:
 
 ## Concurrency Rules
 
-Capsule uses:
+coldkeep uses:
 
 - Per-file database transactions
 - SELECT ... FOR UPDATE SKIP LOCKED
@@ -122,7 +122,7 @@ Pull requests should include:
 
 Open an issue with:
 
-- Capsule version
+- coldkeep version
 - Exact command used
 - Console output
 - Steps to reproduce
@@ -137,7 +137,7 @@ For significant changes (e.g., encryption, container format change, resumable up
 
 Please open a design discussion issue first.
 
-Capsule is evolving toward:
+coldkeep is evolving toward:
 
 - Block-based layout
 - Authenticated metadata
@@ -155,4 +155,4 @@ Capsule is evolving toward:
 
 ---
 
-Thank you for contributing to Capsule.
+Thank you for contributing to coldkeep.

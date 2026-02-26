@@ -1,11 +1,11 @@
 services:
   postgres:
     image: postgres:16
-    container_name: capsule_postgres
+    container_name: coldkeep_postgres
     environment:
-      POSTGRES_USER: capsule
-      POSTGRES_PASSWORD: capsule
-      POSTGRES_DB: capsule
+      POSTGRES_USER: coldkeep
+      POSTGRES_PASSWORD: coldkeep
+      POSTGRES_DB: coldkeep
     ports:
       - "5432:5432"
     volumes:
@@ -16,17 +16,17 @@ services:
     build:
       context: .
       dockerfile: app/Dockerfile
-    container_name: capsule_app
+    container_name: coldkeep_app
     depends_on:
       - postgres
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_USER: capsule
-      DB_PASSWORD: capsule
-      DB_NAME: capsule
-      CAPSULE_STORAGE_DIR: /storage/containers
-      CAPSULE_CONTAINER_MAX_SIZE_MB: 64
+      DB_USER: coldkeep
+      DB_PASSWORD: coldkeep
+      DB_NAME: coldkeep
+      coldkeep_STORAGE_DIR: /storage/containers
+      coldkeep_CONTAINER_MAX_SIZE_MB: 64
     volumes:
       - ./storage:/storage
 

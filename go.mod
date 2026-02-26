@@ -1,4 +1,4 @@
-module capsule-poc
+module coldkeep-poc
 
 go 1.23
 

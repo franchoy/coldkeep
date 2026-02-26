@@ -1,16 +1,16 @@
 # ---------- Builder ----------
-FROM golang:1.22-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
 # Install git (required for some Go modules)
 RUN apk add --no-cache git
 
-COPY app/go.mod app/go.sum ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY app/ .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o capsule .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o coldkeep .
 
 # ---------- Runtime ----------
 FROM alpine:3.19
@@ -23,11 +23,11 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy binary
-COPY --from=builder /app/capsule /usr/local/bin/capsule
+COPY --from=builder /app/coldkeep /usr/local/bin/coldkeep
 
 # Copy scripts for smoke/testing
 COPY scripts/ ./scripts/
 
 # Default command
-ENTRYPOINT ["capsule"]
+ENTRYPOINT ["coldkeep"]
 CMD ["stats"]

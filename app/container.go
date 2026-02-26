@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-var storageDir = getEnv("CAPSULE_STORAGE_DIR", "./storage/containers")
+var storageDir = getEnv("coldkeep_STORAGE_DIR", "./storage/containers")
 
-var containerMaxSize = getEnvInt64("CAPSULE_CONTAINER_MAX_SIZE_MB", 64) * 1024 * 1024 //MB
+var containerMaxSize = getEnvInt64("coldkeep_CONTAINER_MAX_SIZE_MB", 64) * 1024 * 1024 //MB
 
 func getEnv(key, fallback string) string {
 	if val, ok := os.LookupEnv(key); ok {

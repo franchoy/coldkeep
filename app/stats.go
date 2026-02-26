@@ -40,7 +40,7 @@ func runStats() error {
 		FROM chunk
 	`).Scan(&liveBytes, &deadBytes)
 
-	fmt.Println("\n====== Capsule Stats ======")
+	fmt.Println("\n====== coldkeep Stats ======")
 
 	fmt.Printf("Logical files:           %d\n", totalFiles)
 	fmt.Printf("Logical stored size:     %.2f MB\n", float64(totalLogicalSize.Int64)/(1024*1024))

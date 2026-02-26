@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-We as members, contributors, and maintainers pledge to make participation in Capsule a harassment-free experience for everyone, regardless of:
+We as members, contributors, and maintainers pledge to make participation in coldkeep a harassment-free experience for everyone, regardless of:
 
 - Age
 - Body size

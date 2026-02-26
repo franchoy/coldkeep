@@ -1,6 +1,6 @@
-# Capsule (POC)
+# coldkeep (POC)
 
-![CI](https://github.com/franchoy/capsule_poc/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/franchoy/coldkeep_poc/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-research%20prototype-orange)
@@ -8,7 +8,7 @@
 > **Status:** Research prototype / proof‑of‑concept.  
 > **Not production‑ready. Do not use for real or sensitive data.**
 
-Capsule is an experimental local-first content‑addressed file storage prototype written in Go. It stores files as **chunks** inside **container** files on disk, and tracks metadata in Postgres.
+coldkeep is an experimental local-first content‑addressed file storage prototype written in Go. It stores files as **chunks** inside **container** files on disk, and tracks metadata in Postgres.
 
 This repo is meant for learning, experimentation, and discussion — not for operational backup/storage use.
 
@@ -78,17 +78,17 @@ docker compose up -d postgres
 
 ```bash
 cd app
-go build -o ../capsule .
+go build -o ../coldkeep .
 cd ..
 ```
 
 3) Run:
 
 ```bash
-./capsule store ./somefile.bin
-./capsule restore <logical_name_or_id> ./out.bin
-./capsule stats
-./capsule gc
+./coldkeep store ./somefile.bin
+./coldkeep restore <logical_name_or_id> ./out.bin
+./coldkeep stats
+./coldkeep gc
 ```
 
 ---
@@ -103,7 +103,7 @@ The app reads DB connection info from environment variables (see `docker-compose
 
 ### Crash consistency / failure modes
 
-Capsule is **not crash-consistent**. Some operations combine filesystem writes with DB transactions, but the filesystem cannot be rolled back if a DB transaction fails. This means:
+coldkeep is **not crash-consistent**. Some operations combine filesystem writes with DB transactions, but the filesystem cannot be rolled back if a DB transaction fails. This means:
 
 - A crash or error can leave **orphan container files** on disk.
 - DB state can temporarily **disagree** with what exists on disk.
@@ -141,7 +141,7 @@ This project is a prototype. It does not claim to provide strong security guaran
 
 ### Smoke script
 
-`scripts/smoke.sh` is intended for **local runs** (it uses `bash` and `./capsule`). If you run it inside Docker, ensure you use a dev container that has bash and your repo mounted.
+`scripts/smoke.sh` is intended for **local runs** (it uses `bash` and `./coldkeep`). If you run it inside Docker, ensure you use a dev container that has bash and your repo mounted.
 
 ---
 

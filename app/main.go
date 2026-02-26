@@ -23,19 +23,19 @@ func main() {
 	switch os.Args[1] {
 	case "store":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: capsule store <filePath>")
+			log.Fatal("Usage: coldkeep store <filePath>")
 		}
 		err = storeFile(os.Args[2])
 
 	case "store-folder":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: capsule store-folder <folderPath>")
+			log.Fatal("Usage: coldkeep store-folder <folderPath>")
 		}
 		err = storeFolder(os.Args[2])
 
 	case "restore":
 		if len(os.Args) < 4 {
-			log.Fatal("Usage: capsule restore <fileID> <outputDir>")
+			log.Fatal("Usage: coldkeep restore <fileID> <outputDir>")
 		}
 		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
 		if err != nil {
@@ -45,7 +45,7 @@ func main() {
 
 	case "remove":
 		if len(os.Args) < 3 {
-			log.Fatal("Usage: capsule remove <fileID>")
+			log.Fatal("Usage: coldkeep remove <fileID>")
 		}
 		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
 		if err != nil {
@@ -63,7 +63,7 @@ func main() {
 		printHelp()
 
 	case "version", "-v", "--version":
-		fmt.Println("Capsule version", version)
+		fmt.Println("coldkeep version", version)
 
 	case "list":
 		err = listFiles()
@@ -86,10 +86,10 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("Capsule POC (V0)")
+	fmt.Println("coldkeep POC (V0)")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  capsule <command> [arguments]")
+	fmt.Println("  coldkeep <command> [arguments]")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  store <file>               Store a single file")
@@ -114,11 +114,12 @@ func printHelp() {
 	fmt.Println("  DB_USER")
 	fmt.Println("  DB_PASSWORD")
 	fmt.Println("  DB_NAME")
-	fmt.Println("  CAPSULE_STORAGE_DIR (default: ./storage/containers)")
+	fmt.Println("  coldkeep_STORAGE_DIR (default: ./storage/containers)")
+	fmt.Println("  coldkeep_CONTAINER_MAX_SIZE_MB (default: 64)")
 	fmt.Println()
 	fmt.Println("Example:")
-	fmt.Println("  capsule store myfile.bin")
-	fmt.Println("  capsule restore 12 ./restored")
+	fmt.Println("  coldkeep store myfile.bin")
+	fmt.Println("  coldkeep restore 12 ./restored")
 }
 
 func printSuccess(title string) {
