@@ -56,10 +56,16 @@ Start services:
 docker compose up -d --build
 ```
 
+Store a sample file:
+
+``` bash
+docker compose run --rm -v "$PWD/samples:/samples" app store /samples/hello.txt
+```
+
 Store the sample folder:
 
 ``` bash
-docker compose run --rm app store-folder samples
+docker compose run --rm -v "$PWD/samples:/samples" app store-folder /samples
 ```
 
 List stored files:
@@ -204,6 +210,22 @@ information.
 
 `scripts/smoke.sh` provides a quick end‑to‑end test using the `samples/`
 folder.
+
+#### Local (without Docker)
+
+docker compose up -d postgres
+go build -o coldkeep ./app
+bash scripts/smoke.sh
+
+#### Docker
+
+docker compose up -d postgres
+docker compose run --rm  
+  -e COLDKEEP_SAMPLES_DIR=/samples \
+  -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage \
+  -v "$PWD/samples:/samples" \
+  --entrypoint bash \
+  app scripts/smoke.sh
 
 ------------------------------------------------------------------------
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# samples dir can be overridden with env var, default to ./samples
+: "${COLDKEEP_SAMPLES_DIR:=./samples}"
 
 # Simple end-to-end smoke test for coldkeep V0.
 # Requires a running Postgres with env vars set (or docker compose).
 #
 # Example (docker):
 #   docker compose up -d postgres
-#   docker compose run --rm -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage -v ./samples:/samples app bash scripts/smoke.sh
+#   docker compose run --rm  -e COLDKEEP_SAMPLES_DIR=/samples -v ./samples:/samples --entrypoint bash app scripts/smoke.sh
 
 echo "[smoke] starting"
 
@@ -17,7 +19,7 @@ echo "[smoke] stats (before)"
 coldkeep stats || true
 
 echo "[smoke] store-folder samples"
-coldkeep store-folder ./samples
+coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"
 
 echo "[smoke] stats (after)"
 coldkeep stats
