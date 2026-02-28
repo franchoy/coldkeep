@@ -2,157 +2,204 @@
 
 Thank you for your interest in contributing to coldkeep.
 
-coldkeep V0 is an experimental deduplicated storage engine prototype.
-We welcome improvements, bug reports, and architectural discussions.
+coldkeep V0 is an experimental deduplicated storage engine prototype. We
+welcome improvements, bug reports, architectural discussions, and
+thoughtful critiques.
 
----
+------------------------------------------------------------------------
 
-## Project Goals (V0)
+## Project Philosophy (V0)
 
-coldkeep V0 focuses on:
+coldkeep V0 prioritizes:
 
-- Correctness over performance
-- Transactional metadata safety
-- Deterministic container layout
-- Safe concurrent folder ingestion
-- Clear and readable code
+-   Correctness over performance
+-   Deterministic storage behavior
+-   Transactional metadata safety
+-   Clear and readable code
+-   Simplicity over abstraction
 
-V0 is intentionally simple. Major architectural changes should be discussed before implementation.
+This is a research prototype. Stability and conceptual clarity are more
+important than feature velocity.
 
----
+Major architectural changes should be discussed before implementation.
 
-## Development Environment
+------------------------------------------------------------------------
 
-### Requirements
+## Development Requirements
 
-- Go 1.23+
-- PostgreSQL 14+
-- Docker (recommended)
+-   Go 1.23+ (or the version specified in go.mod)
+-   PostgreSQL 14+
+-   Docker (recommended for reproducibility)
 
----
+------------------------------------------------------------------------
 
-## Running Locally (Docker Recommended)
+## Running with Docker (Recommended)
 
 Start PostgreSQL:
 
-    docker compose up -d postgres
+``` bash
+docker compose up -d postgres
+```
 
-Build coldkeep:
+Build the application image:
 
-    docker compose build
+``` bash
+docker compose build
+```
 
 Run commands:
 
-    docker compose run --rm app ./coldkeep stats
-    docker compose run --rm app ./coldkeep store-folder /input
+``` bash
+docker compose run --rm app stats
+docker compose run --rm app store-folder samples
+```
 
----
+------------------------------------------------------------------------
 
 ## Running Without Docker
 
 Set environment variables:
 
-    export DB_HOST=localhost
-    export DB_PORT=5432
-    export DB_USER=coldkeep
-    export DB_PASSWORD=coldkeep
-    export DB_NAME=coldkeep
+``` bash
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+```
 
-Initialize schema:
+Initialize the schema:
 
-    psql -U coldkeep -d coldkeep -f db/init.sql
+``` bash
+psql -U coldkeep -d coldkeep -f db/init.sql
+```
 
 Build:
 
-    go build -o coldkeep ./app
-
----
-
-## Code Style
-
-- Code must pass gofmt
-- Keep functions small and readable
-- Avoid premature optimization
-- Prefer clarity over cleverness
-- No hidden concurrency patterns
+``` bash
+go build -o coldkeep ./app
+```
 
 Run:
 
-    gofmt -w .
-    go vet ./...
+``` bash
+./coldkeep store-folder samples
+./coldkeep stats
+```
 
----
+------------------------------------------------------------------------
 
-## Concurrency Rules
+## Code Style & Quality
+
+-   Code must pass `gofmt`
+-   Code must pass `go vet`
+-   Keep functions small and readable
+-   Avoid premature optimization
+-   Prefer clarity over cleverness
+-   Avoid hidden or implicit concurrency patterns
+
+Before submitting:
+
+``` bash
+gofmt -w .
+go vet ./...
+go test ./...
+```
+
+------------------------------------------------------------------------
+
+## Concurrency & Storage Rules
 
 coldkeep uses:
 
-- Per-file database transactions
-- SELECT ... FOR UPDATE SKIP LOCKED
-- Container rotation logic
+-   Per-file PostgreSQL transactions
+-   `SELECT ... FOR UPDATE SKIP LOCKED`
+-   Deterministic container append logic
 
 When modifying storage logic:
 
-- Do not remove transactional boundaries
-- Do not introduce partial metadata commits
-- Do not bypass container locking semantics
-- Keep container writes deterministic
+-   Do not remove transactional boundaries
+-   Do not introduce partial metadata commits
+-   Do not bypass container locking semantics
+-   Do not introduce non-deterministic container writes
+-   Preserve chunk ordering guarantees
 
-If unsure, open a discussion before implementing.
+If unsure, open a discussion before implementing changes.
 
----
+------------------------------------------------------------------------
+
+## Testing Guidelines
+
+-   Unit tests should not require Docker
+-   Integration tests must be explicitly gated by environment variables
+-   Avoid flaky timing-based tests
+-   Prefer deterministic inputs
+
+If adding storage logic, include at least one restore verification test.
+
+------------------------------------------------------------------------
 
 ## Submitting Changes
 
-1. Fork the repository
-2. Create a feature branch
-3. Keep commits small and focused
-4. Run formatting tools
-5. Open a Pull Request
+1.  Fork the repository
+2.  Create a feature branch
+3.  Keep commits small and focused
+4.  Run formatting and tests
+5.  Open a Pull Request
 
 Pull requests should include:
 
-- Clear description of the change
-- Why it is needed
-- Any tradeoffs introduced
+-   A clear description of the change
+-   Why it is needed
+-   Tradeoffs introduced
+-   Any schema impact (if applicable)
 
----
+Breaking changes must include migration notes.
+
+------------------------------------------------------------------------
 
 ## Reporting Bugs
 
-Open an issue with:
+When opening an issue, include:
 
-- coldkeep version
-- Exact command used
-- Console output
-- Steps to reproduce
+-   coldkeep version (commit hash if possible)
+-   Exact command used
+-   Full console output
+-   Steps to reproduce
+-   Expected vs. actual behavior
 
-If the issue involves data corruption or security, see SECURITY.md.
+If the issue involves potential corruption or security impact, see
+SECURITY.md before filing publicly.
 
----
+------------------------------------------------------------------------
 
-## Architectural Changes
+## Architectural Discussions
 
-For significant changes (e.g., encryption, container format change, resumable uploads):
+For significant changes (e.g., encryption, container format redesign,
+background compaction, resumable uploads):
 
 Please open a design discussion issue first.
 
 coldkeep is evolving toward:
 
-- Block-based layout
-- Authenticated metadata
-- Encryption
-- Background compaction
+-   Block-based container layout
+-   Authenticated metadata
+-   Encryption support
+-   Background verification / compaction
+-   Cloud backend experimentation
 
----
+------------------------------------------------------------------------
 
-## What We Are Not Accepting (V0)
+## Not in Scope for V0
 
-- Large framework rewrites
-- ORM introduction
-- Breaking schema changes without migration plan
-- Non-deterministic storage logic
+The following are unlikely to be accepted in V0:
 
----
+-   Large framework rewrites
+-   ORM introduction
+-   Non-deterministic storage logic
+-   Breaking schema changes without migration strategy
+-   Heavy dependency additions without strong justification
+
+------------------------------------------------------------------------
 
 Thank you for contributing to coldkeep.

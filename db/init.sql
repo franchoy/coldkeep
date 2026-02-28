@@ -76,11 +76,10 @@ CREATE TABLE IF NOT EXISTS file_chunk (
   chunk_id BIGINT NOT NULL
     REFERENCES chunk(id) ON DELETE RESTRICT,
   chunk_order INTEGER NOT NULL CHECK (chunk_order >= 0),
-  PRIMARY KEY (logical_file_id, chunk_order),
-  UNIQUE (logical_file_id, chunk_id)
-);
+  PRIMARY KEY (logical_file_id, chunk_order)
+  );
 
-CREATE INDEX IF NOT EXISTS idx_file_chunk_chunk 
-ON file_chunk(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_file_chunk_logical_file_id ON file_chunk(logical_file_id);
+CREATE INDEX IF NOT EXISTS idx_file_chunk_chunk_id ON file_chunk(chunk_id);
 
 COMMIT;

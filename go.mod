@@ -1,4 +1,4 @@
-module coldkeep
+module github.com/franchoy/coldkeep
 
 go 1.23
 

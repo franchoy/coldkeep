@@ -72,3 +72,8 @@ tmp/
 temp/
 *.swp
 *.swo
+
+# =========================
+# smoke scripts output
+# =========================
+_smoke_out/

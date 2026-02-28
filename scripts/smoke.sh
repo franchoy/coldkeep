@@ -14,26 +14,26 @@ echo "[smoke] starting"
 mkdir -p "$COLDKEEP_STORAGE_DIR"
 
 echo "[smoke] stats (before)"
-./coldkeep stats || true
+coldkeep stats || true
 
 echo "[smoke] store-folder samples"
-./coldkeep store-folder ./samples
+coldkeep store-folder ./samples
 
 echo "[smoke] stats (after)"
-./coldkeep stats
+coldkeep stats
 
 echo "[smoke] list files"
-./coldkeep list
+coldkeep list
 
 # Restore first file id if available
-FIRST_ID=$(./coldkeep list | awk 'NR==2 {print $1}' || true)
+FIRST_ID=$(coldkeep list | awk 'NR>2 {print $1; exit}' || true)
 if [[ -n "${FIRST_ID}" ]]; then
   echo "[smoke] restoring first file id=${FIRST_ID}"
   mkdir -p ./_smoke_out
-  ./coldkeep restore "${FIRST_ID}" ./_smoke_out/
+  coldkeep restore "${FIRST_ID}" ./_smoke_out/
   echo "[smoke] re-store restored file (should dedupe)"
   RESTORED=$(ls -1 ./_smoke_out | head -n 1)
-  ./coldkeep store "./_smoke_out/${RESTORED}" || true
+  coldkeep store "./_smoke_out/${RESTORED}" || true
 fi
 
 echo "[smoke] done"
