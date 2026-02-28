@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"os"
+	"strings"
 
 	_ "github.com/lib/pq"
 )
@@ -15,7 +16,9 @@ func connectDB() (*sql.DB, error) {
 		" password=" + os.Getenv("DB_PASSWORD") +
 		" dbname=" + os.Getenv("DB_NAME") +
 		" sslmode=" + envOrDefault("DB_SSLMODE", "disable")
-	log.Printf("Connecting to DB with: %s", connStr) // Log the connection string (without password)
+	safeConnStr := strings.ReplaceAll(connStr, "password="+os.Getenv("DB_PASSWORD"), "password=***")
+
+	log.Printf("Connecting to DB with: %s", safeConnStr) // Log the connection string (without password)
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
