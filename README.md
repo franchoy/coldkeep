@@ -86,7 +86,7 @@ cd ..
 
 ```bash
 ./coldkeep store ./somefile.bin
-./coldkeep restore <logical_name_or_id> ./out.bin
+./coldkeep restore <logical_file_id> ./out.bin
 ./coldkeep stats
 ./coldkeep gc
 ```
@@ -121,7 +121,7 @@ Default for this POC is **no container compression**.
 
 - Concurrency guarantees are minimal; correctness under heavy concurrent store/remove/gc is not a goal for v0.
 - Integrity checking is basic; there is no end-to-end authentication of restored files beyond chunk hashing.
-
+- concurrency can create orphan bytes inside containers
 ---
 
 ## Security

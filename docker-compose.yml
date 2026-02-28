@@ -25,8 +25,9 @@ services:
       DB_USER: coldkeep
       DB_PASSWORD: coldkeep
       DB_NAME: coldkeep
-      coldkeep_STORAGE_DIR: /storage/containers
-      coldkeep_CONTAINER_MAX_SIZE_MB: 64
+      DB_SSLMODE: disable
+      COLDKEEP_STORAGE_DIR: /storage/containers
+      COLDKEEP_CONTAINER_MAX_SIZE_MB: 64
     volumes:
       - ./storage:/storage
 

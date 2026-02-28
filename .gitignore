@@ -22,7 +22,6 @@ go.work
 # =========================
 coldkeep
 app/coldkeep
-app/coldkeep-poc
 # binaries generated during development
 *.exe
 *.out

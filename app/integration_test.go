@@ -13,15 +13,15 @@ import (
 
 // NOTE:
 // These tests are integration-style (DB + filesystem).
-// They are skipped unless coldkeep_TEST_DB=1 is set.
+// They are skipped unless COLDKEEP_TEST_DB=1 is set.
 //
 // Run (example):
-//   coldkeep_TEST_DB=1 DB_HOST=localhost DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep go test ./app -v
+//   COLDKEEP_TEST_DB=1 DB_HOST=localhost DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep go test ./app -v
 
 func requireDB(t *testing.T) {
 	t.Helper()
-	if os.Getenv("coldkeep_TEST_DB") == "" {
-		t.Skip("Set coldkeep_TEST_DB=1 to run integration tests")
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
 	}
 }
 
@@ -29,7 +29,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 	t.Helper()
 
 	// 1) Allow explicit override (best for Docker / CI)
-	if p := os.Getenv("coldkeep_SCHEMA_PATH"); p != "" {
+	if p := os.Getenv("COLDKEEP_SCHEMA_PATH"); p != "" {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatalf("read schema %s: %v", p, err)
@@ -86,7 +86,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 		}
 	}
 
-	t.Fatalf("could not find db/init.sql; set coldkeep_SCHEMA_PATH to an absolute path")
+	t.Fatalf("could not find db/init.sql; set COLDKEEP_SCHEMA_PATH to an absolute path")
 }
 
 func resetDB(t *testing.T, db *sql.DB) {
@@ -158,7 +158,7 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	// Use temp dirs per test
 	tmp := t.TempDir()
 	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("coldkeep_STORAGE_DIR", storageDir)
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
 	resetStorage(t)
 
 	db, err := connectDB()
@@ -211,7 +211,7 @@ func TestDedupSameFile(t *testing.T) {
 
 	tmp := t.TempDir()
 	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("coldkeep_STORAGE_DIR", storageDir)
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
 	resetStorage(t)
 
 	db, err := connectDB()
@@ -252,7 +252,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 
 	tmp := t.TempDir()
 	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("coldkeep_STORAGE_DIR", storageDir)
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
 	resetStorage(t)
 
 	db, err := connectDB()
@@ -390,7 +390,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 
 	tmp := t.TempDir()
 	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("coldkeep_STORAGE_DIR", storageDir)
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
 	resetStorage(t)
 
 	db, err := connectDB()
@@ -448,18 +448,8 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// Remove fileA
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("begin tx: %v", err)
-	}
-
 	if err := removeFileWithDB(db, fileAID); err != nil {
-		_ = tx.Rollback()
 		t.Fatalf("removeFileWithDB: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit remove: %v", err)
 	}
 
 	// Run GC

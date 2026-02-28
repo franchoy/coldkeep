@@ -6,12 +6,12 @@ set -euo pipefail
 #
 # Example (docker):
 #   docker compose up -d postgres
-#   docker compose run --rm -e coldkeep_STORAGE_DIR=/tmp/coldkeep-storage -v ./samples:/samples app bash scripts/smoke.sh
+#   docker compose run --rm -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage -v ./samples:/samples app bash scripts/smoke.sh
 
 echo "[smoke] starting"
 
-: "${coldkeep_STORAGE_DIR:=./storage/containers}"
-mkdir -p "$coldkeep_STORAGE_DIR"
+: "${COLDKEEP_STORAGE_DIR:=./storage/containers}"
+mkdir -p "$COLDKEEP_STORAGE_DIR"
 
 echo "[smoke] stats (before)"
 ./coldkeep stats || true

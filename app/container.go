@@ -10,26 +10,9 @@ import (
 	"time"
 )
 
-var storageDir = getEnv("coldkeep_STORAGE_DIR", "./storage/containers")
+var storageDir = envOrDefault("COLDKEEP_STORAGE_DIR", "./storage/containers")
 
-var containerMaxSize = getEnvInt64("coldkeep_CONTAINER_MAX_SIZE_MB", 64) * 1024 * 1024 //MB
-
-func getEnv(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
-	}
-	return fallback
-}
-
-func getEnvInt64(key string, fallback int64) int64 {
-	if val, ok := os.LookupEnv(key); ok {
-		var result int64
-		if _, err := fmt.Sscanf(val, "%d", &result); err == nil {
-			return result
-		}
-	}
-	return fallback
-}
+var containerMaxSize = envOrDefaultInt64("COLDKEEP_CONTAINER_MAX_SIZE_MB", 64) * 1024 * 1024 //MB
 
 func getOrCreateOpenContainer(db DBTX) (int64, string, int64, error) {
 	var id int64

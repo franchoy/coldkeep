@@ -1,4 +1,4 @@
-module coldkeep-poc
+module coldkeep
 
 go 1.23
 
