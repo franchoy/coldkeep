@@ -56,7 +56,7 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 		SELECT
 			c.chunk_offset,
 			c.size,
-			c.sha256,
+			c.chunk_hash,
 			ct.filename,
 			ct.compression_algorithm
 		FROM file_chunk fc

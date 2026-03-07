@@ -106,7 +106,7 @@ func storeFileWithDB(db *sql.DB, path string) (err error) {
 
 		var chunkID int64
 		cerr := tx.QueryRow(
-			"SELECT id FROM chunk WHERE sha256=$1",
+			"SELECT id FROM chunk WHERE chunk_hash=$1",
 			hash,
 		).Scan(&chunkID)
 
@@ -155,9 +155,9 @@ func storeFileWithDB(db *sql.DB, path string) (err error) {
 			// Try insert chunk (concurrency-safe)
 			var insertedChunkID int64
 			insErr := tx.QueryRow(
-				`INSERT INTO chunk (sha256, size, container_id, chunk_offset, ref_count)
+				`INSERT INTO chunk (chunk_hash, size, container_id, chunk_offset, ref_count)
 				VALUES ($1, $2, $3, $4, 1)
-				ON CONFLICT (sha256) DO NOTHING
+				ON CONFLICT (chunk_hash) DO NOTHING
 				RETURNING id`,
 				hash,
 				len(chunkData),
@@ -170,7 +170,7 @@ func storeFileWithDB(db *sql.DB, path string) (err error) {
 				chunkID = insertedChunkID
 			} else if insErr == sql.ErrNoRows {
 				// Someone else inserted it first; reuse it and bump refcount
-				if err := tx.QueryRow(`SELECT id FROM chunk WHERE sha256 = $1`, hash).Scan(&chunkID); err != nil {
+				if err := tx.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1`, hash).Scan(&chunkID); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(`UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
