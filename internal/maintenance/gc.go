@@ -1,14 +1,18 @@
-package main
+package maintenance
 
 import (
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/utils"
 )
 
-func runGC() error {
-	db, err := connectDB()
+func RunGC() error {
+	db, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
@@ -80,8 +84,8 @@ func runGC() error {
 		}
 
 		// After commit, delete file from disk
-		containerPath := filepath.Join(storageDir, filename)
-		if algo != "" && algo != string(CompressionNone) {
+		containerPath := filepath.Join(container.StorageDir, filename)
+		if algo != "" && algo != string(utils.CompressionNone) {
 			containerPath += "." + algo
 		}
 

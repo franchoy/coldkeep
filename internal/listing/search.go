@@ -1,12 +1,14 @@
-package main
+package listing
 
 import (
 	"fmt"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func searchFiles(args []string) error {
-	db, err := connectDB()
+func SearchFiles(args []string) error {
+	db, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}

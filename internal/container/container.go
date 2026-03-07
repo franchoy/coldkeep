@@ -1,4 +1,4 @@
-package main
+package container
 
 import (
 	"crypto/sha256"
@@ -8,13 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/utils"
 )
 
-var storageDir = envOrDefault("COLDKEEP_STORAGE_DIR", "./storage/containers")
-
-var containerMaxSize = envOrDefaultInt64("COLDKEEP_CONTAINER_MAX_SIZE_MB", 64) * 1024 * 1024 //MB
-
-func getOrCreateOpenContainer(db DBTX) (int64, string, int64, error) {
+func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 	var id int64
 	var filename string
 	var currentSize int64
@@ -55,11 +54,11 @@ func getOrCreateOpenContainer(db DBTX) (int64, string, int64, error) {
 
 	// 3️⃣ Create physical file
 
-	if err := os.MkdirAll(storageDir, 0755); err != nil {
+	if err := os.MkdirAll(StorageDir, 0755); err != nil {
 		return 0, "", 0, err
 	}
 
-	fullPath := filepath.Join(storageDir, filename)
+	fullPath := filepath.Join(StorageDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
@@ -82,8 +81,8 @@ func getOrCreateOpenContainer(db DBTX) (int64, string, int64, error) {
 	return id, filename, currentSize, nil
 }
 
-func appendChunkPhysical(filename string, currentSize int64, chunk []byte) (int64, int64, error) {
-	containerDir := storageDir
+func AppendChunkPhysical(filename string, currentSize int64, chunk []byte) (int64, int64, error) {
+	containerDir := StorageDir
 	containerPath := filepath.Join(containerDir, filename)
 
 	f, err := os.OpenFile(containerPath, os.O_APPEND|os.O_WRONLY, 0644)
@@ -122,7 +121,7 @@ func appendChunkPhysical(filename string, currentSize int64, chunk []byte) (int6
 	return offset, newSize, nil
 }
 
-func updateContainerSize(tx DBTX, containerID int64, newSize int64) error {
+func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
 	_, err := tx.Exec(
 		`UPDATE container SET current_size = $1 WHERE id = $2`,
 		newSize,
@@ -131,12 +130,12 @@ func updateContainerSize(tx DBTX, containerID int64, newSize int64) error {
 	return err
 }
 
-func sealContainer(tx DBTX, containerID int64, filename string) error {
-	containerDir := storageDir
+func SealContainer(tx db.DBTX, containerID int64, filename string) error {
+	containerDir := StorageDir
 	originalPath := filepath.Join(containerDir, filename)
 
 	// Compress file
-	compressedPath, compressed_size, err := CompressFile(originalPath, defaultCompression)
+	compressedPath, compressed_size, err := utils.CompressFile(originalPath, utils.DefaultCompression)
 	if err != nil {
 		return err
 	}
@@ -148,12 +147,12 @@ func sealContainer(tx DBTX, containerID int64, filename string) error {
 		    compression_algorithm = $1,
 			compressed_size = $2
 		WHERE id = $3
-	`, string(defaultCompression), compressed_size, containerID)
+	`, string(utils.DefaultCompression), compressed_size, containerID)
 
 	if err != nil {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
-	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, defaultCompression, compressedPath)
+	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, utils.DefaultCompression, compressedPath)
 	return nil
 }

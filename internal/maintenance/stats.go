@@ -1,12 +1,14 @@
-package main
+package maintenance
 
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func runStats() error {
-	db, err := connectDB()
+func RunStats() error {
+	db, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}

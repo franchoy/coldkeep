@@ -9,6 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/internal/utils"
 )
 
 // NOTE:
@@ -107,11 +113,11 @@ func resetDB(t *testing.T, db *sql.DB) {
 
 func resetStorage(t *testing.T) {
 	t.Helper()
-	if storageDir == "" {
+	if container.StorageDir == "" {
 		t.Fatalf("storageDir is empty")
 	}
-	_ = os.RemoveAll(storageDir)
-	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+	_ = os.RemoveAll(container.StorageDir)
+	if err := os.MkdirAll(container.StorageDir, 0o755); err != nil {
 		t.Fatalf("mkdir storageDir: %v", err)
 	}
 }
@@ -157,11 +163,11 @@ func TestRoundTripStoreRestore(t *testing.T) {
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
-	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
 	resetStorage(t)
 
-	db, err := connectDB()
+	db, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
@@ -171,7 +177,7 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	resetDB(t, db)
 
 	// Ensure we don't exercise heavy compression here.
-	defaultCompression = CompressionNone
+	utils.DefaultCompression = utils.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -181,7 +187,7 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	want := mustRead(t, inPath)
 	wantHash := sha256File(t, inPath)
 
-	if err := storeFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
 		t.Fatalf("storeFileWithDB: %v", err)
 	}
 
@@ -191,7 +197,7 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "roundtrip.restored.bin")
 
-	if err := restoreFileWithDB(db, fileID, outPath); err != nil {
+	if err := storage.RestoreFileWithDB(db, fileID, outPath); err != nil {
 		t.Fatalf("restoreFileWithDB: %v", err)
 	}
 
@@ -210,11 +216,11 @@ func TestDedupSameFile(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
 	resetStorage(t)
 
-	db, err := connectDB()
+	db, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
@@ -223,17 +229,17 @@ func TestDedupSameFile(t *testing.T) {
 	applySchema(t, db)
 	resetDB(t, db)
 
-	defaultCompression = CompressionNone
+	utils.DefaultCompression = utils.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "dup.bin", 256*1024)
 	fileHash := sha256File(t, inPath)
 
-	if err := storeFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
 		t.Fatalf("first store: %v", err)
 	}
-	if err := storeFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
 		t.Fatalf("second store: %v", err)
 	}
 
@@ -251,11 +257,11 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
 	resetStorage(t)
 
-	db, err := connectDB()
+	db, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
@@ -263,7 +269,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	applySchema(t, db)
 	resetDB(t, db)
 
-	defaultCompression = CompressionNone
+	utils.DefaultCompression = utils.CompressionNone
 
 	// Build folder with duplicates + shared-chunk variants
 	inputDir := filepath.Join(tmp, "folder")
@@ -311,7 +317,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 
 	// Run storeFolder with timeout to catch deadlocks/hangs.
 	done := make(chan error, 1)
-	go func() { done <- storeFolder(inputDir) }()
+	go func() { done <- storage.StoreFolder(inputDir) }()
 
 	select {
 	case err := <-done:
@@ -339,7 +345,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 			t.Fatalf("scan: %v", err)
 		}
 		outPath := filepath.Join(outDir, name)
-		if err := restoreFileWithDB(db, id, outPath); err != nil {
+		if err := storage.RestoreFileWithDB(db, id, outPath); err != nil {
 			t.Fatalf("restore %d: %v", id, err)
 		}
 		gotHash := sha256File(t, outPath)
@@ -389,11 +395,11 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	storageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", storageDir)
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
 	resetStorage(t)
 
-	db, err := connectDB()
+	db, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
@@ -401,7 +407,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	applySchema(t, db)
 	resetDB(t, db)
 
-	defaultCompression = CompressionNone
+	utils.DefaultCompression = utils.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -421,10 +427,10 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	fileB := fileBPath
 
 	// Store both
-	if err := storeFileWithDB(db, fileA); err != nil {
+	if err := storage.StoreFileWithDB(db, fileA); err != nil {
 		t.Fatalf("store fileA: %v", err)
 	}
-	if err := storeFileWithDB(db, fileB); err != nil {
+	if err := storage.StoreFileWithDB(db, fileB); err != nil {
 		t.Fatalf("store fileB: %v", err)
 	}
 
@@ -448,12 +454,12 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// Remove fileA
-	if err := removeFileWithDB(db, fileAID); err != nil {
+	if err := storage.RemoveFileWithDB(db, fileAID); err != nil {
 		t.Fatalf("removeFileWithDB: %v", err)
 	}
 
 	// Run GC
-	if err := runGC(); err != nil {
+	if err := maintenance.RunGC(); err != nil {
 		t.Fatalf("runGC: %v", err)
 	}
 
@@ -487,7 +493,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "fileB.restored.bin")
 
-	if err := restoreFileWithDB(db, fileBID, outPath); err != nil {
+	if err := storage.RestoreFileWithDB(db, fileBID, outPath); err != nil {
 		t.Fatalf("restore fileB after GC: %v", err)
 	}
 
