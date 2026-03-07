@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version(version)
-SELECT 1
+SELECT 2
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 
 -- =========================
@@ -48,13 +48,12 @@ CREATE TABLE IF NOT EXISTS chunk (
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-  UNIQUE (chunk_hash, size)
+  --UNIQUE (chunk_hash, size)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
 CREATE INDEX IF NOT EXISTS idx_chunk_container ON chunk(container_id);
-
 CREATE INDEX IF NOT EXISTS idx_chunk_ref_count ON chunk(ref_count);
-
 CREATE INDEX IF NOT EXISTS idx_chunk_status ON chunk(status);
 
 -- =========================
@@ -93,5 +92,33 @@ CREATE TABLE IF NOT EXISTS file_chunk (
 
 CREATE INDEX IF NOT EXISTS idx_file_chunk_logical_file_id ON file_chunk(logical_file_id);
 CREATE INDEX IF NOT EXISTS idx_file_chunk_chunk_id ON file_chunk(chunk_id);
+
+
+-- =========================
+-- updated_at trigger
+-- =========================
+
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_container_updated_at
+BEFORE UPDATE ON container
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_chunk_updated_at
+BEFORE UPDATE ON chunk
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_logical_file_updated_at
+BEFORE UPDATE ON logical_file
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 
 COMMIT;
