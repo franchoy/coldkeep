@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS container (
   max_size BIGINT NOT NULL CHECK (max_size > 0),
   compression_algorithm TEXT NOT NULL DEFAULT 'none',
   compressed_size BIGINT NOT NULL DEFAULT 0 CHECK (compressed_size >= 0),
-  created_at TIMESTAMPZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_container_sealed ON container(sealed);
@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS chunk (
   chunk_offset BIGINT CHECK (chunk_offset >= 0),
   ref_count BIGINT NOT NULL DEFAULT 0 CHECK (ref_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
-  created_at TIMESTAMPZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
@@ -66,8 +66,8 @@ CREATE TABLE IF NOT EXISTS logical_file (
   file_hash TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
-  created_at TIMESTAMPZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (file_hash, total_size)
 );
 
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS file_chunk (
   chunk_id BIGINT NOT NULL
     REFERENCES chunk(id) ON DELETE RESTRICT,
   chunk_order INTEGER NOT NULL CHECK (chunk_order >= 0),
-  created_at TIMESTAMPZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (logical_file_id, chunk_order)
   );
 
