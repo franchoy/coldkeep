@@ -308,8 +308,13 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 		// Append chunk data to container file
 		offset, newSize, err2 := container.AppendChunkPhysical(containerfilename, containercurrentSize, chunkData)
 		if err2 != nil {
-			err = err2
-			return err
+			if _, err3 := tx.Exec(
+				`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
+				claimedChunkID,
+			); err3 != nil {
+				return err3
+			}
+			return err2
 		}
 		// Update chunk row with container_id and chunk_offset, and mark it as "COMPLETED"
 		if err2 := tx.QueryRow(

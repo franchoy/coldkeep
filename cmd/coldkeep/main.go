@@ -14,6 +14,14 @@ import (
 const version = "0.1.0"
 
 func main() {
+
+	//system recovery on startup
+	err := recovery.SystemRecovery()
+	if err != nil {
+		log.Printf("System recovery failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	if len(os.Args) < 2 {
 		printHelp()
 		return

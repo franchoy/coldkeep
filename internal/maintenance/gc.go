@@ -20,7 +20,7 @@ func RunGC() error {
 
 	rows, err := db.Query(`
 		SELECT id, filename, compression_algorithm
-		FROM container
+		FROM container WHERE quarantine = FALSE 
 	`)
 	if err != nil {
 		return err
@@ -66,7 +66,7 @@ func RunGC() error {
 		}
 
 		// Delete chunks
-		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1`, containerID)
+		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1 and status = 'COMPLETED'`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return err

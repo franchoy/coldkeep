@@ -22,7 +22,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 	err := db.QueryRow(`
 		SELECT id, filename, current_size
 		FROM container
-		WHERE sealed = FALSE
+		WHERE sealed = FALSE and quarantine = FALSE
 		ORDER BY id
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
