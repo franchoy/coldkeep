@@ -15,7 +15,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: app/Dockerfile
+      dockerfile: Dockerfile
     container_name: coldkeep_app
     depends_on:
       - postgres

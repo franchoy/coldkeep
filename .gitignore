@@ -20,8 +20,8 @@ go.work
 # =========================
 # coldkeep specific binaries
 # =========================
-coldkeep
 app/coldkeep
+
 # binaries generated during development
 *.exe
 *.out
