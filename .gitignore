@@ -28,7 +28,6 @@ app/coldkeep
 # =========================
 # Local storage directories
 # =========================
-storage/
 storage/containers/
 storage/output/
 pgdata/
