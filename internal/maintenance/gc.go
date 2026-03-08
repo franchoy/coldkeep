@@ -52,7 +52,7 @@ func RunGC() error {
 					WHERE container_id = $1
 					AND ref_count > 0
 				)
-			FROM container
+			FROM container where quarantine = FALSE
 			WHERE id = $1
 		`, containerID).Scan(&stillEmpty)
 		if err != nil {
