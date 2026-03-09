@@ -16,6 +16,12 @@ func runStats() error {
 
 	var totalFiles int64
 	var totalLogicalSize sql.NullInt64
+	var completedFiles int64
+	var completedLogicalSize sql.NullInt64
+	var processingFiles int64
+	var processingLogicalSize sql.NullInt64
+	var abortedFiles int64
+	var abortedLogicalSize sql.NullInt64
 	var healthyContainers int64
 	var quarantinedContainers int64
 	var totalContainers int64
@@ -29,9 +35,21 @@ func runStats() error {
 	var liveBytes sql.NullInt64
 	var deadBytes sql.NullInt64
 
-	// Logical file stats
+	// Logical file stats - total
 	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
 		Scan(&totalFiles, &totalLogicalSize)
+
+	// Logical file stats - completed
+	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
+		Scan(&completedFiles, &completedLogicalSize)
+
+	// Logical file stats - processing
+	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
+		Scan(&processingFiles, &processingLogicalSize)
+
+	// Logical file stats - aborted
+	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
+		Scan(&abortedFiles, &abortedLogicalSize)
 
 	// healthy Container stats
 	db.QueryRow(`
@@ -72,8 +90,11 @@ func runStats() error {
 
 	fmt.Println("\n====== coldkeep Stats ======")
 
-	fmt.Printf("Logical files:           %d\n", totalFiles)
-	fmt.Printf("Logical stored size:     %.2f MB\n", float64(totalLogicalSize.Int64)/(1024*1024))
+	fmt.Printf("Logical files (total):           %d\n", totalFiles)
+	fmt.Printf("Logical stored size (total):     %.2f MB\n", float64(totalLogicalSize.Int64)/(1024*1024))
+	fmt.Printf("  Completed files:               %d (%.2f MB)\n", completedFiles, float64(completedLogicalSize.Int64)/(1024*1024))
+	fmt.Printf("  Processing files:              %d (%.2f MB)\n", processingFiles, float64(processingLogicalSize.Int64)/(1024*1024))
+	fmt.Printf("  Aborted files:                 %d (%.2f MB)\n", abortedFiles, float64(abortedLogicalSize.Int64)/(1024*1024))
 	fmt.Printf("Healthy containers:      %d\n", healthyContainers)
 	fmt.Printf("Healthy container bytes:     %.2f MB\n", float64(healthyContainerSize.Int64)/(1024*1024))
 	fmt.Printf("Healthy compressed bytes:        %.2f MB\n", float64(healthyCompressedSize.Int64)/(1024*1024))
@@ -87,8 +108,8 @@ func runStats() error {
 	fmt.Printf("Live chunk bytes:        %.2f MB\n", float64(liveBytes.Int64)/(1024*1024))
 	fmt.Printf("Dead chunk bytes:        %.2f MB\n", float64(deadBytes.Int64)/(1024*1024))
 
-	if totalLogicalSize.Int64 > 0 {
-		dedupRatio := 1.0 - (float64(liveBytes.Int64) / float64(totalLogicalSize.Int64))
+	if completedLogicalSize.Int64 > 0 {
+		dedupRatio := 1.0 - (float64(liveBytes.Int64) / float64(completedLogicalSize.Int64))
 		fmt.Printf("Global dedup ratio:      %.2f%%\n", dedupRatio*100)
 	}
 

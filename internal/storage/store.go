@@ -216,6 +216,10 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 		return 0, "", insErr
 	}
 
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	
 	return chunkID, status, nil
 }
 

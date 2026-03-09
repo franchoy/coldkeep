@@ -511,3 +511,241 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("found chunks with negative ref_count")
 	}
 }
+
+func TestConcurrentStoreSameFile(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	resetStorage(t)
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer db.Close()
+
+	applySchema(t, db)
+	resetDB(t, db)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "concurrent.bin", 256*1024)
+	fileHash := sha256File(t, inPath)
+
+	// Start two goroutines trying to store the same file
+	done := make(chan error, 2)
+	go func() { done <- storage.StoreFileWithDB(db, inPath) }()
+	go func() { done <- storage.StoreFileWithDB(db, inPath) }()
+
+	// Wait for both to complete
+	err1 := <-done
+	err2 := <-done
+
+	if err1 != nil {
+		t.Fatalf("first store failed: %v", err1)
+	}
+	if err2 != nil {
+		t.Fatalf("second store failed: %v", err2)
+	}
+
+	// Should still be 1 logical file for this hash
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
+		t.Fatalf("count logical_file: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 logical_file row, got %d", n)
+	}
+}
+
+func TestConcurrentStoreSameChunk(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	resetStorage(t)
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer db.Close()
+
+	applySchema(t, db)
+	resetDB(t, db)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create two files that share a common chunk
+	// Use a large shared prefix that will be chunked the same way
+	sharedPrefix := make([]byte, 128*1024) // Large enough to be multiple chunks
+	for i := range sharedPrefix {
+		sharedPrefix[i] = byte((i * 31 + 7) % 251)
+	}
+
+	// File A: shared prefix + unique suffix
+	fileAData := append(append([]byte{}, sharedPrefix...), []byte("uniqueA")...)
+	fileAPath := filepath.Join(inputDir, "fileA.bin")
+	if err := os.WriteFile(fileAPath, fileAData, 0o644); err != nil {
+		t.Fatalf("write fileA: %v", err)
+	}
+
+	// File B: same shared prefix + different unique suffix
+	fileBData := append(append([]byte{}, sharedPrefix...), []byte("uniqueB")...)
+	fileBPath := filepath.Join(inputDir, "fileB.bin")
+	if err := os.WriteFile(fileBPath, fileBData, 0o644); err != nil {
+		t.Fatalf("write fileB: %v", err)
+	}
+
+	// Start two goroutines storing the files concurrently
+	done := make(chan error, 2)
+	go func() { done <- storage.StoreFileWithDB(db, fileAPath) }()
+	go func() { done <- storage.StoreFileWithDB(db, fileBPath) }()
+
+	// Wait for both to complete
+	err1 := <-done
+	err2 := <-done
+
+	if err1 != nil {
+		t.Fatalf("store fileA failed: %v", err1)
+	}
+	if err2 != nil {
+		t.Fatalf("store fileB failed: %v", err2)
+	}
+
+	// Verify both files are stored
+	hashA := sha256File(t, fileAPath)
+	hashB := sha256File(t, fileBPath)
+
+	var countA, countB int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashA).Scan(&countA); err != nil {
+		t.Fatalf("count fileA: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashB).Scan(&countB); err != nil {
+		t.Fatalf("count fileB: %v", err)
+	}
+
+	if countA != 1 || countB != 1 {
+		t.Fatalf("expected 1 entry each for fileA and fileB, got %d and %d", countA, countB)
+	}
+}
+
+func TestRetryAfterAbortedFile(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	resetStorage(t)
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer db.Close()
+
+	applySchema(t, db)
+	resetDB(t, db)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "retry_file.bin", 256*1024)
+	fileHash := sha256File(t, inPath)
+
+	// Store the file initially
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+		t.Fatalf("initial store: %v", err)
+	}
+
+	// Manually set the file status to ABORTED to simulate a failed store
+	fileID := fetchFileIDByHash(t, db, fileHash)
+	if _, err := db.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+		t.Fatalf("set status to ABORTED: %v", err)
+	}
+
+	// Now try to store the same file again - it should retry and succeed
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+		t.Fatalf("retry store after abort: %v", err)
+	}
+
+	// Verify the file is now marked as COMPLETED
+	var status string
+	if err := db.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+		t.Fatalf("check status: %v", err)
+	}
+	if status != "COMPLETED" {
+		t.Fatalf("expected status COMPLETED, got %s", status)
+	}
+}
+
+func TestRetryAfterAbortedChunk(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.StorageDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	resetStorage(t)
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer db.Close()
+
+	applySchema(t, db)
+	resetDB(t, db)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "retry_chunk.bin", 256*1024)
+
+	// Store the file initially to create chunks
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+		t.Fatalf("initial store: %v", err)
+	}
+
+	// Find a chunk from this file and set it to ABORTED
+	var chunkID int64
+	var chunkHash string
+	if err := db.QueryRow(`
+		SELECT c.id, c.chunk_hash
+		FROM chunk c
+		JOIN file_chunk fc ON c.id = fc.chunk_id
+		JOIN logical_file lf ON fc.logical_file_id = lf.id
+		WHERE lf.file_hash = $1
+		LIMIT 1
+	`, sha256File(t, inPath)).Scan(&chunkID, &chunkHash); err != nil {
+		t.Fatalf("find chunk: %v", err)
+	}
+
+	// Set the chunk status to ABORTED
+	if _, err := db.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+		t.Fatalf("set chunk status to ABORTED: %v", err)
+	}
+
+	// Now try to store the same file again - it should retry the aborted chunk and succeed
+	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+		t.Fatalf("retry store after chunk abort: %v", err)
+	}
+
+	// Verify the chunk is now marked as COMPLETED
+	var status string
+	if err := db.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
+		t.Fatalf("check chunk status: %v", err)
+	}
+	if status != "COMPLETED" {
+		t.Fatalf("expected chunk status COMPLETED, got %s", status)
+	}
+}
