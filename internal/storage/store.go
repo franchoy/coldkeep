@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -37,8 +35,9 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 	if err != nil {
 		return 0, "", err
 	}
+	txclosed := false
 	defer func() {
-		if err != nil {
+		if err != nil && !txclosed {
 			_ = tx.Rollback()
 		}
 	}()
@@ -60,8 +59,9 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 		// Conflict happened: someone else already stored this file hash
 		var existingID int64
 		if err := tx.QueryRow(
-			`SELECT id, status FROM logical_file WHERE file_hash = $1`,
+			`SELECT id, status FROM logical_file WHERE file_hash = $1 and total_size = $2`,
 			fileHash,
+			fileinfo.Size(),
 		).Scan(&existingID, &filestatus); err != nil {
 			return 0, "", err
 		}
@@ -70,7 +70,7 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 		case "COMPLETED":
 			// File already stored and ready: we can reuse it
 			_ = tx.Rollback() // Don't hold locks while waiting
-
+			txclosed = true
 			fmt.Printf("File '%s' already stored\n", fileinfo.Name())
 			fmt.Printf("  FileID: %d\n", existingID)
 			fmt.Printf("  SHA256: %s\n", fileHash)
@@ -78,6 +78,7 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 		case "PROCESSING":
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
+			txclosed = true
 			fmt.Printf("File '%s' is currently being stored by another process. Waiting...\n", fileinfo.Name())
 
 			for keep_waiting := true; keep_waiting; {
@@ -127,16 +128,18 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 				return 0, "", err
 			}
 			fileID = existingID
+			filestatus = "PROCESSING"
 		}
 	} else if insErr == nil {
 		// We won: this file is new and we should store it
 		filestatus = "PROCESSING"
 	} else {
-		return 0, insErr
+		return 0, "", insErr
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, "", err
+	if !txclosed {
+		if err := tx.Commit(); err != nil {
+			return 0, "", err
+		}
 	}
 
 	return fileID, filestatus, nil
@@ -148,8 +151,9 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 	if err != nil {
 		return 0, "", err
 	}
+	txclosed := false
 	defer func() {
-		if err != nil {
+		if err != nil && !txclosed {
 			_ = tx.Rollback()
 		}
 	}()
@@ -178,10 +182,12 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 		case "COMPLETED":
 			// Chunk already stored and ready: we can reuse it
 			_ = tx.Rollback() // Don't hold locks while waiting
+			txclosed = true
 			return chunkID, chunkstatus, nil
 		case "PROCESSING":
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
+			txclosed = true
 			fmt.Printf("Chunk '%s' is currently being stored by another process. Waiting...\n", chunkHash)
 
 			for keep_waiting := true; keep_waiting; {
@@ -233,10 +239,11 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 		return 0, "", insErr
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, chunkstatus, err
+	if !txclosed {
+		if err := tx.Commit(); err != nil {
+			return 0, chunkstatus, err
+		}
 	}
-
 	return chunkID, chunkstatus, nil
 }
 
@@ -261,7 +268,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 	}
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
 
-	if _, err := file.Seek(0,0); err != nil {
+	if _, err := file.Seek(0, 0); err != nil {
 		return err
 	}
 
@@ -341,7 +348,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 			}
 			return err2
 		}
-		
+
 		// Update chunk row with container_id and chunk_offset, and mark it as "COMPLETED"
 		if _, err2 := tx.Exec(
 			`UPDATE chunk SET container_id = $1, chunk_offset = $2, status = 'COMPLETED' WHERE id = $3`,
@@ -414,4 +421,3 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 
 	return nil
 }
-
