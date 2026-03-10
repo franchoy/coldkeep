@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/utils"
 )
@@ -747,5 +749,222 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 	if status != "COMPLETED" {
 		t.Fatalf("expected chunk status COMPLETED, got %s", status)
+	}
+}
+func TestContainerRollover(t *testing.T) {
+	requireDB(t)
+
+	// Use temp dirs per test
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer db.Close()
+
+	applySchema(t, db)
+	resetDB(t, db)
+
+	// Set small container size for testing rollover
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024) // 1MB for quick test
+	defer container.SetContainerMaxSize(originalMaxSize) // restore
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create files that will exceed container size
+	files := []string{
+		createTempFile(t, inputDir, "file1.bin", 600*1024), // 600KB
+		createTempFile(t, inputDir, "file2.bin", 600*1024), // 600KB, should trigger rollover
+	}
+
+	// Store first file
+	if err := storage.StoreFileWithDB(db, files[0]); err != nil {
+		t.Fatalf("store first file: %v", err)
+	}
+
+	// Check that one container exists and is not sealed
+	var containerCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&containerCount); err != nil {
+		t.Fatalf("count unsealed containers: %v", err)
+	}
+	if containerCount != 1 {
+		t.Fatalf("expected 1 unsealed container, got %d", containerCount)
+	}
+
+	// Store second file - should trigger rollover
+	if err := storage.StoreFileWithDB(db, files[1]); err != nil {
+		t.Fatalf("store second file: %v", err)
+	}
+
+	// Check that the first container is now sealed
+	var sealedCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedCount); err != nil {
+		t.Fatalf("count sealed containers: %v", err)
+	}
+	if sealedCount != 1 {
+		t.Fatalf("expected 1 sealed container, got %d", sealedCount)
+	}
+
+	// Check that a new unsealed container exists
+	if err := db.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&containerCount); err != nil {
+		t.Fatalf("count unsealed containers after rollover: %v", err)
+	}
+	if containerCount != 1 {
+		t.Fatalf("expected 1 unsealed container after rollover, got %d", containerCount)
+	}
+
+	// Verify both files can be restored
+	for i, file := range files {
+		hash := sha256File(t, file)
+		fileID := fetchFileIDByHash(t, db, hash)
+
+		outDir := filepath.Join(tmp, "out")
+		_ = os.MkdirAll(outDir, 0o755)
+		outPath := filepath.Join(outDir, fmt.Sprintf("restored%d.bin", i))
+
+		if err := storage.RestoreFileWithDB(db, fileID, outPath); err != nil {
+			t.Fatalf("restore file %d: %v", i, err)
+		}
+
+		// Verify content
+		original := mustRead(t, file)
+		restored := mustRead(t, outPath)
+		if !bytes.Equal(original, restored) {
+			t.Fatalf("file %d content mismatch", i)
+		}
+	}
+}
+
+func TestStartupRecoverySimulation(t *testing.T) {
+	requireDB(t)
+
+	// Use temp dirs per test
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer db.Close()
+
+	applySchema(t, db)
+	resetDB(t, db)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create and start storing a file, but simulate it getting stuck
+	inPath := createTempFile(t, inputDir, "stuck_file.bin", 256*1024)
+
+	// Manually insert a processing logical file (simulating stuck store)
+	hash := sha256File(t, inPath)
+	hashStr := hex.EncodeToString(hash)
+	size := int64(256 * 1024)
+
+	_, err = db.Exec(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
+		VALUES ($1, $2, $3, 'PROCESSING', 0)
+	`, filepath.Base(inPath), size, hashStr)
+	if err != nil {
+		t.Fatalf("insert processing logical file: %v", err)
+	}
+
+	// Set updated_at to old time to simulate stuck processing
+	_, err = db.Exec(`
+		UPDATE logical_file
+		SET updated_at = NOW() - INTERVAL '15 minutes'
+		WHERE file_hash = $1
+	`, hashStr)
+	if err != nil {
+		t.Fatalf("update logical file timestamp: %v", err)
+	}
+
+	// Also create a processing chunk
+	_, err = db.Exec(`
+		INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
+		VALUES ($1, $2, 'PROCESSING', NULL, NULL, 0, 0)
+	`, "dummy_chunk_hash", int64(128*1024))
+	if err != nil {
+		t.Fatalf("insert processing chunk: %v", err)
+	}
+
+	// Get chunk ID
+	var chunkID int64
+	if err := db.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1`, "dummy_chunk_hash").Scan(&chunkID); err != nil {
+		t.Fatalf("get chunk ID: %v", err)
+	}
+
+	// Set chunk updated_at to old time
+	_, err = db.Exec(`
+		UPDATE chunk
+		SET updated_at = NOW() - INTERVAL '15 minutes'
+		WHERE id = $1
+	`, chunkID)
+	if err != nil {
+		t.Fatalf("update chunk timestamp: %v", err)
+	}
+
+	// Create a container file and then delete it to simulate missing container
+	containerPath := filepath.Join(container.ContainersDir, "missing_container.bin")
+	if err := os.WriteFile(containerPath, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("create dummy container file: %v", err)
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		VALUES ($1, $2, $3, FALSE, FALSE)
+	`, "missing_container.bin", int64(1024), int64(64*1024*1024))
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	// Delete the file to simulate missing container
+	if err := os.Remove(containerPath); err != nil {
+		t.Fatalf("remove container file: %v", err)
+	}
+
+	// Now run system recovery
+	if err := recovery.SystemRecovery(); err != nil {
+		t.Fatalf("system recovery: %v", err)
+	}
+
+	// Verify that processing logical file was aborted
+	var fileStatus string
+	if err := db.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hashStr).Scan(&fileStatus); err != nil {
+		t.Fatalf("check logical file status: %v", err)
+	}
+	if fileStatus != "ABORTED" {
+		t.Fatalf("expected logical file status ABORTED, got %s", fileStatus)
+	}
+
+	// Verify that processing chunk was aborted
+	var chunkStatus string
+	if err := db.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&chunkStatus); err != nil {
+		t.Fatalf("check chunk status: %v", err)
+	}
+	if chunkStatus != "ABORTED" {
+		t.Fatalf("expected chunk status ABORTED, got %s", chunkStatus)
+	}
+
+	// Verify that missing container was quarantined
+	var quarantine bool
+	if err := db.QueryRow(`SELECT quarantine FROM container WHERE filename = $1`, "missing_container.bin").Scan(&quarantine); err != nil {
+		t.Fatalf("check container quarantine: %v", err)
+	}
+	if !quarantine {
+		t.Fatalf("expected missing container to be quarantined")
 	}
 }
