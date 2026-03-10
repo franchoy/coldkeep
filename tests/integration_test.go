@@ -113,12 +113,12 @@ func resetDB(t *testing.T, db *sql.DB) {
 
 func resetStorage(t *testing.T) {
 	t.Helper()
-	if container.StorageDir == "" {
-		t.Fatalf("storageDir is empty")
+	if container.ContainersDir == "" {
+		t.Fatalf("ContainersDir is empty")
 	}
-	_ = os.RemoveAll(container.StorageDir)
-	if err := os.MkdirAll(container.StorageDir, 0o755); err != nil {
-		t.Fatalf("mkdir storageDir: %v", err)
+	_ = os.RemoveAll(container.ContainersDir)
+	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+		t.Fatalf("mkdir ContainersDir: %v", err)
 	}
 }
 
@@ -163,8 +163,8 @@ func TestRoundTripStoreRestore(t *testing.T) {
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -216,8 +216,8 @@ func TestDedupSameFile(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -257,8 +257,8 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -395,8 +395,8 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -516,8 +516,8 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -566,8 +566,8 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -588,7 +588,7 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	// Use a large shared prefix that will be chunked the same way
 	sharedPrefix := make([]byte, 128*1024) // Large enough to be multiple chunks
 	for i := range sharedPrefix {
-		sharedPrefix[i] = byte((i * 31 + 7) % 251)
+		sharedPrefix[i] = byte((i*31 + 7) % 251)
 	}
 
 	// File A: shared prefix + unique suffix
@@ -642,8 +642,8 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()
@@ -692,8 +692,8 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
-	container.StorageDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.StorageDir)
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
 	db, err := db.ConnectDB()

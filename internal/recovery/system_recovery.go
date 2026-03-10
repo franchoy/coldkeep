@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	
 )
 
 func SystemRecovery() error {
 
-	db, err := db.Connect()
+	db, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
@@ -47,14 +48,13 @@ func abortProcessingLogicalFiles(db *sql.DB) error {
 }
 
 func abortProcessingChunks(db *sql.DB) error {
-	
-	_, err := db.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)	
+
+	_, err := db.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
 	if err != nil {
 		return fmt.Errorf("query update chunk to ABORTED: %w", err)
 	}
 	return nil
-}	
-
+}
 
 func quarantineMissingContainers(db *sql.DB) error {
 
@@ -73,7 +73,7 @@ func quarantineMissingContainers(db *sql.DB) error {
 			return err
 		}
 
-		path := filepath.Join(containersDir, filename)
+		path := filepath.Join(container.ContainersDir, filename)
 
 		_, err := os.Stat(path)
 
@@ -95,7 +95,7 @@ func quarantineMissingContainers(db *sql.DB) error {
 func quarantineOrphanContainers(db *sql.DB) error {
 
 	// recover files in container folder
-	entries, err := os.ReadDir(containersDir)
+	entries, err := os.ReadDir(container.ContainersDir)
 	if err != nil {
 		return fmt.Errorf("read containers dir: %w", err)
 	}

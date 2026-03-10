@@ -8,6 +8,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -26,8 +27,6 @@ func main() {
 		printHelp()
 		return
 	}
-
-	var err error
 
 	switch os.Args[1] {
 	case "store":

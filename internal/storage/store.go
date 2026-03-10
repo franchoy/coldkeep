@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -417,6 +419,64 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 	fmt.Printf("  FileID:   %d\n", fileID)
 	fmt.Printf("  Path:   %s\n", path)
 	fmt.Printf("  SHA256: %s\n", fileHash)
+	utils.PrintDuration(start)
+
+	return nil
+}
+func StoreFolder(root string) error {
+	start := time.Now()
+
+	db, err := db.ConnectDB()
+	if err != nil {
+		return fmt.Errorf("failed to connect DB: %w", err)
+	}
+	defer db.Close()
+
+	workerCount := runtime.NumCPU()
+
+	fileChan := make(chan string, 256)
+	errChan := make(chan error, workerCount)
+
+	// Workers
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			for p := range fileChan {
+				if err := StoreFileWithDB(db, p); err != nil {
+					errChan <- err
+					return
+				}
+			}
+			errChan <- nil
+		}()
+	}
+
+	// Producer
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if !d.IsDir() {
+			fileChan <- path
+		}
+
+		return nil
+	})
+
+	close(fileChan)
+
+	if walkErr != nil {
+		return walkErr
+	}
+
+	// Wait workers
+	for i := 0; i < workerCount; i++ {
+		if werr := <-errChan; werr != nil {
+			return werr
+		}
+	}
+
+	utils.PrintSuccess("Folder stored successfully")
 	utils.PrintDuration(start)
 
 	return nil

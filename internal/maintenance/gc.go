@@ -84,7 +84,7 @@ func RunGC() error {
 		}
 
 		// After commit, delete file from disk
-		containerPath := filepath.Join(container.StorageDir, filename)
+		containerPath := filepath.Join(container.ContainersDir, filename)
 		if algo != "" && algo != string(utils.CompressionNone) {
 			containerPath += "." + algo
 		}

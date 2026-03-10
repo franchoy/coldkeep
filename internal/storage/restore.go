@@ -119,7 +119,7 @@ func RestoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 			containerFilename = filename + "." + algoStr
 		}
 
-		containerPath := filepath.Join(container.StorageDir, containerFilename)
+		containerPath := filepath.Join(container.ContainersDir, containerFilename)
 
 		// Open as plain file (seek) or as decompressed stream (skip bytes)
 		var r io.ReadCloser

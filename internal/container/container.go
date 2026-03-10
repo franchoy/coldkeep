@@ -54,11 +54,11 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 
 	// 3️⃣ Create physical file
 
-	if err := os.MkdirAll(StorageDir, 0755); err != nil {
+	if err := os.MkdirAll(ContainersDir, 0755); err != nil {
 		return 0, "", 0, err
 	}
 
-	fullPath := filepath.Join(StorageDir, filename)
+	fullPath := filepath.Join(ContainersDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
@@ -82,8 +82,8 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 }
 
 func AppendChunkPhysical(filename string, currentSize int64, chunk []byte) (int64, int64, error) {
-	containerDir := StorageDir
-	containerPath := filepath.Join(containerDir, filename)
+
+	containerPath := filepath.Join(ContainersDir, filename)
 
 	f, err := os.OpenFile(containerPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
@@ -131,8 +131,8 @@ func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
 }
 
 func SealContainer(tx db.DBTX, containerID int64, filename string) error {
-	containerDir := StorageDir
-	originalPath := filepath.Join(containerDir, filename)
+
+	originalPath := filepath.Join(ContainersDir, filename)
 
 	// Compress file
 	compressedPath, compressed_size, err := utils.CompressFile(originalPath, utils.DefaultCompression)
