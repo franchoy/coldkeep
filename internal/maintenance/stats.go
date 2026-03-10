@@ -120,6 +120,51 @@ func RunStats() error {
 
 	fmt.Println("============================")
 
+	type chunkStats struct {
+    status string
+    count  int64
+    bytes  int64
+	}
+
+	rows, err := db.Query(`
+		SELECT status, COUNT(*), COALESCE(SUM(size),0)
+		FROM chunk
+		GROUP BY status`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var completedCount, processingCount, abortedCount int64
+	var completedBytes int64
+
+	for rows.Next() {
+		var status string
+		var count int64
+		var bytes int64
+
+		if err := rows.Scan(&status, &count, &bytes); err != nil {
+			return err
+		}
+
+		switch status {
+		case "COMPLETED":
+			completedCount = count
+			completedBytes = bytes
+		case "PROCESSING":
+			processingCount = count
+		case "ABORTED":
+			abortedCount = count
+		}
+	}
+
+	fmt.Printf("Chunks (total):           %d\n", completedCount+processingCount+abortedCount)
+	fmt.Printf("  Completed chunks:       %d (%.2f MB)\n", completedCount, bytesToMB(completedBytes))
+	fmt.Printf("  Processing chunks:      %d\n", processingCount)
+	fmt.Printf("  Aborted chunks:         %d\n", abortedCount)
+
+	fmt.Println("============================")
+
 	// ---- Per container breakdown ----
 	fmt.Println("\nPer-container breakdown:")
 

@@ -115,6 +115,10 @@ func AppendChunkPhysical(filename string, currentSize int64, chunk []byte) (int6
 	if _, err := f.Write(chunk); err != nil {
 		return 0, 0, err
 	}
+	// Ensure data is flushed to disk
+	if err := f.Sync(); err != nil {
+		return 0, 0, err
+	}
 
 	newSize := currentSize + int64(32+4+len(chunk))
 
