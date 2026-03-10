@@ -39,6 +39,14 @@ func RunStats() error {
 	var liveBytes sql.NullInt64
 	var deadBytes sql.NullInt64
 
+	// Retry stats
+	var totalFileRetries sql.NullInt64
+	var avgFileRetries sql.NullFloat64
+	var maxFileRetries sql.NullInt64
+	var totalChunkRetries sql.NullInt64
+	var avgChunkRetries sql.NullFloat64
+	var maxChunkRetries sql.NullInt64
+
 	// Logical file stats - total
 	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
 		Scan(&totalFiles, &totalLogicalSize)
@@ -113,6 +121,24 @@ func RunStats() error {
 		return fmt.Errorf("Failed to query chunk live/dead stats: %w", err)
 	}
 
+	// Retry stats for logical files
+	err = db.QueryRow(`
+		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
+		FROM logical_file
+	`).Scan(&totalFileRetries, &avgFileRetries, &maxFileRetries)
+	if err != nil {
+		return fmt.Errorf("Failed to query logical file retry stats: %w", err)
+	}
+
+	// Retry stats for chunks
+	err = db.QueryRow(`
+		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
+		FROM chunk
+	`).Scan(&totalChunkRetries, &avgChunkRetries, &maxChunkRetries)
+	if err != nil {
+		return fmt.Errorf("Failed to query chunk retry stats: %w", err)
+	}
+
 	fmt.Println("\n====== coldkeep Stats ======")
 
 	fmt.Printf("Logical files (total):           %d\n", totalFiles)
@@ -147,6 +173,9 @@ func RunStats() error {
 		compressionRatio := float64(totalLogicalSize.Int64) / float64(totalCompressedSize.Int64)
 		fmt.Printf("Compression ratio:               %.2f\n", compressionRatio)
 	}
+
+	fmt.Printf("File retry stats:                total=%d, avg=%.2f, max=%d\n", totalFileRetries.Int64, avgFileRetries.Float64, maxFileRetries.Int64)
+	fmt.Printf("Chunk retry stats:               total=%d, avg=%.2f, max=%d\n", totalChunkRetries.Int64, avgChunkRetries.Float64, maxChunkRetries.Int64)
 
 	fmt.Println("============================")
 
