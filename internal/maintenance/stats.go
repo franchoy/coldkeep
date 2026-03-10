@@ -7,6 +7,10 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
+func bytesToMB(bytes int64) float64 {
+	return float64(bytes) / (1024 * 1024)
+}
+
 func RunStats() error {
 	db, err := db.ConnectDB()
 	if err != nil {
@@ -36,38 +40,56 @@ func RunStats() error {
 	var deadBytes sql.NullInt64
 
 	// Logical file stats - total
-	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
+	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
 		Scan(&totalFiles, &totalLogicalSize)
+	if err != nil {
+		return fmt.Errorf("Failed to query total logical files: %w", err)
+	}
 
 	// Logical file stats - completed
-	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
+	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
 		Scan(&completedFiles, &completedLogicalSize)
+	if err != nil {
+		return fmt.Errorf("Failed to query completed logical files: %w", err)
+	}
 
 	// Logical file stats - processing
-	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
+	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
 		Scan(&processingFiles, &processingLogicalSize)
+	if err != nil {
+		return fmt.Errorf("Failed to query processing logical files: %w", err)
+	}
 
 	// Logical file stats - aborted
-	db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
+	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
 		Scan(&abortedFiles, &abortedLogicalSize)
+	if err != nil {
+		return fmt.Errorf("Failed to query aborted logical files: %w", err)
+	}
 
 	// healthy Container stats
-	db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT COUNT(*),
 		       COALESCE(SUM(current_size),0),
 		       COALESCE(SUM(compressed_size),0)
 		FROM container
 		WHERE quarantine = FALSE
 	`).Scan(&healthyContainers, &healthyContainerSize, &healthyCompressedSize)
+	if err != nil {
+		return fmt.Errorf("Failed to query healthy containers: %w", err)
+	}
 
 	// quarantined Container stats
-	db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT COUNT(*),
 		       COALESCE(SUM(current_size),0),
 		       COALESCE(SUM(compressed_size),0)
 		FROM container
 		WHERE quarantine = TRUE
 	`).Scan(&quarantinedContainers, &quarantinedContainerSize, &quarantinedCompressedSize)
+	if err != nil {
+		return fmt.Errorf("Failed to query quarantined containers: %w", err)
+	}
 
 	// Total container stats
 	totalContainers = healthyContainers + quarantinedContainers
@@ -81,41 +103,49 @@ func RunStats() error {
 	}
 
 	// Chunk live/dead stats
-	db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT
 			COALESCE(SUM(CASE WHEN ref_count > 0 THEN size ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN ref_count = 0 THEN size ELSE 0 END),0)
 		FROM chunk
 	`).Scan(&liveBytes, &deadBytes)
+	if err != nil {
+		return fmt.Errorf("Failed to query chunk live/dead stats: %w", err)
+	}
 
 	fmt.Println("\n====== coldkeep Stats ======")
 
 	fmt.Printf("Logical files (total):           %d\n", totalFiles)
-	fmt.Printf("Logical stored size (total):     %.2f MB\n", float64(totalLogicalSize.Int64)/(1024*1024))
-	fmt.Printf("  Completed files:               %d (%.2f MB)\n", completedFiles, float64(completedLogicalSize.Int64)/(1024*1024))
-	fmt.Printf("  Processing files:              %d (%.2f MB)\n", processingFiles, float64(processingLogicalSize.Int64)/(1024*1024))
-	fmt.Printf("  Aborted files:                 %d (%.2f MB)\n", abortedFiles, float64(abortedLogicalSize.Int64)/(1024*1024))
-	fmt.Printf("Healthy containers:      %d\n", healthyContainers)
-	fmt.Printf("Healthy container bytes:     %.2f MB\n", float64(healthyContainerSize.Int64)/(1024*1024))
-	fmt.Printf("Healthy compressed bytes:        %.2f MB\n", float64(healthyCompressedSize.Int64)/(1024*1024))
-	fmt.Printf("Quarantined containers:  %d\n", quarantinedContainers)
-	fmt.Printf("Quarantined container bytes:     %.2f MB\n", float64(quarantinedContainerSize.Int64)/(1024*1024))
-	fmt.Printf("Quarantined compressed bytes:        %.2f MB\n", float64(quarantinedCompressedSize.Int64)/(1024*1024))
-	fmt.Printf("Total containers:              %d\n", totalContainers)
-	fmt.Printf("Total container bytes:     %.2f MB\n", float64(totalContainerSize.Int64)/(1024*1024))
-	fmt.Printf("Total compressed bytes:        %.2f MB\n", float64(totalCompressedSize.Int64)/(1024*1024))
+	fmt.Printf("Logical stored size (total):     %.2f MB\n", bytesToMB(totalLogicalSize.Int64))
+	fmt.Printf("  Completed files:               %d (%.2f MB)\n", completedFiles, bytesToMB(completedLogicalSize.Int64))
+	fmt.Printf("  Processing files:              %d (%.2f MB)\n", processingFiles, bytesToMB(processingLogicalSize.Int64))
+	fmt.Printf("  Aborted files:                 %d (%.2f MB)\n", abortedFiles, bytesToMB(abortedLogicalSize.Int64))
+	fmt.Printf("Healthy containers:              %d\n", healthyContainers)
+	fmt.Printf("Healthy container bytes:         %.2f MB\n", bytesToMB(healthyContainerSize.Int64))
+	fmt.Printf("Healthy compressed bytes:        %.2f MB\n", bytesToMB(healthyCompressedSize.Int64))
+	fmt.Printf("Quarantined containers:          %d\n", quarantinedContainers)
+	fmt.Printf("Quarantined container bytes:     %.2f MB\n", bytesToMB(quarantinedContainerSize.Int64))
+	fmt.Printf("Quarantined compressed bytes:    %.2f MB\n", bytesToMB(quarantinedCompressedSize.Int64))
+	fmt.Printf("Total containers:                %d\n", totalContainers)
+	fmt.Printf("Total container bytes:           %.2f MB\n", bytesToMB(totalContainerSize.Int64))
+	fmt.Printf("Total compressed bytes:          %.2f MB\n", bytesToMB(totalCompressedSize.Int64))
 
-	fmt.Printf("Live chunk bytes:        %.2f MB\n", float64(liveBytes.Int64)/(1024*1024))
-	fmt.Printf("Dead chunk bytes:        %.2f MB\n", float64(deadBytes.Int64)/(1024*1024))
+	fmt.Printf("Live chunk bytes:                %.2f MB\n", bytesToMB(liveBytes.Int64))
+	fmt.Printf("Dead chunk bytes:                %.2f MB\n", bytesToMB(deadBytes.Int64))
 
 	if completedLogicalSize.Int64 > 0 {
 		dedupRatio := 1.0 - (float64(liveBytes.Int64) / float64(completedLogicalSize.Int64))
-		fmt.Printf("Global dedup ratio:      %.2f%%\n", dedupRatio*100)
+		fmt.Printf("Global dedup ratio:              %.2f%%\n", dedupRatio*100)
 	}
 
 	if totalContainerSize.Int64 > 0 {
 		deadRatio := float64(deadBytes.Int64) / float64(healthyContainerSize.Int64)
-		fmt.Printf("Fragmentation ratio:     %.2f%%\n", deadRatio*100)
+		fmt.Printf("Fragmentation ratio:             %.2f%%\n", deadRatio*100)
+	}
+
+	if totalLogicalSize.Int64 > 0 && totalCompressedSize.Int64 > 0 {
+		compressionRatio := float64(totalLogicalSize.Int64) / float64(totalCompressedSize.Int64)
+		fmt.Printf("Compression ratio:               %.2f\n", compressionRatio)
 	}
 
 	fmt.Println("============================")
