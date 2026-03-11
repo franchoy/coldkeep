@@ -8,21 +8,21 @@ import (
 )
 
 func RemoveFile(fileID int64) error {
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	if err := RemoveFileWithDB(db, fileID); err != nil {
+	if err := RemoveFileWithDB(dbconn, fileID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func RemoveFileWithDB(db *sql.DB, fileID int64) error {
+func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 
-	tx, err := db.Begin()
+	tx, err := dbconn.Begin()
 	if err != nil {
 		return err
 	}

@@ -42,7 +42,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 		if err != nil {
 			t.Fatalf("read schema %s: %v", p, err)
 		}
-		if _, err := db.Exec(string(b)); err != nil {
+		if _, err := dbconn.Exec(string(b)); err != nil {
 			t.Fatalf("apply schema: %v", err)
 		}
 		return
@@ -59,7 +59,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 				if err != nil {
 					t.Fatalf("read schema %s: %v", candidate, err)
 				}
-				if _, err := db.Exec(string(b)); err != nil {
+				if _, err := dbconn.Exec(string(b)); err != nil {
 					t.Fatalf("apply schema: %v", err)
 				}
 				return
@@ -87,7 +87,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 			if err != nil {
 				t.Fatalf("read schema %s: %v", p, err)
 			}
-			if _, err := db.Exec(string(b)); err != nil {
+			if _, err := dbconn.Exec(string(b)); err != nil {
 				t.Fatalf("apply schema: %v", err)
 			}
 			return
@@ -100,7 +100,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 func resetDB(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// Keep schema_version; clear the data tables and reset sequences.
-	_, err := db.Exec(`
+	_, err := dbconn.Exec(`
 		TRUNCATE TABLE
 			file_chunk,
 			chunk,
@@ -153,7 +153,7 @@ func createTempFile(t *testing.T, dir, name string, size int) string {
 func fetchFileIDByHash(t *testing.T, db *sql.DB, fileHash string) int64 {
 	t.Helper()
 	var id int64
-	err := db.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&id)
+	err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&id)
 	if err != nil {
 		t.Fatalf("query logical_file by hash: %v", err)
 	}
@@ -169,11 +169,11 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -222,11 +222,11 @@ func TestDedupSameFile(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -247,7 +247,7 @@ func TestDedupSameFile(t *testing.T) {
 
 	// Should still be 1 logical file for this hash
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
 		t.Fatalf("count logical_file: %v", err)
 	}
 	if n != 1 {
@@ -263,11 +263,11 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 	applySchema(t, db)
 	resetDB(t, db)
 
@@ -331,7 +331,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	}
 
 	// Spot-check: restore a few logical files and compare hashes.
-	rows, err := db.Query(`SELECT id, file_hash, original_name FROM logical_file ORDER BY id ASC LIMIT 5`)
+	rows, err := dbconn.Query(`SELECT id, file_hash, original_name FROM logical_file ORDER BY id ASC LIMIT 5`)
 	if err != nil {
 		t.Fatalf("query logical_file: %v", err)
 	}
@@ -401,11 +401,11 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 	applySchema(t, db)
 	resetDB(t, db)
 
@@ -438,7 +438,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 
 	// Count containers before removal
 	var containersBefore int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&containersBefore); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&containersBefore); err != nil {
 		t.Fatalf("count container: %v", err)
 	}
 	if containersBefore == 0 {
@@ -448,7 +448,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	// Fetch fileA ID
 	var fileAID int64
 	hashA := sha256File(t, fileA)
-	if err := db.QueryRow(
+	if err := dbconn.QueryRow(
 		`SELECT id FROM logical_file WHERE file_hash = $1`,
 		hashA,
 	).Scan(&fileAID); err != nil {
@@ -467,14 +467,14 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 
 	// Count containers after GC
 	var containersAfter int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&containersAfter); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&containersAfter); err != nil {
 		t.Fatalf("count container after: %v", err)
 	}
 
 	// GC may delete 0 containers if remaining live chunks share the same container.
 	// What we must guarantee is that GC does not break restore and ref_counts remain valid.
 	var negatives int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
 		t.Fatalf("check negative ref_count: %v", err)
 	}
 	if negatives != 0 {
@@ -484,7 +484,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	// Ensure fileB still restores correctly
 	var fileBID int64
 	hashB := sha256File(t, fileB)
-	if err := db.QueryRow(
+	if err := dbconn.QueryRow(
 		`SELECT id FROM logical_file WHERE file_hash = $1`,
 		hashB,
 	).Scan(&fileBID); err != nil {
@@ -506,7 +506,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 
 	// Ensure no chunk has negative ref_count
 	//var negatives int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
 		t.Fatalf("check negative ref_count: %v", err)
 	}
 	if negatives != 0 {
@@ -522,11 +522,11 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -556,7 +556,7 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 
 	// Should still be 1 logical file for this hash
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
 		t.Fatalf("count logical_file: %v", err)
 	}
 	if n != 1 {
@@ -572,11 +572,11 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -628,10 +628,10 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	hashB := sha256File(t, fileBPath)
 
 	var countA, countB int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashA).Scan(&countA); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashA).Scan(&countA); err != nil {
 		t.Fatalf("count fileA: %v", err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashB).Scan(&countB); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashB).Scan(&countB); err != nil {
 		t.Fatalf("count fileB: %v", err)
 	}
 
@@ -648,11 +648,11 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -671,7 +671,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 
 	// Manually set the file status to ABORTED to simulate a failed store
 	fileID := fetchFileIDByHash(t, db, fileHash)
-	if _, err := db.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
 		t.Fatalf("set status to ABORTED: %v", err)
 	}
 
@@ -682,7 +682,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 
 	// Verify the file is now marked as COMPLETED
 	var status string
-	if err := db.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
 		t.Fatalf("check status: %v", err)
 	}
 	if status != "COMPLETED" {
@@ -698,11 +698,11 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -721,7 +721,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	// Find a chunk from this file and set it to ABORTED
 	var chunkID int64
 	var chunkHash string
-	if err := db.QueryRow(`
+	if err := dbconn.QueryRow(`
 		SELECT c.id, c.chunk_hash
 		FROM chunk c
 		JOIN file_chunk fc ON c.id = fc.chunk_id
@@ -733,7 +733,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 
 	// Set the chunk status to ABORTED
-	if _, err := db.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
 		t.Fatalf("set chunk status to ABORTED: %v", err)
 	}
 
@@ -744,7 +744,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 
 	// Verify the chunk is now marked as COMPLETED
 	var status string
-	if err := db.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
 	if status != "COMPLETED" {
@@ -760,18 +760,18 @@ func TestContainerRollover(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
 
 	// Set small container size for testing rollover
 	originalMaxSize := container.GetContainerMaxSize()
-	container.SetContainerMaxSize(1 * 1024 * 1024) // 1MB for quick test
+	container.SetContainerMaxSize(1 * 1024 * 1024)       // 1MB for quick test
 	defer container.SetContainerMaxSize(originalMaxSize) // restore
 
 	utils.DefaultCompression = utils.CompressionNone
@@ -792,7 +792,7 @@ func TestContainerRollover(t *testing.T) {
 
 	// Check that one container exists and is not sealed
 	var containerCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&containerCount); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&containerCount); err != nil {
 		t.Fatalf("count unsealed containers: %v", err)
 	}
 	if containerCount != 1 {
@@ -806,7 +806,7 @@ func TestContainerRollover(t *testing.T) {
 
 	// Check that the first container is now sealed
 	var sealedCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedCount); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedCount); err != nil {
 		t.Fatalf("count sealed containers: %v", err)
 	}
 	if sealedCount != 1 {
@@ -814,7 +814,7 @@ func TestContainerRollover(t *testing.T) {
 	}
 
 	// Check that a new unsealed container exists
-	if err := db.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&containerCount); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&containerCount); err != nil {
 		t.Fatalf("count unsealed containers after rollover: %v", err)
 	}
 	if containerCount != 1 {
@@ -852,11 +852,11 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	resetStorage(t)
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	applySchema(t, db)
 	resetDB(t, db)
@@ -874,7 +874,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	hashStr := hex.EncodeToString(hash)
 	size := int64(256 * 1024)
 
-	_, err = db.Exec(`
+	_, err = dbconn.Exec(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
 		VALUES ($1, $2, $3, 'PROCESSING', 0)
 	`, filepath.Base(inPath), size, hashStr)
@@ -883,7 +883,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 
 	// Set updated_at to old time to simulate stuck processing
-	_, err = db.Exec(`
+	_, err = dbconn.Exec(`
 		UPDATE logical_file
 		SET updated_at = NOW() - INTERVAL '15 minutes'
 		WHERE file_hash = $1
@@ -893,7 +893,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 
 	// Also create a processing chunk
-	_, err = db.Exec(`
+	_, err = dbconn.Exec(`
 		INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
 		VALUES ($1, $2, 'PROCESSING', NULL, NULL, 0, 0)
 	`, "dummy_chunk_hash", int64(128*1024))
@@ -903,12 +903,12 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Get chunk ID
 	var chunkID int64
-	if err := db.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1`, "dummy_chunk_hash").Scan(&chunkID); err != nil {
+	if err := dbconn.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1`, "dummy_chunk_hash").Scan(&chunkID); err != nil {
 		t.Fatalf("get chunk ID: %v", err)
 	}
 
 	// Set chunk updated_at to old time
-	_, err = db.Exec(`
+	_, err = dbconn.Exec(`
 		UPDATE chunk
 		SET updated_at = NOW() - INTERVAL '15 minutes'
 		WHERE id = $1
@@ -923,7 +923,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 		t.Fatalf("create dummy container file: %v", err)
 	}
 
-	_, err = db.Exec(`
+	_, err = dbconn.Exec(`
 		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
 		VALUES ($1, $2, $3, FALSE, FALSE)
 	`, "missing_container.bin", int64(1024), int64(64*1024*1024))
@@ -943,7 +943,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Verify that processing logical file was aborted
 	var fileStatus string
-	if err := db.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hashStr).Scan(&fileStatus); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hashStr).Scan(&fileStatus); err != nil {
 		t.Fatalf("check logical file status: %v", err)
 	}
 	if fileStatus != "ABORTED" {
@@ -952,7 +952,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Verify that processing chunk was aborted
 	var chunkStatus string
-	if err := db.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&chunkStatus); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&chunkStatus); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
 	if chunkStatus != "ABORTED" {
@@ -961,7 +961,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Verify that missing container was quarantined
 	var quarantine bool
-	if err := db.QueryRow(`SELECT quarantine FROM container WHERE filename = $1`, "missing_container.bin").Scan(&quarantine); err != nil {
+	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE filename = $1`, "missing_container.bin").Scan(&quarantine); err != nil {
 		t.Fatalf("check container quarantine: %v", err)
 	}
 	if !quarantine {

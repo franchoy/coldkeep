@@ -18,22 +18,22 @@ import (
 )
 
 func StoreFile(path string) error {
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	if err := StoreFileWithDB(db, path); err != nil {
+	if err := StoreFileWithDB(dbconn, path); err != nil {
 		return err
 	}
 	return nil
 
 }
 
-func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
+func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
 
-	tx, err := db.Begin()
+	tx, err := dbconn.Begin()
 	if err != nil {
 		return 0, "", err
 	}
@@ -89,7 +89,7 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 				time.Sleep(logicalFileWaitingtime)
 
 				var finalStatus string
-				if err := db.QueryRow(
+				if err := dbconn.QueryRow(
 					`SELECT status FROM logical_file WHERE id = $1`,
 					existingID,
 				).Scan(&finalStatus); err != nil {
@@ -114,7 +114,7 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 		if filestatus == "ABORTED" {
 			// Previous attempt was aborted while we were waiting: we can try to store again
 			// We can reuse the same logical_file row since it has the same file_hash
-			tx2, err := db.Begin()
+			tx2, err := dbconn.Begin()
 			if err != nil {
 				return 0, "", err
 			}
@@ -147,9 +147,9 @@ func claimLogicalFile(db *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID
 	return fileID, filestatus, nil
 }
 
-func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, err error) {
+func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, err error) {
 
-	tx, err := db.Begin()
+	tx, err := dbconn.Begin()
 	if err != nil {
 		return 0, "", err
 	}
@@ -198,7 +198,7 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 				time.Sleep(chunkWaitingtime)
 
 				var finalStatus string
-				if err := db.QueryRow(
+				if err := dbconn.QueryRow(
 					`SELECT status FROM chunk WHERE id = $1`,
 					chunkID,
 				).Scan(&finalStatus); err != nil {
@@ -220,7 +220,7 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 		if chunkstatus == "ABORTED" {
 			// Previous attempt was aborted while we were waiting: we can try to store again
 			// We can reuse the same chunk row since it has the same chunk_hash and size
-			tx2, err := db.Begin()
+			tx2, err := dbconn.Begin()
 			if err != nil {
 				return 0, "", err
 			}
@@ -249,7 +249,7 @@ func claimChunk(db *sql.DB, chunkHash string, chunksize int64) (chunkID int64, c
 	return chunkID, chunkstatus, nil
 }
 
-func StoreFileWithDB(db *sql.DB, path string) (err error) {
+func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 	start := time.Now()
 
 	file, err := os.Open(path)
@@ -275,7 +275,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 	}
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := claimLogicalFile(db, fileinfo, fileHash)
+	fileID, filestatus, err := claimLogicalFile(dbconn, fileinfo, fileHash)
 	if err != nil {
 		return err
 	}
@@ -288,7 +288,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 	completed := false
 	defer func() {
 		if !completed {
-			db.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID)
+			dbconn.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID)
 		}
 	}()
 
@@ -304,14 +304,14 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 		sum := sha256.Sum256(chunkData)
 		hash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, err := claimChunk(db, hash, int64(len(chunkData)))
+		claimedChunkID, chunkStatus, err := claimChunk(dbconn, hash, int64(len(chunkData)))
 		if err != nil {
 			return err
 		}
 
 		if chunkStatus == "COMPLETED" {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			_, err = db.Exec(
+			_, err = dbconn.Exec(
 				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
 			 VALUES ($1, $2, $3)`,
 				fileID,
@@ -326,7 +326,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 			continue // Move to next chunk
 		}
 
-		tx, err := db.Begin()
+		tx, err := dbconn.Begin()
 		if err != nil {
 			return err
 		}
@@ -342,7 +342,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 		if err2 != nil {
 			_ = tx.Rollback()
 
-			if _, err3 := db.Exec(
+			if _, err3 := dbconn.Exec(
 				`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
 				claimedChunkID,
 			); err3 != nil {
@@ -405,7 +405,7 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 	}
 
 	// After all chunks are stored and linked, mark logical file as "COMPLETED"
-	_, err = db.Exec(
+	_, err = dbconn.Exec(
 		`UPDATE logical_file SET status='COMPLETED' WHERE id=$1`,
 		fileID,
 	)
@@ -426,11 +426,11 @@ func StoreFileWithDB(db *sql.DB, path string) (err error) {
 func StoreFolder(root string) error {
 	start := time.Now()
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("failed to connect DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	workerCount := runtime.NumCPU()
 
@@ -441,7 +441,7 @@ func StoreFolder(root string) error {
 	for i := 0; i < workerCount; i++ {
 		go func() {
 			for p := range fileChan {
-				if err := StoreFileWithDB(db, p); err != nil {
+				if err := StoreFileWithDB(dbconn, p); err != nil {
 					errChan <- err
 					return
 				}

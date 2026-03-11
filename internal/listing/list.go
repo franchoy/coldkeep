@@ -8,13 +8,13 @@ import (
 )
 
 func ListFiles() error {
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT id, original_name, total_size, created_at
 		FROM logical_file
 		ORDER BY created_at DESC

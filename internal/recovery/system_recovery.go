@@ -12,25 +12,25 @@ import (
 
 func SystemRecovery() error {
 
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	err = abortProcessingLogicalFiles(db)
+	err = abortProcessingLogicalFiles(dbconn)
 	if err != nil {
 		return err
 	}
-	err = abortProcessingChunks(db)
+	err = abortProcessingChunks(dbconn)
 	if err != nil {
 		return err
 	}
-	err = quarantineMissingContainers(db)
+	err = quarantineMissingContainers(dbconn)
 	if err != nil {
 		return err
 	}
-	err = quarantineOrphanContainers(db)
+	err = quarantineOrphanContainers(dbconn)
 	if err != nil {
 		return err
 	}
@@ -38,27 +38,27 @@ func SystemRecovery() error {
 	return nil
 }
 
-func abortProcessingLogicalFiles(db *sql.DB) error {
+func abortProcessingLogicalFiles(dbconn *sql.DB) error {
 
-	_, err := db.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
+	_, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
 	if err != nil {
 		return fmt.Errorf("query update logical_file to ABORTED: %w", err)
 	}
 	return nil
 }
 
-func abortProcessingChunks(db *sql.DB) error {
+func abortProcessingChunks(dbconn *sql.DB) error {
 
-	_, err := db.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
+	_, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
 	if err != nil {
 		return fmt.Errorf("query update chunk to ABORTED: %w", err)
 	}
 	return nil
 }
 
-func quarantineMissingContainers(db *sql.DB) error {
+func quarantineMissingContainers(dbconn *sql.DB) error {
 
-	rows, err := db.Query(`SELECT id, filename FROM container WHERE quarantine = FALSE`)
+	rows, err := dbconn.Query(`SELECT id, filename FROM container WHERE quarantine = FALSE`)
 	if err != nil {
 		return fmt.Errorf("query retrieve container list: %w", err)
 	}
@@ -79,7 +79,7 @@ func quarantineMissingContainers(db *sql.DB) error {
 
 		if os.IsNotExist(err) {
 
-			_, err := db.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
+			_, err := dbconn.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
 			if err != nil {
 				return fmt.Errorf("query update container to quarantine due to missing file: %w", err)
 			}
@@ -92,7 +92,7 @@ func quarantineMissingContainers(db *sql.DB) error {
 	return rows.Err()
 }
 
-func quarantineOrphanContainers(db *sql.DB) error {
+func quarantineOrphanContainers(dbconn *sql.DB) error {
 
 	// recover files in container folder
 	entries, err := os.ReadDir(container.ContainersDir)
@@ -107,12 +107,12 @@ func quarantineOrphanContainers(db *sql.DB) error {
 		name := file.Name()
 		// check if a container record exists for this filename
 		var exists bool
-		err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM container WHERE filename = $1)`, name).Scan(&exists)
+		err := dbconn.QueryRow(`SELECT EXISTS(SELECT 1 FROM container WHERE filename = $1)`, name).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("query check container existence: %w", err)
 		}
 		if !exists {
-			_, err := db.Exec(`INSERT INTO container (filename, quarantine) VALUES ($1, TRUE) ON CONFLICT (filename) DO NOTHING`, name)
+			_, err := dbconn.Exec(`INSERT INTO container (filename, quarantine) VALUES ($1, TRUE) ON CONFLICT (filename) DO NOTHING`, name)
 			if err != nil {
 				return fmt.Errorf("insert orphan container record: %w", err)
 			}

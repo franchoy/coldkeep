@@ -12,13 +12,13 @@ import (
 )
 
 func RunGC() error {
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT id, filename, compression_algorithm
 		FROM container WHERE quarantine = FALSE 
 	`)
@@ -38,7 +38,7 @@ func RunGC() error {
 			return err
 		}
 
-		tx, err := db.Begin()
+		tx, err := dbconn.Begin()
 		if err != nil {
 			return err
 		}

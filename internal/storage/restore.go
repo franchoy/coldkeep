@@ -19,19 +19,19 @@ import (
 )
 
 func RestoreFile(id int64, outputPath string) error {
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	if err := RestoreFileWithDB(db, id, outputPath); err != nil {
+	if err := RestoreFileWithDB(dbconn, id, outputPath); err != nil {
 		return err
 	}
 	return nil
 }
 
-func RestoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
+func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	start := time.Now()
 	// ------------------------------------------------------------
 	// Fetch logical file metadata
@@ -39,7 +39,7 @@ func RestoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	var expectedFileHash string
 	var originalName string
 
-	err := db.QueryRow(
+	err := dbconn.QueryRow(
 		"SELECT original_name, file_hash FROM logical_file WHERE status = 'COMPLETED' AND id = $1",
 		fileID,
 	).Scan(&originalName, &expectedFileHash)
@@ -56,7 +56,7 @@ func RestoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	// NOTE: chunk_offset points to the *start of the record* inside the container:
 	//   [32 bytes sha256][4 bytes little-endian uint32 size][<size> bytes data]
 	// ------------------------------------------------------------
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT
 			c.chunk_offset,
 			c.size,

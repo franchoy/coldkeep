@@ -12,11 +12,11 @@ func bytesToMB(bytes int64) float64 {
 }
 
 func RunStats() error {
-	db, err := db.ConnectDB()
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	var totalFiles int64
 	var totalLogicalSize sql.NullInt64
@@ -48,35 +48,35 @@ func RunStats() error {
 	var maxChunkRetries sql.NullInt64
 
 	// Logical file stats - total
-	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
+	err = dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
 		Scan(&totalFiles, &totalLogicalSize)
 	if err != nil {
 		return fmt.Errorf("Failed to query total logical files: %w", err)
 	}
 
 	// Logical file stats - completed
-	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
+	err = dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
 		Scan(&completedFiles, &completedLogicalSize)
 	if err != nil {
 		return fmt.Errorf("Failed to query completed logical files: %w", err)
 	}
 
 	// Logical file stats - processing
-	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
+	err = dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
 		Scan(&processingFiles, &processingLogicalSize)
 	if err != nil {
 		return fmt.Errorf("Failed to query processing logical files: %w", err)
 	}
 
 	// Logical file stats - aborted
-	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
+	err = dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
 		Scan(&abortedFiles, &abortedLogicalSize)
 	if err != nil {
 		return fmt.Errorf("Failed to query aborted logical files: %w", err)
 	}
 
 	// healthy Container stats
-	err = db.QueryRow(`
+	err = dbconn.QueryRow(`
 		SELECT COUNT(*),
 		       COALESCE(SUM(current_size),0),
 		       COALESCE(SUM(compressed_size),0)
@@ -88,7 +88,7 @@ func RunStats() error {
 	}
 
 	// quarantined Container stats
-	err = db.QueryRow(`
+	err = dbconn.QueryRow(`
 		SELECT COUNT(*),
 		       COALESCE(SUM(current_size),0),
 		       COALESCE(SUM(compressed_size),0)
@@ -111,7 +111,7 @@ func RunStats() error {
 	}
 
 	// Chunk live/dead stats
-	err = db.QueryRow(`
+	err = dbconn.QueryRow(`
 		SELECT
 			COALESCE(SUM(CASE WHEN ref_count > 0 THEN size ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN ref_count = 0 THEN size ELSE 0 END),0)
@@ -122,7 +122,7 @@ func RunStats() error {
 	}
 
 	// Retry stats for logical files
-	err = db.QueryRow(`
+	err = dbconn.QueryRow(`
 		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
 		FROM logical_file
 	`).Scan(&totalFileRetries, &avgFileRetries, &maxFileRetries)
@@ -131,7 +131,7 @@ func RunStats() error {
 	}
 
 	// Retry stats for chunks
-	err = db.QueryRow(`
+	err = dbconn.QueryRow(`
 		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
 		FROM chunk
 	`).Scan(&totalChunkRetries, &avgChunkRetries, &maxChunkRetries)
@@ -180,12 +180,12 @@ func RunStats() error {
 	fmt.Println("============================")
 
 	type chunkStats struct {
-    status string
-    count  int64
-    bytes  int64
+		status string
+		count  int64
+		bytes  int64
 	}
 
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT status, COUNT(*), COALESCE(SUM(size),0)
 		FROM chunk
 		GROUP BY status`)
@@ -227,7 +227,7 @@ func RunStats() error {
 	// ---- Per container breakdown ----
 	fmt.Println("\nPer-container breakdown:")
 
-	rows, err := db.Query(`
+	rows, err = dbconn.Query(`
 		SELECT
 			c.id,
 			c.filename,
