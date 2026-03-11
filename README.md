@@ -1,4 +1,4 @@
-# coldkeep (POC)
+# coldkeep
 
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)

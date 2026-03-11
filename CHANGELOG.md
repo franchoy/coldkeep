@@ -10,7 +10,7 @@ production stability.
 
 ## \[0.1.0\] - 2026-02-24
 
-Initial public research prototype (POC).
+Initial public research prototype.
 
 ### Added
 
