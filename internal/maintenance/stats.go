@@ -164,7 +164,7 @@ func RunStats() error {
 		fmt.Printf("Global dedup ratio:              %.2f%%\n", dedupRatio*100)
 	}
 
-	if totalContainerSize.Int64 > 0 {
+	if healthyContainerSize.Int64 > 0 {
 		deadRatio := float64(deadBytes.Int64) / float64(healthyContainerSize.Int64)
 		fmt.Printf("Fragmentation ratio:             %.2f%%\n", deadRatio*100)
 	}
