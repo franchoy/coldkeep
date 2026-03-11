@@ -96,6 +96,9 @@ func quarantineOrphanContainers(dbconn *sql.DB) error {
 
 	// recover files in container folder
 	entries, err := os.ReadDir(container.ContainersDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read containers dir: %w", err)
 	}
