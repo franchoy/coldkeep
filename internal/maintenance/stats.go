@@ -179,12 +179,6 @@ func RunStats() error {
 
 	fmt.Println("============================")
 
-	type chunkStats struct {
-		status string
-		count  int64
-		bytes  int64
-	}
-
 	rows, err := dbconn.Query(`
 		SELECT status, COUNT(*), COALESCE(SUM(size),0)
 		FROM chunk
