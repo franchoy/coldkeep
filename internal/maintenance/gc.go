@@ -53,7 +53,7 @@ func RunGC() error {
 					AND ref_count > 0
 				)
 			FROM container where quarantine = FALSE
-			WHERE id = $1
+			and id = $1
 		`, containerID).Scan(&stillEmpty)
 		if err != nil {
 			_ = tx.Rollback()
