@@ -45,6 +45,7 @@ func abortProcessingLogicalFiles(dbconn *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("query update logical_file to ABORTED: %w", err)
 	}
+	log.Println("Aborting logical files stuck in PROCESSING state for more than 10 minutes - done")
 	return nil
 }
 
@@ -84,10 +85,12 @@ func quarantineMissingContainers(dbconn *sql.DB) error {
 			if err != nil {
 				return fmt.Errorf("query update container to quarantine due to missing file: %w", err)
 			}
+			log.Printf("Quarantined container record with missing file: %s", filename)
 
 		} else if err != nil {
 			return fmt.Errorf("stat container file: %w", err)
 		}
+
 	}
 
 	return rows.Err()
@@ -124,6 +127,7 @@ func quarantineOrphanContainers(dbconn *sql.DB) error {
 			if err != nil {
 				return fmt.Errorf("insert orphan container record: %w", err)
 			}
+			log.Printf("Quarantined orphan container file: %s", name)
 		}
 	}
 
