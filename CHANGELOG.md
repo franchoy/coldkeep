@@ -2,15 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
-This project follows a lightweight, research-friendly versioning
-approach. Version numbers indicate conceptual milestones rather than
+This project follows a lightweight, prototype-friendly versioning
+approach.
+
+Version numbers indicate conceptual milestones rather than
 production stability.
 
 ------------------------------------------------------------------------
 
-## \[0.1.0\] - 2026-02-24
+## [0.2.0]- 2026-03-11
 
-Initial public research prototype.
+Crash-consistency foundation for the storage engine
+
+### Added
+
+-   Logical file lifecycle management
+-   Chunk lifecycle management
+-   Retry handling for interrupted operations
+-   Startup recovery system
+-   Container quarantine mechanism
+-   Extended storage statistics
+-   Smoke test improvements
+-   Durable container writes with fsync to guarantee on-disk persistence
+
+### Improved
+
+-   Concurrent file ingestion
+-   Garbage collection safety
+-   Operational observability
+
+### Notes
+
+This version introduces the core reliability model for the storage
+engine. 
+
+The on-disk format and APIs may still change in future releases.
+
+### Known Limitations
+
+- Basic crash recovery exists, but full end-to-end crash consistency across
+  filesystem and database layers is still evolving.
+- No encryption at rest or in transit.
+- No authentication or authorization model.
+- Whole-container compression is not suitable for efficient random-access
+  restores.
+- Concurrency behavior has not been heavily stress-tested under high parallel
+  workloads.
+- No background integrity verification or automatic container scrubbing.
+- On-disk storage format may change before v1.0.
+
+------------------------------------------------------------------------
+
+## [0.1.0] - 2026-02-24
+
+Initial public research prototype (POC).
 
 ### Added
 

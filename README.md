@@ -5,11 +5,11 @@
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-research%20prototype-orange)
 
-> **Status:** Research prototype / proof-of-concept.\
+> **Status:** Experimental research projec.\
 > **Not production-ready. Do not use for real or sensitive data.**
 
-coldkeep is an experimental **local-first content-addressed file storage
-prototype** written in Go.
+coldkeep is an experimental **local-first content-addressed file storage engine**
+written in Go.
 
 Files are split into **content-addressed chunks**, packed into
 **container files on disk**, and tracked through **PostgreSQL
@@ -29,7 +29,8 @@ storage.
 -   Restore a file by reconstructing it from stored chunks.
 -   Remove logical files (decrements chunk reference counts).
 -   Run garbage collection to remove unreferenced chunks.
--   Display basic storage statistics.
+-   Recover safely from interrupted operations on startup.
+-   Display storage statistics and container health information.
 
 ------------------------------------------------------------------------
 
@@ -53,6 +54,14 @@ Core tables:
 Containers are stored on disk under:
 
     storage/containers/
+
+Lifecycle states:
+
+- logical_file: PROCESSING → COMPLETED → ABORTED
+- chunk: PROCESSING → COMPLETED → ABORTED
+
+These states allow coldkeep to detect interrupted operations and
+recover safely on startup.
 
 ------------------------------------------------------------------------
 
@@ -194,22 +203,30 @@ Storage is written to:
 
 During development you can safely delete this directory.
 
+Additional environment variables used in development:
+
+- `COLDKEEP_STORAGE_DIR`
+- `COLDKEEP_SAMPLES_DIR`
+
 ------------------------------------------------------------------------
 
 # Known limitations
 
-## Crash consistency
+## Crash recovery
 
-coldkeep is **not crash-consistent yet**.
+coldkeep now includes a basic crash recovery model.
 
-Some operations combine filesystem writes with database transactions.\
-Filesystem operations cannot be rolled back if a transaction fails.
+Operations use lifecycle states (`PROCESSING`, `COMPLETED`, `ABORTED`)
+to detect interrupted operations.
 
-Possible consequences:
+On startup the system:
 
--   orphan container files
--   temporary disagreement between DB and disk
--   partially applied container writes
+- marks stale `PROCESSING` rows as `ABORTED`
+- prevents incomplete chunks from being reused
+- allows safe retries of interrupted operations
+
+However, the system is still experimental and full transactional
+guarantees across filesystem and database layers are not yet complete.
 
 Use only with **disposable test data**.
 
@@ -228,7 +245,11 @@ Default for this prototype: **no compression**.
 
 ## Concurrency & integrity
 
-Concurrency guarantees are minimal.
+Concurrency support is still evolving.
+
+Basic protections exist to avoid duplicate chunk ingestion and to
+coordinate concurrent writers, but the system has not yet been
+stress-tested for heavy parallel workloads.
 
 -   Concurrent store/remove/gc operations are not a focus for v0.
 -   Concurrent operations may leave unused bytes in containers.
@@ -272,8 +293,9 @@ and require a running PostgreSQL instance.
 
 ## Smoke test
 
-`scripts/smoke.sh` provides a quick end-to-end test using the `samples/`
-directory.
+`scripts/smoke.sh` runs a full end-to-end workflow : using the `samples/` directory.
+
+store → stats → list → restore → dedup check.
 
 ### Local
 
@@ -301,10 +323,10 @@ docker compose run --rm \
 # Roadmap ideas
 
 -   framed container format with random-access compression
--   improved crash consistency
--   safer concurrent operations
+-   stronger crash consistency guarantees
+-   improved concurrent ingestion
 -   experimental cloud storage backends
--   richer CLI and statistics
+-   richer CLI and observability
 
 ------------------------------------------------------------------------
 
