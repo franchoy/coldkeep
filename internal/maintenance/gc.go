@@ -18,6 +18,22 @@ func RunGC() error {
 	}
 	defer dbconn.Close()
 
+	// Attempt to acquire advisory lock to ensure only one GC runs at a time
+	var locked bool
+
+	err = dbconn.QueryRow("SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
+	if err != nil {
+		return fmt.Errorf("failed to attempt advisory lock: %w", err)
+	}
+
+	if !locked {
+		return fmt.Errorf("GC already running (advisory lock held)")
+	}
+
+	defer func() {
+		_, _ = dbconn.Exec("SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+	}()
+
 	rows, err := dbconn.Query(`
 		SELECT id, filename, compression_algorithm
 		FROM container WHERE quarantine = FALSE 
