@@ -18,9 +18,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache: true
 
       - name: Verify module
         run: go mod tidy && git diff --exit-code
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
 
       - name: Vet
         run: go vet ./...
@@ -28,5 +32,8 @@ jobs:
       - name: Test (race enabled)
         run: go test -race ./...
 
-      - name: Build
+      - name: Build packages
+        run: go build ./...
+
+      - name: Build CLI
         run: go build -o coldkeep ./cmd/coldkeep
