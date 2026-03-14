@@ -3,7 +3,7 @@
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-research%20prototype-orange)
+![Status](https://img.shields.io/badge/status-research%20experimental-orange)
 
 > **Status:** Experimental research projec.\
 > **Not production-ready. Do not use for real or sensitive data.**
