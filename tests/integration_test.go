@@ -189,17 +189,17 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	want := mustRead(t, inPath)
 	wantHash := sha256File(t, inPath)
 
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("storeFileWithDB: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, db, wantHash)
+	fileID := fetchFileIDByHash(t, dbconn, wantHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "roundtrip.restored.bin")
 
-	if err := storage.RestoreFileWithDB(db, fileID, outPath); err != nil {
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 		t.Fatalf("restoreFileWithDB: %v", err)
 	}
 
@@ -238,10 +238,10 @@ func TestDedupSameFile(t *testing.T) {
 	inPath := createTempFile(t, inputDir, "dup.bin", 256*1024)
 	fileHash := sha256File(t, inPath)
 
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("first store: %v", err)
 	}
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("second store: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 			t.Fatalf("scan: %v", err)
 		}
 		outPath := filepath.Join(outDir, name)
-		if err := storage.RestoreFileWithDB(db, id, outPath); err != nil {
+		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
 			t.Fatalf("restore %d: %v", id, err)
 		}
 		gotHash := sha256File(t, outPath)
@@ -429,10 +429,10 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	fileB := fileBPath
 
 	// Store both
-	if err := storage.StoreFileWithDB(db, fileA); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, fileA); err != nil {
 		t.Fatalf("store fileA: %v", err)
 	}
-	if err := storage.StoreFileWithDB(db, fileB); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, fileB); err != nil {
 		t.Fatalf("store fileB: %v", err)
 	}
 
@@ -456,7 +456,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// Remove fileA
-	if err := storage.RemoveFileWithDB(db, fileAID); err != nil {
+	if err := storage.RemoveFileWithDB(dbconn, fileAID); err != nil {
 		t.Fatalf("removeFileWithDB: %v", err)
 	}
 
@@ -495,7 +495,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "fileB.restored.bin")
 
-	if err := storage.RestoreFileWithDB(db, fileBID, outPath); err != nil {
+	if err := storage.RestoreFileWithDB(dbconn, fileBID, outPath); err != nil {
 		t.Fatalf("restore fileB after GC: %v", err)
 	}
 
@@ -540,8 +540,8 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 
 	// Start two goroutines trying to store the same file
 	done := make(chan error, 2)
-	go func() { done <- storage.StoreFileWithDB(db, inPath) }()
-	go func() { done <- storage.StoreFileWithDB(db, inPath) }()
+	go func() { done <- storage.StoreFileWithDB(dbconn, inPath) }()
+	go func() { done <- storage.StoreFileWithDB(dbconn, inPath) }()
 
 	// Wait for both to complete
 	err1 := <-done
@@ -609,8 +609,8 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 
 	// Start two goroutines storing the files concurrently
 	done := make(chan error, 2)
-	go func() { done <- storage.StoreFileWithDB(db, fileAPath) }()
-	go func() { done <- storage.StoreFileWithDB(db, fileBPath) }()
+	go func() { done <- storage.StoreFileWithDB(dbconn, fileAPath) }()
+	go func() { done <- storage.StoreFileWithDB(dbconn, fileBPath) }()
 
 	// Wait for both to complete
 	err1 := <-done
@@ -665,18 +665,18 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	fileHash := sha256File(t, inPath)
 
 	// Store the file initially
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
 
 	// Manually set the file status to ABORTED to simulate a failed store
-	fileID := fetchFileIDByHash(t, db, fileHash)
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
 	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
 		t.Fatalf("set status to ABORTED: %v", err)
 	}
 
 	// Now try to store the same file again - it should retry and succeed
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("retry store after abort: %v", err)
 	}
 
@@ -714,7 +714,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	inPath := createTempFile(t, inputDir, "retry_chunk.bin", 256*1024)
 
 	// Store the file initially to create chunks
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
 
@@ -738,7 +738,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 
 	// Now try to store the same file again - it should retry the aborted chunk and succeed
-	if err := storage.StoreFileWithDB(db, inPath); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
 		t.Fatalf("retry store after chunk abort: %v", err)
 	}
 
@@ -786,7 +786,7 @@ func TestContainerRollover(t *testing.T) {
 	}
 
 	// Store first file
-	if err := storage.StoreFileWithDB(db, files[0]); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, files[0]); err != nil {
 		t.Fatalf("store first file: %v", err)
 	}
 
@@ -800,7 +800,7 @@ func TestContainerRollover(t *testing.T) {
 	}
 
 	// Store second file - should trigger rollover
-	if err := storage.StoreFileWithDB(db, files[1]); err != nil {
+	if err := storage.StoreFileWithDB(dbconn, files[1]); err != nil {
 		t.Fatalf("store second file: %v", err)
 	}
 
@@ -824,13 +824,13 @@ func TestContainerRollover(t *testing.T) {
 	// Verify both files can be restored
 	for i, file := range files {
 		hash := sha256File(t, file)
-		fileID := fetchFileIDByHash(t, db, hash)
+		fileID := fetchFileIDByHash(t, dbconn, hash)
 
 		outDir := filepath.Join(tmp, "out")
 		_ = os.MkdirAll(outDir, 0o755)
 		outPath := filepath.Join(outDir, fmt.Sprintf("restored%d.bin", i))
 
-		if err := storage.RestoreFileWithDB(db, fileID, outPath); err != nil {
+		if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 			t.Fatalf("restore file %d: %v", i, err)
 		}
 
