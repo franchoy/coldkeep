@@ -33,7 +33,7 @@ func requireDB(t *testing.T) {
 	}
 }
 
-func applySchema(t *testing.T, db *sql.DB) {
+func applySchema(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
 
 	// 1) Allow explicit override (best for Docker / CI)
@@ -97,7 +97,7 @@ func applySchema(t *testing.T, db *sql.DB) {
 	t.Fatalf("could not find db/init.sql; set COLDKEEP_SCHEMA_PATH to an absolute path")
 }
 
-func resetDB(t *testing.T, db *sql.DB) {
+func resetDB(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
 	// Keep schema_version; clear the data tables and reset sequences.
 	_, err := dbconn.Exec(`
@@ -150,7 +150,7 @@ func createTempFile(t *testing.T, dir, name string, size int) string {
 	return p
 }
 
-func fetchFileIDByHash(t *testing.T, db *sql.DB, fileHash string) int64 {
+func fetchFileIDByHash(t *testing.T, dbconn *sql.DB, fileHash string) int64 {
 	t.Helper()
 	var id int64
 	err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&id)
