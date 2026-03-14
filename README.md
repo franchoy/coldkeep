@@ -4,6 +4,9 @@
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Status](https://img.shields.io/badge/status-research%20experimental-orange)
+![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
+
+
 
 > **Status:** Experimental research projec.\
 > **Not production-ready. Do not use for real or sensitive data.**
@@ -320,13 +323,22 @@ docker compose run --rm \
 
 ------------------------------------------------------------------------
 
-# Roadmap ideas
+## Roadmap
 
--   framed container format with random-access compression
--   stronger crash consistency guarantees
--   improved concurrent ingestion
--   experimental cloud storage backends
--   richer CLI and observability
+Short-term goals:
+
+- framed container format with random-access compression
+- improved container lifecycle management
+- stronger crash recovery guarantees
+- improved concurrency coordination
+- richer operational statistics
+
+Longer-term ideas:
+
+- cloud storage backends
+- container compaction
+- optional encryption
+- background integrity verification
 
 ------------------------------------------------------------------------
 
