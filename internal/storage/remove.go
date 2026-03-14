@@ -1,26 +1,28 @@
-package main
+package storage
 
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func removeFile(fileID int64) error {
-	db, err := connectDB()
+func RemoveFile(fileID int64) error {
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	if err := removeFileWithDB(db, fileID); err != nil {
+	if err := RemoveFileWithDB(dbconn, fileID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func removeFileWithDB(db *sql.DB, fileID int64) error {
+func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 
-	tx, err := db.Begin()
+	tx, err := dbconn.Begin()
 	if err != nil {
 		return err
 	}

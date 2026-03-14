@@ -1,22 +1,26 @@
-package main
+package maintenance
 
 import (
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/utils"
 )
 
-func runGC() error {
-	db, err := connectDB()
+func RunGC() error {
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT id, filename, compression_algorithm
-		FROM container
+		FROM container WHERE quarantine = FALSE 
 	`)
 	if err != nil {
 		return err
@@ -34,7 +38,7 @@ func runGC() error {
 			return err
 		}
 
-		tx, err := db.Begin()
+		tx, err := dbconn.Begin()
 		if err != nil {
 			return err
 		}
@@ -48,8 +52,8 @@ func runGC() error {
 					WHERE container_id = $1
 					AND ref_count > 0
 				)
-			FROM container
-			WHERE id = $1
+			FROM container where quarantine = FALSE
+			and id = $1
 		`, containerID).Scan(&stillEmpty)
 		if err != nil {
 			_ = tx.Rollback()
@@ -62,7 +66,7 @@ func runGC() error {
 		}
 
 		// Delete chunks
-		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1`, containerID)
+		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1 and status = 'COMPLETED'`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -80,8 +84,8 @@ func runGC() error {
 		}
 
 		// After commit, delete file from disk
-		containerPath := filepath.Join(storageDir, filename)
-		if algo != "" && algo != string(CompressionNone) {
+		containerPath := filepath.Join(container.ContainersDir, filename)
+		if algo != "" && algo != string(utils.CompressionNone) {
 			containerPath += "." + algo
 		}
 

@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"compress/gzip"
@@ -16,6 +16,8 @@ const (
 	CompressionGzip CompressionType = "gzip"
 	CompressionZstd CompressionType = "zstd"
 )
+
+var DefaultCompression = CompressionNone //CompressionZstd
 
 func CompressFile(path string, algo CompressionType) (string, int64, error) {
 	// No compression

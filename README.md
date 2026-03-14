@@ -1,54 +1,106 @@
-# coldkeep (POC)
+# coldkeep
 
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-research%20prototype-orange)
+![Status](https://img.shields.io/badge/status-research%20experimental-orange)
 
-> **Status:** Research prototype / proof‑of‑concept.\
-> **Not production‑ready. Do not use for real or sensitive data.**
+> **Status:** Experimental research projec.\
+> **Not production-ready. Do not use for real or sensitive data.**
 
-coldkeep is an experimental local-first content‑addressed file storage
-prototype written in Go.\
-It stores files as **chunks** inside **container** files on disk, and
-tracks metadata in Postgres.
+coldkeep is an experimental **local-first content-addressed file storage engine**
+written in Go.
 
-This repo is meant for learning, experimentation, and discussion --- not
-for operational backup/storage use.
+Files are split into **content-addressed chunks**, packed into
+**container files on disk**, and tracked through **PostgreSQL
+metadata**.
+
+This repository exists primarily for **learning, experimentation, and
+design exploration** --- not for operational backup or production
+storage.
 
 ------------------------------------------------------------------------
 
-## What it does (today)
+# What it does (today)
 
 -   Store a file (or folder) by splitting it into chunks.
--   Deduplicate chunks using SHA‑256.
--   Pack chunks into container files up to a max size.
--   Restore a file by reconstructing it from chunks.
--   Remove a logical file (decrements chunk ref counts).
--   Run GC to delete unreferenced chunks/containers.
--   Basic stats.
+-   Deduplicate chunks using SHA-256.
+-   Pack chunks into container files up to a maximum size.
+-   Restore a file by reconstructing it from stored chunks.
+-   Remove logical files (decrements chunk reference counts).
+-   Run garbage collection to remove unreferenced chunks.
+-   Recover safely from interrupted operations on startup.
+-   Display storage statistics and container health information.
 
 ------------------------------------------------------------------------
 
-## Design sketch
+# Design sketch
 
--   **logical_file**: user-facing file entry (name, size, file_hash)
--   **chunk**: content-addressed chunk (hash, size, ref_count,
-    container_id, offset)
--   **file_chunk**: mapping from logical_file → ordered chunk list
--   **container**: physical file on disk that stores chunk data
+Core tables:
 
-Containers are plain files under:
+-   **logical_file**\
+    User-visible file entry (name, size, file_hash).
+
+-   **chunk**\
+    Content-addressed chunk (chunk_hash, size, ref_count, container_id,
+    offset).
+
+-   **file_chunk**\
+    Ordered mapping between logical files and chunks.
+
+-   **container**\
+    Physical container file storing chunk data.
+
+Containers are stored on disk under:
 
     storage/containers/
 
+Lifecycle states:
+
+- logical_file: PROCESSING → COMPLETED → ABORTED
+- chunk: PROCESSING → COMPLETED → ABORTED
+
+These states allow coldkeep to detect interrupted operations and
+recover safely on startup.
+
 ------------------------------------------------------------------------
 
-## Quickstart (Using the included `samples/` folder)
+# Project structure
 
-This repository includes a small `samples/` directory for testing.
+    coldkeep/
+    │
+    ├─ cmd/
+    │   └─ coldkeep/          # CLI entrypoint
+    │
+    ├─ internal/
+    │   ├─ container/         # container format + container management
+    │   ├─ chunk/             # chunking and compression logic
+    │   ├─ db/                # database connection helpers
+    │   ├─ storage/           # store / restore / remove pipeline
+    │   ├─ maintenance/       # gc and stats
+    │   ├─ listing/           # file listing operations
+    │   └─ utils/             # small helper utilities
+    │
+    ├─ tests/                 # integration tests
+    ├─ scripts/               # smoke / development scripts
+    ├─ db/                    # database schema
+    │
+    ├─ docker-compose.yml
+    ├─ go.mod
+    └─ README.md
 
-### 🐳 With Docker
+`internal/` packages implement the storage engine.\
+`cmd/` contains the CLI entrypoint.
+
+------------------------------------------------------------------------
+
+# Quickstart
+
+A small `samples/` folder is included for testing.
+
+------------------------------------------------------------------------
+
+# 🐳 With Docker
 
 Start services:
 
@@ -74,7 +126,7 @@ List stored files:
 docker compose run --rm app list
 ```
 
-Restore a file (replace ID as needed):
+Restore a file:
 
 ``` bash
 docker compose run --rm app restore 1 _out.bin
@@ -94,20 +146,18 @@ docker compose run --rm app gc
 
 ------------------------------------------------------------------------
 
-### 💻 Local (without Docker)
+# 💻 Local development (without Docker)
 
-Start Postgres (example via Docker):
+Start Postgres (example):
 
 ``` bash
 docker compose up -d postgres
 ```
 
-Build:
+Build the CLI:
 
 ``` bash
-cd app
-go build -o ../coldkeep .
-cd ..
+go build -o coldkeep ./cmd/coldkeep
 ```
 
 Store the sample folder:
@@ -116,7 +166,7 @@ Store the sample folder:
 ./coldkeep store-folder samples
 ```
 
-List files:
+List stored files:
 
 ``` bash
 ./coldkeep list
@@ -125,7 +175,7 @@ List files:
 Restore a file:
 
 ``` bash
-./coldkeep restore 1 ./restored.bin
+./coldkeep restore 1 restored.bin
 ```
 
 Show stats:
@@ -142,110 +192,152 @@ Run GC:
 
 ------------------------------------------------------------------------
 
-## Configuration
+# Configuration
 
-The app reads DB connection info from environment variables\
+Database configuration is read from environment variables\
 (see `docker-compose.yml` for defaults).
 
-Storage goes to:
+Storage is written to:
 
     ./storage/
 
-You can safely delete the entire `storage/` directory during testing.
+During development you can safely delete this directory.
+
+Additional environment variables used in development:
+
+- `COLDKEEP_STORAGE_DIR`
+- `COLDKEEP_SAMPLES_DIR`
 
 ------------------------------------------------------------------------
 
-## Known limitations (important)
+# Known limitations
 
-### Crash consistency
+## Crash recovery
 
-coldkeep is **not crash-consistent**. Some operations combine filesystem
-writes with DB transactions, but filesystem changes cannot be rolled
-back if a DB transaction fails.
+coldkeep now includes a basic crash recovery model.
 
-Possible effects:
+Operations use lifecycle states (`PROCESSING`, `COMPLETED`, `ABORTED`)
+to detect interrupted operations.
 
--   Orphan container files on disk
--   Temporary disagreement between DB and disk
--   Partially applied container sealing/compression
+On startup the system:
 
-Use only with disposable test data.
+- marks stale `PROCESSING` rows as `ABORTED`
+- prevents incomplete chunks from being reused
+- allows safe retries of interrupted operations
 
-------------------------------------------------------------------------
+However, the system is still experimental and full transactional
+guarantees across filesystem and database layers are not yet complete.
 
-### Whole-container compression
-
-If container compression is enabled (gzip/zstd), restores may become
-very slow because compressed streams are not seekable.
-
-Default for this POC is **no container compression**.
+Use only with **disposable test data**.
 
 ------------------------------------------------------------------------
 
-### Concurrency & integrity
+## Container compression
 
--   Concurrency guarantees are minimal.
--   Heavy concurrent store/remove/gc is not a goal for v0.
--   Concurrent operations may leave orphan bytes inside containers.
+Container-level compression currently compresses the whole container.
+
+This makes random access difficult because compressed streams are not
+seekable.
+
+Default for this prototype: **no compression**.
 
 ------------------------------------------------------------------------
 
-## Security
+## Concurrency & integrity
+
+Concurrency support is still evolving.
+
+Basic protections exist to avoid duplicate chunk ingestion and to
+coordinate concurrent writers, but the system has not yet been
+stress-tested for heavy parallel workloads.
+
+-   Concurrent store/remove/gc operations are not a focus for v0.
+-   Concurrent operations may leave unused bytes in containers.
+
+Future versions will improve:
+
+-   crash recovery
+-   concurrency coordination
+-   container lifecycle safety
+
+------------------------------------------------------------------------
+
+# Security
 
 See `SECURITY.md`.
 
 This project is a prototype and should not be used to protect sensitive
-information.
+data.
 
 ------------------------------------------------------------------------
 
-## Development
+# Development
 
-### Tests
+## Build
 
--   Unit tests: `go test ./...`
--   Integration tests require Postgres (see tests for details).
+    go build ./cmd/coldkeep
 
-### Smoke script
+## Tests
 
-`scripts/smoke.sh` provides a quick end‑to‑end test using the `samples/`
-folder.
+Run all tests:
 
-#### Local (without Docker)
+    go test ./...
 
+Integration tests live under:
+
+    tests/
+
+and require a running PostgreSQL instance.
+
+------------------------------------------------------------------------
+
+## Smoke test
+
+`scripts/smoke.sh` runs a full end-to-end workflow : using the `samples/` directory.
+
+store → stats → list → restore → dedup check.
+
+### Local
+
+``` bash
 docker compose up -d postgres
-go build -o coldkeep ./app
+go build -o coldkeep ./cmd/coldkeep
 bash scripts/smoke.sh
+```
 
-#### Docker
+### Docker
 
+``` bash
 docker compose up -d postgres
-docker compose run --rm  
+
+docker compose run --rm \
   -e COLDKEEP_SAMPLES_DIR=/samples \
   -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage \
   -v "$PWD/samples:/samples" \
   --entrypoint bash \
   app scripts/smoke.sh
+```
 
 ------------------------------------------------------------------------
 
-## Roadmap ideas
+# Roadmap ideas
 
--   Framed container format for random access with compression.
--   Stronger crash consistency.
--   Safer concurrent operations.
--   Cloud backends experiments.
--   CLI improvements and richer stats.
+-   framed container format with random-access compression
+-   stronger crash consistency guarantees
+-   improved concurrent ingestion
+-   experimental cloud storage backends
+-   richer CLI and observability
 
 ------------------------------------------------------------------------
 
-## Contributing
+# Contributing
 
-Contributions and discussion are welcome.\
+Contributions and discussion are welcome.
+
 See `CONTRIBUTING.md`.
 
 ------------------------------------------------------------------------
 
-## License
+# License
 
 Apache-2.0. See `LICENSE`.

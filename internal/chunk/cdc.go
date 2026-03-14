@@ -1,4 +1,4 @@
-package main
+package chunk
 
 import (
 	"io"
@@ -11,7 +11,7 @@ const (
 	mask         = 0x3FFFF
 )
 
-func chunkFile(filePath string) ([][]byte, error) {
+func ChunkFile(filePath string) ([][]byte, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err

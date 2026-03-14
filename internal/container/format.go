@@ -1,4 +1,4 @@
-package main
+package container
 
 import (
 	"crypto/rand"
@@ -10,7 +10,7 @@ import (
 
 const (
 	ContainerMagic    = "coldkeep0" // must be exactly 8 bytes
-	ContainerHdrLenV0 = 64         // fixed header size in bytes
+	ContainerHdrLenV0 = 64          // fixed header size in bytes
 )
 
 // Reserved future flags (not used yet)
@@ -37,8 +37,8 @@ func writeNewContainerHeaderV0(f *os.File, maxSize int64) error {
 	// flags (none for V0)
 	binary.LittleEndian.PutUint32(h[16:20], 0)
 
-	// created timestamp
-	binary.LittleEndian.PutUint64(h[20:28], uint64(time.Now().UnixNano()))
+	// created timestampZ UTC
+	binary.LittleEndian.PutUint64(h[20:28], uint64(time.Now().UTC().UnixNano()))
 
 	// max container size policy
 	binary.LittleEndian.PutUint64(h[28:36], uint64(maxSize))

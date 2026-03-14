@@ -1,4 +1,4 @@
-package main
+package storage
 
 import (
 	"bytes"
@@ -12,22 +12,26 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/utils"
 )
 
-func restoreFile(id int64, outputPath string) error {
-	db, err := connectDB()
+func RestoreFile(id int64, outputPath string) error {
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	if err := restoreFileWithDB(db, id, outputPath); err != nil {
+	if err := RestoreFileWithDB(dbconn, id, outputPath); err != nil {
 		return err
 	}
 	return nil
 }
 
-func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
+func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	start := time.Now()
 	// ------------------------------------------------------------
 	// Fetch logical file metadata
@@ -35,8 +39,8 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	var expectedFileHash string
 	var originalName string
 
-	err := db.QueryRow(
-		"SELECT original_name, file_hash FROM logical_file WHERE id = $1",
+	err := dbconn.QueryRow(
+		"SELECT original_name, file_hash FROM logical_file WHERE status = 'COMPLETED' AND id = $1",
 		fileID,
 	).Scan(&originalName, &expectedFileHash)
 
@@ -52,17 +56,17 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	// NOTE: chunk_offset points to the *start of the record* inside the container:
 	//   [32 bytes sha256][4 bytes little-endian uint32 size][<size> bytes data]
 	// ------------------------------------------------------------
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT
 			c.chunk_offset,
 			c.size,
-			c.sha256,
+			c.chunk_hash,
 			ct.filename,
 			ct.compression_algorithm
 		FROM file_chunk fc
 		JOIN chunk c ON fc.chunk_id = c.id
 		JOIN container ct ON c.container_id = ct.id
-		WHERE fc.logical_file_id = $1
+		WHERE fc.logical_file_id = $1 AND c.status = 'COMPLETED'
 		ORDER BY fc.chunk_order ASC
 	`, fileID)
 
@@ -107,21 +111,21 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
-		algo := CompressionType(algoStr)
+		algo := utils.CompressionType(algoStr)
 
 		// Container filename changes when compressed (CompressFile removes the original and writes filename.<algo>)
 		containerFilename := filename
-		if algo != CompressionNone {
+		if algo != utils.CompressionNone {
 			containerFilename = filename + "." + algoStr
 		}
 
-		containerPath := filepath.Join(storageDir, containerFilename)
+		containerPath := filepath.Join(container.ContainersDir, containerFilename)
 
 		// Open as plain file (seek) or as decompressed stream (skip bytes)
 		var r io.ReadCloser
 		var f *os.File
 
-		if algo == CompressionNone {
+		if algo == utils.CompressionNone {
 			f, err = os.Open(containerPath)
 			if err != nil {
 				return fmt.Errorf("open container %q: %w", containerFilename, err)
@@ -134,7 +138,7 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 			// Use file as reader; close via f.Close() below
 			r = f
 		} else {
-			r, err = OpenDecompressionReader(containerPath, algo)
+			r, err = utils.OpenDecompressionReader(containerPath, algo)
 			if err != nil {
 				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
 			}
@@ -217,7 +221,7 @@ func restoreFileWithDB(db *sql.DB, fileID int64, outputPath string) error {
 	fmt.Printf("File %s restored successfully\n", originalName)
 	fmt.Printf("  Output: %s\n", outputPath)
 	fmt.Printf("  SHA256: %s\n", restoredHash)
-	printDuration(start)
+	utils.PrintDuration(start)
 
 	return nil
 }

@@ -1,18 +1,20 @@
-package main
+package listing
 
 import (
 	"fmt"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func listFiles() error {
-	db, err := connectDB()
+func ListFiles() error {
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
-	rows, err := db.Query(`
+	rows, err := dbconn.Query(`
 		SELECT id, original_name, total_size, created_at
 		FROM logical_file
 		ORDER BY created_at DESC

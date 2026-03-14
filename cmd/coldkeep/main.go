@@ -5,33 +5,41 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
+
+	"github.com/franchoy/coldkeep/internal/listing"
+	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-const version = "0.1.0"
-
-var defaultCompression = CompressionNone //CompressionZstd
+const version = "0.2.0"
 
 func main() {
+
+	//system recovery on startup
+	err := recovery.SystemRecovery()
+	if err != nil {
+		log.Printf("System recovery failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	if len(os.Args) < 2 {
 		printHelp()
 		return
 	}
-
-	var err error
 
 	switch os.Args[1] {
 	case "store":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: coldkeep store <filePath>")
 		}
-		err = storeFile(os.Args[2])
+		err = storage.StoreFile(os.Args[2])
 
 	case "store-folder":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: coldkeep store-folder <folderPath>")
 		}
-		err = storeFolder(os.Args[2])
+		err = storage.StoreFolder(os.Args[2])
 
 	case "restore":
 		if len(os.Args) < 4 {
@@ -41,7 +49,7 @@ func main() {
 		if err != nil {
 			log.Fatal("Invalid fileID: ", err)
 		}
-		err = restoreFile(fileID, os.Args[3])
+		err = storage.RestoreFile(fileID, os.Args[3])
 
 	case "remove":
 		if len(os.Args) < 3 {
@@ -51,13 +59,13 @@ func main() {
 		if err != nil {
 			log.Fatal("Invalid fileID: ", err)
 		}
-		err = removeFile(fileID)
+		err = storage.RemoveFile(fileID)
 
 	case "gc":
-		err = runGC()
+		err = maintenance.RunGC()
 
 	case "stats":
-		err = runStats()
+		err = maintenance.RunStats()
 
 	case "help", "-h", "--help":
 		printHelp()
@@ -66,10 +74,10 @@ func main() {
 		fmt.Println("coldkeep version", version)
 
 	case "list":
-		err = listFiles()
+		err = listing.ListFiles()
 
 	case "search":
-		err = searchFiles(os.Args[2:])
+		err = listing.SearchFiles(os.Args[2:])
 
 	default:
 		fmt.Println("Unknown command:", os.Args[1])
@@ -86,7 +94,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("coldkeep POC (V0)")
+	fmt.Println("coldkeep (V0.2.0)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
@@ -120,12 +128,4 @@ func printHelp() {
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep restore 12 ./restored")
-}
-
-func printSuccess(title string) {
-	fmt.Println(title)
-}
-
-func printDuration(start time.Time) {
-	fmt.Printf("  Time: %v\n", time.Since(start))
 }

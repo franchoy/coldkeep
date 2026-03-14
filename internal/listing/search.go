@@ -1,16 +1,18 @@
-package main
+package listing
 
 import (
 	"fmt"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func searchFiles(args []string) error {
-	db, err := connectDB()
+func SearchFiles(args []string) error {
+	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer db.Close()
+	defer dbconn.Close()
 
 	query := `
 		SELECT id, original_name, total_size, created_at
@@ -53,7 +55,7 @@ func searchFiles(args []string) error {
 
 	query += " ORDER BY created_at DESC"
 
-	rows, err := db.Query(query, params...)
+	rows, err := dbconn.Query(query, params...)
 	if err != nil {
 		return err
 	}

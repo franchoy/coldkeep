@@ -10,6 +10,12 @@ set -euo pipefail
 #   docker compose up -d postgres
 #   docker compose run --rm  -e COLDKEEP_SAMPLES_DIR=/samples -v ./samples:/samples --entrypoint bash app scripts/smoke.sh
 
+cleanup() {
+  rm -rf ./_smoke_out
+}
+
+trap cleanup EXIT
+
 echo "[smoke] starting"
 
 : "${COLDKEEP_STORAGE_DIR:=./storage/containers}"
@@ -37,5 +43,20 @@ if [[ -n "${FIRST_ID}" ]]; then
   RESTORED=$(ls -1 ./_smoke_out | head -n 1)
   coldkeep store "./_smoke_out/${RESTORED}" || true
 fi
+
+echo "[smoke] search test"
+coldkeep search hello || true
+
+echo "[smoke] remove test"
+if [[ -n "${FIRST_ID}" ]]; then
+  echo "[smoke] removing first file id=${FIRST_ID}"
+  coldkeep remove "${FIRST_ID}"
+fi
+
+echo "[smoke] gc test"
+coldkeep gc
+
+echo "[smoke] stats (after gc)"
+coldkeep stats
 
 echo "[smoke] done"
