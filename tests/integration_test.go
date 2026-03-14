@@ -175,8 +175,8 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	// Ensure we don't exercise heavy compression here.
 	utils.DefaultCompression = utils.CompressionNone
@@ -228,8 +228,8 @@ func TestDedupSameFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -268,8 +268,8 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 		t.Fatalf("connectDB: %v", err)
 	}
 	defer dbconn.Close()
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -406,8 +406,8 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("connectDB: %v", err)
 	}
 	defer dbconn.Close()
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -528,8 +528,8 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -578,8 +578,8 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -654,8 +654,8 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -704,8 +704,8 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
@@ -766,8 +766,8 @@ func TestContainerRollover(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	// Set small container size for testing rollover
 	originalMaxSize := container.GetContainerMaxSize()
@@ -858,8 +858,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, db)
-	resetDB(t, db)
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
 
 	utils.DefaultCompression = utils.CompressionNone
 
