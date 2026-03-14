@@ -871,13 +871,12 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Manually insert a processing logical file (simulating stuck store)
 	hash := sha256File(t, inPath)
-	hashStr := hex.EncodeToString(hash)
 	size := int64(256 * 1024)
 
 	_, err = dbconn.Exec(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
 		VALUES ($1, $2, $3, 'PROCESSING', 0)
-	`, filepath.Base(inPath), size, hashStr)
+	`, filepath.Base(inPath), size, hash)
 	if err != nil {
 		t.Fatalf("insert processing logical file: %v", err)
 	}
@@ -887,7 +886,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 		UPDATE logical_file
 		SET updated_at = NOW() - INTERVAL '15 minutes'
 		WHERE file_hash = $1
-	`, hashStr)
+	`, hash)
 	if err != nil {
 		t.Fatalf("update logical file timestamp: %v", err)
 	}
@@ -943,7 +942,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Verify that processing logical file was aborted
 	var fileStatus string
-	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hashStr).Scan(&fileStatus); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hash).Scan(&fileStatus); err != nil {
 		t.Fatalf("check logical file status: %v", err)
 	}
 	if fileStatus != "ABORTED" {
