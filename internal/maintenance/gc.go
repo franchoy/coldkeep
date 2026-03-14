@@ -11,7 +11,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/utils"
 )
 
-func RunGC() error {
+func RunGC(dryRun bool) error {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
@@ -31,19 +31,22 @@ func RunGC() error {
 	}
 
 	defer func() {
-		_, _ = dbconn.Exec("SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+		_, err = dbconn.Exec("SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+		if err != nil {
+			log.Printf("warning: failed to release advisory lock: %v\n", err)
+		}
 	}()
 
 	rows, err := dbconn.Query(`
 		SELECT id, filename, compression_algorithm
-		FROM container WHERE quarantine = FALSE 
+		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
 	`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
-	var deletedContainers int
+	var affectedContainers int
 
 	for rows.Next() {
 		var containerID int64
@@ -63,13 +66,12 @@ func RunGC() error {
 		var stillEmpty bool
 		err = tx.QueryRow(`
 			SELECT 
-				sealed AND NOT EXISTS (
+				COALESCE(sealed, false) AND NOT EXISTS (
 					SELECT 1 FROM chunk
 					WHERE container_id = $1
 					AND ref_count > 0
 				)
-			FROM container where quarantine = FALSE
-			and id = $1
+			FROM container where id = $1
 		`, containerID).Scan(&stillEmpty)
 		if err != nil {
 			_ = tx.Rollback()
@@ -81,8 +83,17 @@ func RunGC() error {
 			continue
 		}
 
+		// If dry-run, rollback transaction and skip file deletion
+		// dry-run is just simulation and count
+		if dryRun {
+			fmt.Println("[DRY-RUN] Would delete container:", filename)
+			_ = tx.Rollback()
+			affectedContainers++
+			continue
+		}
+
 		// Delete chunks
-		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1 and status = 'COMPLETED'`, containerID)
+		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1 AND status = 'COMPLETED'`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -109,10 +120,23 @@ func RunGC() error {
 			log.Println("warning: failed to delete container file:", err)
 		}
 
-		deletedContainers++
+		affectedContainers++
 		fmt.Println("Deleted container:", filename)
 	}
 
-	fmt.Printf("GC completed. Containers deleted: %d\n", deletedContainers)
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if affectedContainers == 0 {
+		fmt.Println("GC completed. No containers eligible for deletion.")
+		return nil
+	}
+
+	if dryRun {
+		fmt.Printf("GC dry-run completed. Containers eligible for deletion: %d\n", affectedContainers)
+	} else {
+		fmt.Printf("GC completed. Containers deleted: %d\n", affectedContainers)
+	}
 	return nil
 }

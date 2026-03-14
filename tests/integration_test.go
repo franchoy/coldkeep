@@ -460,9 +460,14 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("removeFileWithDB: %v", err)
 	}
 
+	// Run GC -- dry run first to check it doesn't delete anything prematurely
+	if err := maintenance.RunGC(true); err != nil {
+		t.Fatalf("runGC (dry-run): %v", err)
+	}
+
 	// Run GC
-	if err := maintenance.RunGC(); err != nil {
-		t.Fatalf("runGC: %v", err)
+	if err := maintenance.RunGC(false); err != nil {
+		t.Fatalf("runGC 'real' run: %v", err)
 	}
 
 	// Count containers after GC

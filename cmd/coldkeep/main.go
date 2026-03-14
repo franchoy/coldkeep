@@ -62,7 +62,16 @@ func main() {
 		err = storage.RemoveFile(fileID)
 
 	case "gc":
-		err = maintenance.RunGC()
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "--dry-run", "--dryRun", "dry-run", "dryRun":
+				err = maintenance.RunGC(true)
+			default:
+				log.Fatal("Unknown option for gc: ", os.Args[2])
+			}
+		} else {
+			err = maintenance.RunGC(false)
+		}
 
 	case "stats":
 		err = maintenance.RunStats()
