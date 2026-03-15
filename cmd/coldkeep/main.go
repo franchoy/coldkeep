@@ -88,6 +88,20 @@ func main() {
 	case "search":
 		err = listing.SearchFiles(os.Args[2:])
 
+	case "verify":
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "--full", "--full-check", "full", "full-check":
+				err = maintenance.RunVerify(maintenance.VerifyFull)
+			case "--deep", "--deep-check", "deep", "deep-check":
+				err = maintenance.RunVerify(maintenance.VerifyDeep)
+			default:
+				log.Fatal("Unknown option for verify: ", os.Args[2])
+			}
+		} else {
+			err = maintenance.RunVerify(maintenance.VerifyStandard)
+		}
+
 	default:
 		fmt.Println("Unknown command:", os.Args[1])
 		fmt.Println()
