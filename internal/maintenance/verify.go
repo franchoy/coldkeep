@@ -267,7 +267,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	log.Printf("Checking chunk offsets consistency with status...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
+	rows1, err := dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
 							FROM chunk 
 							WHERE status = 'COMPLETED' 
 							AND (container_id IS NULL OR chunk_offset IS NULL);`)
@@ -276,7 +276,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		log.Printf("Failed to query completed chunks: %v", err)
 		return fmt.Errorf("failed to query completed chunks: %w", err)
 	}
-	defer rows.Close()
+	defer rows1.Close()
 
 	type chunkInfo struct {
 		id          int
@@ -286,9 +286,9 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		status      string
 	}
 
-	for rows.Next() {
+	for rows1.Next() {
 		var c chunkInfo
-		if err := rows.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.status); err != nil {
+		if err := rows1.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.status); err != nil {
 			errorCount++
 			errorList = appendToErrorList(errorList, fmt.Errorf("failed to scan completed chunk: %w", err))
 			continue
@@ -297,15 +297,15 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		errorList = appendToErrorList(errorList, fmt.Errorf("chunk ID %d has status COMPLETED but missing location info: container_id=%v chunk_offset=%v", c.id, c.containerID, c.chunkOffset))
 	}
 
-	if err := rows.Err(); err != nil {
+	if err := rows1.Err(); err != nil {
 		errorCount++
 		errorList = appendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
 	}
 
-	rows.Close()
+	rows1.Close()
 
 	// if status != COMPLETED → container_id NULL chunk_offset NULL
-	rows, err = dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
+	rows2, err := dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
 							FROM chunk 
 							WHERE status != 'COMPLETED' 
 							AND (container_id IS NOT NULL OR chunk_offset IS NOT NULL);`)
@@ -314,11 +314,11 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		log.Printf("Failed to query non-completed chunks: %v", err)
 		return fmt.Errorf("failed to query non-completed chunks: %w", err)
 	}
-	defer rows.Close()
+	defer rows2.Close()
 
-	for rows.Next() {
+	for rows2.Next() {
 		var c chunkInfo
-		if err := rows.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.status); err != nil {
+		if err := rows2.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.status); err != nil {
 			errorCount++
 			errorList = appendToErrorList(errorList, fmt.Errorf("failed to scan non-completed chunk: %w", err))
 			continue
@@ -327,7 +327,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		errorList = appendToErrorList(errorList, fmt.Errorf("chunk ID %d has status %s but has location info: container_id=%v chunk_offset=%v", c.id, c.status, c.containerID, c.chunkOffset))
 	}
 
-	if err := rows.Err(); err != nil {
+	if err := rows2.Err(); err != nil {
 		errorCount++
 		errorList = appendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
 	}
