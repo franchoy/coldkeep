@@ -7,7 +7,7 @@ import (
 
 const (
 	minChunkSize = 512 * 1024
-	maxChunkSize = 2 * 1024 * 1024
+	MaxChunkSize = 2 * 1024 * 1024
 	mask         = 0x3FFFF
 )
 
@@ -19,7 +19,7 @@ func ChunkFile(filePath string) ([][]byte, error) {
 	defer file.Close()
 
 	var chunks [][]byte
-	buffer := make([]byte, 0, maxChunkSize)
+	buffer := make([]byte, 0, MaxChunkSize)
 	var rolling uint32
 
 	temp := make([]byte, 32*1024)
@@ -32,11 +32,11 @@ func ChunkFile(filePath string) ([][]byte, error) {
 				buffer = append(buffer, b)
 				rolling = (rolling << 1) + uint32(b)
 
-				if len(buffer) >= minChunkSize && ((rolling&mask) == 0 || len(buffer) >= maxChunkSize) {
+				if len(buffer) >= minChunkSize && ((rolling&mask) == 0 || len(buffer) >= MaxChunkSize) {
 					chunk := make([]byte, len(buffer))
 					copy(chunk, buffer)
 					chunks = append(chunks, chunk)
-					buffer = make([]byte, 0, maxChunkSize)
+					buffer = make([]byte, 0, MaxChunkSize)
 					rolling = 0
 				}
 			}

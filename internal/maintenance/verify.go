@@ -1,12 +1,17 @@
 package maintenance
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils"
@@ -115,7 +120,11 @@ func RunVerify(VerifyLevel VerifyLevel) error {
 	//full checks end
 
 	//deep checks ini
-
+	if VerifyLevel == VerifyDeep {
+		if err = verifyDeep(dbconn); err != nil {
+			return err
+		}
+	}
 	//deep checks end
 
 	log.Printf("Verification completed successfully with method: %s", VerifyLevelString(VerifyLevel))
@@ -612,4 +621,215 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 	log.Println(" SUCCESS ")
 	return nil
 
+}
+
+func verifyDeep(dbconn *sql.DB) error {
+	//for each container:
+	//open container file
+	//fetch chunks ordered by offset
+	//read container sequentially
+	//verify each chunk
+	log.Println("Starting deep verification of container files...")
+	var errorList []error
+	var errorCount int
+	//retrieve sealer container count
+	containerCount := 0
+	containerCountErr := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed=true`).Scan(&containerCount)
+	if containerCountErr != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query sealed container count: %v", containerCountErr)
+		return fmt.Errorf("failed to query sealed container count: %w", containerCountErr)
+	}
+
+	processedContainers := 0
+
+	containers, err := dbconn.Query(`SELECT id, filename, compression_algo  FROM container WHERE sealed=true`)
+	if err != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query sealed containers: %v", err)
+		return fmt.Errorf("failed to query sealed containers: %w", err)
+	}
+	defer containers.Close()
+
+	maxChunkSize := chunk.MaxChunkSize
+	buffer := make([]byte, maxChunkSize)
+
+	for containers.Next() {
+		processedContainers++
+		var containerID int
+		var filename string
+		var compressionAlgo string
+		if err := containers.Scan(&containerID, &filename, &compressionAlgo); err != nil {
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("failed to scan container info: %w", err))
+			continue
+		}
+		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
+
+		//open container file
+		fullPath := filepath.Join(container.ContainersDir, filename)
+		if compressionAlgo != "" && compressionAlgo != string(utils.CompressionNone) {
+			fullPath = fullPath + "." + compressionAlgo
+		}
+
+		file, err := os.Open(fullPath)
+		if err != nil {
+			log.Printf("Failed to open container file %s: %v", fullPath, err)
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("failed to open container file %s: %w", fullPath, err))
+			continue
+		}
+
+		info, err := file.Stat()
+		if err != nil {
+			errorCount++
+			log.Printf("Failed to stat container file %s: %v", fullPath, err)
+			errorList = appendToErrorList(errorList, fmt.Errorf("failed to stat container file %s: %w", fullPath, err))
+			file.Close()
+			continue
+		}
+		fileSize := info.Size()
+
+		//fetch chunks ordered by offset
+		chunks, err := dbconn.Query(`SELECT chunk_offset, size, hash
+								FROM chunk
+								WHERE container_id = $1
+								AND status = 'COMPLETED'
+								ORDER BY chunk_offset`, containerID)
+		if err != nil {
+			log.Printf("Failed to query chunks for container %d: %v", containerID, err)
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("failed to query chunks for container %d: %w", containerID, err))
+			file.Close()
+			continue
+		}
+
+		currentOffset := int64(0)
+
+		hasChunks := false
+
+		for chunks.Next() {
+			hasChunks = true
+			var chunkOffset int64
+			var chunkSize int64
+			var chunkHash string
+			if err := chunks.Scan(&chunkOffset, &chunkSize, &chunkHash); err != nil {
+				log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
+				continue
+			}
+
+			if chunkOffset < 0 || chunkSize < 0 {
+				log.Printf("Invalid chunk offset or size for container %d at offset %d: chunk size %d", containerID, chunkOffset, chunkSize)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("invalid chunk offset or size for container %d at offset %d: chunk size %d", containerID, chunkOffset, chunkSize))
+				continue
+			}
+
+			if chunkSize > int64(maxChunkSize) {
+				log.Printf("Chunk size %d exceeds maximum allowed size %d for chunk in container %d", chunkSize, maxChunkSize, containerID)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("chunk size %d exceeds maximum allowed size %d for chunk in container %d", chunkSize, maxChunkSize, containerID))
+				continue
+			}
+
+			if chunkOffset+chunkSize > fileSize {
+				log.Printf("Chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize))
+				continue
+			}
+
+			if chunkOffset != currentOffset {
+				_, err = file.Seek(chunkOffset, io.SeekStart)
+				if err != nil {
+					errorCount++
+					errorList = appendToErrorList(errorList,
+						fmt.Errorf("failed to seek container %d to offset %d: %w", containerID, chunkOffset, err))
+					continue
+				}
+			}
+
+			_, err = io.ReadFull(file, buffer[:chunkSize])
+			if err != nil {
+				log.Printf("Failed to read chunk data for container %d at offset %d: %v", containerID, chunkOffset, err)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("failed to read chunk data for container %d at offset %d: %w", containerID, chunkOffset, err))
+				continue
+			}
+
+			currentOffset = chunkOffset + chunkSize
+
+			//compute hash of the chunk data
+			hash := sha256.Sum256(buffer[:chunkSize])
+			storedHash, err := hex.DecodeString(chunkHash)
+			if err != nil {
+				log.Printf("Failed to decode stored hash for container %d at offset %d: %v", containerID, chunkOffset, err)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("failed to decode stored hash for container %d at offset %d: %w", containerID, chunkOffset, err))
+				continue
+			}
+
+			if len(storedHash) != sha256.Size {
+				log.Printf("Invalid stored hash length for container %d at offset %d: expected %d, got %d", containerID, chunkOffset, sha256.Size, len(storedHash))
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("invalid stored hash length for container %d at offset %d: expected %d, got %d", containerID, chunkOffset, sha256.Size, len(storedHash)))
+				continue
+			}
+
+			//compare with stored hash
+			if !bytes.Equal(hash[:], storedHash) {
+				//if mismatch → corruption detected
+				computedHex := hex.EncodeToString(hash[:])
+				log.Printf("Chunk hash mismatch for container %d at offset %d: expected %s, got %s", containerID, chunkOffset, chunkHash, computedHex)
+				errorCount++
+				errorList = appendToErrorList(errorList, fmt.Errorf("chunk hash mismatch for container %d at offset %d: expected %s, got %s", containerID, chunkOffset, chunkHash, computedHex))
+			}
+
+		}
+
+		if !hasChunks {
+			log.Printf("WARNING: container %d has no chunks", containerID)
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("container %d has no chunks", containerID))
+			_ = chunks.Close()
+			_ = file.Close()
+			continue
+		}
+
+		if err := chunks.Err(); err != nil {
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("row iteration failed for chunks of container %d: %w", containerID, err))
+			_ = chunks.Close()
+			_ = file.Close()
+			continue
+		}
+
+		_ = chunks.Close()
+
+		_ = file.Close()
+
+	}
+
+	if err := containers.Err(); err != nil {
+		errorCount++
+		errorList = appendToErrorList(errorList, fmt.Errorf("row iteration failed for containers: %w", err))
+		return fmt.Errorf("row iteration failed for containers: %w", err)
+	}
+
+	if len(errorList) > 0 {
+		log.Println(" ERROR ")
+		log.Printf("Found %d errors in deep verification of container files:", errorCount)
+		if errorCount > maxErrorsToPrint {
+			log.Printf("showing only first %d:", len(errorList))
+		}
+		for _, err := range errorList {
+			log.Printf(" - %v", err)
+		}
+		return fmt.Errorf("found %d errors in deep verification of container files", errorCount)
+	}
+
+	log.Println("Deep verification completed successfully.")
+	return nil
 }

@@ -972,3 +972,69 @@ func TestStartupRecoverySimulation(t *testing.T) {
 		t.Fatalf("expected missing container to be quarantined")
 	}
 }
+
+func TestVerifyStandard(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_standard.bin", 256*1024)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	t.Run("passes on clean database", func(t *testing.T) {
+		if err := maintenance.RunVerify(maintenance.VerifyStandard); err != nil {
+			t.Fatalf("RunVerify on clean DB should not fail: %v", err)
+		}
+	})
+
+	t.Run("detects corrupted ref_count", func(t *testing.T) {
+		// Corrupt one chunk's ref_count to a wrong value
+		if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count + 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+			t.Fatalf("corrupt ref_count: %v", err)
+		}
+		defer func() {
+			// Restore so other sub-tests are not affected
+			dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`)
+		}()
+
+		if err := maintenance.RunVerify(maintenance.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected the corrupted ref_count but returned nil")
+		}
+	})
+
+	t.Run("detects orphan chunk", func(t *testing.T) {
+		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
+		if _, err := dbconn.Exec(`
+			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
+			VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', NULL, NULL, 1, 0)
+		`); err != nil {
+			t.Fatalf("insert orphan chunk: %v", err)
+		}
+		defer func() {
+			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'orphan_chunk_hash_test'`)
+		}()
+
+		if err := maintenance.RunVerify(maintenance.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected the orphan chunk but returned nil")
+		}
+	})
+}
