@@ -10,6 +10,29 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.3.0] - 2026-03-15
+
+Safe garbage collection foundation.
+
+### Added
+- Repository verification command (`coldkeep verify`)
+- Verification levels: standard, full, deep
+- Reference count validation
+- Container integrity verification
+- Chunk offset validation
+- Deep data verification (hash validation)
+
+### Improved
+- Garbage collection safety via transactional re-checks
+- Advisory lock preventing concurrent GC runs
+- `gc --dry-run` simulation mode
+
+### Testing
+- Integration tests for GC safety
+- Verification corruption detection tests
+
+------------------------------------------------------------------------
+
 ## [0.2.0]- 2026-03-11
 
 Crash-consistency foundation for the storage engine
