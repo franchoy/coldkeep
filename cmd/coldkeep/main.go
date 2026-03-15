@@ -12,7 +12,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 
@@ -117,7 +117,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("coldkeep (V0.2.0)")
+	fmt.Println("coldkeep (V0.3.0)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
