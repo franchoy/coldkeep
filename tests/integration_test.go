@@ -460,9 +460,24 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("removeFileWithDB: %v", err)
 	}
 
+	// Run verify before GC to check for any issues with ref_counts or metadata integrity.
+	if err := maintenance.RunVerify(maintenance.VerifyStandard); err != nil {
+		t.Fatalf("verify standard after GC: %v", err)
+	}
+
+	// Run GC -- dry run first to check it doesn't delete anything prematurely
+	if err := maintenance.RunGC(true); err != nil {
+		t.Fatalf("runGC (dry-run): %v", err)
+	}
+
+	// Verify again after dry-run GC to ensure it doesn't break anything.
+	if err := maintenance.RunVerify(maintenance.VerifyFull); err != nil {
+		t.Fatalf("verify full after GC: %v", err)
+	}
+
 	// Run GC
-	if err := maintenance.RunGC(); err != nil {
-		t.Fatalf("runGC: %v", err)
+	if err := maintenance.RunGC(false); err != nil {
+		t.Fatalf("runGC 'real' run: %v", err)
 	}
 
 	// Count containers after GC
@@ -965,5 +980,237 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 	if !quarantine {
 		t.Fatalf("expected missing container to be quarantined")
+	}
+}
+
+func TestVerifyStandard(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_standard.bin", 256*1024)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	t.Run("passes on clean database", func(t *testing.T) {
+		if err := maintenance.RunVerify(maintenance.VerifyStandard); err != nil {
+			t.Fatalf("RunVerify on clean DB should not fail: %v", err)
+		}
+	})
+
+	t.Run("detects corrupted ref_count", func(t *testing.T) {
+		// Corrupt one chunk's ref_count to a wrong value
+		if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count + 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+			t.Fatalf("corrupt ref_count: %v", err)
+		}
+		defer func() {
+			// Restore so other sub-tests are not affected
+			dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`)
+		}()
+
+		if err := maintenance.RunVerify(maintenance.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected the corrupted ref_count but returned nil")
+		}
+	})
+
+	t.Run("detects orphan chunk", func(t *testing.T) {
+		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
+		if _, err := dbconn.Exec(`
+			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
+			VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', NULL, NULL, 1, 0)
+		`); err != nil {
+			t.Fatalf("insert orphan chunk: %v", err)
+		}
+		defer func() {
+			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'orphan_chunk_hash_test'`)
+		}()
+
+		if err := maintenance.RunVerify(maintenance.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected the orphan chunk but returned nil")
+		}
+	})
+
+	t.Run("detects missing container file", func(t *testing.T) {
+		var filename string
+		err := dbconn.QueryRow(`SELECT filename FROM container LIMIT 1`).Scan(&filename)
+		if err != nil {
+			t.Fatalf("query container filename: %v", err)
+		}
+
+		path := filepath.Join(container.ContainersDir, filename)
+
+		err = os.Remove(path)
+		if err != nil {
+			t.Fatalf("remove container file: %v", err)
+		}
+
+		if err := maintenance.RunVerify(maintenance.VerifyFull); err == nil {
+			t.Fatal("verify full should detect missing container file")
+		}
+	})
+}
+
+func TestVerifyFull(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_full.bin", 256*1024)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	t.Run("passes on clean database", func(t *testing.T) {
+		if err := maintenance.RunVerify(maintenance.VerifyFull); err != nil {
+			t.Fatalf("RunVerify full on clean DB should not fail: %v", err)
+		}
+	})
+
+	t.Run("detects completed chunk without location", func(t *testing.T) {
+		if _, err := dbconn.Exec(`
+			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
+			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', NULL, NULL, 0, 0)
+		`); err != nil {
+			t.Fatalf("insert malformed completed chunk: %v", err)
+		}
+		defer func() {
+			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'verify_full_bad_chunk'`)
+		}()
+
+		if err := maintenance.RunVerify(maintenance.VerifyFull); err == nil {
+			t.Fatal("RunVerify full should have detected malformed completed chunk but returned nil")
+		}
+	})
+
+	t.Run("detects missing container file", func(t *testing.T) {
+		var filename string
+		err := dbconn.QueryRow(`SELECT filename FROM container LIMIT 1`).Scan(&filename)
+		if err != nil {
+			t.Fatalf("query container filename: %v", err)
+		}
+
+		path := filepath.Join(container.ContainersDir, filename)
+
+		err = os.Remove(path)
+		if err != nil {
+			t.Fatalf("remove container file: %v", err)
+		}
+
+		if err := maintenance.RunVerify(maintenance.VerifyFull); err == nil {
+			t.Fatal("verify full should detect missing container file")
+		}
+	})
+}
+
+func TestSharedChunkSafety(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils.DefaultCompression = utils.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir inputDir: %v", err)
+	}
+
+	// Create one file
+	fileA := createTempFile(t, inputDir, "fileA.bin", 512*1024)
+
+	// Copy to create identical file
+	fileB := filepath.Join(inputDir, "fileB.bin")
+	data, err := os.ReadFile(fileA)
+	if err != nil {
+		t.Fatalf("read fileA: %v", err)
+	}
+	if err := os.WriteFile(fileB, data, 0o644); err != nil {
+		t.Fatalf("write fileB: %v", err)
+	}
+
+	// Store both files
+	if err := storage.StoreFileWithDB(dbconn, fileA); err != nil {
+		t.Fatalf("store fileA: %v", err)
+	}
+	if err := storage.StoreFileWithDB(dbconn, fileB); err != nil {
+		t.Fatalf("store fileB: %v", err)
+	}
+
+	// Remove file A
+	if err := storage.RemoveFileWithDB(dbconn, 1); err != nil {
+		t.Fatalf("remove fileA: %v", err)
+	}
+
+	// Run GC
+	if err := maintenance.RunGC(false); err != nil {
+		t.Fatalf("run GC: %v", err)
+	}
+
+	// Restore file B
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restoreDir: %v", err)
+	}
+
+	outPath := filepath.Join(restoreDir, "fileB.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, 2, outPath); err != nil {
+		t.Fatalf("restore fileB: %v", err)
+	}
+
+	// Compare hashes
+	origHash := sha256File(t, fileB)
+	restoreHash := sha256File(t, outPath)
+
+	if origHash != restoreHash {
+		t.Fatalf("hash mismatch: expected %s, got %s", origHash, restoreHash)
 	}
 }

@@ -62,7 +62,16 @@ func main() {
 		err = storage.RemoveFile(fileID)
 
 	case "gc":
-		err = maintenance.RunGC()
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "--dry-run", "--dryRun", "dry-run", "dryRun":
+				err = maintenance.RunGC(true)
+			default:
+				log.Fatal("Unknown option for gc: ", os.Args[2])
+			}
+		} else {
+			err = maintenance.RunGC(false)
+		}
 
 	case "stats":
 		err = maintenance.RunStats()
@@ -78,6 +87,20 @@ func main() {
 
 	case "search":
 		err = listing.SearchFiles(os.Args[2:])
+
+	case "verify":
+		if len(os.Args) > 2 {
+			switch os.Args[2] {
+			case "--full", "--full-check", "full", "full-check":
+				err = maintenance.RunVerify(maintenance.VerifyFull)
+			case "--deep", "--deep-check", "deep", "deep-check":
+				err = maintenance.RunVerify(maintenance.VerifyDeep)
+			default:
+				log.Fatal("Unknown option for verify: ", os.Args[2])
+			}
+		} else {
+			err = maintenance.RunVerify(maintenance.VerifyStandard)
+		}
 
 	default:
 		fmt.Println("Unknown command:", os.Args[1])
@@ -104,8 +127,14 @@ func printHelp() {
 	fmt.Println("  store-folder <folder>      Store all files in a folder recursively")
 	fmt.Println("  restore <fileID> <dir>     Restore file by ID into directory")
 	fmt.Println("  remove <fileID>            Remove logical file (decrement refcounts)")
-	fmt.Println("  gc                         Run garbage collection")
+	fmt.Println("  gc [options]               Run garbage collection")
+	fmt.Println("    (no options)             	Perform standard GC")
+	fmt.Println("  gc --dry-run               	Show what would be removed without deleting")
 	fmt.Println("  stats                      Show storage statistics")
+	fmt.Println("  verify [options]           Verify stored files")
+	fmt.Println("    (no options)             	Perform standard verification (metadata only)")
+	fmt.Println("  verify --full              	Perform full verification (metadata + content)")
+	fmt.Println("  verify --deep              	Perform deep verification (metadata + content + checksums)")
 	fmt.Println("  help                       Show this help message")
 	fmt.Println("  version                    Show version information")
 	fmt.Println("  list                       List stored logical files")

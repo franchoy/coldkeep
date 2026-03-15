@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS file_chunk (
     REFERENCES logical_file(id) ON DELETE CASCADE,
   chunk_id BIGINT NOT NULL
     REFERENCES chunk(id) ON DELETE RESTRICT,
-  chunk_order INTEGER NOT NULL CHECK (chunk_order >= 0),
+  chunk_order BIGINT NOT NULL CHECK (chunk_order >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (logical_file_id, chunk_order)
   );
