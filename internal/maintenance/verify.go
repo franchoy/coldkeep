@@ -98,6 +98,11 @@ func RunVerify(VerifyLevel VerifyLevel) error {
 			return err
 		}
 
+		//check that all sealed containers have a valid hash that matches the file content
+		if err = checkContainerHash(dbconn); err != nil {
+			return err
+		}
+		
 		//check that all chunks are correctly associated with their containers (if container_id != NULL → chunk.status must be COMPLETED)
 		if err = checkChunkContainerConsistency(dbconn); err != nil {
 			return err
