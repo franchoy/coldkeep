@@ -139,7 +139,7 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 	originalPath := filepath.Join(ContainersDir, filename)
 
 	// Compress file
-	compressedPath, compressed_size, err := utils.CompressFile(originalPath, utils.DefaultCompression)
+	compressedPath, compressed_size, sumHex, err := utils.CompressFile(originalPath, utils.DefaultCompression)
 	if err != nil {
 		return err
 	}
@@ -149,14 +149,30 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 		UPDATE container
 		SET sealed = TRUE,
 		    compression_algorithm = $1,
-			compressed_size = $2
-		WHERE id = $3
-	`, string(utils.DefaultCompression), compressed_size, containerID)
+			compressed_size = $2,
+			container_hash = $3
+		WHERE id = $4
+	`, string(utils.DefaultCompression), compressed_size, sumHex, containerID)
 
 	if err != nil {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
 	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, utils.DefaultCompression, compressedPath)
+	return nil
+}
+
+func CheckContainerHashFile(id int, filename, storedHash string) error {
+	containerPath := filepath.Join(ContainersDir, filename)
+
+	computedHash, err := utils.ComputeFileHashHex(containerPath)
+	if err != nil {
+		return fmt.Errorf("compute container file hash: %w", err)
+	}
+
+	if computedHash != storedHash {
+		return fmt.Errorf("container file hash mismatch for container %d: expected %s, got %s", id, storedHash, computedHash)
+	}
+
 	return nil
 }

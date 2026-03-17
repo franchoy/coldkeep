@@ -44,6 +44,7 @@ func RunVerify(VerifyLevel VerifyLevel) error {
 	//	full
 	//		standard checks +
 	//			container file existence and size check
+	//			container hash check
 	//			chunk-container consistency check
 	//			chunk offsets consistency check
 	//			chunk offset validity check
@@ -179,6 +180,59 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 			log.Printf(" - %v", err)
 		}
 		return fmt.Errorf("found %d errors in checkContainersFileExistence checks", errorCount)
+	}
+	log.Println(" SUCCESS ")
+
+	return nil
+}
+
+func checkContainerHash(dbconn *sql.DB) error {
+	// Check that all sealed containers have a valid hash that matches the file content
+	log.Printf("Checking container file hash consistency...")
+	var errorList []error
+	var errorCount int
+	rows, err := dbconn.Query(`select id, filename, compression_algo, container_hash
+				from container
+				where quarantine = false and sealed = true`)
+	if err != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query container hashes: %v", err)
+		return fmt.Errorf("failed to query container hashes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var filename string
+		var compressionalgo string
+		var storedHash string
+		if err := rows.Scan(&id, &filename, &compressionalgo, &storedHash); err != nil {
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("failed to scan container hash: %w", err))
+			continue
+		}
+		// Check if the file exists on disk and has the correct hash
+		if err := container.CheckContainerHashFile(id, filename, storedHash); err != nil {
+			errorCount++
+			errorList = appendToErrorList(errorList, fmt.Errorf("container hash check failed for container %d: %w", id, err))
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		errorCount++
+		errorList = appendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
+	}
+
+	if len(errorList) > 0 {
+		log.Println(" ERROR ")
+		log.Printf("Found %d errors in checkContainerHash checks:", errorCount)
+		if errorCount > maxErrorsToPrint {
+			log.Printf("showing only first %d:", len(errorList))
+		}
+		for _, err := range errorList {
+			log.Printf(" - %v", err)
+		}
+		return fmt.Errorf("found %d errors in checkContainerHash checks", errorCount)
 	}
 	log.Println(" SUCCESS ")
 

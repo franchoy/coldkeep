@@ -2,6 +2,8 @@ package utils
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -19,19 +21,23 @@ const (
 
 var DefaultCompression = CompressionNone //CompressionZstd
 
-func CompressFile(path string, algo CompressionType) (string, int64, error) {
+func CompressFile(path string, algo CompressionType) (string, int64, string, error) {
 	// No compression
 	if algo == CompressionNone {
 		info, err := os.Stat(path)
 		if err != nil {
-			return "", 0, err
+			return "", 0, "", err
 		}
-		return path, info.Size(), nil
+		sumHex, err := ComputeFileHashHex(path)
+		if err != nil {
+			return "", 0, "", fmt.Errorf("compute file hash: %w", err)
+		}
+		return path, info.Size(), sumHex, nil
 	}
 
 	input, err := os.Open(path)
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	defer input.Close()
 
@@ -39,7 +45,7 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 
 	output, err := os.Create(outputPath)
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	var writer io.WriteCloser
@@ -52,13 +58,13 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 		encoder, err := zstd.NewWriter(output)
 		if err != nil {
 			output.Close()
-			return "", 0, err
+			return "", 0, "", err
 		}
 		writer = encoder
 
 	default:
 		output.Close()
-		return "", 0, fmt.Errorf("unknown compression algorithm: %q", algo)
+		return "", 0, "", fmt.Errorf("unknown compression algorithm: %q", algo)
 	}
 
 	// Copy data
@@ -66,49 +72,73 @@ func CompressFile(path string, algo CompressionType) (string, int64, error) {
 		_ = writer.Close()
 		_ = output.Close()
 		_ = os.Remove(outputPath) // cleanup broken file
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	// Close compression writer (flush buffers)
 	if err := writer.Close(); err != nil {
 		_ = output.Close()
 		_ = os.Remove(outputPath)
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	// Ensure file is flushed to disk
 	if err := output.Sync(); err != nil {
 		_ = output.Close()
 		_ = os.Remove(outputPath)
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	if err := output.Close(); err != nil {
 		_ = os.Remove(outputPath)
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	// Validate compressed file
 	info, err := os.Stat(outputPath)
 	if err != nil {
 		_ = os.Remove(outputPath)
-		return "", 0, err
+		return "", 0, "", err
 	}
 
 	if info.Size() == 0 {
 		_ = os.Remove(outputPath)
-		return "", 0, fmt.Errorf("compressed file is empty")
+		return "", 0, "", fmt.Errorf("compressed file is empty")
 	}
 
 	// Only now remove original
 	if err := os.Remove(path); err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 
-	return outputPath, info.Size(), nil
+	// Compute hash of compressed file
+	sumHex, err := ComputeFileHashHex(outputPath)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("compute compressed file hash: %w", err)
+	}
+
+	return outputPath, info.Size(), sumHex, nil
 }
 
-// zstd wrapper to satisfy io.ReadCloser
+func ComputeFileHashHex(path string) (string, error) {
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+
+	_, err = io.Copy(hash, file)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// zstd wrapper to satisfy io.ReadClose
 type zstdReadCloser struct {
 	decoder *zstd.Decoder
 	file    *os.File

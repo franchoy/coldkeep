@@ -278,7 +278,7 @@ data.
 
 ## Build
 
-    go build ./cmd/coldkeep
+    go build -o coldkeep ./cmd/coldkeep
 
 ## Tests
 
