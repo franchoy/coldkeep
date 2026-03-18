@@ -102,7 +102,7 @@ func RunVerify(VerifyLevel VerifyLevel) error {
 		if err = checkContainerHash(dbconn); err != nil {
 			return err
 		}
-		
+
 		//check that all chunks are correctly associated with their containers (if container_id != NULL → chunk.status must be COMPLETED)
 		if err = checkChunkContainerConsistency(dbconn); err != nil {
 			return err
@@ -206,7 +206,15 @@ func checkContainerHash(dbconn *sql.DB) error {
 	}
 	defer rows.Close()
 
+	var totalRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE quarantine = false AND sealed = true`).Scan(&totalRows); err != nil {
+		log.Printf("Failed to query total container count: %v", err)
+		return fmt.Errorf("failed to query total container count: %w", err)
+	}
+	var containercount int
 	for rows.Next() {
+		containercount++
+		log.Printf("Checking container %d / %d", containercount, totalRows)
 		var id int
 		var filename string
 		var compressionalgo string
