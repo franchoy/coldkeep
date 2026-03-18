@@ -170,6 +170,11 @@ func CheckContainerHashFile(id int, filename, storedHash string) error {
 		return fmt.Errorf("compute container file hash: %w", err)
 	}
 
+	//if stored has is null or empty, we can skip the check (for backward compatibility with old containers)
+	if len(storedHash) == 0 || storedHash == "null" || storedHash == "NULL" {
+		return fmt.Errorf("container file hash is missing in db for container %d, calculated hash: %s", id, computedHash)
+	}
+
 	if computedHash != storedHash {
 		return fmt.Errorf("container file hash mismatch for container %d: expected %s, got %s", id, storedHash, computedHash)
 	}
