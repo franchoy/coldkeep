@@ -1,4 +1,4 @@
-package utils
+package utils_env
 
 import (
 	"fmt"

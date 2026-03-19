@@ -15,7 +15,8 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils"
+	"github.com/franchoy/coldkeep/internal/utils_compression"
+	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func RestoreFile(id int64, outputPath string) error {
@@ -111,11 +112,11 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
-		algo := utils.CompressionType(algoStr)
+		algo := utils_compression.CompressionType(algoStr)
 
 		// Container filename changes when compressed (CompressFile removes the original and writes filename.<algo>)
 		containerFilename := filename
-		if algo != utils.CompressionNone {
+		if algo != utils_compression.CompressionNone {
 			containerFilename = filename + "." + algoStr
 		}
 
@@ -125,7 +126,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		var r io.ReadCloser
 		var f *os.File
 
-		if algo == utils.CompressionNone {
+		if algo == utils_compression.CompressionNone {
 			f, err = os.Open(containerPath)
 			if err != nil {
 				return fmt.Errorf("open container %q: %w", containerFilename, err)
@@ -138,7 +139,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			// Use file as reader; close via f.Close() below
 			r = f
 		} else {
-			r, err = utils.OpenDecompressionReader(containerPath, algo)
+			r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
 			if err != nil {
 				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
 			}
@@ -221,7 +222,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	fmt.Printf("File %s restored successfully\n", originalName)
 	fmt.Printf("  Output: %s\n", outputPath)
 	fmt.Printf("  SHA256: %s\n", restoredHash)
-	utils.PrintDuration(start)
+	utils_print.PrintDuration(start)
 
 	return nil
 }

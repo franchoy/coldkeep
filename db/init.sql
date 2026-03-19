@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS container (
   id BIGSERIAL PRIMARY KEY,
   filename TEXT NOT NULL UNIQUE,
   sealed BOOLEAN NOT NULL DEFAULT FALSE,
+  container_hash TEXT DEFAULT NULL,
   quarantine BOOLEAN NOT NULL DEFAULT FALSE,
   current_size BIGINT NOT NULL DEFAULT 0 CHECK (current_size >= 0),
   max_size BIGINT NOT NULL CHECK (max_size > 0),

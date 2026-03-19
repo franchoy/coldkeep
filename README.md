@@ -11,7 +11,7 @@
 > **Status:** Experimental research projec.\
 > **Not production-ready. Do not use for real or sensitive data.**
 
-coldkeep is an experimental **local-first content-addressed file storage engine**
+coldkeep is an experimental **local-first content-addressed file storage engine with verifiable integrity**
 written in Go.
 
 Files are split into **content-addressed chunks**, packed into
@@ -34,6 +34,54 @@ storage.
 -   Run garbage collection to remove unreferenced chunks.
 -   Recover safely from interrupted operations on startup.
 -   Display storage statistics and container health information.
+-   Multi-level integrity verification (metadata, container structure, and full data integrity)
+
+------------------------------------------------------------------------
+
+## Verification
+
+coldkeep provides a multi-level integrity verification system to ensure
+consistency and detect corruption across metadata and stored data.
+
+### Levels
+
+- **Standard**
+  - Validates metadata integrity
+  - Checks reference counts, chunk ordering, and orphan records
+
+- **Full**
+  - Includes all standard checks
+  - Verifies container files exist and match recorded sizes
+  - Validates container hashes and chunk-to-container consistency
+
+- **Deep**
+  - Includes all full checks
+  - Reads container data and recomputes chunk hashes
+  - Detects physical data corruption at the byte level
+
+### Usage
+
+Verify the entire system:
+
+```bash
+coldkeep verify system --level standard
+coldkeep verify system --level full
+coldkeep verify system --level deep
+```
+
+Verify an specific file
+
+```bash
+coldkeep verify file <file_id> --level standard
+coldkeep verify file <file_id> --level full
+coldkeep verify file <file_id> --level deep
+```
+
+### Notes
+
+Deep verification performs full reads of container files and may be slow
+
+Recommended for periodic integrity audits rather than frequent execution
 
 ------------------------------------------------------------------------
 
@@ -76,13 +124,17 @@ recover safely on startup.
     │   └─ coldkeep/          # CLI entrypoint
     │
     ├─ internal/
-    │   ├─ container/         # container format + container management
-    │   ├─ chunk/             # chunking and compression logic
-    │   ├─ db/                # database connection helpers
-    │   ├─ storage/           # store / restore / remove pipeline
-    │   ├─ maintenance/       # gc and stats
-    │   ├─ listing/           # file listing operations
-    │   └─ utils/             # small helper utilities
+    │   ├─ chunk/               # chunking and compression logic
+    │   ├─ container/           # container format + container management
+    │   ├─ db/                  # database connection helpers
+    │   ├─ listing/             # file listing operations
+    │   ├─ maintenance/         # gc, stats, and verify_command
+    │   ├─ recovery             # system recovery logic
+    │   ├─ storage/             # store / restore / remove pipeline
+    │   ├─ utils_compresion/    # small compresion helper utilities
+    │   ├─ utils_env/           # small env helper utilities
+    │   ├─ utils_print/         # small print helper utilities
+    │   └─ verify/              # verify logc for system or file
     │
     ├─ tests/                 # integration tests
     ├─ scripts/               # smoke / development scripts
@@ -278,7 +330,7 @@ data.
 
 ## Build
 
-    go build ./cmd/coldkeep
+    go build -o coldkeep ./cmd/coldkeep
 
 ## Tests
 

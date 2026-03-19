@@ -10,9 +10,10 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 
@@ -89,17 +90,60 @@ func main() {
 		err = listing.SearchFiles(os.Args[2:])
 
 	case "verify":
+		var target string
+		var verifyLevel verify.VerifyLevel
+		var fileID int64
+		//target can be "system" or "file"
 		if len(os.Args) > 2 {
-			switch os.Args[2] {
-			case "--full", "--full-check", "full", "full-check":
-				err = maintenance.RunVerify(maintenance.VerifyFull)
-			case "--deep", "--deep-check", "deep", "deep-check":
-				err = maintenance.RunVerify(maintenance.VerifyDeep)
+			target = os.Args[2]
+			switch target {
+			case "system":
+				//target is system, verify level can be --standard, --full, or --deep
+				if len(os.Args) > 3 {
+					switch os.Args[3] {
+					case "--standard", "standard", "":
+						verifyLevel = verify.VerifyStandard
+					case "--full", "full":
+						verifyLevel = verify.VerifyFull
+					case "--deep", "deep":
+						verifyLevel = verify.VerifyDeep
+					default:
+						log.Fatal("Unknown option for system verify: ", os.Args[3])
+					}
+				} else {
+					verifyLevel = verify.VerifyStandard
+				}
+			case "file":
+				if len(os.Args) > 3 {
+					fileID, err = strconv.ParseInt(os.Args[3], 10, 64)
+					if err != nil {
+						log.Fatal("Invalid fileID: ", err)
+					}
+				} else {
+					log.Fatal("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+				}
+				if len(os.Args) > 4 {
+					switch os.Args[4] {
+					case "--standard", "standard", "":
+						verifyLevel = verify.VerifyStandard
+					case "--full", "full":
+						verifyLevel = verify.VerifyFull
+					case "--deep", "deep":
+						verifyLevel = verify.VerifyDeep
+					default:
+						log.Fatal("Unknown option for file verify: ", os.Args[4])
+					}
+				} else {
+					verifyLevel = verify.VerifyStandard
+				}
 			default:
-				log.Fatal("Unknown option for verify: ", os.Args[2])
+				log.Fatal("Unknown target for verify: ", target)
+
+				//call verify command with target, fileID, and verifyLevel
+				err = maintenance.VerifyCommand(target, int(fileID), verifyLevel)
 			}
 		} else {
-			err = maintenance.RunVerify(maintenance.VerifyStandard)
+			log.Fatal("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
 		}
 
 	default:
@@ -117,33 +161,34 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("coldkeep (V0.3.0)")
+	fmt.Println("coldkeep (V0.4.0)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  store <file>               Store a single file")
-	fmt.Println("  store-folder <folder>      Store all files in a folder recursively")
-	fmt.Println("  restore <fileID> <dir>     Restore file by ID into directory")
-	fmt.Println("  remove <fileID>            Remove logical file (decrement refcounts)")
-	fmt.Println("  gc [options]               Run garbage collection")
-	fmt.Println("    (no options)             	Perform standard GC")
-	fmt.Println("  gc --dry-run               	Show what would be removed without deleting")
-	fmt.Println("  stats                      Show storage statistics")
-	fmt.Println("  verify [options]           Verify stored files")
-	fmt.Println("    (no options)             	Perform standard verification (metadata only)")
-	fmt.Println("  verify --full              	Perform full verification (metadata + content)")
-	fmt.Println("  verify --deep              	Perform deep verification (metadata + content + checksums)")
-	fmt.Println("  help                       Show this help message")
-	fmt.Println("  version                    Show version information")
-	fmt.Println("  list                       List stored logical files")
-	fmt.Println("  search [filters]           Search files by filters")
-	fmt.Println()
-	fmt.Println("Search Filters:")
-	fmt.Println("  --name <substring>")
-	fmt.Println("  --min-size <bytes>")
-	fmt.Println("  --max-size <bytes>")
+	fmt.Println("  store <file>               			Store a single file")
+	fmt.Println("  store-folder <folder>     			Store all files in a folder recursively")
+	fmt.Println("  restore <fileID> <dir>     			Restore file by ID into directory")
+	fmt.Println("  remove <fileID>            			Remove logical file (decrement refcounts)")
+	fmt.Println("  gc [options]               			Run garbage collection")
+	fmt.Println("    (no options)             				Perform standard GC")
+	fmt.Println("  gc --dry-run               				Show what would be removed without deleting")
+	fmt.Println("  stats                      			Show storage statistics")
+	fmt.Println("  verify [target] [fileID] [options]	Verify stored files")
+	fmt.Println("  		  [target] can be 'system' or 'file'")
+	fmt.Println("  		  					[options] can be '--standard', '--full', or '--deep'")
+	fmt.Println("  		  						no options defaults to '--standard'")
+	fmt.Println("    	verify system [options]         	Perform system-wide verification")
+	fmt.Println("    	verify file <fileID> [options]  	Perform verification for specific file")
+	fmt.Println("  help                       			Show this help message")
+	fmt.Println("  version                    			Show version information")
+	fmt.Println("  list                      			List stored logical files")
+	fmt.Println("  search [filters]          			Search files by filters")
+	fmt.Println("			Filters:")
+	fmt.Println("  				--name <substring>")
+	fmt.Println("  				--min-size <bytes>")
+	fmt.Println("  				--max-size <bytes>")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
 	fmt.Println("  DB_HOST")

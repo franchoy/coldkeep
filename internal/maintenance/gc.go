@@ -8,7 +8,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils"
+	"github.com/franchoy/coldkeep/internal/utils_compression"
 )
 
 func RunGC(dryRun bool) error {
@@ -112,7 +112,7 @@ func RunGC(dryRun bool) error {
 
 		// After commit, delete file from disk
 		containerPath := filepath.Join(container.ContainersDir, filename)
-		if algo != "" && algo != string(utils.CompressionNone) {
+		if algo != "" && algo != string(utils_compression.CompressionNone) {
 			containerPath += "." + algo
 		}
 
