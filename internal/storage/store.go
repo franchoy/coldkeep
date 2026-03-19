@@ -288,7 +288,9 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 	completed := false
 	defer func() {
 		if !completed {
-			dbconn.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID)
+			if _, err := dbconn.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID); err != nil {
+				fmt.Printf("failed to mark logical file %d as ABORTED: %v\n", fileID, err)
+			}
 		}
 	}()
 

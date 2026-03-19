@@ -343,8 +343,6 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		_ = chunks.Close()
 	}
 	if err := containers.Err(); err != nil {
-		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed for containers: %w", err))
 		return fmt.Errorf("row iteration failed for containers: %w", err)
 	}
 

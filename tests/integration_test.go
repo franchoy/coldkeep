@@ -1113,7 +1113,10 @@ func TestVerifyStandard(t *testing.T) {
 		}
 		defer func() {
 			// Restore so other sub-tests are not affected
-			dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`)
+			if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+				t.Fatalf("restore ref_count: %v", err)
+			}
+
 		}()
 
 		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err == nil {
@@ -1130,7 +1133,10 @@ func TestVerifyStandard(t *testing.T) {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
 		defer func() {
-			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'orphan_chunk_hash_test'`)
+			if _, err := dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'orphan_chunk_hash_test'`); err != nil {
+				t.Fatalf("delete orphan chunk: %v", err)
+			}
+
 		}()
 
 		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err == nil {
