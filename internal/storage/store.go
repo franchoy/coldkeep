@@ -14,7 +14,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils"
+	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func StoreFile(path string) error {
@@ -415,11 +415,11 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 	// Mark the operation as completed to avoid aborting it in the deferred function
 	completed = true
 
-	utils.PrintSuccess("File stored successfully")
+	utils_print.PrintSuccess("File stored successfully")
 	fmt.Printf("  FileID:   %d\n", fileID)
 	fmt.Printf("  Path:   %s\n", path)
 	fmt.Printf("  SHA256: %s\n", fileHash)
-	utils.PrintDuration(start)
+	utils_print.PrintDuration(start)
 
 	return nil
 }
@@ -476,8 +476,8 @@ func StoreFolder(root string) error {
 		}
 	}
 
-	utils.PrintSuccess("Folder stored successfully")
-	utils.PrintDuration(start)
+	utils_print.PrintSuccess("Folder stored successfully")
+	utils_print.PrintDuration(start)
 
 	return nil
 }

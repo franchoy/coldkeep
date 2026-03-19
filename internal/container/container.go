@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils"
+	"github.com/franchoy/coldkeep/internal/utils_compression"
 )
 
 func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
@@ -139,7 +139,7 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 	originalPath := filepath.Join(ContainersDir, filename)
 
 	// Compress file
-	compressedPath, compressed_size, sumHex, err := utils.CompressFile(originalPath, utils.DefaultCompression)
+	compressedPath, compressed_size, sumHex, err := utils_compression.CompressFile(originalPath, utils_compression.DefaultCompression)
 	if err != nil {
 		return err
 	}
@@ -152,20 +152,20 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 			compressed_size = $2,
 			container_hash = $3
 		WHERE id = $4
-	`, string(utils.DefaultCompression), compressed_size, sumHex, containerID)
+	`, string(utils_compression.DefaultCompression), compressed_size, sumHex, containerID)
 
 	if err != nil {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
-	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, utils.DefaultCompression, compressedPath)
+	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, utils_compression.DefaultCompression, compressedPath)
 	return nil
 }
 
 func CheckContainerHashFile(id int, filename, storedHash string) error {
 	containerPath := filepath.Join(ContainersDir, filename)
 
-	computedHash, err := utils.ComputeFileHashHex(containerPath)
+	computedHash, err := utils_compression.ComputeFileHashHex(containerPath)
 	if err != nil {
 		return fmt.Errorf("compute container file hash: %w", err)
 	}

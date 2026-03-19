@@ -16,7 +16,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
-	"github.com/franchoy/coldkeep/internal/utils"
+	"github.com/franchoy/coldkeep/internal/utils_compression"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 // NOTE:
@@ -179,7 +180,7 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	resetDB(t, dbconn)
 
 	// Ensure we don't exercise heavy compression here.
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -231,7 +232,7 @@ func TestDedupSameFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -271,7 +272,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	// Build folder with duplicates + shared-chunk variants
 	inputDir := filepath.Join(tmp, "folder")
@@ -409,7 +410,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -461,7 +462,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// Run verify before GC to check for any issues with ref_counts or metadata integrity.
-	if err := maintenance.RunVerify(maintenance.VerifyStandard); err != nil {
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err != nil {
 		t.Fatalf("verify standard after GC: %v", err)
 	}
 
@@ -471,7 +472,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// Verify again after dry-run GC to ensure it doesn't break anything.
-	if err := maintenance.RunVerify(maintenance.VerifyFull); err != nil {
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify full after GC: %v", err)
 	}
 
@@ -546,7 +547,7 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -596,7 +597,7 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -672,7 +673,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -722,7 +723,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -789,7 +790,7 @@ func TestContainerRollover(t *testing.T) {
 	container.SetContainerMaxSize(1 * 1024 * 1024)       // 1MB for quick test
 	defer container.SetContainerMaxSize(originalMaxSize) // restore
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -876,7 +877,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1000,7 +1001,7 @@ func TestVerifyStandard(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1011,7 +1012,7 @@ func TestVerifyStandard(t *testing.T) {
 	}
 
 	t.Run("passes on clean database", func(t *testing.T) {
-		if err := maintenance.RunVerify(maintenance.VerifyStandard); err != nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err != nil {
 			t.Fatalf("RunVerify on clean DB should not fail: %v", err)
 		}
 	})
@@ -1026,7 +1027,7 @@ func TestVerifyStandard(t *testing.T) {
 			dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`)
 		}()
 
-		if err := maintenance.RunVerify(maintenance.VerifyStandard); err == nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err == nil {
 			t.Fatal("RunVerify should have detected the corrupted ref_count but returned nil")
 		}
 	})
@@ -1043,7 +1044,7 @@ func TestVerifyStandard(t *testing.T) {
 			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'orphan_chunk_hash_test'`)
 		}()
 
-		if err := maintenance.RunVerify(maintenance.VerifyStandard); err == nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err == nil {
 			t.Fatal("RunVerify should have detected the orphan chunk but returned nil")
 		}
 	})
@@ -1062,7 +1063,7 @@ func TestVerifyStandard(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		if err := maintenance.RunVerify(maintenance.VerifyFull); err == nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
 			t.Fatal("verify full should detect missing container file")
 		}
 	})
@@ -1085,7 +1086,7 @@ func TestVerifyFull(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1096,7 +1097,7 @@ func TestVerifyFull(t *testing.T) {
 	}
 
 	t.Run("passes on clean database", func(t *testing.T) {
-		if err := maintenance.RunVerify(maintenance.VerifyFull); err != nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
 			t.Fatalf("RunVerify full on clean DB should not fail: %v", err)
 		}
 	})
@@ -1112,7 +1113,7 @@ func TestVerifyFull(t *testing.T) {
 			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'verify_full_bad_chunk'`)
 		}()
 
-		if err := maintenance.RunVerify(maintenance.VerifyFull); err == nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
 			t.Fatal("RunVerify full should have detected malformed completed chunk but returned nil")
 		}
 	})
@@ -1131,7 +1132,7 @@ func TestVerifyFull(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		if err := maintenance.RunVerify(maintenance.VerifyFull); err == nil {
+		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
 			t.Fatal("verify full should detect missing container file")
 		}
 	})
@@ -1156,7 +1157,7 @@ func TestSharedChunkSafety(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils.DefaultCompression = utils.CompressionNone
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {

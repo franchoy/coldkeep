@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/franchoy/coldkeep/internal/utils"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 	_ "github.com/lib/pq"
 )
 
@@ -16,7 +16,7 @@ func ConnectDB() (*sql.DB, error) {
 		" user=" + os.Getenv("DB_USER") +
 		" password=" + os.Getenv("DB_PASSWORD") +
 		" dbname=" + os.Getenv("DB_NAME") +
-		" sslmode=" + utils.GetenvOrDefault("DB_SSLMODE", "disable")
+		" sslmode=" + utils_env.GetenvOrDefault("DB_SSLMODE", "disable")
 	safeConnStr := strings.ReplaceAll(connStr, "password="+os.Getenv("DB_PASSWORD"), "password=***")
 
 	log.Printf("Connecting to DB with: %s", safeConnStr) // Log the connection string (without password)

@@ -10,6 +10,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 const version = "0.3.0"
@@ -89,17 +90,60 @@ func main() {
 		err = listing.SearchFiles(os.Args[2:])
 
 	case "verify":
+		var target string
+		var verifyLevel verify.VerifyLevel
+		var fileID int64
+		//target can be "system" or "file"
 		if len(os.Args) > 2 {
-			switch os.Args[2] {
-			case "--full", "--full-check", "full", "full-check":
-				err = maintenance.RunVerify(maintenance.VerifyFull)
-			case "--deep", "--deep-check", "deep", "deep-check":
-				err = maintenance.RunVerify(maintenance.VerifyDeep)
+			target = os.Args[2]
+			switch target {
+			case "system":
+				//target is system, verify level can be --standard, --full, or --deep
+				if len(os.Args) > 3 {
+					switch os.Args[3] {
+					case "--standard", "standard", "":
+						verifyLevel = verify.VerifyStandard
+					case "--full", "full":
+						verifyLevel = verify.VerifyFull
+					case "--deep", "deep":
+						verifyLevel = verify.VerifyDeep
+					default:
+						log.Fatal("Unknown option for system verify: ", os.Args[3])
+					}
+				} else {
+					verifyLevel = verify.VerifyStandard
+				}
+			case "file":
+				if len(os.Args) > 3 {
+					fileID, err = strconv.ParseInt(os.Args[3], 10, 64)
+					if err != nil {
+						log.Fatal("Invalid fileID: ", err)
+					}
+				} else {
+					log.Fatal("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+				}
+				if len(os.Args) > 4 {
+					switch os.Args[4] {
+					case "--standard", "standard", "":
+						verifyLevel = verify.VerifyStandard
+					case "--full", "full":
+						verifyLevel = verify.VerifyFull
+					case "--deep", "deep":
+						verifyLevel = verify.VerifyDeep
+					default:
+						log.Fatal("Unknown option for file verify: ", os.Args[4])
+					}
+				} else {
+					verifyLevel = verify.VerifyStandard
+				}
 			default:
-				log.Fatal("Unknown option for verify: ", os.Args[2])
+				log.Fatal("Unknown target for verify: ", target)
+
+				//call verify command with target, fileID, and verifyLevel
+				err = maintenance.VerifyCommand(target, int(fileID), verifyLevel)
 			}
 		} else {
-			err = maintenance.RunVerify(maintenance.VerifyStandard)
+			log.Fatal("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
 		}
 
 	default:
