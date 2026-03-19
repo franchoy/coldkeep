@@ -161,7 +161,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`SELECT id, filename, compression_algo  FROM container WHERE sealed=true`)
+	containers, err := dbconn.Query(`SELECT id, filename, compression_algorithm  FROM container WHERE sealed=true`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query sealed containers: %v", err)

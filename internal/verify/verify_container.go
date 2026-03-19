@@ -18,7 +18,7 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 	log.Printf("Checking container file existence and size consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, compression_algo, current_size 
+	rows, err := dbconn.Query(`select id, filename, compression_algorithm, current_size 
 				from container 
 				where quarantine = false and sealed = true`)
 	if err != nil {
@@ -146,7 +146,7 @@ func checkContainerHash(dbconn *sql.DB) error {
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, compression_algo, container_hash
+	rows, err := dbconn.Query(`select id, filename, compression_algorithm, container_hash
 				from container
 				where quarantine = false and sealed = true`)
 	if err != nil {

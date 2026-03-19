@@ -60,7 +60,7 @@ func verifyFile(dbconn *sql.DB, fileId int, verifyLevel verify.VerifyLevel) erro
 
 	//verify that the file id exists
 	var exists bool
-	err := dbconn.QueryRow("SELECT EXISTS(SELECT 1 FROM file WHERE id = ?)", fileId).Scan(&exists)
+	err := dbconn.QueryRow("SELECT EXISTS(SELECT 1 FROM logical_file WHERE id = ?)", fileId).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
