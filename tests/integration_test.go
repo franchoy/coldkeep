@@ -1454,3 +1454,98 @@ func TestSharedChunkSafety(t *testing.T) {
 		t.Fatalf("hash mismatch: expected %s, got %s", origHash, restoreHash)
 	}
 }
+
+func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_deep_clean.bin", 512*1024)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyDeep); err != nil {
+		t.Fatalf("verify system --deep on clean stored file should pass: %v", err)
+	}
+}
+
+func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_deep_corruption.bin", 512*1024)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	// Fetch first chunk record to find where to corrupt
+	var chunkOffset int64
+	var chunkSize int64
+	var containerFilename string
+	err = dbconn.QueryRow(`
+		SELECT c.chunk_offset, c.size, ctr.filename
+		FROM chunk c
+		JOIN container ctr ON ctr.id = c.container_id
+		WHERE c.status = 'COMPLETED'
+		ORDER BY c.chunk_offset ASC
+		LIMIT 1
+	`).Scan(&chunkOffset, &chunkSize, &containerFilename)
+	if err != nil {
+		t.Fatalf("query first chunk: %v", err)
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, containerFilename)
+
+	// Open container and corrupt a byte in the first chunk's data
+	// Skip past the header (32 bytes hash + 4 bytes size) to reach the actual chunk data
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file: %v", err)
+	}
+	defer f.Close()
+
+	corruptionOffset := chunkOffset + 32 + 4 + 10 // header (32+4 bytes) + 10 bytes into data
+	if _, err := f.WriteAt([]byte{0xFF}, corruptionOffset); err != nil {
+		t.Fatalf("corrupt chunk byte: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyDeep); err == nil {
+		t.Fatal("verify system --deep should detect chunk data corruption but returned nil")
+	}
+}
