@@ -1,3 +1,5 @@
+version: "1"
+
 run:
   timeout: 3m
 
@@ -16,12 +18,9 @@ linters-settings:
 
 issues:
   exclude-use-default: false
-
-  # Keep signal high, noise low
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  # Ignore test-related false positives if needed
   exclude-rules:
     - path: _test\.go
       linters:
