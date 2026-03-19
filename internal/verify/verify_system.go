@@ -210,7 +210,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		fileSize := info.Size()
 
 		//fetch chunks ordered by offset
-		chunks, err := dbconn.Query(`SELECT chunk_offset, size, chunk_hashhash
+		chunks, err := dbconn.Query(`SELECT chunk_offset, size, chunk_hash
 								FROM chunk
 								WHERE container_id = $1
 								AND status = 'COMPLETED'
