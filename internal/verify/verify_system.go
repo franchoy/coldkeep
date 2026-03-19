@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -170,7 +171,6 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 	defer containers.Close()
 
 	maxChunkSize := chunk.MaxChunkSize
-	buffer := make([]byte, maxChunkSize)
 
 	for containers.Next() {
 		processedContainers++
@@ -186,7 +186,8 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 
 		//open container file
 		fullPath := filepath.Join(container.ContainersDir, filename)
-		if compressionAlgo != "" && compressionAlgo != string(utils_compression.CompressionNone) {
+		algo := utils_compression.CompressionType(compressionAlgo)
+		if algo != utils_compression.CompressionNone {
 			fullPath = fullPath + "." + compressionAlgo
 		}
 
@@ -209,7 +210,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		fileSize := info.Size()
 
 		//fetch chunks ordered by offset
-		chunks, err := dbconn.Query(`SELECT chunk_offset, size, hash
+		chunks, err := dbconn.Query(`SELECT chunk_offset, size, chunk_hashhash
 								FROM chunk
 								WHERE container_id = $1
 								AND status = 'COMPLETED'
@@ -269,40 +270,78 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 				}
 			}
 
-			_, err = io.ReadFull(file, buffer[:chunkSize])
-			if err != nil {
-				log.Printf("Failed to read chunk data for container %d at offset %d: %v", containerID, chunkOffset, err)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to read chunk data for container %d at offset %d: %w", containerID, chunkOffset, err))
-				continue
+			algo := utils_compression.CompressionType(compressionAlgo)
+
+			containerPath := filepath.Join(container.ContainersDir, filename)
+
+			// Open as plain file (seek) or as decompressed stream (skip bytes)
+			var r io.ReadCloser
+			var f *os.File
+
+			if algo == utils_compression.CompressionNone {
+				f, err = os.Open(containerPath)
+				if err != nil {
+					return fmt.Errorf("open container %q: %w", filename, err)
+				}
+				// Seek to record start
+				if _, err := f.Seek(chunkOffset, io.SeekStart); err != nil {
+					_ = f.Close()
+					return fmt.Errorf("seek container %q to offset %d: %w", filename, chunkOffset, err)
+				}
+				// Use file as reader; close via f.Close() below
+				r = f
+			} else {
+				r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
+				if err != nil {
+					return fmt.Errorf("open compressed container %q: %w", filename, err)
+				}
+				// Skip to record offset inside the *uncompressed* stream
+				if _, err := io.CopyN(io.Discard, r, chunkOffset); err != nil {
+					_ = r.Close()
+					return fmt.Errorf("skip to chunk offset in decompressed stream for container %q: %w", filename, err)
+				}
 			}
 
-			currentOffset = chunkOffset + chunkSize
-
-			//compute hash of the chunk data
-			hash := sha256.Sum256(buffer[:chunkSize])
-			storedHash, err := hex.DecodeString(chunkHash)
-			if err != nil {
-				log.Printf("Failed to decode stored hash for container %d at offset %d: %v", containerID, chunkOffset, err)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to decode stored hash for container %d at offset %d: %w", containerID, chunkOffset, err))
-				continue
+			// Read record header
+			headerHash := make([]byte, 32)
+			if _, err := io.ReadFull(r, headerHash); err != nil {
+				_ = r.Close()
+				return fmt.Errorf("read chunk header hash for container %q: %w", filename, err)
 			}
 
-			if len(storedHash) != sha256.Size {
-				log.Printf("Invalid stored hash length for container %d at offset %d: expected %d, got %d", containerID, chunkOffset, sha256.Size, len(storedHash))
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid stored hash length for container %d at offset %d: expected %d, got %d", containerID, chunkOffset, sha256.Size, len(storedHash)))
-				continue
+			sizeBuf := make([]byte, 4)
+			if _, err := io.ReadFull(r, sizeBuf); err != nil {
+				_ = r.Close()
+				return fmt.Errorf("read chunk header size for container %q: %w", filename, err)
+			}
+			recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
+
+			if recordSize != chunkSize {
+				_ = r.Close()
+				return fmt.Errorf("chunk size mismatch at offset %d (db=%d record=%d) for container %q", chunkOffset, chunkSize, recordSize, filename)
 			}
 
-			//compare with stored hash
-			if !bytes.Equal(hash[:], storedHash) {
-				//if mismatch → corruption detected
-				computedHex := hex.EncodeToString(hash[:])
-				log.Printf("Chunk hash mismatch for container %d at offset %d: expected %s, got %s", containerID, chunkOffset, chunkHash, computedHex)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk hash mismatch for container %d at offset %d: expected %s, got %s", containerID, chunkOffset, chunkHash, computedHex))
+			// Read chunk data
+			chunkData := make([]byte, recordSize)
+			if _, err := io.ReadFull(r, chunkData); err != nil {
+				_ = r.Close()
+				return fmt.Errorf("read chunk data for container %q: %w", filename, err)
+			}
+
+			// Close container reader
+			if err := r.Close(); err != nil {
+				return fmt.Errorf("close container reader for container %q: %w", filename, err)
+			}
+
+			// Validate hashes (DB hash and on-disk record hash)
+			sum := sha256.Sum256(chunkData)
+			sumHex := hex.EncodeToString(sum[:])
+
+			if sumHex != chunkHash {
+				return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s) for container %q", chunkOffset, chunkHash, sumHex, filename)
+			}
+			if !bytes.Equal(sum[:], headerHash) {
+				return fmt.Errorf("chunk record header hash mismatch at offset %d for container %q", chunkOffset, filename)
 			}
 
 		}
