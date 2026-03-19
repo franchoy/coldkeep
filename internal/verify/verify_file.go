@@ -90,13 +90,12 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	//ensure file_chunks exists for the file
 	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = ? order by chunk_order asc`, fileId)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("logical file %d has no chunks", fileId)
+		}
 		return fmt.Errorf("failed to query file chunks: %w", err)
 	}
 	defer filechunkrows.Close()
-
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("logical file %d has no chunks", fileId)
-	}
 
 	var chunkIdList []int
 	var previousChunkOrder int = 0
