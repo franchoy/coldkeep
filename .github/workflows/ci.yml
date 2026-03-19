@@ -25,15 +25,16 @@ jobs:
 
       - name: Check formatting
         run: |
-          fmt=$(gofmt -l .)
-          if [ -n "$fmt" ]; then
-            echo "The following files are not properly formatted:"
-            echo "$fmt"
-            echo ""
-            echo "Run: gofmt -w ."
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files detected:"
+            echo "$unformatted"
             exit 1
           fi
-
+          
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+    
       - name: Vet
         run: go vet ./...
 
