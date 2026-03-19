@@ -13,7 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 
@@ -161,7 +161,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("coldkeep (V0.3.0)")
+	fmt.Println("coldkeep (V0.4.0)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")

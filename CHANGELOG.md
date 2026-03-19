@@ -10,6 +10,42 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.4.0] - 2026-03-19
+
+Integrity Verification Layer
+
+This release introduces a complete integrity verification system for coldkeep,
+covering metadata consistency, container structure validation, and full
+end-to-end data integrity checks.
+
+The system is designed in three verification levels:
+
+- Standard: metadata integrity checks
+- Full: metadata + container structure and hash validation
+- Deep: full physical verification by reading container data and recomputing chunk hashes
+
+### Added
+- `verify system` command with three verification levels (standard, full, deep)
+- `verify file <id>` command with per-file verification (standard, full, deep)
+- Deep verification logic that reads container data and validates chunk hashes
+- Record-level validation (header hash + stored size + data hash)
+- Container-wide integrity verification across all sealed containers
+- Comprehensive integration tests for verification (positive and corruption scenarios)
+
+### Improved
+- Verification coverage across file, chunk, and container layers
+- Error reporting with aggregated verification failures
+- Internal consistency checks for chunk offsets, sizes, and container bounds
+
+### Notes
+- Deep verification performs full disk reads and may be slow on large datasets
+- Whole-container compression is still present but will be removed in a future release in favor of block-level compression
+
+coldkeep remains an experimental research project and is not production ready.
+The on-disk format may change before v1.0.
+
+------------------------------------------------------------------------
+
 ## [0.3.0] - 2026-03-15
 
 Safe garbage collection foundation.
