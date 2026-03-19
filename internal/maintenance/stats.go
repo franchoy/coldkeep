@@ -16,7 +16,7 @@ func RunStats() error {
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	var totalFiles int64
 	var totalLogicalSize sql.NullInt64
@@ -186,7 +186,7 @@ func RunStats() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var completedCount, processingCount, abortedCount int64
 	var completedBytes int64
@@ -237,7 +237,7 @@ func RunStats() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64

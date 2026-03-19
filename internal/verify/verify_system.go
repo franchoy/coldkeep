@@ -168,7 +168,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		log.Printf("Failed to query sealed containers: %v", err)
 		return fmt.Errorf("failed to query sealed containers: %w", err)
 	}
-	defer containers.Close()
+	defer func() { _ = containers.Close() }()
 
 	maxChunkSize := chunk.MaxChunkSize
 

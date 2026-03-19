@@ -39,7 +39,7 @@ func CompressFile(path string, algo CompressionType) (string, int64, string, err
 	if err != nil {
 		return "", 0, "", err
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 
 	outputPath := path + "." + string(algo)
 
@@ -57,13 +57,13 @@ func CompressFile(path string, algo CompressionType) (string, int64, string, err
 	case CompressionZstd:
 		encoder, err := zstd.NewWriter(output)
 		if err != nil {
-			output.Close()
+			_ = output.Close()
 			return "", 0, "", err
 		}
 		writer = encoder
 
 	default:
-		output.Close()
+		_ = output.Close()
 		return "", 0, "", fmt.Errorf("unknown compression algorithm: %q", algo)
 	}
 
@@ -126,7 +126,7 @@ func ComputeFileHashHex(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hash := sha256.New()
 

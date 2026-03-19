@@ -26,7 +26,7 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 		log.Printf("Failed to query container files: %v", err)
 		return fmt.Errorf("failed to query container files: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int
@@ -107,7 +107,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 		log.Printf("Failed to query chunk-container consistency: %v", err)
 		return fmt.Errorf("failed to query chunk-container consistency: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int
@@ -154,7 +154,7 @@ func checkContainerHash(dbconn *sql.DB) error {
 		log.Printf("Failed to query container hashes: %v", err)
 		return fmt.Errorf("failed to query container hashes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var totalRows int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE quarantine = false AND sealed = true`).Scan(&totalRows); err != nil {
@@ -221,7 +221,7 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 		log.Printf("Failed to query container completeness: %v", err)
 		return fmt.Errorf("failed to query container completeness: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var containerID int

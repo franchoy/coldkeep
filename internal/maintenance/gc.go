@@ -16,7 +16,7 @@ func RunGC(dryRun bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	// Attempt to acquire advisory lock to ensure only one GC runs at a time
 	var locked bool
@@ -44,7 +44,7 @@ func RunGC(dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var affectedContainers int
 

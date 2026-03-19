@@ -33,7 +33,7 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 		log.Printf("Failed to query file chunk ordering: %v", err)
 		return fmt.Errorf("failed to query file chunk ordering: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var logicalFileID int
@@ -92,7 +92,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	if err != nil {
 		return fmt.Errorf("failed to query file chunks: %w", err)
 	}
-	defer filechunkrows.Close()
+	defer func() { _ = filechunkrows.Close() }()
 
 	var chunkIdList []int
 	var previousChunkOrder int = 0
@@ -134,7 +134,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	if err != nil {
 		return fmt.Errorf("failed to query chunks: %w", err)
 	}
-	defer chunkrows.Close()
+	defer func() { _ = chunkrows.Close() }()
 
 	var chunkCount int
 	for chunkrows.Next() {
@@ -192,7 +192,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 	if err != nil {
 		return fmt.Errorf("query file containers and offsets: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	const chunkRecordHeaderSize = int64(32 + 4)
 
@@ -317,7 +317,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 	if err != nil {
 		return fmt.Errorf("query file chunk hashes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var chunkID int

@@ -17,7 +17,7 @@ func SystemRecovery() error {
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	err = abortProcessingLogicalFiles(dbconn)
 	if err != nil {
@@ -64,7 +64,7 @@ func quarantineMissingContainers(dbconn *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("query retrieve container list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 

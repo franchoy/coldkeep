@@ -12,7 +12,7 @@ func RemoveFile(fileID int64) error {
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	if err := RemoveFileWithDB(dbconn, fileID); err != nil {
 		return err
@@ -57,7 +57,7 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 		_ = tx.Rollback()
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var chunkIDs []int64
 	for rows.Next() {

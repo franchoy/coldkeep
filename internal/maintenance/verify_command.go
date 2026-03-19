@@ -22,7 +22,7 @@ func VerifyCommand(target string, fileId int, verifyLevel verify.VerifyLevel) er
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	switch target {
 	case "system":

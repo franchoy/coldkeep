@@ -22,7 +22,7 @@ func StoreFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	if err := StoreFileWithDB(dbconn, path); err != nil {
 		return err
@@ -256,7 +256,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fileinfo, err := file.Stat()
 	if err != nil {
@@ -432,7 +432,7 @@ func StoreFolder(root string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	workerCount := runtime.NumCPU()
 

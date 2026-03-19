@@ -24,7 +24,7 @@ func RestoreFile(id int64, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	if err := RestoreFileWithDB(dbconn, id, outputPath); err != nil {
 		return err
@@ -74,7 +74,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("query file chunks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// ------------------------------------------------------------
 	// Prepare output file
@@ -93,7 +93,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	hasher := sha256.New()
 

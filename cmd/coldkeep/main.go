@@ -51,9 +51,9 @@ func main() {
 			log.Fatal("Usage: coldkeep restore <fileID> <outputDir>")
 			os.Exit(1)
 		}
-		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
-		if err != nil {
-			log.Fatal("Invalid fileID: ", err)
+		fileID, parseErr := strconv.ParseInt(os.Args[2], 10, 64)
+		if parseErr != nil {
+			log.Fatal("Invalid fileID: ", parseErr)
 			os.Exit(1)
 		}
 
@@ -64,9 +64,9 @@ func main() {
 			log.Fatal("Usage: coldkeep remove <fileID>")
 			os.Exit(1)
 		}
-		fileID, err := strconv.ParseInt(os.Args[2], 10, 64)
-		if err != nil {
-			log.Fatal("Invalid fileID: ", err)
+		fileID, parseErr := strconv.ParseInt(os.Args[2], 10, 64)
+		if parseErr != nil {
+			log.Fatal("Invalid fileID: ", parseErr)
 			os.Exit(1)
 		}
 

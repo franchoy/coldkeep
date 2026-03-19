@@ -28,7 +28,7 @@ func checkReferenceCounts(dbconn *sql.DB) error {
 		log.Printf("Failed to query chunk reference counts: %v", err)
 		return fmt.Errorf("failed to query chunk reference counts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type chunkRefCount struct {
 		id       int
@@ -81,7 +81,7 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 		log.Printf("Failed to query orphan chunks: %v", err)
 		return fmt.Errorf("failed to query orphan chunks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int
@@ -130,7 +130,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		log.Printf("Failed to query completed chunks: %v", err)
 		return fmt.Errorf("failed to query completed chunks: %w", err)
 	}
-	defer rows1.Close()
+	defer func() { _ = rows1.Close() }()
 
 	type chunkInfo struct {
 		id          int
@@ -156,7 +156,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
 	}
 
-	rows1.Close()
+	_ = rows1.Close()
 
 	// if status != COMPLETED → container_id NULL chunk_offset NULL
 	rows2, err := dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
@@ -168,7 +168,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		log.Printf("Failed to query non-completed chunks: %v", err)
 		return fmt.Errorf("failed to query non-completed chunks: %w", err)
 	}
-	defer rows2.Close()
+	defer func() { _ = rows2.Close() }()
 
 	for rows2.Next() {
 		var c chunkInfo
@@ -217,7 +217,7 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		log.Printf("Failed to query completed chunks for offset validity: %v", err)
 		return fmt.Errorf("failed to query completed chunks for offset validity: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type chunkInfo struct {
 		id            int

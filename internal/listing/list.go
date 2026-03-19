@@ -12,7 +12,7 @@ func ListFiles() error {
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
-	defer dbconn.Close()
+	defer func() { _ = dbconn.Close() }()
 
 	rows, err := dbconn.Query(`
 		SELECT id, original_name, total_size, created_at
@@ -22,7 +22,7 @@ func ListFiles() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	fmt.Printf("%-6s %-25s %-15s %-20s\n", "ID", "NAME", "SIZE(bytes)", "CREATED_AT")
 	fmt.Println("---------------------------------------------------------------------")

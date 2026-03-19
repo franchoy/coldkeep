@@ -64,7 +64,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 	if err != nil {
 		return 0, "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// 4️⃣ Write V0 header
 	if err := writeNewContainerHeaderV0(f, containerMaxSize); err != nil {
@@ -89,7 +89,7 @@ func AppendChunkPhysical(filename string, currentSize int64, chunk []byte) (int6
 	if err != nil {
 		return 0, 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// offset where this chunk starts
 	offset := currentSize
