@@ -184,27 +184,19 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		}
 		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
 
-		//open container file
+		//construct full path with compression extension if needed
 		fullPath := filepath.Join(container.ContainersDir, filename)
 		algo := utils_compression.CompressionType(compressionAlgo)
 		if algo != utils_compression.CompressionNone {
 			fullPath = fullPath + "." + compressionAlgo
 		}
 
-		file, err := os.Open(fullPath)
-		if err != nil {
-			log.Printf("Failed to open container file %s: %v", fullPath, err)
-			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to open container file %s: %w", fullPath, err))
-			continue
-		}
-
-		info, err := file.Stat()
+		//get file size for validation
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			errorCount++
 			log.Printf("Failed to stat container file %s: %v", fullPath, err)
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to stat container file %s: %w", fullPath, err))
-			file.Close()
 			continue
 		}
 		fileSize := info.Size()
@@ -219,11 +211,8 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			log.Printf("Failed to query chunks for container %d: %v", containerID, err)
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to query chunks for container %d: %w", containerID, err))
-			file.Close()
 			continue
 		}
-
-		currentOffset := int64(0)
 
 		hasChunks := false
 
@@ -258,16 +247,6 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 				errorCount++
 				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize))
 				continue
-			}
-
-			if chunkOffset != currentOffset {
-				_, err = file.Seek(chunkOffset, io.SeekStart)
-				if err != nil {
-					errorCount++
-					errorList = utils_print.AppendToErrorList(errorList,
-						fmt.Errorf("failed to seek container %d to offset %d: %w", containerID, chunkOffset, err))
-					continue
-				}
 			}
 
 			algo := utils_compression.CompressionType(compressionAlgo)
@@ -351,7 +330,6 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("container %d has no chunks", containerID))
 			_ = chunks.Close()
-			_ = file.Close()
 			continue
 		}
 
@@ -359,16 +337,11 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed for chunks of container %d: %w", containerID, err))
 			_ = chunks.Close()
-			_ = file.Close()
 			continue
 		}
 
 		_ = chunks.Close()
-
-		_ = file.Close()
-
 	}
-
 	if err := containers.Err(); err != nil {
 		errorCount++
 		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed for containers: %w", err))
