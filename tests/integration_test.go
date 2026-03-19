@@ -161,6 +161,95 @@ func fetchFileIDByHash(t *testing.T, dbconn *sql.DB, fileHash string) int64 {
 	return id
 }
 
+type fileChunkRecord struct {
+	chunkID              int64
+	containerID          int64
+	chunkOffset          int64
+	chunkSize            int64
+	containerFilename    string
+	compressionAlgorithm string
+	containerCurrentSize int64
+}
+
+func setupStoredFileForVerification(t *testing.T, filename string, size int) (*sql.DB, string, int64) {
+	t.Helper()
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	utils_compression.DefaultCompression = utils_compression.CompressionNone
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		dbconn.Close()
+		t.Fatalf("mkdir inputDir: %v", err)
+	}
+
+	inPath := createTempFile(t, inputDir, filename, size)
+	fileHash := sha256File(t, inPath)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		dbconn.Close()
+		t.Fatalf("store file: %v", err)
+	}
+
+	return dbconn, inPath, fetchFileIDByHash(t, dbconn, fileHash)
+}
+
+func fetchFirstChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunkRecord {
+	t.Helper()
+
+	var record fileChunkRecord
+	err := dbconn.QueryRow(`
+		SELECT
+			c.id,
+			c.container_id,
+			c.chunk_offset,
+			c.size,
+			ctr.filename,
+			ctr.compression_algorithm,
+			ctr.current_size
+		FROM file_chunk fc
+		JOIN chunk c ON c.id = fc.chunk_id
+		JOIN container ctr ON ctr.id = c.container_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY fc.chunk_order ASC
+		LIMIT 1
+	`, fileID).Scan(
+		&record.chunkID,
+		&record.containerID,
+		&record.chunkOffset,
+		&record.chunkSize,
+		&record.containerFilename,
+		&record.compressionAlgorithm,
+		&record.containerCurrentSize,
+	)
+	if err != nil {
+		t.Fatalf("query first chunk record: %v", err)
+	}
+
+	return record
+}
+
+func containerPathForRecord(record fileChunkRecord) string {
+	filename := record.containerFilename
+	if record.compressionAlgorithm != "" && record.compressionAlgorithm != string(utils_compression.CompressionNone) {
+		filename += "." + record.compressionAlgorithm
+	}
+	return filepath.Join(container.ContainersDir, filename)
+}
+
 func TestRoundTripStoreRestore(t *testing.T) {
 	requireDB(t)
 
@@ -1136,6 +1225,156 @@ func TestVerifyFull(t *testing.T) {
 			t.Fatal("verify full should detect missing container file")
 		}
 	})
+}
+
+func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_deep_corruption.bin", 512*1024)
+	defer dbconn.Close()
+
+	record := fetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := containerPathForRecord(record)
+
+	file, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file: %v", err)
+	}
+
+	corruptionOffset := record.chunkOffset + 32 + 4
+	if record.chunkSize > 10 {
+		corruptionOffset += 10
+	}
+
+	if _, err := file.WriteAt([]byte{0xFF}, corruptionOffset); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt chunk byte: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close container file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyDeep); err == nil {
+		t.Fatal("verify file --deep should detect chunk data corruption")
+	}
+}
+
+func TestVerifyFileStandardPassesOnCleanStoredFile(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_clean.bin", 256*1024)
+	defer dbconn.Close()
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyStandard); err != nil {
+		t.Fatalf("verify file --standard on clean file should pass: %v", err)
+	}
+}
+
+func TestVerifyFileFullPassesOnCleanStoredFile(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_clean.bin", 256*1024)
+	defer dbconn.Close()
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyFull); err != nil {
+		t.Fatalf("verify file --full on clean file should pass: %v", err)
+	}
+}
+
+func TestVerifyFileDeepPassesOnCleanStoredFile(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_deep_clean.bin", 256*1024)
+	defer dbconn.Close()
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyDeep); err != nil {
+		t.Fatalf("verify file --deep on clean file should pass: %v", err)
+	}
+}
+
+func TestVerifyFileFullDetectsContainerTruncation(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_truncation.bin", 512*1024)
+	defer dbconn.Close()
+
+	record := fetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := containerPathForRecord(record)
+
+	truncatedSize := record.containerCurrentSize - 100
+	if truncatedSize <= 0 {
+		t.Fatalf("invalid truncated size derived from container size %d", record.containerCurrentSize)
+	}
+
+	if err := os.Truncate(containerPath, truncatedSize); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyFull); err == nil {
+		t.Fatal("verify file --full should detect truncated container data")
+	}
+}
+
+func TestVerifyFileFullDetectsMissingContainerFile(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_missing_container.bin", 256*1024)
+	defer dbconn.Close()
+
+	record := fetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := containerPathForRecord(record)
+
+	if err := os.Remove(containerPath); err != nil {
+		t.Fatalf("remove container file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyFull); err == nil {
+		t.Fatal("verify file --full should detect a missing container file")
+	}
+}
+
+func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_missing_chunk.bin", 512*1024)
+	defer dbconn.Close()
+
+	record := fetchFirstChunkRecord(t, dbconn, fileID)
+
+	if _, err := dbconn.Exec(`ALTER TABLE file_chunk DROP CONSTRAINT IF EXISTS file_chunk_chunk_id_fkey`); err != nil {
+		t.Fatalf("drop file_chunk foreign key: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk WHERE id = $1`, record.chunkID); err != nil {
+		t.Fatalf("delete chunk row: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyStandard); err == nil {
+		t.Fatal("verify file should detect missing chunk metadata")
+	}
+}
+
+func TestVerifyFileStandardDetectsBrokenChunkOrder(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_chunk_order.bin", 512*1024)
+	defer dbconn.Close()
+
+	if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order + 1 WHERE logical_file_id = $1`, fileID); err != nil {
+		t.Fatalf("corrupt chunk ordering: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyStandard); err == nil {
+		t.Fatal("verify file should detect broken chunk ordering")
+	}
+}
+
+func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
+	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_system_full_container_hash.bin", 256*1024)
+	defer dbconn.Close()
+
+	record := fetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := containerPathForRecord(record)
+
+	file, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{0xAB}, 0); err != nil {
+		_ = file.Close()
+		t.Fatalf("mutate container file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close container file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
+		t.Fatal("verify system --full should detect a container hash mismatch")
+	}
 }
 
 func TestSharedChunkSafety(t *testing.T) {
