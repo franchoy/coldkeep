@@ -188,7 +188,8 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -269,7 +270,8 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	resetDB(t, dbconn)
 
 	// Ensure we don't exercise heavy compression here.
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -321,7 +323,8 @@ func TestDedupSameFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -361,7 +364,8 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	// Build folder with duplicates + shared-chunk variants
 	inputDir := filepath.Join(tmp, "folder")
@@ -499,7 +503,8 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -636,7 +641,8 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -686,7 +692,8 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -762,7 +769,8 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -812,7 +820,8 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -879,7 +888,8 @@ func TestContainerRollover(t *testing.T) {
 	container.SetContainerMaxSize(1 * 1024 * 1024)       // 1MB for quick test
 	defer container.SetContainerMaxSize(originalMaxSize) // restore
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -966,7 +976,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1090,7 +1101,8 @@ func TestVerifyStandard(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1181,7 +1193,8 @@ func TestVerifyFull(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1402,7 +1415,8 @@ func TestSharedChunkSafety(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -1478,7 +1492,8 @@ func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -1510,7 +1525,8 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	utils_compression.DefaultCompression = utils_compression.CompressionNone
+	// DEPRECATED: container-level compression will be removed in v0.6
+	// utils_compression.DefaultCompression = utils_compression.CompressionNone
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)

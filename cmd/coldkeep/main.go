@@ -178,6 +178,8 @@ func main() {
 func printHelp() {
 	fmt.Println("coldkeep (V0.4.0)")
 	fmt.Println()
+	fmt.Println(" Container-level compression has been deprecated due to incompatibility with deterministic restore guarantees and upcoming block-based storage")
+	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
 	fmt.Println()
