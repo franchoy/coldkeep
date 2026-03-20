@@ -64,11 +64,12 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			c.size,
 			c.chunk_hash,
 			ct.filename,
-			ct.compression_algorithm
+			ct.compression_algorithm,
+			c.status
 		FROM file_chunk fc
 		JOIN chunk c ON fc.chunk_id = c.id
 		JOIN container ct ON c.container_id = ct.id
-		WHERE fc.logical_file_id = $1 AND c.status = 'COMPLETED'
+		WHERE fc.logical_file_id = $1 
 		ORDER BY fc.chunk_order ASC
 	`, fileID)
 
@@ -110,9 +111,14 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		var expectedChunkHash string
 		var filename string
 		var algoStr string
+		var chunkStatus string
 
-		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &algoStr); err != nil {
+		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &algoStr, &chunkStatus); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
+		}
+
+		if chunkStatus != "COMPLETED" {
+			return fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkOrder, fileID, chunkStatus)
 		}
 
 		// Validate monotonically contiguous chunk sequence
@@ -151,6 +157,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			// Use file as reader; close via f.Close() below
 			r = f
 		} else {
+			//WARNING : compression is going to be removed on V0.6
 			r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
 			if err != nil {
 				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
