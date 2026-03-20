@@ -1571,3 +1571,393 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatal("verify system --deep should detect chunk data corruption but returned nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// v0.5 deterministic-restore guarantee tests
+// ---------------------------------------------------------------------------
+
+// TestZeroByteFile verifies that a zero-byte file can be stored, restored,
+// has size 0, and its SHA-256 matches the well-known hash of empty content.
+func TestZeroByteFile(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a zero-byte input file.
+	inPath := filepath.Join(inputDir, "empty.bin")
+	if err := os.WriteFile(inPath, []byte{}, 0o644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+
+	// SHA-256("") = e3b0c44298fc1c149afbf4c8996fb924...
+	const emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	if gotHash := sha256File(t, inPath); gotHash != emptyHash {
+		t.Fatalf("unexpected hash for empty file: %s", gotHash)
+	}
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store empty file: %v", err)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, emptyHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "empty.restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore empty file: %v", err)
+	}
+
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatalf("stat restored file: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("restored file size: expected 0, got %d", info.Size())
+	}
+
+	if gotHash := sha256File(t, outPath); gotHash != emptyHash {
+		t.Fatalf("restored hash mismatch: want %s got %s", emptyHash, gotHash)
+	}
+}
+
+// TestRepeatRestoreDeterminism restores the same file three times and asserts
+// that all three results are byte-for-byte identical and match the original.
+func TestRepeatRestoreDeterminism(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	inPath := createTempFile(t, inputDir, "determinism.bin", 512*1024)
+	wantHash := sha256File(t, inPath)
+	wantBytes := mustRead(t, inPath)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, wantHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+
+	const restoreRuns = 3
+	for i := 0; i < restoreRuns; i++ {
+		outPath := filepath.Join(outDir, fmt.Sprintf("determinism.run%d.bin", i))
+		if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+			t.Fatalf("restore run %d: %v", i, err)
+		}
+
+		gotBytes := mustRead(t, outPath)
+		if !bytes.Equal(wantBytes, gotBytes) {
+			t.Fatalf("run %d: restored bytes differ from original", i)
+		}
+
+		gotHash := sha256File(t, outPath)
+		if gotHash != wantHash {
+			t.Fatalf("run %d: hash mismatch: want %s got %s", i, wantHash, gotHash)
+		}
+	}
+}
+
+// TestStoreGCRestore is the v0.5 headline guarantee: a stored file remains
+// fully restorable after GC runs (even in the presence of other deleted files).
+func TestStoreGCRestore(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Store the "keeper" file that must survive GC.
+	keeperPath := createTempFile(t, inputDir, "keeper.bin", 512*1024)
+	keeperHash := sha256File(t, keeperPath)
+	keeperBytes := mustRead(t, keeperPath)
+
+	if err := storage.StoreFileWithDB(dbconn, keeperPath); err != nil {
+		t.Fatalf("store keeper: %v", err)
+	}
+	keeperID := fetchFileIDByHash(t, dbconn, keeperHash)
+
+	// Store a second file, then remove it so GC has something to collect.
+	noisePath := createTempFile(t, inputDir, "noise.bin", 512*1024)
+	noiseHash := sha256File(t, noisePath)
+
+	if err := storage.StoreFileWithDB(dbconn, noisePath); err != nil {
+		t.Fatalf("store noise: %v", err)
+	}
+	noiseID := fetchFileIDByHash(t, dbconn, noiseHash)
+
+	if err := storage.RemoveFileWithDB(dbconn, noiseID); err != nil {
+		t.Fatalf("remove noise: %v", err)
+	}
+
+	// Dry-run GC must not break anything.
+	if err := maintenance.RunGC(true); err != nil {
+		t.Fatalf("GC dry-run: %v", err)
+	}
+
+	// Real GC.
+	if err := maintenance.RunGC(false); err != nil {
+		t.Fatalf("GC real run: %v", err)
+	}
+
+	// After GC, ref_counts must not go negative.
+	var negatives int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
+		t.Fatalf("check ref_count: %v", err)
+	}
+	if negatives != 0 {
+		t.Fatalf("found %d chunks with negative ref_count after GC", negatives)
+	}
+
+	// Restore the keeper and verify byte-perfect fidelity.
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "keeper.restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, keeperID, outPath); err != nil {
+		t.Fatalf("restore keeper after GC: %v", err)
+	}
+
+	gotBytes := mustRead(t, outPath)
+	if !bytes.Equal(keeperBytes, gotBytes) {
+		t.Fatalf("restored bytes differ from original after GC")
+	}
+
+	gotHash := sha256File(t, outPath)
+	if gotHash != keeperHash {
+		t.Fatalf("hash mismatch after GC: want %s got %s", keeperHash, gotHash)
+	}
+}
+
+// chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
+// minChunk = 512 KiB, maxChunk = 2 MiB.
+var chunkBoundaryCases = []struct {
+	name string
+	size int
+}{
+	{"1_byte", 1},
+	{"small_64b", 64},
+	{"min_minus_1", 512*1024 - 1},
+	{"exactly_min", 512 * 1024},
+	{"min_plus_1", 512*1024 + 1},
+	{"max_minus_1", 2*1024*1024 - 1},
+	{"exactly_max", 2 * 1024 * 1024},
+	{"max_plus_1", 2*1024*1024 + 1},
+	{"multi_chunk_uneven_tail", 3*2*1024*1024 + 37},
+}
+
+// TestChunkBoundaryMatrix stores and restores files at classic CDC boundary sizes,
+// verifying byte-perfect restoration for each case.
+func TestChunkBoundaryMatrix(t *testing.T) {
+	requireDB(t)
+
+	for _, tc := range chunkBoundaryCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			container.ContainersDir = filepath.Join(tmp, "containers")
+			_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+			resetStorage(t)
+
+			dbconn, err := db.ConnectDB()
+			if err != nil {
+				t.Fatalf("connectDB: %v", err)
+			}
+			defer dbconn.Close()
+
+			applySchema(t, dbconn)
+			resetDB(t, dbconn)
+
+			inputDir := filepath.Join(tmp, "input")
+			_ = os.MkdirAll(inputDir, 0o755)
+
+			inPath := createTempFile(t, inputDir, tc.name+".bin", tc.size)
+			wantHash := sha256File(t, inPath)
+			wantBytes := mustRead(t, inPath)
+
+			if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+				t.Fatalf("store: %v", err)
+			}
+
+			fileID := fetchFileIDByHash(t, dbconn, wantHash)
+
+			outDir := filepath.Join(tmp, "out")
+			_ = os.MkdirAll(outDir, 0o755)
+			outPath := filepath.Join(outDir, tc.name+".restored.bin")
+
+			if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+
+			gotBytes := mustRead(t, outPath)
+			if !bytes.Equal(wantBytes, gotBytes) {
+				t.Fatalf("restored bytes differ for size %d", tc.size)
+			}
+
+			gotHash := sha256File(t, outPath)
+			if gotHash != wantHash {
+				t.Fatalf("hash mismatch: want %s got %s", wantHash, gotHash)
+			}
+
+			// Confirm the restored file size matches the input exactly.
+			info, err := os.Stat(outPath)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+			if int(info.Size()) != tc.size {
+				t.Fatalf("size mismatch: want %d got %d", tc.size, info.Size())
+			}
+		})
+	}
+}
+
+type chunkRecord struct {
+	order int
+	hash  string
+	size  int64
+}
+
+func queryChunkGraph(t *testing.T, dbconn *sql.DB, fileID int64) []chunkRecord {
+	t.Helper()
+	rows, err := dbconn.Query(`
+		SELECT fc.chunk_order, c.chunk_hash, c.size
+		FROM file_chunk fc
+		JOIN chunk c ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1
+		ORDER BY fc.chunk_order ASC
+	`, fileID)
+	if err != nil {
+		t.Fatalf("query chunk graph: %v", err)
+	}
+	defer rows.Close()
+
+	var records []chunkRecord
+	for rows.Next() {
+		var r chunkRecord
+		if err := rows.Scan(&r.order, &r.hash, &r.size); err != nil {
+			t.Fatalf("scan chunk graph row: %v", err)
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate chunk graph: %v", err)
+	}
+	return records
+}
+
+// TestSameInputSameChunkGraph verifies that storing identical file content in
+// two separate fresh environments yields the same chunk count, chunk hashes,
+// and chunk order — confirming cross-run CDC determinism.
+func TestSameInputSameChunkGraph(t *testing.T) {
+	requireDB(t)
+
+	// Generate a fixed data blob (deterministic, cross-run stable).
+	const fileSize = 3*512*1024 + 77 // spans multiple chunks with uneven tail
+	data := make([]byte, fileSize)
+	for i := range data {
+		data[i] = byte((i*31 + 7) % 251)
+	}
+
+	storeAndQuery := func(label string) []chunkRecord {
+		tmp := t.TempDir()
+		container.ContainersDir = filepath.Join(tmp, "containers")
+		_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+		resetStorage(t)
+
+		dbconn, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("%s: connectDB: %v", label, err)
+		}
+		defer dbconn.Close()
+
+		applySchema(t, dbconn)
+		resetDB(t, dbconn)
+
+		inputDir := filepath.Join(tmp, "input")
+		_ = os.MkdirAll(inputDir, 0o755)
+
+		inPath := filepath.Join(inputDir, label+".bin")
+		if err := os.WriteFile(inPath, data, 0o644); err != nil {
+			t.Fatalf("%s: write file: %v", label, err)
+		}
+
+		if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+			t.Fatalf("%s: store: %v", label, err)
+		}
+
+		sum := sha256.Sum256(data)
+		fileHash := hex.EncodeToString(sum[:])
+		fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+		return queryChunkGraph(t, dbconn, fileID)
+	}
+
+	run1 := storeAndQuery("run1")
+	run2 := storeAndQuery("run2")
+
+	if len(run1) != len(run2) {
+		t.Fatalf("chunk count mismatch: run1=%d run2=%d", len(run1), len(run2))
+	}
+	if len(run1) == 0 {
+		t.Fatalf("expected at least one chunk (file size %d)", fileSize)
+	}
+
+	for i := range run1 {
+		if run1[i].order != run2[i].order {
+			t.Errorf("chunk %d: order mismatch: run1=%d run2=%d", i, run1[i].order, run2[i].order)
+		}
+		if run1[i].hash != run2[i].hash {
+			t.Errorf("chunk %d: hash mismatch: run1=%s run2=%s", i, run1[i].hash, run2[i].hash)
+		}
+		if run1[i].size != run2[i].size {
+			t.Errorf("chunk %d: size mismatch: run1=%d run2=%d", i, run1[i].size, run2[i].size)
+		}
+	}
+}

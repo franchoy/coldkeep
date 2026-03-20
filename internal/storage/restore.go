@@ -59,6 +59,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	rows, err := dbconn.Query(`
 		SELECT
+			fc.chunk_order,
 			c.chunk_offset,
 			c.size,
 			c.chunk_hash,
@@ -100,17 +101,28 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
+	var expectedOrder int64 = 0
 	for rows.Next() {
 
+		var chunkOrder int64
 		var offset int64
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
 		var algoStr string
 
-		if err := rows.Scan(&offset, &expectedSize, &expectedChunkHash, &filename, &algoStr); err != nil {
+		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &algoStr); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
+
+		// Validate monotonically contiguous chunk sequence
+		if chunkOrder != expectedOrder {
+			return fmt.Errorf(
+				"chunk order discontinuity for file %d: expected order %d got %d",
+				fileID, expectedOrder, chunkOrder,
+			)
+		}
+		expectedOrder++
 
 		algo := utils_compression.CompressionType(algoStr)
 
