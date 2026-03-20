@@ -215,6 +215,14 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		}
 	}
 
+	if expectedOrder == 0 {
+		// valid ONLY if expectedFileHash == sha256("")
+		if expectedFileHash != "" {
+			return fmt.Errorf("no chunks found for file %d but expected hash is not empty", fileID)
+		}
+		// else: empty file, no chunks, valid if expected hash is sha256 of empty string
+	}
+
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate chunk rows: %w", err)
 	}
