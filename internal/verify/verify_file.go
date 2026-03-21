@@ -23,7 +23,8 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 	var errorCount int
 	rows, err := dbconn.Query(`SELECT id
 							FROM logical_file lf
-							WHERE NOT EXISTS (
+							WHERE lf.total_size > 0
+							  AND NOT EXISTS (
 								SELECT 1
 								FROM file_chunk fc
 								WHERE fc.logical_file_id = lf.id
@@ -75,10 +76,12 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	//ensure file id exists
 	var id int
 	var status string
+	var totalSize int64
 	err := dbconn.QueryRow(`SELECT id, 
-							status 
+							status,
+							total_size
 							from logical_file 
-							where id = ?`, fileId).Scan(&id, &status)
+							where id = ?`, fileId).Scan(&id, &status, &totalSize)
 	if err != nil {
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
@@ -117,6 +120,10 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	}
 
 	if !hasChunks {
+		if totalSize == 0 {
+			log.Printf("logical file %d is zero-byte with no chunks; accepted", fileId)
+			return nil
+		}
 		return fmt.Errorf("logical file %d has no chunks", fileId)
 	}
 

@@ -10,31 +10,31 @@
 
 > **Status:** Experimental research projec.\
 > **Not production-ready. Do not use for real or sensitive data.**
+> On-disk format and APIs may change before v1.0.
 
-coldkeep is an experimental **local-first content-addressed file storage engine with verifiable integrity**
-written in Go.
+coldkeep is a content-addressed storage engine for cold data.
 
-Files are split into **content-addressed chunks**, packed into
-**container files on disk**, and tracked through **PostgreSQL
-metadata**.
+It splits files into content-defined chunks, deduplicates them using SHA-256,
+and packs them into container files with database-backed metadata.
 
-This repository exists primarily for **learning, experimentation, and
-design exploration** --- not for operational backup or production
-storage.
+coldkeep guarantees deterministic, byte-identical restore of stored data,
+validated by end-to-end hashing and resilient across garbage collection
+and restart/recovery.
 
 ------------------------------------------------------------------------
 
 # What it does (today)
 
--   Store a file (or folder) by splitting it into chunks.
--   Deduplicate chunks using SHA-256.
--   Pack chunks into container files up to a maximum size.
--   Restore a file by reconstructing it from stored chunks.
--   Remove logical files (decrements chunk reference counts).
--   Run garbage collection to remove unreferenced chunks.
--   Recover safely from interrupted operations on startup.
--   Display storage statistics and container health information.
--   Multi-level integrity verification (metadata, container structure, and full data integrity)
+-   Store files or folders by splitting them into content-defined chunks.
+-   Deduplicate chunks using SHA-256 (content-addressed storage).
+-   Pack chunks into container files up to a configurable maximum size.
+-   Restore files by reconstructing them from stored chunks.
+-   Guarantee byte-identical restore outputs (verified by SHA-256).
+-   Remove logical files (decrementing chunk reference counts).
+-   Run garbage collection to remove unreferenced chunks safely.
+-   Recover from interrupted operations on startup.
+-   Provide storage statistics and container health information.
+-   Perform multi-level integrity verification (metadata, container structure, and full data integrity).
 
 ------------------------------------------------------------------------
 
@@ -82,6 +82,25 @@ coldkeep verify file <file_id> --level deep
 Deep verification performs full reads of container files and may be slow
 
 Recommended for periodic integrity audits rather than frequent execution
+
+------------------------------------------------------------------------
+
+# Deterministic restore guarantees (v0.5)
+
+Coldkeep v0.5 guarantees deterministic restore at the logical file level.
+
+Current integration coverage validates:
+
+- deterministic stored logical files under deduplication
+- byte-identical restore outputs verified by SHA-256
+- consistent restore behavior after GC and restart/recovery
+- deterministic results across representative and edge-case datasets
+
+This guarantee applies to logical files and dataset-level workflows.
+
+Coldkeep does not yet define a first-class contract for restoring full
+directory trees with exact original layout. Current tests restore logical
+files individually rather than reconstructing folder structure.
 
 ------------------------------------------------------------------------
 

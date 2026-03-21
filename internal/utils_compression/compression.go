@@ -19,9 +19,14 @@ const (
 	CompressionZstd CompressionType = "zstd"
 )
 
-var DefaultCompression = CompressionNone //CompressionZstd
+// DEPRECATED: container-level compression will be removed in v0.6
+const DefaultCompression = CompressionNone //CompressionZstd
 
 func CompressFile(path string, algo CompressionType) (string, int64, string, error) {
+	// DEPRECATED: container-level compression will be removed in v0.6
+	if algo != CompressionNone {
+		return "", 0, "", fmt.Errorf("cannot compress file with algo %s. container level compression have been disabled on V0.5 ", algo)
+	}
 	// No compression
 	if algo == CompressionNone {
 		info, err := os.Stat(path)

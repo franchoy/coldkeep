@@ -59,15 +59,17 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	rows, err := dbconn.Query(`
 		SELECT
+			fc.chunk_order,
 			c.chunk_offset,
 			c.size,
 			c.chunk_hash,
 			ct.filename,
-			ct.compression_algorithm
+			ct.compression_algorithm,
+			c.status
 		FROM file_chunk fc
 		JOIN chunk c ON fc.chunk_id = c.id
 		JOIN container ct ON c.container_id = ct.id
-		WHERE fc.logical_file_id = $1 AND c.status = 'COMPLETED'
+		WHERE fc.logical_file_id = $1 
 		ORDER BY fc.chunk_order ASC
 	`, fileID)
 
@@ -100,17 +102,33 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
+	var expectedOrder int64 = 0
 	for rows.Next() {
 
+		var chunkOrder int64
 		var offset int64
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
 		var algoStr string
+		var chunkStatus string
 
-		if err := rows.Scan(&offset, &expectedSize, &expectedChunkHash, &filename, &algoStr); err != nil {
+		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &algoStr, &chunkStatus); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
+
+		if chunkStatus != "COMPLETED" {
+			return fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkOrder, fileID, chunkStatus)
+		}
+
+		// Validate monotonically contiguous chunk sequence
+		if chunkOrder != expectedOrder {
+			return fmt.Errorf(
+				"chunk order discontinuity for file %d: expected order %d got %d",
+				fileID, expectedOrder, chunkOrder,
+			)
+		}
+		expectedOrder++
 
 		algo := utils_compression.CompressionType(algoStr)
 
@@ -139,6 +157,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			// Use file as reader; close via f.Close() below
 			r = f
 		} else {
+			//WARNING : compression is going to be removed on V0.6
 			r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
 			if err != nil {
 				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
@@ -201,6 +220,15 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		if _, err := hasher.Write(chunkData); err != nil {
 			return fmt.Errorf("hash restored data: %w", err)
 		}
+	}
+
+	if expectedOrder == 0 {
+		// valid ONLY if expectedFileHash == sha256("")
+		const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		if expectedFileHash != emptyFileSHA256 {
+			return fmt.Errorf("no chunks found for file %d but expected hash is not empty", fileID)
+		}
+		// else: empty file, no chunks, valid
 	}
 
 	if err := rows.Err(); err != nil {
