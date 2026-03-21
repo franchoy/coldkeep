@@ -8,7 +8,6 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 )
 
 func RunGC(dryRun bool) error {
@@ -38,7 +37,7 @@ func RunGC(dryRun bool) error {
 	}()
 
 	rows, err := dbconn.Query(`
-		SELECT id, filename, compression_algorithm
+		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
 	`)
 	if err != nil {
@@ -51,9 +50,8 @@ func RunGC(dryRun bool) error {
 	for rows.Next() {
 		var containerID int64
 		var filename string
-		var algo string
 
-		if err := rows.Scan(&containerID, &filename, &algo); err != nil {
+		if err := rows.Scan(&containerID, &filename); err != nil {
 			return err
 		}
 
@@ -112,9 +110,6 @@ func RunGC(dryRun bool) error {
 
 		// After commit, delete file from disk
 		containerPath := filepath.Join(container.ContainersDir, filename)
-		if algo != "" && algo != string(utils_compression.CompressionNone) {
-			containerPath += "." + algo
-		}
 
 		if err := os.Remove(containerPath); err != nil {
 			log.Println("warning: failed to delete container file:", err)

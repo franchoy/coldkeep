@@ -9,32 +9,35 @@ import (
 )
 
 const (
-	ContainerMagic    = "coldkeep0" // must be exactly 8 bytes
-	ContainerHdrLenV0 = 64          // fixed header size in bytes
+	ContainerMagic  = "ColdKeep" // must be exactly 8 bytes
+	ContainerHdrLen = 64         // fixed header size in bytes
+)
+
+const (
+	ContainerVersionMajor = 0
+	ContainerVersionMinor = 6
 )
 
 // Reserved future flags (not used yet)
 const (
-	FLAG_WHOLE_COMPRESS = 1 << 0
-	FLAG_WHOLE_ENCRYPT  = 1 << 1
-	FLAG_BLOCK_LAYOUT   = 1 << 2
-	FLAG_HAS_BLOCK_TBL  = 1 << 3
+	FLAG_BLOCK_LAYOUT  = 1 << 0 // container uses block-based layout
+	FLAG_HAS_BLOCK_TBL = 1 << 1 // optional block index present
 )
 
 func writeNewContainerHeaderV0(f *os.File, maxSize int64) error {
-	h := make([]byte, ContainerHdrLenV0)
+	h := make([]byte, ContainerHdrLen)
 
 	// 0..7 magic
 	copy(h[0:8], []byte(ContainerMagic))
 
 	// version
-	binary.LittleEndian.PutUint16(h[8:10], 0)  // major
-	binary.LittleEndian.PutUint16(h[10:12], 1) // minor
+	binary.LittleEndian.PutUint16(h[8:10], ContainerVersionMajor)  // major
+	binary.LittleEndian.PutUint16(h[10:12], ContainerVersionMinor) // minor
 
 	// header length
-	binary.LittleEndian.PutUint32(h[12:16], uint32(ContainerHdrLenV0))
+	binary.LittleEndian.PutUint32(h[12:16], uint32(ContainerHdrLen))
 
-	// flags (none for V0)
+	// flags (structure only; no compression/encryption semantics)
 	binary.LittleEndian.PutUint32(h[16:20], 0)
 
 	// created timestampZ UTC

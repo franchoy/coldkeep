@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -188,8 +187,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			ctr.current_size,
 			ctr.sealed,
 			ctr.quarantine,
-			ctr.container_hash,
-			ctr.compression_algorithm
+			ctr.container_hash 
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
@@ -207,7 +205,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		path         string
 		physicalSize int64
 		currentSize  int64
-		algo         utils_compression.CompressionType
 	}
 
 	containerInfoByID := map[int64]containerInfo{}
@@ -222,7 +219,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		var sealed bool
 		var quarantine bool
 		var containerHash string
-		var compressionAlgorithm string
 
 		if err := rows.Scan(
 			&chunkID,
@@ -234,7 +230,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			&sealed,
 			&quarantine,
 			&containerHash,
-			&compressionAlgorithm,
 		); err != nil {
 			return fmt.Errorf("scan file containers and offsets: %w", err)
 		}
@@ -251,11 +246,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 
 		info, ok := containerInfoByID[containerID]
 		if !ok {
-			algo := utils_compression.CompressionType(compressionAlgorithm)
 			containerFilename := filename
-			if algo != utils_compression.CompressionNone {
-				containerFilename = filename + "." + compressionAlgorithm
-			}
 
 			fullPath := filepath.Join(container.ContainersDir, containerFilename)
 			stat, err := os.Stat(fullPath)
@@ -267,11 +258,10 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 				path:         fullPath,
 				physicalSize: stat.Size(),
 				currentSize:  currentSize,
-				algo:         algo,
 			}
 			containerInfoByID[containerID] = info
 
-			if algo == utils_compression.CompressionNone && stat.Size() != currentSize {
+			if stat.Size() != currentSize {
 				return fmt.Errorf("container %d size mismatch: expected %d got %d", containerID, currentSize, stat.Size())
 			}
 		}
@@ -280,7 +270,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		if recordEnd > info.currentSize {
 			return fmt.Errorf("chunk %d exceeds container %d bounds in metadata", chunkID, containerID)
 		}
-		if info.algo == utils_compression.CompressionNone && recordEnd > info.physicalSize {
+		if recordEnd > info.physicalSize {
 			return fmt.Errorf("chunk %d exceeds container %d physical file size", chunkID, containerID)
 		}
 	}
@@ -313,8 +303,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			c.chunk_offset,
 			c.size,
 			c.chunk_hash,
-			ctr.filename,
-			ctr.compression_algorithm
+			ctr.filename
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
@@ -332,7 +321,6 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
-		var compressionAlgorithm string
 
 		if err := rows.Scan(
 			&chunkID,
@@ -340,21 +328,27 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			&expectedSize,
 			&expectedChunkHash,
 			&filename,
-			&compressionAlgorithm,
 		); err != nil {
 			return fmt.Errorf("scan file chunk hashes: %w", err)
 		}
 
 		containerFilename := filename
-		algo := utils_compression.CompressionType(compressionAlgorithm)
-		if algo != utils_compression.CompressionNone {
-			containerFilename = filename + "." + compressionAlgorithm
-		}
 
-		r, err := utils_compression.OpenDecompressionReader(filepath.Join(container.ContainersDir, containerFilename), algo)
+		// Open as plain file (seek)
+		var r io.ReadCloser
+		var f *os.File
+
+		f, err = os.Open(containerFilename)
 		if err != nil {
-			return fmt.Errorf("open container for chunk %d: %w", chunkID, err)
+			return fmt.Errorf("open container %q: %w", containerFilename, err)
 		}
+		// Seek to record start
+		if _, err := f.Seek(chunkOffset, io.SeekStart); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("seek container offset: %w", err)
+		}
+		// Use file as reader; close via f.Close() below
+		r = f
 
 		if _, err := io.CopyN(io.Discard, r, chunkOffset); err != nil {
 			_ = r.Close()

@@ -15,7 +15,6 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -64,7 +63,6 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			c.size,
 			c.chunk_hash,
 			ct.filename,
-			ct.compression_algorithm,
 			c.status
 		FROM file_chunk fc
 		JOIN chunk c ON fc.chunk_id = c.id
@@ -110,10 +108,9 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
-		var algoStr string
 		var chunkStatus string
 
-		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &algoStr, &chunkStatus); err != nil {
+		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &chunkStatus); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
@@ -130,44 +127,25 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		}
 		expectedOrder++
 
-		algo := utils_compression.CompressionType(algoStr)
-
-		// Container filename changes when compressed (CompressFile removes the original and writes filename.<algo>)
 		containerFilename := filename
-		if algo != utils_compression.CompressionNone {
-			containerFilename = filename + "." + algoStr
-		}
 
 		containerPath := filepath.Join(container.ContainersDir, containerFilename)
 
-		// Open as plain file (seek) or as decompressed stream (skip bytes)
+		// Open as plain file (seek)
 		var r io.ReadCloser
 		var f *os.File
 
-		if algo == utils_compression.CompressionNone {
-			f, err = os.Open(containerPath)
-			if err != nil {
-				return fmt.Errorf("open container %q: %w", containerFilename, err)
-			}
-			// Seek to record start
-			if _, err := f.Seek(offset, io.SeekStart); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("seek container offset: %w", err)
-			}
-			// Use file as reader; close via f.Close() below
-			r = f
-		} else {
-			//WARNING : compression is going to be removed on V0.6
-			r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
-			if err != nil {
-				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
-			}
-			// Skip to record offset inside the *uncompressed* stream
-			if _, err := io.CopyN(io.Discard, r, offset); err != nil {
-				_ = r.Close()
-				return fmt.Errorf("skip to chunk offset in decompressed stream: %w", err)
-			}
+		f, err = os.Open(containerPath)
+		if err != nil {
+			return fmt.Errorf("open container %q: %w", containerFilename, err)
 		}
+		// Seek to record start
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("seek container offset: %w", err)
+		}
+		// Use file as reader; close via f.Close() below
+		r = f
 
 		// Read record header
 		headerHash := make([]byte, 32)

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
+	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
 
 func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
@@ -46,7 +46,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 		INSERT INTO container (filename, current_size, max_size, sealed)
 		VALUES ($1, $2, $3, FALSE)
 		RETURNING id
-	`, filename, ContainerHdrLenV0, containerMaxSize).Scan(&id)
+	`, filename, ContainerHdrLen, containerMaxSize).Scan(&id)
 
 	if err != nil {
 		return 0, "", 0, err
@@ -76,7 +76,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 		return 0, "", 0, err
 	}
 
-	currentSize = ContainerHdrLenV0
+	currentSize = ContainerHdrLen
 
 	return id, filename, currentSize, nil
 }
@@ -138,34 +138,32 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 
 	originalPath := filepath.Join(ContainersDir, filename)
 
-	// Compress file
-	compressedPath, compressed_size, sumHex, err := utils_compression.CompressFile(originalPath, utils_compression.DefaultCompression)
+	// Compute file hash
+	sumHex, err := utils_hash.ComputeFileHashHex(originalPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("compute container file hash: %w", err)
 	}
 
 	// Update DB
 	_, err = tx.Exec(`
 		UPDATE container
 		SET sealed = TRUE,
-		    compression_algorithm = $1,
-			compressed_size = $2,
-			container_hash = $3
-		WHERE id = $4
-	`, string(utils_compression.DefaultCompression), compressed_size, sumHex, containerID)
+			container_hash = $1
+		WHERE id = $2
+	`, sumHex, containerID)
 
 	if err != nil {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
-	fmt.Printf("Container %d sealed and compressed with type %s : %s\n", containerID, utils_compression.DefaultCompression, compressedPath)
+	fmt.Printf("Container %d sealed successfully: %s\n", containerID, originalPath)
 	return nil
 }
 
 func CheckContainerHashFile(id int, filename, storedHash string) error {
 	containerPath := filepath.Join(ContainersDir, filename)
 
-	computedHash, err := utils_compression.ComputeFileHashHex(containerPath)
+	computedHash, err := utils_hash.ComputeFileHashHex(containerPath)
 	if err != nil {
 		return fmt.Errorf("compute container file hash: %w", err)
 	}

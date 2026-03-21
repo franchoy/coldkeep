@@ -23,8 +23,6 @@ CREATE TABLE IF NOT EXISTS container (
   quarantine BOOLEAN NOT NULL DEFAULT FALSE,
   current_size BIGINT NOT NULL DEFAULT 0 CHECK (current_size >= 0),
   max_size BIGINT NOT NULL CHECK (max_size > 0),
-  compression_algorithm TEXT NOT NULL DEFAULT 'none',
-  compressed_size BIGINT NOT NULL DEFAULT 0 CHECK (compressed_size >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
