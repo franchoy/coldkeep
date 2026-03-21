@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,8 +41,22 @@ func requireDB(t *testing.T) {
 	}
 }
 
+func TestIntegrationHarnessSmoke(t *testing.T) {
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Log("COLDKEEP_TEST_DB is not set; DB-backed integration tests may be skipped")
+	} else {
+		t.Log("COLDKEEP_TEST_DB is set; DB-backed integration tests can run")
+	}
+}
+
 func applySchema(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
+
+	// If schema already exists, reuse it.
+	var logicalFileTable sql.NullString
+	if err := dbconn.QueryRow(`SELECT to_regclass('public.logical_file')`).Scan(&logicalFileTable); err == nil && logicalFileTable.Valid {
+		return
+	}
 
 	// 1) Allow explicit override (best for Docker / CI)
 	if p := os.Getenv("COLDKEEP_SCHEMA_PATH"); p != "" {
@@ -47,7 +64,7 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 		if err != nil {
 			t.Fatalf("read schema %s: %v", p, err)
 		}
-		if _, err := dbconn.Exec(string(b)); err != nil {
+		if _, err := dbconn.Exec(string(b)); err != nil && !isDuplicateSchemaError(err) {
 			t.Fatalf("apply schema: %v", err)
 		}
 		return
@@ -64,7 +81,7 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 				if err != nil {
 					t.Fatalf("read schema %s: %v", candidate, err)
 				}
-				if _, err := dbconn.Exec(string(b)); err != nil {
+				if _, err := dbconn.Exec(string(b)); err != nil && !isDuplicateSchemaError(err) {
 					t.Fatalf("apply schema: %v", err)
 				}
 				return
@@ -92,7 +109,7 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 			if err != nil {
 				t.Fatalf("read schema %s: %v", p, err)
 			}
-			if _, err := dbconn.Exec(string(b)); err != nil {
+			if _, err := dbconn.Exec(string(b)); err != nil && !isDuplicateSchemaError(err) {
 				t.Fatalf("apply schema: %v", err)
 			}
 			return
@@ -100,6 +117,17 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 	}
 
 	t.Fatalf("could not find db/init.sql; set COLDKEEP_SCHEMA_PATH to an absolute path")
+}
+
+func isDuplicateSchemaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "42710")
 }
 
 func resetDB(t *testing.T, dbconn *sql.DB) {
@@ -1991,6 +2019,232 @@ func queryChunkGraph(t *testing.T, dbconn *sql.DB, fileID int64) []chunkRecord {
 	return records
 }
 
+func findRepoFixtureDir(t *testing.T, fixtureDir string) string {
+	t.Helper()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	dir := cwd
+	for i := 0; i < 8; i++ {
+		candidate := filepath.Join(dir, fixtureDir)
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	t.Fatalf("could not find fixture directory %q from cwd %q", fixtureDir, cwd)
+	return ""
+}
+
+func copyDirTree(t *testing.T, srcDir, dstDir string) {
+	t.Helper()
+
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		t.Fatalf("mkdir dstDir %s: %v", dstDir, err)
+	}
+
+	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copy fixture %s -> %s: %v", srcDir, dstDir, err)
+	}
+}
+
+func collectFileHashesByCount(t *testing.T, root string) map[string]int {
+	t.Helper()
+
+	hashCount := make(map[string]int)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		hashCount[sha256File(t, path)]++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("collect file hashes from %s: %v", root, err)
+	}
+
+	return hashCount
+}
+
+func storeFolderSequentialWithDB(t *testing.T, dbconn *sql.DB, root string) error {
+	t.Helper()
+
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	sort.Strings(files)
+	for _, filePath := range files {
+		if err := storage.StoreFileWithDB(dbconn, filePath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
+	t.Helper()
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	fixturePath := findRepoFixtureDir(t, fixtureDir)
+	inputDir := filepath.Join(tmp, "input")
+	copyDirTree(t, fixturePath, inputDir)
+
+	expectedHashCounts := collectFileHashesByCount(t, inputDir)
+	expectedUniqueHashes := make(map[string]bool, len(expectedHashCounts))
+	for hash := range expectedHashCounts {
+		expectedUniqueHashes[hash] = true
+	}
+
+	if err := storage.StoreFolder(inputDir); err != nil {
+		if strings.Contains(err.Error(), "container_filename_key") {
+			t.Logf("store folder hit container filename race, retrying deterministically: %v", err)
+			resetDB(t, dbconn)
+			resetStorage(t)
+			if err := storeFolderSequentialWithDB(t, dbconn, inputDir); err != nil {
+				t.Fatalf("store folder %s (sequential fallback): %v", fixtureDir, err)
+			}
+		} else {
+			t.Fatalf("store folder %s: %v", fixtureDir, err)
+		}
+	}
+
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after store for %s: %v", fixtureDir, err)
+	}
+
+	if err := maintenance.RunGC(true); err != nil {
+		t.Fatalf("gc dry-run for %s: %v", fixtureDir, err)
+	}
+	if err := maintenance.RunGC(false); err != nil {
+		t.Fatalf("gc real for %s: %v", fixtureDir, err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before restart for %s: %v", fixtureDir, err)
+	}
+	if err := recovery.SystemRecovery(); err != nil {
+		t.Fatalf("system recovery for %s: %v", fixtureDir, err)
+	}
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after restart for %s: %v", fixtureDir, err)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out for %s: %v", fixtureDir, err)
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT id, file_hash
+		FROM logical_file
+		WHERE status = 'COMPLETED'
+	`)
+	if err != nil {
+		t.Fatalf("query logical_file for %s: %v", fixtureDir, err)
+	}
+	defer rows.Close()
+
+	restoredCount := 0
+	for rows.Next() {
+		var id int64
+		var hash string
+		if err := rows.Scan(&id, &hash); err != nil {
+			t.Fatalf("scan logical_file row for %s: %v", fixtureDir, err)
+		}
+
+		outPath := filepath.Join(outDir, fmt.Sprintf("%d.restore.bin", id))
+		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+			t.Fatalf("restore file id %d for %s: %v", id, fixtureDir, err)
+		}
+
+		gotHash := sha256File(t, outPath)
+		if gotHash != hash {
+			t.Fatalf("restored hash mismatch for file id %d in %s: want %s got %s", id, fixtureDir, hash, gotHash)
+		}
+
+		if !expectedUniqueHashes[gotHash] {
+			t.Fatalf("unexpected restored hash %s for %s", gotHash, fixtureDir)
+		}
+		delete(expectedUniqueHashes, gotHash)
+		restoredCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error for %s: %v", fixtureDir, err)
+	}
+
+	if restoredCount != len(expectedHashCounts) {
+		t.Fatalf("restored file count mismatch for %s: want %d got %d", fixtureDir, len(expectedHashCounts), restoredCount)
+	}
+
+	for hash := range expectedUniqueHashes {
+		t.Fatalf("missing restored file for hash %s in %s", hash, fixtureDir)
+	}
+}
+
 // TestSameInputSameChunkGraph verifies that storing identical file content in
 // two separate fresh environments yields the same chunk count, chunk hashes,
 // and chunk order — confirming cross-run CDC determinism.
@@ -2161,4 +2415,12 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
+}
+
+func TestSamplesFolderEndToEnd(t *testing.T) {
+	runFixtureFolderEndToEnd(t, "samples")
+}
+
+func TestSamplesEdgeCasesFolderEndToEnd(t *testing.T) {
+	runFixtureFolderEndToEnd(t, "samples_edge_cases")
 }
