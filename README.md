@@ -137,7 +137,7 @@ recover safely on startup.
 
 # Project structure
 
-coldkeep/
+    coldkeep/
     │
     ├─ cmd/
     │   └─ coldkeep/          # CLI entrypoint
