@@ -396,20 +396,36 @@ docker compose run --rm \
 
 ## Roadmap
 
-Short-term goals:
+Coldkeep follows a risk-reduction approach, where each release tries to removes a
+class of failure until the system becomes fully trustworthy.
 
-- framed container format with random-access compression
-- improved container lifecycle management
-- stronger crash recovery guarantees
-- improved concurrency coordination
-- richer operational statistics
+- **v0.2 — Crash Consistency Foundation**  
+  Eliminate DB ↔ filesystem divergence and ensure safe recovery after crashes.
 
-Longer-term ideas:
+- **v0.3 — Safe Garbage Collection**  
+  Guarantee that GC cannot remove referenced data.
 
-- cloud storage backends
-- container compaction
-- optional encryption
-- background integrity verification
+- **v0.4 — Integrity & Verification Layer**  
+  Enable full-system verification and corruption detection.
+
+- **v0.5 — Deterministic Restore Guarantees**  
+  Ensure byte-identical, reproducible restore across GC and restart.
+
+- **v0.6 — Storage Model Evolution**  
+  Simplify the storage layer, remove legacy compression, and prepare for
+  future features (block abstraction, encryption).
+
+- **v0.7 — Encryption & Data Protection**  
+  Protect data at rest while preserving deterministic restore guarantees.
+
+- **v0.8 — CLI Stabilization**  
+  Freeze command behavior and define a stable user interface.
+
+- **v0.9 — Internal Hardening**  
+  Improve reliability, simplify internals, and finalize implementation details.
+
+- **v1.0 — Storage Engine Stable**  
+  Coldkeep becomes a trustworthy storage engine for real cold backups.
 
 ------------------------------------------------------------------------
 
