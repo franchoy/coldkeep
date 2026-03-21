@@ -10,6 +10,41 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.5.0] - 2026-03-21
+
+Deterministic restore guarantees for stored files and dataset-level workflows.
+
+### Added
+- End-to-end integration tests using real fixture datasets:
+  - `samples`
+  - `samples_edge_cases`
+
+- Full workflow validation for fixture datasets:
+  - store folder
+  - verify system (full)
+  - GC (dry run + real run)
+  - restart / recovery
+  - restore all stored logical files
+  - hash comparison against original inputs
+
+### Scope
+- This release validates deterministic restore at the logical-file level:
+  - stable stored logical files under deduplication
+  - byte-identical restore outputs verified by SHA-256
+  - deterministic behavior across GC and restart
+
+- It does **not** yet define a first-class “restore folder tree layout exactly”
+  contract, as current tests restore logical files individually.
+
+### Notes
+- Whole-container compression remains readable for backward compatibility,
+  but is no longer used for new writes.
+- Compression removal and storage-format cleanup are deferred to a later release.
+- Some scenario tests overlap between generated datasets and fixture datasets;
+  both are currently retained to maximize confidence.
+
+------------------------------------------------------------------------
+
 ## [0.4.0] - 2026-03-19
 
 Integrity Verification Layer
