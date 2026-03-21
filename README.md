@@ -25,16 +25,16 @@ and restart/recovery.
 
 # What it does (today)
 
--   Store files or folders by splitting them into content-defined chunks.
--   Deduplicate chunks using SHA-256 (content-addressed storage).
--   Pack chunks into container files up to a configurable maximum size.
--   Restore files by reconstructing them from stored chunks.
--   Guarantee byte-identical restore outputs (verified by SHA-256).
--   Remove logical files (decrementing chunk reference counts).
--   Run garbage collection to remove unreferenced chunks safely.
--   Recover from interrupted operations on startup.
--   Provide storage statistics and container health information.
--   Perform multi-level integrity verification (metadata, container structure, and full data integrity).
+- Store files or folders by splitting them into content-defined chunks.
+- Deduplicate chunks using SHA-256 (content-addressed storage).
+- Pack chunks into container files up to a configurable maximum size.
+- Restore files by reconstructing them from stored chunks.
+- Guarantee byte-identical restore outputs (verified by SHA-256).
+- Remove logical files (decrementing chunk reference counts).
+- Run garbage collection to remove unreferenced chunks safely.
+- Recover from interrupted operations on startup.
+- Provide storage statistics and container health information.
+- Perform multi-level integrity verification (metadata, container structure, and full data integrity).
 
 ------------------------------------------------------------------------
 
@@ -108,22 +108,22 @@ files individually rather than reconstructing folder structure.
 
 Core tables:
 
--   **logical_file**\
+- **logical_file**\
     User-visible file entry (name, size, file_hash).
 
--   **chunk**\
+- **chunk**\
     Content-addressed chunk (chunk_hash, size, ref_count, container_id,
     offset).
 
--   **file_chunk**\
+- **file_chunk**\
     Ordered mapping between logical files and chunks.
 
--   **container**\
+- **container**\
     Physical container file storing chunk data.
 
 Containers are stored on disk under:
 
-    storage/containers/
+storage/containers/
 
 Lifecycle states:
 
@@ -137,7 +137,7 @@ recover safely on startup.
 
 # Project structure
 
-    coldkeep/
+coldkeep/
     │
     ├─ cmd/
     │   └─ coldkeep/          # CLI entrypoint
@@ -273,7 +273,7 @@ Database configuration is read from environment variables\
 
 Storage is written to:
 
-    ./storage/
+./storage/
 
 During development you can safely delete this directory.
 
@@ -325,14 +325,14 @@ Basic protections exist to avoid duplicate chunk ingestion and to
 coordinate concurrent writers, but the system has not yet been
 stress-tested for heavy parallel workloads.
 
--   Concurrent store/remove/gc operations are not a focus for v0.
--   Concurrent operations may leave unused bytes in containers.
+- Concurrent store/remove/gc operations are not a focus for v0.
+- Concurrent operations may leave unused bytes in containers.
 
 Future versions will improve:
 
--   crash recovery
--   concurrency coordination
--   container lifecycle safety
+- crash recovery
+- concurrency coordination
+- container lifecycle safety
 
 ------------------------------------------------------------------------
 
@@ -349,17 +349,17 @@ data.
 
 ## Build
 
-    go build -o coldkeep ./cmd/coldkeep
+go build -o coldkeep ./cmd/coldkeep
 
 ## Tests
 
 Run all tests:
 
-    go test ./...
+go test ./...
 
 Integration tests live under:
 
-    tests/
+tests/
 
 and require a running PostgreSQL instance.
 
@@ -439,4 +439,4 @@ See `CONTRIBUTING.md`.
 
 # License
 
-Apache-2.0. See `LICENSE`.
+Apache-2.0. See `LICENSE`

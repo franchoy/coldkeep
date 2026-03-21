@@ -15,6 +15,7 @@ production stability.
 Deterministic restore guarantees for stored files and dataset-level workflows.
 
 ### Added
+
 - End-to-end integration tests using real fixture datasets:
   - `samples`
   - `samples_edge_cases`
@@ -28,6 +29,7 @@ Deterministic restore guarantees for stored files and dataset-level workflows.
   - hash comparison against original inputs
 
 ### Scope
+
 - This release validates deterministic restore at the logical-file level:
   - stable stored logical files under deduplication
   - byte-identical restore outputs verified by SHA-256
@@ -37,6 +39,7 @@ Deterministic restore guarantees for stored files and dataset-level workflows.
   contract, as current tests restore logical files individually.
 
 ### Notes
+
 - Whole-container compression remains readable for backward compatibility,
   but is no longer used for new writes.
 - Compression removal and storage-format cleanup are deferred to a later release.
@@ -60,6 +63,7 @@ The system is designed in three verification levels:
 - Deep: full physical verification by reading container data and recomputing chunk hashes
 
 ### Added
+
 - `verify system` command with three verification levels (standard, full, deep)
 - `verify file <id>` command with per-file verification (standard, full, deep)
 - Deep verification logic that reads container data and validates chunk hashes
@@ -68,11 +72,13 @@ The system is designed in three verification levels:
 - Comprehensive integration tests for verification (positive and corruption scenarios)
 
 ### Improved
+
 - Verification coverage across file, chunk, and container layers
 - Error reporting with aggregated verification failures
 - Internal consistency checks for chunk offsets, sizes, and container bounds
 
 ### Notes
+
 - Deep verification performs full disk reads and may be slow on large datasets
 - Whole-container compression is still present but will be removed in a future release in favor of block-level compression
 
@@ -86,6 +92,7 @@ The on-disk format may change before v1.0.
 Safe garbage collection foundation.
 
 ### Added
+
 - Repository verification command (`coldkeep verify`)
 - Verification levels: standard, full, deep
 - Reference count validation
@@ -94,11 +101,13 @@ Safe garbage collection foundation.
 - Deep data verification (hash validation)
 
 ### Improved
+
 - Garbage collection safety via transactional re-checks
 - Advisory lock preventing concurrent GC runs
 - `gc --dry-run` simulation mode
 
 ### Testing
+
 - Integration tests for GC safety
 - Verification corruption detection tests
 
@@ -110,25 +119,25 @@ Crash-consistency foundation for the storage engine
 
 ### Added
 
--   Logical file lifecycle management
--   Chunk lifecycle management
--   Retry handling for interrupted operations
--   Startup recovery system
--   Container quarantine mechanism
--   Extended storage statistics
--   Smoke test improvements
--   Durable container writes with fsync to guarantee on-disk persistence
+- Logical file lifecycle management
+- Chunk lifecycle management
+- Retry handling for interrupted operations
+- Startup recovery system
+- Container quarantine mechanism
+- Extended storage statistics
+- Smoke test improvements
+- Durable container writes with fsync to guarantee on-disk persistence
 
 ### Improved
 
--   Concurrent file ingestion
--   Garbage collection safety
--   Operational observability
+- Concurrent file ingestion
+- Garbage collection safety
+- Operational observability
 
 ### Notes
 
 This version introduces the core reliability model for the storage
-engine. 
+engine.
 
 The on-disk format and APIs may still change in future releases.
 
@@ -153,46 +162,46 @@ Initial public research prototype (POC).
 
 ### Added
 
--   Content-addressed chunking using SHA-256
--   File-level SHA-256 deduplication guard
--   Chunk reference counting
--   Container packing on disk with deterministic append logic
--   PostgreSQL-backed metadata schema
--   CLI commands:
-    -   `store`
-    -   `store-folder`
-    -   `restore`
-    -   `remove`
-    -   `gc`
-    -   `stats`
-    -   `list`
--   Docker Compose setup (Postgres + app)
--   Integration test scaffolding (environment-gated)
--   Basic CI pipeline (build, vet, tests)
--   Open-source project files:
-    -   LICENSE (Apache-2.0)
-    -   SECURITY.md
-    -   CONTRIBUTING.md
-    -   CODE_OF_CONDUCT.md
-    -   README.md
+- Content-addressed chunking using SHA-256
+- File-level SHA-256 deduplication guard
+- Chunk reference counting
+- Container packing on disk with deterministic append logic
+- PostgreSQL-backed metadata schema
+- CLI commands:
+  - `store`
+  - `store-folder`
+  - `restore`
+  - `remove`
+  - `gc`
+  - `stats`
+  - `list`
+- Docker Compose setup (Postgres + app)
+- Integration test scaffolding (environment-gated)
+- Basic CI pipeline (build, vet, tests)
+- Open-source project files:
+  - LICENSE (Apache-2.0)
+  - SECURITY.md
+  - CONTRIBUTING.md
+  - CODE_OF_CONDUCT.md
+  - README.md
 
 ### Design Characteristics
 
--   Per-file transactional metadata
--   `SELECT ... FOR UPDATE SKIP LOCKED` container selection
--   Deterministic chunk ordering for restore correctness
--   Chunk-level and full-file integrity verification on restore
+- Per-file transactional metadata
+- `SELECT ... FOR UPDATE SKIP LOCKED` container selection
+- Deterministic chunk ordering for restore correctness
+- Chunk-level and full-file integrity verification on restore
 
 ### Known Limitations
 
--   Not crash-consistent; filesystem and database state may diverge on
+- Not crash-consistent; filesystem and database state may diverge on
     failure.
--   No encryption at rest or in transit.
--   No authentication or authorization model.
--   Whole-container compression is not suitable for efficient
+- No encryption at rest or in transit.
+- No authentication or authorization model.
+- Whole-container compression is not suitable for efficient
     random-access restores.
--   Concurrency guarantees are minimal and not heavily stress-tested.
--   No background integrity verification process.
+- Concurrency guarantees are minimal and not heavily stress-tested.
+- No background integrity verification process.
 
 ------------------------------------------------------------------------
 
