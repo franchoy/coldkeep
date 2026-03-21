@@ -2153,6 +2153,7 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 	copyDirTree(t, fixturePath, inputDir)
 
 	expectedHashCounts := collectFileHashesByCount(t, inputDir)
+	expectedUniqueCount := len(expectedHashCounts)
 	expectedUniqueHashes := make(map[string]bool, len(expectedHashCounts))
 	for hash := range expectedHashCounts {
 		expectedUniqueHashes[hash] = true
@@ -2236,8 +2237,8 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 		t.Fatalf("rows error for %s: %v", fixtureDir, err)
 	}
 
-	if restoredCount != len(expectedHashCounts) {
-		t.Fatalf("restored file count mismatch for %s: want %d got %d", fixtureDir, len(expectedHashCounts), restoredCount)
+	if restoredCount != expectedUniqueCount {
+		t.Fatalf("restored file count mismatch for %s: want %d got %d", fixtureDir, expectedUniqueCount, restoredCount)
 	}
 
 	for hash := range expectedUniqueHashes {
