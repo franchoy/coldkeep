@@ -2203,6 +2203,7 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 		SELECT id, file_hash
 		FROM logical_file
 		WHERE status = 'COMPLETED'
+		ORDER BY id ASC
 	`)
 	if err != nil {
 		t.Fatalf("query logical_file for %s: %v", fixtureDir, err)
@@ -2381,7 +2382,7 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 		t.Fatalf("mkdir out: %v", err)
 	}
 
-	rows, err := dbconn.Query(`SELECT id, original_name, file_hash FROM logical_file`)
+	rows, err := dbconn.Query(`SELECT id, original_name, file_hash FROM logical_file ORDER BY id ASC`)
 	if err != nil {
 		t.Fatalf("query logical_file: %v", err)
 	}
