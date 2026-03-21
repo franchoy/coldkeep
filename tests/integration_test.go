@@ -27,6 +27,10 @@ import (
 // Run (example):
 //   COLDKEEP_TEST_DB=1 DB_HOST=localhost DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep go test ./app -v
 
+// -----------------------------------------------------------------------------
+// Helpers and test data
+// -----------------------------------------------------------------------------
+
 func requireDB(t *testing.T) {
 	t.Helper()
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
@@ -184,6 +188,7 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
+	defer func() { _ = dbconn.Close() }()
 
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
@@ -193,7 +198,7 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
-		dbconn.Close()
+		_ = dbconn.Close()
 		t.Fatalf("mkdir inputDir: %v", err)
 	}
 
@@ -201,12 +206,170 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 	fileHash := sha256File(t, inPath)
 
 	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
-		dbconn.Close()
+		_ = dbconn.Close()
 		t.Fatalf("store file: %v", err)
 	}
 
 	return dbconn, inPath, fetchFileIDByHash(t, dbconn, fileHash)
 }
+
+func containerPathForRecord(record fileChunkRecord) string {
+	filename := record.containerFilename
+	if record.compressionAlgorithm != "" && record.compressionAlgorithm != string(utils_compression.CompressionNone) {
+		filename += "." + record.compressionAlgorithm
+	}
+	return filepath.Join(container.ContainersDir, filename)
+}
+
+// Helpers (small, local)
+func mustRead(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read %s: %v", p, err)
+	}
+	return b
+}
+
+func itoa(i int) string {
+	// small int to string without fmt to keep output clean
+	if i == 0 {
+		return "0"
+	}
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	var buf [32]byte
+	pos := len(buf)
+	for i > 0 {
+		pos--
+		buf[pos] = byte('0' + (i % 10))
+		i /= 10
+	}
+	if neg {
+		pos--
+		buf[pos] = '-'
+	}
+	return string(buf[pos:])
+}
+
+// chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
+// minChunk = 512 KiB, maxChunk = 2 MiB.
+var chunkBoundaryCases = []struct {
+	name string
+	size int
+}{
+	{"1_byte", 1},
+	{"small_64b", 64},
+	{"min_minus_1", 512*1024 - 1},
+	{"exactly_min", 512 * 1024},
+	{"min_plus_1", 512*1024 + 1},
+	{"max_minus_1", 2*1024*1024 - 1},
+	{"exactly_max", 2 * 1024 * 1024},
+	{"max_plus_1", 2*1024*1024 + 1},
+	{"multi_chunk_uneven_tail", 3*2*1024*1024 + 37},
+}
+
+type chunkRecord struct {
+	order int
+	hash  string
+	size  int64
+}
+
+func createSampleDataset(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	paths := make(map[string]string)
+
+	// 1. Empty file
+	p := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(p, []byte{}, 0o644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+	paths["empty.txt"] = p
+
+	// 2. Small file (1 byte)
+	p = filepath.Join(dir, "small.txt")
+	if err := os.WriteFile(p, []byte{0x42}, 0o644); err != nil {
+		t.Fatalf("write small file: %v", err)
+	}
+	paths["small.txt"] = p
+
+	// 3. Config-like text
+	config := []byte("port: 8080\nhost: localhost\n")
+	p = filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, config, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	paths["config.yaml"] = p
+
+	// 4. Repetitive text (good for chunking patterns)
+	lorem := bytes.Repeat([]byte("lorem ipsum\n"), 1000)
+	p = filepath.Join(dir, "lorem.txt")
+	if err := os.WriteFile(p, lorem, 0o644); err != nil {
+		t.Fatalf("write lorem: %v", err)
+	}
+	paths["lorem.txt"] = p
+
+	// 5. Binary file (deterministic pseudo-random)
+	bin := make([]byte, 128*1024)
+	for i := range bin {
+		bin[i] = byte((i*31 + 7) % 251)
+	}
+	p = filepath.Join(dir, "binary.bin")
+	if err := os.WriteFile(p, bin, 0o644); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+	paths["binary.bin"] = p
+
+	// 6. Duplicate files
+	dup := make([]byte, 64*1024)
+	for i := range dup {
+		dup[i] = byte((i*17 + 3) % 251)
+	}
+
+	p1 := filepath.Join(dir, "dup1.bin")
+	p2 := filepath.Join(dir, "dup2.bin")
+
+	if err := os.WriteFile(p1, dup, 0o644); err != nil {
+		t.Fatalf("write dup1: %v", err)
+	}
+	if err := os.WriteFile(p2, dup, 0o644); err != nil {
+		t.Fatalf("write dup2: %v", err)
+	}
+
+	paths["dup1.bin"] = p1
+	paths["dup2.bin"] = p2
+
+	// 7. Shared-chunk hybrid files
+	prefix := make([]byte, 64*1024)
+	for i := range prefix {
+		prefix[i] = byte((i*13 + 5) % 251)
+	}
+
+	for i := 0; i < 2; i++ {
+		suffix := make([]byte, 32*1024)
+		for j := range suffix {
+			suffix[j] = byte((j*29 + i) % 251)
+		}
+
+		data := append(append([]byte{}, prefix...), suffix...)
+		name := fmt.Sprintf("hybrid_%c.bin", 'a'+i)
+		p := filepath.Join(dir, name)
+
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatalf("write hybrid: %v", err)
+		}
+		paths[name] = p
+	}
+
+	return paths
+}
+
+// -----------------------------------------------------------------------------
+// test cases
+// -----------------------------------------------------------------------------
 
 func fetchFirstChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunkRecord {
 	t.Helper()
@@ -241,14 +404,6 @@ func fetchFirstChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunk
 	}
 
 	return record
-}
-
-func containerPathForRecord(record fileChunkRecord) string {
-	filename := record.containerFilename
-	if record.compressionAlgorithm != "" && record.compressionAlgorithm != string(utils_compression.CompressionNone) {
-		filename += "." + record.compressionAlgorithm
-	}
-	return filepath.Join(container.ContainersDir, filename)
 }
 
 func TestRoundTripStoreRestore(t *testing.T) {
@@ -452,39 +607,6 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-}
-
-// Helpers (small, local)
-func mustRead(t *testing.T, p string) []byte {
-	t.Helper()
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatalf("read %s: %v", p, err)
-	}
-	return b
-}
-
-func itoa(i int) string {
-	// small int to string without fmt to keep output clean
-	if i == 0 {
-		return "0"
-	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	var buf [32]byte
-	pos := len(buf)
-	for i > 0 {
-		pos--
-		buf[pos] = byte('0' + (i % 10))
-		i /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }
 
 func TestGCRemovesUnusedContainers(t *testing.T) {
@@ -1776,23 +1898,6 @@ func TestStoreGCRestore(t *testing.T) {
 	}
 }
 
-// chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
-// minChunk = 512 KiB, maxChunk = 2 MiB.
-var chunkBoundaryCases = []struct {
-	name string
-	size int
-}{
-	{"1_byte", 1},
-	{"small_64b", 64},
-	{"min_minus_1", 512*1024 - 1},
-	{"exactly_min", 512 * 1024},
-	{"min_plus_1", 512*1024 + 1},
-	{"max_minus_1", 2*1024*1024 - 1},
-	{"exactly_max", 2 * 1024 * 1024},
-	{"max_plus_1", 2*1024*1024 + 1},
-	{"multi_chunk_uneven_tail", 3*2*1024*1024 + 37},
-}
-
 // TestChunkBoundaryMatrix stores and restores files at classic CDC boundary sizes,
 // verifying byte-perfect restoration for each case.
 func TestChunkBoundaryMatrix(t *testing.T) {
@@ -1856,12 +1961,6 @@ func TestChunkBoundaryMatrix(t *testing.T) {
 			}
 		})
 	}
-}
-
-type chunkRecord struct {
-	order int
-	hash  string
-	size  int64
 }
 
 func queryChunkGraph(t *testing.T, dbconn *sql.DB, fileID int64) []chunkRecord {
@@ -1959,5 +2058,107 @@ func TestSameInputSameChunkGraph(t *testing.T) {
 		if run1[i].size != run2[i].size {
 			t.Errorf("chunk %d: size mismatch: run1=%d run2=%d", i, run1[i].size, run2[i].size)
 		}
+	}
+}
+
+func TestSampleDatasetEndToEnd(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// -----------------------------
+	// Create dataset
+	// -----------------------------
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	paths := createSampleDataset(t, inputDir)
+
+	// Precompute hashes
+	expectedHashes := make(map[string]string)
+	for name, p := range paths {
+		expectedHashes[name] = sha256File(t, p)
+	}
+
+	// -----------------------------
+	// Store folder
+	// -----------------------------
+	if err := storage.StoreFolder(inputDir); err != nil {
+		t.Fatalf("store folder: %v", err)
+	}
+
+	// -----------------------------
+	// Verify system
+	// -----------------------------
+	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after store: %v", err)
+	}
+
+	// -----------------------------
+	// Run GC (dry + real)
+	// -----------------------------
+	if err := maintenance.RunGC(true); err != nil {
+		t.Fatalf("gc dry-run: %v", err)
+	}
+	if err := maintenance.RunGC(false); err != nil {
+		t.Fatalf("gc real: %v", err)
+	}
+
+	// -----------------------------
+	// Restore all files
+	// -----------------------------
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+
+	rows, err := dbconn.Query(`SELECT id, original_name, file_hash FROM logical_file`)
+	if err != nil {
+		t.Fatalf("query logical_file: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var name, hash string
+
+		if err := rows.Scan(&id, &name, &hash); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		outPath := filepath.Join(outDir, name)
+
+		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+			t.Fatalf("restore %s: %v", name, err)
+		}
+
+		gotHash := sha256File(t, outPath)
+
+		if gotHash != hash {
+			t.Fatalf("hash mismatch for %s: want %s got %s", name, hash, gotHash)
+		}
+
+		// Extra: compare with original file
+		if expectedHashes[name] != gotHash {
+			t.Fatalf("original mismatch for %s", name)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
 	}
 }
