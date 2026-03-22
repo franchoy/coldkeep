@@ -3,7 +3,6 @@ package storage
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -308,7 +307,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		return err
 	}
 
-	activeContainer, err2 := container.GetOrCreateOpeneExistingContainer(tx)
+	activeContainer, err2 := container.GetOrCreateOpeneContainer(tx)
 	if err2 != nil {
 		return err2
 	}
@@ -386,7 +385,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 				return err2
 			}
 			//request a new active container for next chunks
-			activeContainer, err2 = container.GetOrCreateOpeneExistingContainer(tx)
+			activeContainer, err2 = container.GetOrCreateOpeneContainer(tx)
 			if err2 != nil {
 				_ = tx.Rollback()
 				return err2
@@ -510,15 +509,7 @@ func StoreFolder(root string) error {
 // --------------------------------------------------------------------------
 
 func StoreChunk(c container.Container, chunk []byte) (offset int64, newsize int64, err error) {
-	// hash (storage responsibility)
-	sum := sha256.Sum256(chunk)
-
-	// build record (this becomes future "block")
-	record := make([]byte, 32+4+len(chunk))
-
-	copy(record[0:32], sum[:])
-	binary.LittleEndian.PutUint32(record[32:36], uint32(len(chunk)))
-	copy(record[36:], chunk)
+	record := container.BuildChunkRecord(chunk)
 
 	// append to container
 	offset, err = c.Append(record)
