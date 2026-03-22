@@ -25,7 +25,6 @@ type FileContainer struct {
 type Container interface {
 	Append(data []byte) (offset int64, err error)
 	ReadAt(offset int64, size int64) ([]byte, error)
-	Size() (int64, error)
 	Sync() error
 	Close() error
 }
@@ -67,6 +66,10 @@ func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 }
 
 func (c *FileContainer) Append(data []byte) (int64, error) {
+	if c.f == nil {
+		return 0, fmt.Errorf("container is closed")
+	}
+
 	if c.offset+int64(len(data)) > c.maxSize {
 		return 0, fmt.Errorf("container full")
 	}
@@ -87,6 +90,10 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 }
 
 func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
+	if c.f == nil {
+		return nil, fmt.Errorf("container is closed")
+	}
+
 	buf := make([]byte, size)
 
 	n, err := c.f.ReadAt(buf, offset)
@@ -102,22 +109,20 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 }
 
 func (c *FileContainer) Sync() error {
-	return c.f.Sync()
-}
-
-func (c *FileContainer) Size() (int64, error) {
-	info, err := c.f.Stat()
-	if err != nil {
-		return 0, err
+	if c.f == nil {
+		return fmt.Errorf("container is closed")
 	}
-	return info.Size(), nil
+
+	return c.f.Sync()
 }
 
 func (c *FileContainer) Close() error {
 	if c.f == nil {
 		return nil
 	}
-	return c.f.Close()
+	err := c.f.Close()
+	c.f = nil
+	return err
 }
 
 // --------------------------------------------------------------------------
@@ -127,18 +132,17 @@ func (c *FileContainer) Close() error {
 func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	var id int64
 	var filename string
-	var currentSize int64
 	var maxSize int64
 
 	// 1 Try to find an existing open container
 	err := db.QueryRow(`
-		SELECT id, filename, current_size, max_size
+		SELECT id, filename, max_size
 		FROM container
 		WHERE sealed = FALSE and quarantine = FALSE
 		ORDER BY id
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
-	`).Scan(&id, &filename, &currentSize, &maxSize)
+	`).Scan(&id, &filename, &maxSize)
 
 	if err == nil {
 		// Found existing open container
@@ -210,8 +214,6 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	}
 	closeOnError = false
 
-	currentSize = ContainerHdrLen
-
 	container, err := OpenExistingContainer(false, fullPath, containerMaxSize)
 	if err != nil {
 		return ActiveContainer{}, err
@@ -268,7 +270,7 @@ func CheckContainerHashFile(id int, filename, storedHash string) error {
 		return fmt.Errorf("compute container file hash: %w", err)
 	}
 
-	//if stored hash is null or empty, we can skip the check (for backward compatibility with old containers)
+	// If stored hash is missing, fail verification explicitly.
 	if len(storedHash) == 0 || storedHash == "null" || storedHash == "NULL" {
 		return fmt.Errorf("container file hash is missing in db for container %d, calculated hash: %s", id, computedHash)
 	}
