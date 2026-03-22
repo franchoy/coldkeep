@@ -107,6 +107,9 @@ func (c *FileContainer) Size() (int64, error) {
 }
 
 func (c *FileContainer) Close() error {
+	if c.f == nil {
+		return nil
+	}
 	return c.f.Close()
 }
 
@@ -120,7 +123,7 @@ func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 	var currentSize int64
 	var maxSize int64
 
-	// 1️⃣ Try to find an existing open container
+	// 1 Try to find an existing open container
 	err := db.QueryRow(`
 		SELECT id, filename, current_size, max_size
 		FROM container
@@ -151,7 +154,7 @@ func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 		return ActiveContainer{}, err
 	}
 
-	// 2️⃣ No open container found → create new one
+	// 2 No open container found → create new one
 
 	filename = fmt.Sprintf("container_%d.bin", time.Now().UnixNano())
 
@@ -166,7 +169,7 @@ func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 		return ActiveContainer{}, err
 	}
 
-	// 3️⃣ Create physical file
+	// 3 Create physical file
 
 	if err := os.MkdirAll(ContainersDir, 0755); err != nil {
 		return ActiveContainer{}, err
@@ -179,7 +182,7 @@ func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 		return ActiveContainer{}, err
 	}
 
-	// 4️⃣ Write V0 header
+	// 4 Write V0 header
 	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
 		return ActiveContainer{}, err
 	}
