@@ -6,20 +6,21 @@
 ![Status](https://img.shields.io/badge/status-research%20experimental-orange)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-
-
-> **Status:** Experimental research projec.\
-> **Not production-ready. Do not use for real or sensitive data.**
+> **Status:** Experimental research project.\
+> **Not production-ready. Do not use for real or sensitive data.**  
 > On-disk format and APIs may change before v1.0.
 
 coldkeep is a content-addressed storage engine for cold data.
 
 It splits files into content-defined chunks, deduplicates them using SHA-256,
-and packs them into container files with database-backed metadata.
+and stores them in append-only container files with database-backed metadata.
 
 coldkeep guarantees deterministic, byte-identical restore of stored data,
 validated by end-to-end hashing and resilient across garbage collection
 and restart/recovery.
+
+The system prioritizes correctness, determinism, and recoverability
+over performance or feature completeness.
 
 ------------------------------------------------------------------------
 
@@ -30,6 +31,7 @@ and restart/recovery.
 - Pack chunks into container files up to a configurable maximum size.
 - Restore files by reconstructing them from stored chunks.
 - Guarantee byte-identical restore outputs (verified by SHA-256).
+- Use an append-only container model for deterministic and safe writes.
 - Remove logical files (decrementing chunk reference counts).
 - Run garbage collection to remove unreferenced chunks safely.
 - Recover from interrupted operations on startup.
@@ -69,7 +71,7 @@ coldkeep verify system --level full
 coldkeep verify system --level deep
 ```
 
-Verify an specific file
+Verify a specific file:
 
 ```bash
 coldkeep verify file <file_id> --level standard
@@ -79,9 +81,8 @@ coldkeep verify file <file_id> --level deep
 
 ### Notes
 
-Deep verification performs full reads of container files and may be slow
-
-Recommended for periodic integrity audits rather than frequent execution
+Deep verification performs full reads of container files and may be slow.  
+Recommended for periodic integrity audits rather than frequent execution.
 
 ------------------------------------------------------------------------
 
@@ -108,22 +109,23 @@ files individually rather than reconstructing folder structure.
 
 Core tables:
 
-- **logical_file**\
-    User-visible file entry (name, size, file_hash).
+- **logical_file**  
+  User-visible file entry (name, size, file_hash).
 
-- **chunk**\
-    Content-addressed chunk (chunk_hash, size, ref_count, container_id,
-    offset).
+- **chunk**  
+  Content-addressed chunk (chunk_hash, size, ref_count, container_id, offset).
 
-- **file_chunk**\
-    Ordered mapping between logical files and chunks.
+- **file_chunk**  
+  Ordered mapping between logical files and chunks.
 
-- **container**\
-    Physical container file storing chunk data.
+- **container**  
+  Physical container file storing chunk data.
 
 Containers are stored on disk under:
 
 storage/containers/
+
+Containers follow an append-only write model.
 
 Lifecycle states:
 
@@ -137,23 +139,22 @@ recover safely on startup.
 
 # Project structure
 
-coldkeep/
+    coldkeep/
     │
     ├─ cmd/
     │   └─ coldkeep/          # CLI entrypoint
     │
     ├─ internal/
-    │   ├─ chunk/               # chunking and compression logic
-    │   ├─ container/           # container format + container management
-    │   ├─ db/                  # database connection helpers
-    │   ├─ listing/             # file listing operations
-    │   ├─ maintenance/         # gc, stats, and verify_command
-    │   ├─ recovery             # system recovery logic
-    │   ├─ storage/             # store / restore / remove pipeline
-    │   ├─ utils_compresion/    # small compresion helper utilities
-    │   ├─ utils_env/           # small env helper utilities
-    │   ├─ utils_print/         # small print helper utilities
-    │   └─ verify/              # verify logc for system or file
+    │   ├─ chunk/             # chunking logic
+    │   ├─ container/         # container format + management
+    │   ├─ db/                # database helpers
+    │   ├─ listing/           # file listing operations
+    │   ├─ maintenance/       # gc, stats, verify_command
+    │   ├─ recovery/          # system recovery logic
+    │   ├─ storage/           # store / restore / remove pipeline
+    │   ├─ utils_env/         # env helpers
+    │   ├─ utils_print/       # print helpers
+    │   └─ verify/            # verification logic
     │
     ├─ tests/                 # integration tests
     ├─ scripts/               # smoke / development scripts
@@ -163,9 +164,6 @@ coldkeep/
     ├─ go.mod
     └─ README.md
 
-`internal/` packages implement the storage engine.\
-`cmd/` contains the CLI entrypoint.
-
 ------------------------------------------------------------------------
 
 # Quickstart
@@ -174,7 +172,7 @@ A small `samples/` folder is included for testing.
 
 ------------------------------------------------------------------------
 
-# 🐳 With Docker
+# 🐳 Local development (With Docker)
 
 Start services:
 
@@ -279,8 +277,8 @@ During development you can safely delete this directory.
 
 Additional environment variables used in development:
 
-- `COLDKEEP_STORAGE_DIR`
-- `COLDKEEP_SAMPLES_DIR`
+- COLDKEEP_STORAGE_DIR
+- COLDKEEP_SAMPLES_DIR
 
 ------------------------------------------------------------------------
 
@@ -288,10 +286,10 @@ Additional environment variables used in development:
 
 ## Crash recovery
 
-coldkeep now includes a basic crash recovery model.
+coldkeep includes a crash recovery model based on lifecycle states.
 
-Operations use lifecycle states (`PROCESSING`, `COMPLETED`, `ABORTED`)
-to detect interrupted operations.
+Operations use explicit states (`PROCESSING`, `COMPLETED`, `ABORTED`)
+to detect and handle interrupted operations safely.
 
 On startup the system:
 
@@ -299,40 +297,31 @@ On startup the system:
 - prevents incomplete chunks from being reused
 - allows safe retries of interrupted operations
 
+This model ensures that partially written data does not corrupt
+the logical state of the system.
+
+In v0.6, the append-only container model further simplifies recovery
+by eliminating in-place mutations of container data.
+
 However, the system is still experimental and full transactional
 guarantees across filesystem and database layers are not yet complete.
 
 Use only with **disposable test data**.
 
-------------------------------------------------------------------------
 
 ## Container compression
 
-Container-level compression currently compresses the whole container.
+Whole-container compression has been removed in v0.6.
 
-This makes random access difficult because compressed streams are not
-seekable.
-
-Default for this prototype: **no compression**.
-
-------------------------------------------------------------------------
+Future versions may introduce block-level compression.
 
 ## Concurrency & integrity
 
-Concurrency support is still evolving.
+Concurrency support has been significantly improved in v0.6,
+including locking and retry mechanisms.
 
-Basic protections exist to avoid duplicate chunk ingestion and to
-coordinate concurrent writers, but the system has not yet been
-stress-tested for heavy parallel workloads.
-
-- Concurrent store/remove/gc operations are not a focus for v0.
-- Concurrent operations may leave unused bytes in containers.
-
-Future versions will improve:
-
-- crash recovery
-- concurrency coordination
-- container lifecycle safety
+However, it is still evolving and not yet optimized for
+extreme parallel workloads.
 
 ------------------------------------------------------------------------
 
@@ -340,8 +329,9 @@ Future versions will improve:
 
 See `SECURITY.md`.
 
-This project is a prototype and should not be used to protect sensitive
-data.
+This is an experimental research project 
+
+Do not use for real or sensitive data
 
 ------------------------------------------------------------------------
 
@@ -396,7 +386,7 @@ docker compose run --rm \
 
 ## Roadmap
 
-Coldkeep follows a risk-reduction approach, where each release tries to removes a
+Coldkeep follows a risk-reduction approach, where each release removes a
 class of failure until the system becomes fully trustworthy.
 
 - **v0.2 — Crash Consistency Foundation**  
@@ -412,14 +402,17 @@ class of failure until the system becomes fully trustworthy.
   Ensure byte-identical, reproducible restore across GC and restart.
 
 - **v0.6 — Storage Model Evolution**  
-  Simplify the storage layer, remove legacy compression, and prepare for
-  future features (block abstraction, encryption).
+  Introduce an append-only container model, remove legacy compression,
+  and improve concurrency coordination as a foundation for future
+  block abstraction and encryption.
 
-- **v0.7 — Encryption & Data Protection**  
-  Protect data at rest while preserving deterministic restore guarantees.
+- **v0.7 — Block Abstraction & Encryption Foundations**  
+  Introduce block-level structure to enable partial reads, compression,
+  and encryption in a controlled and extensible way.
 
-- **v0.8 — CLI Stabilization**  
-  Freeze command behavior and define a stable user interface.
+- **v0.8 — Simulation & CLI Stabilization**  
+  Add simulation capabilities for storage planning and define a stable
+  command-line interface.
 
 - **v0.9 — Internal Hardening**  
   Improve reliability, simplify internals, and finalize implementation details.

@@ -1,20 +1,15 @@
 package verify
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
-	"os"
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -99,7 +94,7 @@ func VerifySystemFull(dbconn *sql.DB) error {
 	}
 
 	//check that all sealed containers have a valid hash that matches the file content
-	if err = checkContainerHash(dbconn); err != nil {
+	if err = checkSealedContainersHash(dbconn); err != nil {
 		return err
 	}
 
@@ -162,7 +157,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`SELECT id, filename, compression_algorithm  FROM container WHERE sealed=true`)
+	containers, err := dbconn.Query(`SELECT id, filename, current_size, max_size FROM container WHERE sealed=true`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query sealed containers: %v", err)
@@ -176,30 +171,19 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		processedContainers++
 		var containerID int
 		var filename string
-		var compressionAlgo string
-		if err := containers.Scan(&containerID, &filename, &compressionAlgo); err != nil {
+		var currentSize int64
+		var maxSize int64
+		if err := containers.Scan(&containerID, &filename, &currentSize, &maxSize); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container info: %w", err))
 			continue
 		}
 		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
 
-		//construct full path with compression extension if needed
+		//construct full path
 		fullPath := filepath.Join(container.ContainersDir, filename)
-		algo := utils_compression.CompressionType(compressionAlgo)
-		if algo != utils_compression.CompressionNone {
-			fullPath = fullPath + "." + compressionAlgo
-		}
 
-		//get file size for validation
-		info, err := os.Stat(fullPath)
-		if err != nil {
-			errorCount++
-			log.Printf("Failed to stat container file %s: %v", fullPath, err)
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to stat container file %s: %w", fullPath, err))
-			continue
-		}
-		fileSize := info.Size()
+		fileSize := currentSize
 
 		//fetch chunks ordered by offset
 		chunks, err := dbconn.Query(`SELECT chunk_offset, size, chunk_hash
@@ -211,6 +195,15 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			log.Printf("Failed to query chunks for container %d: %v", containerID, err)
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to query chunks for container %d: %w", containerID, err))
+			continue
+		}
+
+		filecontainer, err := container.OpenExistingContainer(true, fullPath, maxSize)
+		if err != nil {
+			log.Printf("Failed to open container %s: %v", fullPath, err)
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to open container %s: %w", fullPath, err))
+			_ = chunks.Close()
 			continue
 		}
 
@@ -242,74 +235,18 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 				continue
 			}
 
-			if chunkOffset+chunkSize > fileSize {
+			if chunkOffset+container.ChunkRecordHeaderSize+chunkSize > fileSize {
 				log.Printf("Chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize)
 				errorCount++
 				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize))
 				continue
 			}
 
-			algo := utils_compression.CompressionType(compressionAlgo)
-
-			containerPath := filepath.Join(container.ContainersDir, filename)
-
-			// Open as plain file (seek) or as decompressed stream (skip bytes)
-			var r io.ReadCloser
-			var f *os.File
-
-			if algo == utils_compression.CompressionNone {
-				f, err = os.Open(containerPath)
-				if err != nil {
-					return fmt.Errorf("open container %q: %w", filename, err)
-				}
-				// Seek to record start
-				if _, err := f.Seek(chunkOffset, io.SeekStart); err != nil {
-					_ = f.Close()
-					return fmt.Errorf("seek container %q to offset %d: %w", filename, chunkOffset, err)
-				}
-				// Use file as reader; close via f.Close() below
-				r = f
-			} else {
-				r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
-				if err != nil {
-					return fmt.Errorf("open compressed container %q: %w", filename, err)
-				}
-				// Skip to record offset inside the *uncompressed* stream
-				if _, err := io.CopyN(io.Discard, r, chunkOffset); err != nil {
-					_ = r.Close()
-					return fmt.Errorf("skip to chunk offset in decompressed stream for container %q: %w", filename, err)
-				}
-			}
-
-			// Read record header
-			headerHash := make([]byte, 32)
-			if _, err := io.ReadFull(r, headerHash); err != nil {
-				_ = r.Close()
-				return fmt.Errorf("read chunk header hash for container %q: %w", filename, err)
-			}
-
-			sizeBuf := make([]byte, 4)
-			if _, err := io.ReadFull(r, sizeBuf); err != nil {
-				_ = r.Close()
-				return fmt.Errorf("read chunk header size for container %q: %w", filename, err)
-			}
-			recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
-
-			if recordSize != chunkSize {
-				_ = r.Close()
-				return fmt.Errorf("chunk size mismatch at offset %d (db=%d record=%d) for container %q", chunkOffset, chunkSize, recordSize, filename)
-			}
-
-			// Read chunk data
-			chunkData := make([]byte, recordSize)
-			if _, err := io.ReadFull(r, chunkData); err != nil {
-				_ = r.Close()
+			chunkData, err := container.ReadChunkDataAt(filecontainer, chunkOffset, chunkSize)
+			if err != nil {
+				_ = filecontainer.Close()
+				_ = chunks.Close()
 				return fmt.Errorf("read chunk data for container %q: %w", filename, err)
-			}
-
-			// Close container reader
-			if err := r.Close(); err != nil {
-				return fmt.Errorf("close container reader for container %q: %w", filename, err)
 			}
 
 			// Validate hashes (DB hash and on-disk record hash)
@@ -317,12 +254,16 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			sumHex := hex.EncodeToString(sum[:])
 
 			if sumHex != chunkHash {
+				_ = filecontainer.Close()
+				_ = chunks.Close()
 				return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s) for container %q", chunkOffset, chunkHash, sumHex, filename)
 			}
-			if !bytes.Equal(sum[:], headerHash) {
-				return fmt.Errorf("chunk record header hash mismatch at offset %d for container %q", chunkOffset, filename)
-			}
 
+		}
+
+		if err := filecontainer.Close(); err != nil {
+			_ = chunks.Close()
+			return fmt.Errorf("close container %q: %w", filename, err)
 		}
 
 		if !hasChunks {

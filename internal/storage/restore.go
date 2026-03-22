@@ -1,13 +1,10 @@
 package storage
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +12,6 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -64,8 +60,8 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			c.size,
 			c.chunk_hash,
 			ct.filename,
-			ct.compression_algorithm,
-			c.status
+			c.status,
+			ct.max_size
 		FROM file_chunk fc
 		JOIN chunk c ON fc.chunk_id = c.id
 		JOIN container ct ON c.container_id = ct.id
@@ -99,6 +95,8 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 
 	hasher := sha256.New()
 
+	var filecontainer *container.FileContainer
+	var containerfilename string
 	// ------------------------------------------------------------
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
@@ -110,10 +108,10 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
-		var algoStr string
 		var chunkStatus string
+		var maxSize int64
 
-		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &algoStr, &chunkStatus); err != nil {
+		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &chunkStatus, &maxSize); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
@@ -130,74 +128,24 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		}
 		expectedOrder++
 
-		algo := utils_compression.CompressionType(algoStr)
+		if containerfilename != filename {
+			if filecontainer != nil {
+				if err := filecontainer.Close(); err != nil {
+					return fmt.Errorf("close container %q: %w", containerfilename, err)
+				}
+			}
 
-		// Container filename changes when compressed (CompressFile removes the original and writes filename.<algo>)
-		containerFilename := filename
-		if algo != utils_compression.CompressionNone {
-			containerFilename = filename + "." + algoStr
-		}
-
-		containerPath := filepath.Join(container.ContainersDir, containerFilename)
-
-		// Open as plain file (seek) or as decompressed stream (skip bytes)
-		var r io.ReadCloser
-		var f *os.File
-
-		if algo == utils_compression.CompressionNone {
-			f, err = os.Open(containerPath)
+			containerPath := filepath.Join(container.ContainersDir, filename)
+			filecontainer, err = container.OpenExistingContainer(true, containerPath, maxSize)
 			if err != nil {
-				return fmt.Errorf("open container %q: %w", containerFilename, err)
+				return fmt.Errorf("open container %q: %w", filename, err)
 			}
-			// Seek to record start
-			if _, err := f.Seek(offset, io.SeekStart); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("seek container offset: %w", err)
-			}
-			// Use file as reader; close via f.Close() below
-			r = f
-		} else {
-			//WARNING : compression is going to be removed on V0.6
-			r, err = utils_compression.OpenDecompressionReader(containerPath, algo)
-			if err != nil {
-				return fmt.Errorf("open compressed container %q: %w", containerFilename, err)
-			}
-			// Skip to record offset inside the *uncompressed* stream
-			if _, err := io.CopyN(io.Discard, r, offset); err != nil {
-				_ = r.Close()
-				return fmt.Errorf("skip to chunk offset in decompressed stream: %w", err)
-			}
+			containerfilename = filename
 		}
 
-		// Read record header
-		headerHash := make([]byte, 32)
-		if _, err := io.ReadFull(r, headerHash); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("read chunk header hash: %w", err)
-		}
-
-		sizeBuf := make([]byte, 4)
-		if _, err := io.ReadFull(r, sizeBuf); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("read chunk header size: %w", err)
-		}
-		recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
-
-		if recordSize != expectedSize {
-			_ = r.Close()
-			return fmt.Errorf("chunk size mismatch at offset %d (db=%d record=%d)", offset, expectedSize, recordSize)
-		}
-
-		// Read chunk data
-		chunkData := make([]byte, recordSize)
-		if _, err := io.ReadFull(r, chunkData); err != nil {
-			_ = r.Close()
+		chunkData, err := container.ReadChunkDataAt(filecontainer, offset, expectedSize)
+		if err != nil {
 			return fmt.Errorf("read chunk data: %w", err)
-		}
-
-		// Close container reader
-		if err := r.Close(); err != nil {
-			return fmt.Errorf("close container reader: %w", err)
 		}
 
 		// Validate hashes (DB hash and on-disk record hash)
@@ -206,9 +154,6 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 
 		if sumHex != expectedChunkHash {
 			return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s)", offset, expectedChunkHash, sumHex)
-		}
-		if !bytes.Equal(sum[:], headerHash) {
-			return fmt.Errorf("chunk record header hash mismatch at offset %d", offset)
 		}
 
 		// Write to output
@@ -222,6 +167,16 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		}
 	}
 
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate chunk rows: %w", err)
+	}
+
+	if filecontainer != nil {
+		if err := filecontainer.Close(); err != nil {
+			return fmt.Errorf("close container %q: %w", containerfilename, err)
+		}
+	}
+
 	if expectedOrder == 0 {
 		// valid ONLY if expectedFileHash == sha256("")
 		const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -229,10 +184,6 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			return fmt.Errorf("no chunks found for file %d but expected hash is not empty", fileID)
 		}
 		// else: empty file, no chunks, valid
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate chunk rows: %w", err)
 	}
 
 	// ------------------------------------------------------------

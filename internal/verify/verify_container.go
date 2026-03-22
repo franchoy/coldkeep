@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -18,7 +17,7 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 	log.Printf("Checking container file existence and size consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, compression_algorithm, current_size 
+	rows, err := dbconn.Query(`select id, filename, current_size 
 				from container 
 				where quarantine = false and sealed = true`)
 	if err != nil {
@@ -31,15 +30,14 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 	for rows.Next() {
 		var id int
 		var filename string
-		var compressionalgo string
 		var currentSize int64
-		if err := rows.Scan(&id, &filename, &compressionalgo, &currentSize); err != nil {
+		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container file: %w", err))
 			continue
 		}
 		// Check if the file exists on disk and has the correct size
-		if err := checkContainerFile(id, filename, compressionalgo, currentSize); err != nil {
+		if err := checkContainerFile(id, filename, currentSize); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("container file check failed for container %d: %w", id, err))
 		}
@@ -66,11 +64,8 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkContainerFile(id int, filename string, compressionalgo string, currentSize int64) error {
+func checkContainerFile(id int, filename string, currentSize int64) error {
 	// Check if the file exists on disk and has the correct size
-	if compressionalgo != "" && compressionalgo != string(utils_compression.CompressionNone) {
-		filename = filename + "." + compressionalgo
-	}
 
 	fullPath := filepath.Join(container.ContainersDir, filename)
 
@@ -79,14 +74,14 @@ func checkContainerFile(id int, filename string, compressionalgo string, current
 		return err
 	}
 
-	// check if file exists
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("file does not exist or is not a regular file: %s", fullPath)
-	}
+	actualSize := info.Size()
 
 	// check if file size matches the DB record
-	if info.Size() != currentSize {
-		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, info.Size())
+	// Assumes verification runs against a consistent recovered state.
+	// During in-flight writes or immediately after a crash (before recovery),
+	// filesystem and DB metadata can temporarily diverge.
+	if actualSize != currentSize {
+		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, actualSize)
 	}
 
 	return nil
@@ -141,12 +136,12 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkContainerHash(dbconn *sql.DB) error {
+func checkSealedContainersHash(dbconn *sql.DB) error {
 	// Check that all sealed containers have a valid hash that matches the file content
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, compression_algorithm, container_hash
+	rows, err := dbconn.Query(`select id, filename, container_hash
 				from container
 				where quarantine = false and sealed = true`)
 	if err != nil {
@@ -167,9 +162,8 @@ func checkContainerHash(dbconn *sql.DB) error {
 		log.Printf("Checking container %d / %d", containercount, totalRows)
 		var id int
 		var filename string
-		var compressionalgo string
 		var storedHash string
-		if err := rows.Scan(&id, &filename, &compressionalgo, &storedHash); err != nil {
+		if err := rows.Scan(&id, &filename, &storedHash); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container hash: %w", err))
 			continue
@@ -188,14 +182,14 @@ func checkContainerHash(dbconn *sql.DB) error {
 
 	if len(errorList) > 0 {
 		log.Println(" ERROR ")
-		log.Printf("Found %d errors in checkContainerHash checks:", errorCount)
+		log.Printf("Found %d errors in checkSealedContainersHash checks:", errorCount)
 		if errorCount > utils_print.MaxErrorsToPrint {
 			log.Printf("showing only first %d:", len(errorList))
 		}
 		for _, err := range errorList {
 			log.Printf(" - %v", err)
 		}
-		return fmt.Errorf("found %d errors in checkContainerHash checks", errorCount)
+		return fmt.Errorf("found %d errors in checkSealedContainersHash checks", errorCount)
 	}
 	log.Println(" SUCCESS ")
 

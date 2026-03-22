@@ -30,12 +30,9 @@ func RunStats() error {
 	var quarantinedContainers int64
 	var totalContainers int64
 	var healthyContainerSize sql.NullInt64
-	var healthyCompressedSize sql.NullInt64
 	var quarantinedContainerSize sql.NullInt64
-	var quarantinedCompressedSize sql.NullInt64
 
 	var totalContainerSize sql.NullInt64
-	var totalCompressedSize sql.NullInt64
 	var liveBytes sql.NullInt64
 	var deadBytes sql.NullInt64
 
@@ -78,11 +75,10 @@ func RunStats() error {
 	// healthy Container stats
 	err = dbconn.QueryRow(`
 		SELECT COUNT(*),
-		       COALESCE(SUM(current_size),0),
-		       COALESCE(SUM(compressed_size),0)
+		       COALESCE(SUM(current_size),0)
 		FROM container
 		WHERE quarantine = FALSE
-	`).Scan(&healthyContainers, &healthyContainerSize, &healthyCompressedSize)
+	`).Scan(&healthyContainers, &healthyContainerSize)
 	if err != nil {
 		return fmt.Errorf("Failed to query healthy containers: %w", err)
 	}
@@ -90,11 +86,10 @@ func RunStats() error {
 	// quarantined Container stats
 	err = dbconn.QueryRow(`
 		SELECT COUNT(*),
-		       COALESCE(SUM(current_size),0),
-		       COALESCE(SUM(compressed_size),0)
+		       COALESCE(SUM(current_size),0)
 		FROM container
 		WHERE quarantine = TRUE
-	`).Scan(&quarantinedContainers, &quarantinedContainerSize, &quarantinedCompressedSize)
+	`).Scan(&quarantinedContainers, &quarantinedContainerSize)
 	if err != nil {
 		return fmt.Errorf("Failed to query quarantined containers: %w", err)
 	}
@@ -104,10 +99,6 @@ func RunStats() error {
 	totalContainerSize = sql.NullInt64{
 		Int64: healthyContainerSize.Int64 + quarantinedContainerSize.Int64,
 		Valid: healthyContainerSize.Valid || quarantinedContainerSize.Valid,
-	}
-	totalCompressedSize = sql.NullInt64{
-		Int64: healthyCompressedSize.Int64 + quarantinedCompressedSize.Int64,
-		Valid: healthyCompressedSize.Valid || quarantinedCompressedSize.Valid,
 	}
 
 	// Chunk live/dead stats
@@ -148,13 +139,10 @@ func RunStats() error {
 	fmt.Printf("  Aborted files:                 %d (%.2f MB)\n", abortedFiles, bytesToMB(abortedLogicalSize.Int64))
 	fmt.Printf("Healthy containers:              %d\n", healthyContainers)
 	fmt.Printf("Healthy container bytes:         %.2f MB\n", bytesToMB(healthyContainerSize.Int64))
-	fmt.Printf("Healthy compressed bytes:        %.2f MB\n", bytesToMB(healthyCompressedSize.Int64))
 	fmt.Printf("Quarantined containers:          %d\n", quarantinedContainers)
 	fmt.Printf("Quarantined container bytes:     %.2f MB\n", bytesToMB(quarantinedContainerSize.Int64))
-	fmt.Printf("Quarantined compressed bytes:    %.2f MB\n", bytesToMB(quarantinedCompressedSize.Int64))
 	fmt.Printf("Total containers:                %d\n", totalContainers)
 	fmt.Printf("Total container bytes:           %.2f MB\n", bytesToMB(totalContainerSize.Int64))
-	fmt.Printf("Total compressed bytes:          %.2f MB\n", bytesToMB(totalCompressedSize.Int64))
 
 	fmt.Printf("Live chunk bytes:                %.2f MB\n", bytesToMB(liveBytes.Int64))
 	fmt.Printf("Dead chunk bytes:                %.2f MB\n", bytesToMB(deadBytes.Int64))
@@ -167,11 +155,6 @@ func RunStats() error {
 	if healthyContainerSize.Int64 > 0 {
 		deadRatio := float64(deadBytes.Int64) / float64(healthyContainerSize.Int64)
 		fmt.Printf("Fragmentation ratio:             %.2f%%\n", deadRatio*100)
-	}
-
-	if totalLogicalSize.Int64 > 0 && totalCompressedSize.Int64 > 0 {
-		compressionRatio := float64(totalLogicalSize.Int64) / float64(totalCompressedSize.Int64)
-		fmt.Printf("Compression ratio:               %.2f\n", compressionRatio)
 	}
 
 	fmt.Printf("File retry stats:                total=%d, avg=%.2f, max=%d\n", totalFileRetries.Int64, avgFileRetries.Float64, maxFileRetries.Int64)

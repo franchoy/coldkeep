@@ -3,16 +3,13 @@ package verify
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
-	"github.com/franchoy/coldkeep/internal/utils_compression"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -81,7 +78,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 							status,
 							total_size
 							from logical_file 
-							where id = ?`, fileId).Scan(&id, &status, &totalSize)
+							where id = $1`, fileId).Scan(&id, &status, &totalSize)
 	if err != nil {
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
@@ -91,7 +88,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	}
 	var hasChunks bool = false
 	//ensure file_chunks exists for the file
-	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = ? order by chunk_order asc`, fileId)
+	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = $1 order by chunk_order asc`, fileId)
 	if err != nil {
 		return fmt.Errorf("failed to query file chunks: %w", err)
 	}
@@ -136,7 +133,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 									c.status
 								FROM chunk c
 								JOIN file_chunk fc ON fc.chunk_id = c.id
-								WHERE fc.logical_file_id = ?
+								WHERE fc.logical_file_id = $1
 								ORDER BY fc.chunk_order ASC`, fileId)
 	if err != nil {
 		return fmt.Errorf("failed to query chunks: %w", err)
@@ -188,12 +185,11 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			ctr.current_size,
 			ctr.sealed,
 			ctr.quarantine,
-			ctr.container_hash,
-			ctr.compression_algorithm
+			ctr.container_hash 
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
-		WHERE fc.logical_file_id = ?
+		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order
 	`, fileID)
 	if err != nil {
@@ -201,13 +197,12 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 	}
 	defer func() { _ = rows.Close() }()
 
-	const chunkRecordHeaderSize = int64(32 + 4)
+	const chunkRecordHeaderSize = container.ChunkRecordHeaderSize
 
 	type containerInfo struct {
 		path         string
 		physicalSize int64
 		currentSize  int64
-		algo         utils_compression.CompressionType
 	}
 
 	containerInfoByID := map[int64]containerInfo{}
@@ -222,7 +217,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		var sealed bool
 		var quarantine bool
 		var containerHash string
-		var compressionAlgorithm string
 
 		if err := rows.Scan(
 			&chunkID,
@@ -234,7 +228,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			&sealed,
 			&quarantine,
 			&containerHash,
-			&compressionAlgorithm,
 		); err != nil {
 			return fmt.Errorf("scan file containers and offsets: %w", err)
 		}
@@ -251,28 +244,28 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 
 		info, ok := containerInfoByID[containerID]
 		if !ok {
-			algo := utils_compression.CompressionType(compressionAlgorithm)
 			containerFilename := filename
-			if algo != utils_compression.CompressionNone {
-				containerFilename = filename + "." + compressionAlgorithm
-			}
 
 			fullPath := filepath.Join(container.ContainersDir, containerFilename)
-			stat, err := os.Stat(fullPath)
+			fileInfo, err := os.Stat(fullPath)
 			if err != nil {
 				return fmt.Errorf("missing container file: %s: %w", fullPath, err)
 			}
 
+			physicalSize := fileInfo.Size()
+
 			info = containerInfo{
 				path:         fullPath,
-				physicalSize: stat.Size(),
+				physicalSize: physicalSize,
 				currentSize:  currentSize,
-				algo:         algo,
 			}
 			containerInfoByID[containerID] = info
 
-			if algo == utils_compression.CompressionNone && stat.Size() != currentSize {
-				return fmt.Errorf("container %d size mismatch: expected %d got %d", containerID, currentSize, stat.Size())
+			// Assumes verification runs against a consistent recovered state.
+			// During in-flight writes or immediately after a crash (before recovery),
+			// filesystem and DB metadata can temporarily diverge.
+			if physicalSize != currentSize {
+				return fmt.Errorf("container %d size mismatch: expected %d got %d", containerID, currentSize, physicalSize)
 			}
 		}
 
@@ -280,7 +273,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		if recordEnd > info.currentSize {
 			return fmt.Errorf("chunk %d exceeds container %d bounds in metadata", chunkID, containerID)
 		}
-		if info.algo == utils_compression.CompressionNone && recordEnd > info.physicalSize {
+		if recordEnd > info.physicalSize {
 			return fmt.Errorf("chunk %d exceeds container %d physical file size", chunkID, containerID)
 		}
 	}
@@ -314,11 +307,11 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			c.size,
 			c.chunk_hash,
 			ctr.filename,
-			ctr.compression_algorithm
+			ctr.max_size
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
-		WHERE fc.logical_file_id = ?
+		WHERE fc.logical_file_id = $1
 		ORDER BY ctr.id, c.chunk_offset
 	`, fileID)
 	if err != nil {
@@ -326,13 +319,16 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 	}
 	defer func() { _ = rows.Close() }()
 
+	var currentContainer *container.FileContainer
+	var currentFilename string
+
 	for rows.Next() {
 		var chunkID int
 		var chunkOffset int64
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
-		var compressionAlgorithm string
+		var maxSize int64
 
 		if err := rows.Scan(
 			&chunkID,
@@ -340,53 +336,29 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			&expectedSize,
 			&expectedChunkHash,
 			&filename,
-			&compressionAlgorithm,
+			&maxSize,
 		); err != nil {
 			return fmt.Errorf("scan file chunk hashes: %w", err)
 		}
 
-		containerFilename := filename
-		algo := utils_compression.CompressionType(compressionAlgorithm)
-		if algo != utils_compression.CompressionNone {
-			containerFilename = filename + "." + compressionAlgorithm
+		if currentFilename != filename {
+			if currentContainer != nil {
+				if err := currentContainer.Close(); err != nil {
+					return fmt.Errorf("close container %q: %w", currentFilename, err)
+				}
+			}
+
+			fullPath := filepath.Join(container.ContainersDir, filename)
+			currentContainer, err = container.OpenExistingContainer(true, fullPath, maxSize)
+			if err != nil {
+				return fmt.Errorf("open container %q: %w", fullPath, err)
+			}
+			currentFilename = filename
 		}
 
-		r, err := utils_compression.OpenDecompressionReader(filepath.Join(container.ContainersDir, containerFilename), algo)
+		chunkData, err := container.ReadChunkDataAt(currentContainer, chunkOffset, expectedSize)
 		if err != nil {
-			return fmt.Errorf("open container for chunk %d: %w", chunkID, err)
-		}
-
-		if _, err := io.CopyN(io.Discard, r, chunkOffset); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("seek chunk %d within container stream: %w", chunkID, err)
-		}
-
-		headerHash := make([]byte, sha256.Size)
-		if _, err := io.ReadFull(r, headerHash); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("read chunk %d header hash: %w", chunkID, err)
-		}
-
-		sizeBuf := make([]byte, 4)
-		if _, err := io.ReadFull(r, sizeBuf); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("read chunk %d header size: %w", chunkID, err)
-		}
-
-		recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
-		if recordSize != expectedSize {
-			_ = r.Close()
-			return fmt.Errorf("chunk %d size mismatch: expected %d got %d", chunkID, expectedSize, recordSize)
-		}
-
-		chunkData := make([]byte, recordSize)
-		if _, err := io.ReadFull(r, chunkData); err != nil {
-			_ = r.Close()
 			return fmt.Errorf("read chunk %d data: %w", chunkID, err)
-		}
-
-		if err := r.Close(); err != nil {
-			return fmt.Errorf("close container reader for chunk %d: %w", chunkID, err)
 		}
 
 		sum := sha256.Sum256(chunkData)
@@ -394,13 +366,16 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 		if computedHash != expectedChunkHash {
 			return fmt.Errorf("chunk %d corrupted: expected %s got %s", chunkID, expectedChunkHash, computedHash)
 		}
-		if hex.EncodeToString(headerHash) != expectedChunkHash {
-			return fmt.Errorf("chunk %d record header hash mismatch", chunkID)
-		}
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate file chunk hashes: %w", err)
+	}
+
+	if currentContainer != nil {
+		if err := currentContainer.Close(); err != nil {
+			return fmt.Errorf("close container %q: %w", currentFilename, err)
+		}
 	}
 
 	return nil
