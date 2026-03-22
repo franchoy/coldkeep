@@ -55,6 +55,7 @@ func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 
 	stat, err := f.Stat()
 	if err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 
@@ -187,6 +188,12 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	if err != nil {
 		return ActiveContainer{}, err
 	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = f.Close()
+		}
+	}()
 
 	// 4 Write V0 header
 	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
@@ -201,6 +208,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	if err = f.Close(); err != nil {
 		return ActiveContainer{}, err
 	}
+	closeOnError = false
 
 	currentSize = ContainerHdrLen
 
