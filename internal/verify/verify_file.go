@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -247,20 +246,28 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			containerFilename := filename
 
 			fullPath := filepath.Join(container.ContainersDir, containerFilename)
-			stat, err := os.Stat(fullPath)
+			fileContainer, err := container.OpeneExistingContainer(fullPath, currentSize)
 			if err != nil {
 				return fmt.Errorf("missing container file: %s: %w", fullPath, err)
 			}
 
+			physicalSize, err := fileContainer.Size()
+			if closeErr := fileContainer.Close(); closeErr != nil {
+				return fmt.Errorf("close container %s: %w", fullPath, closeErr)
+			}
+			if err != nil {
+				return fmt.Errorf("stat container file via api %s: %w", fullPath, err)
+			}
+
 			info = containerInfo{
 				path:         fullPath,
-				physicalSize: stat.Size(),
+				physicalSize: physicalSize,
 				currentSize:  currentSize,
 			}
 			containerInfoByID[containerID] = info
 
-			if stat.Size() != currentSize {
-				return fmt.Errorf("container %d size mismatch: expected %d got %d", containerID, currentSize, stat.Size())
+			if physicalSize != currentSize {
+				return fmt.Errorf("container %d size mismatch: expected %d got %d", containerID, currentSize, physicalSize)
 			}
 		}
 

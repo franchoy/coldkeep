@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -69,19 +68,22 @@ func checkContainerFile(id int, filename string, currentSize int64) error {
 
 	fullPath := filepath.Join(container.ContainersDir, filename)
 
-	info, err := os.Stat(fullPath)
+	fileContainer, err := container.OpeneExistingContainer(fullPath, currentSize)
 	if err != nil {
 		return err
 	}
 
-	// check if file exists
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("file does not exist or is not a regular file: %s", fullPath)
+	actualSize, err := fileContainer.Size()
+	if closeErr := fileContainer.Close(); closeErr != nil {
+		return fmt.Errorf("close container file %s: %w", fullPath, closeErr)
+	}
+	if err != nil {
+		return fmt.Errorf("container file size via api %s: %w", fullPath, err)
 	}
 
 	// check if file size matches the DB record
-	if info.Size() != currentSize {
-		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, info.Size())
+	if actualSize != currentSize {
+		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, actualSize)
 	}
 
 	return nil

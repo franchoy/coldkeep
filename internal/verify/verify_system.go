@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -158,7 +157,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`SELECT id, filename  FROM container WHERE sealed=true`)
+	containers, err := dbconn.Query(`SELECT id, filename, current_size, max_size FROM container WHERE sealed=true`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query sealed containers: %v", err)
@@ -172,7 +171,9 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		processedContainers++
 		var containerID int
 		var filename string
-		if err := containers.Scan(&containerID, &filename); err != nil {
+		var currentSize int64
+		var maxSize int64
+		if err := containers.Scan(&containerID, &filename, &currentSize, &maxSize); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container info: %w", err))
 			continue
@@ -182,15 +183,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		//construct full path
 		fullPath := filepath.Join(container.ContainersDir, filename)
 
-		//get file size for validation
-		info, err := os.Stat(fullPath)
-		if err != nil {
-			errorCount++
-			log.Printf("Failed to stat container file %s: %v", fullPath, err)
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to stat container file %s: %w", fullPath, err))
-			continue
-		}
-		fileSize := info.Size()
+		fileSize := currentSize
 
 		//fetch chunks ordered by offset
 		chunks, err := dbconn.Query(`SELECT chunk_offset, size, chunk_hash
@@ -205,7 +198,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			continue
 		}
 
-		filecontainer, err := container.OpeneExistingContainer(fullPath, info.Size())
+		filecontainer, err := container.OpeneExistingContainer(fullPath, maxSize)
 		if err != nil {
 			log.Printf("Failed to open container %s: %v", fullPath, err)
 			errorCount++

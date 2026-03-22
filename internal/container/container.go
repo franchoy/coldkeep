@@ -25,6 +25,7 @@ type FileContainer struct {
 type Container interface {
 	Append(data []byte) (offset int64, err error)
 	ReadAt(offset int64, size int64) ([]byte, error)
+	Size() (int64, error)
 	Sync() error
 	Close() error
 }
@@ -95,6 +96,14 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 
 func (c *FileContainer) Sync() error {
 	return c.f.Sync()
+}
+
+func (c *FileContainer) Size() (int64, error) {
+	info, err := c.f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func (c *FileContainer) Close() error {
