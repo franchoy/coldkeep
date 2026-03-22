@@ -13,7 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 
@@ -163,9 +163,7 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Println("coldkeep (V0.5.0)")
-	fmt.Println()
-	fmt.Println(" WARNING : Container-level compression has been deprecated due to incompatibility with deterministic restore guarantees and upcoming block-based storage")
+	fmt.Println("coldkeep (V0.6.0)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")

@@ -10,6 +10,36 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.6.0] - 2026-03-22
+
+Storage model evolution and container API redesign.
+
+### Added
+
+* New container abstraction with Append / ReadAt / Sync / Close API
+* Container sealing with full-file hash verification
+* Multi-layer verification system (standard, full, deep)
+* Stress tests for concurrency, retries, and rotation
+
+### Changed
+
+* Refactored storage pipeline to use container interface
+* Simplified container header format
+* Improved concurrency handling with row-level locking and retry logic
+* Container rotation behavior under concurrent workloads
+
+### Removed
+
+* Whole-container compression flag
+* Whole-container encryption flag
+
+### Notes
+
+* On-disk format is still evolving and may change before v1.0
+* Container size limit is enforced on a best-effort basis under concurrency
+
+------------------------------------------------------------------------
+
 ## [0.5.0] - 2026-03-21
 
 Deterministic restore guarantees for stored files and dataset-level workflows.
