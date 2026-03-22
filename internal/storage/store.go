@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -302,6 +303,16 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 
 	chunkOrder := 0
 
+	tx, err := dbconn.Begin()
+	if err != nil {
+		return err
+	}
+
+	activeContainer, err2 := container.GetOrCreateOpenContainer(tx)
+	if err2 != nil {
+		return err2
+	}
+
 	for _, chunkData := range chunks {
 		sum := sha256.Sum256(chunkData)
 		hash := hex.EncodeToString(sum[:])
@@ -328,19 +339,10 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 			continue // Move to next chunk
 		}
 
-		tx, err := dbconn.Begin()
-		if err != nil {
-			return err
-		}
-
 		// At this point, we have a chunk row in "PROCESSING" status for this chunk hash, either created by us or by another process.
-		containerID, containerfilename, containercurrentSize, err2 := container.GetOrCreateOpenContainer(tx)
-		if err2 != nil {
-			_ = tx.Rollback()
-			return err2
-		}
+
 		// Append chunk data to container file
-		offset, newSize, err2 := container.AppendChunkPhysical(containerfilename, containercurrentSize, chunkData)
+		offset, newSize, err2 := StoreChunk(activeContainer.Container, chunkData)
 		if err2 != nil {
 			_ = tx.Rollback()
 
@@ -356,7 +358,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		// Update chunk row with container_id and chunk_offset, and mark it as "COMPLETED"
 		if _, err2 := tx.Exec(
 			`UPDATE chunk SET container_id = $1, chunk_offset = $2, status = 'COMPLETED' WHERE id = $3`,
-			containerID,
+			activeContainer.ID,
 			offset,
 			claimedChunkID,
 		); err2 != nil {
@@ -365,22 +367,37 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		}
 
 		// Update container current size
-		if err2 := container.UpdateContainerSize(tx, containerID, newSize); err2 != nil {
+		if err2 := container.UpdateContainerSize(tx, activeContainer.ID, newSize); err2 != nil {
 			_ = tx.Rollback()
 			return err2
 		}
 
 		// Seal if reached max size
 		var maxSize int64
-		if err2 := tx.QueryRow(`SELECT max_size FROM container WHERE id = $1`, containerID).Scan(&maxSize); err2 != nil {
+		if err2 := tx.QueryRow(`SELECT max_size FROM container WHERE id = $1`, activeContainer.ID).Scan(&maxSize); err2 != nil {
 			_ = tx.Rollback()
 			return err2
 		}
 
 		if newSize >= maxSize {
-			if err2 := container.SealContainer(tx, containerID, containerfilename); err2 != nil {
+			if err2 := container.SealContainer(tx, activeContainer.ID, activeContainer.Filename); err2 != nil {
 				_ = tx.Rollback()
 				return err2
+			} else {
+				// After sealing the full container, we need to sync and close the file handle before we can open a new one for the next chunks
+				if err2 := SyncCloseAndSealContainer(tx, activeContainer); err2 != nil {
+					_ = tx.Rollback()
+					return err2
+				}
+				//request a new active container for next chunks
+				activeContainer, err2 = container.GetOrCreateOpenContainer(tx)
+				if err2 != nil {
+					_ = tx.Rollback()
+					return err2
+				}
+				fmt.Printf("Container %d sealed at size %d bytes. Created new active container %d for next chunks.\n", activeContainer.ID, newSize, activeContainer.ID)
+				// Note: it's possible that multiple containers get sealed around the same time if we have many concurrent writers, which is fine.
+				// The important part is that we don't exceed the max size for any container, and that we can continue writing new chunks to new containers as needed.
 			}
 		}
 
@@ -404,6 +421,15 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		fmt.Printf("Stored new chunk %s for file '%s'\n", hash, path)
 
 		chunkOrder++
+	}
+
+	// Ensure all data is flushed to disk before we mark the file as completed
+	if err := activeContainer.Container.Sync(); err != nil {
+		return err
+	}
+	// Close the file handle since we're done storing chunks for this file
+	if err := activeContainer.Container.Close(); err != nil {
+		return err
 	}
 
 	// After all chunks are stored and linked, mark logical file as "COMPLETED"
@@ -480,6 +506,46 @@ func StoreFolder(root string) error {
 
 	utils_print.PrintSuccess("Folder stored successfully")
 	utils_print.PrintDuration(start)
+
+	return nil
+}
+
+// --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+
+func StoreChunk(c container.Container, chunk []byte) (offset int64, size int64, err error) {
+	// hash (storage responsibility)
+	sum := sha256.Sum256(chunk)
+
+	// build record (this becomes future "block")
+	record := make([]byte, 32+4+len(chunk))
+
+	copy(record[0:32], sum[:])
+	binary.LittleEndian.PutUint32(record[32:36], uint32(len(chunk)))
+	copy(record[36:], chunk)
+
+	// append to container
+	offset, err = c.Append(record)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return offset, int64(len(record)), nil
+}
+
+func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer) error {
+	// sync active container to disk
+	if err := activecontainer.Container.Sync(); err != nil {
+		return err
+	}
+	// close active container file
+	if err := activecontainer.Container.Close(); err != nil {
+		return err
+	}
+	// seal active container in DB
+	if err := container.SealContainer(nil, activecontainer.ID, activecontainer.Filename); err != nil {
+		return err
+	}
 
 	return nil
 }

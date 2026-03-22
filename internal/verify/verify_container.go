@@ -136,7 +136,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkContainerHash(dbconn *sql.DB) error {
+func checkSealedContainersHash(dbconn *sql.DB) error {
 	// Check that all sealed containers have a valid hash that matches the file content
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
@@ -182,14 +182,14 @@ func checkContainerHash(dbconn *sql.DB) error {
 
 	if len(errorList) > 0 {
 		log.Println(" ERROR ")
-		log.Printf("Found %d errors in checkContainerHash checks:", errorCount)
+		log.Printf("Found %d errors in checkSealedContainersHash checks:", errorCount)
 		if errorCount > utils_print.MaxErrorsToPrint {
 			log.Printf("showing only first %d:", len(errorList))
 		}
 		for _, err := range errorList {
 			log.Printf(" - %v", err)
 		}
-		return fmt.Errorf("found %d errors in checkContainerHash checks", errorCount)
+		return fmt.Errorf("found %d errors in checkSealedContainersHash checks", errorCount)
 	}
 	log.Println(" SUCCESS ")
 

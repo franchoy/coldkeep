@@ -1,10 +1,9 @@
 package container
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,28 +12,139 @@ import (
 	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
 
-func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
+// --------------------------------------------------------------------------
+// structures
+// --------------------------------------------------------------------------
+
+type FileContainer struct {
+	f       *os.File
+	offset  int64 // current write position
+	maxSize int64 // maximum allowed size for this container (including header)
+}
+
+type Container interface {
+	Append(data []byte) (offset int64, err error)
+	ReadAt(offset int64, size int64) ([]byte, error)
+	Sync() error
+	Close() error
+}
+
+type ActiveContainer struct {
+	ID        int64
+	Filename  string
+	Container Container
+	MaxSize   int64
+}
+
+type WriteResult struct {
+	Offset int64
+	Size   int64
+}
+
+// --------------------------------------------------------------------------
+// api
+// --------------------------------------------------------------------------
+
+func OpenContainer(path string, maxSize int64) (*FileContainer, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	return &FileContainer{
+		f:       f,
+		offset:  stat.Size(),
+		maxSize: maxSize,
+	}, nil
+}
+
+func (c *FileContainer) Append(data []byte) (int64, error) {
+	if c.offset+int64(len(data)) > c.maxSize {
+		return 0, fmt.Errorf("container full")
+	}
+
+	off := c.offset
+
+	n, err := c.f.Write(data)
+	if err != nil {
+		return 0, err
+	}
+
+	if n != len(data) {
+		return 0, fmt.Errorf("partial write")
+	}
+
+	c.offset += int64(n)
+	return off, nil
+}
+
+func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
+	buf := make([]byte, size)
+
+	n, err := c.f.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	if int64(n) != size {
+		return nil, fmt.Errorf("short read")
+	}
+
+	return buf, nil
+}
+
+func (c *FileContainer) Sync() error {
+	return c.f.Sync()
+}
+
+func (c *FileContainer) Close() error {
+	return c.f.Close()
+}
+
+// --------------------------------------------------------------------------
+// functions
+// --------------------------------------------------------------------------
+
+func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	var id int64
 	var filename string
 	var currentSize int64
+	var maxSize int64
 
 	// 1️⃣ Try to find an existing open container
 	err := db.QueryRow(`
-		SELECT id, filename, current_size
+		SELECT id, filename, current_size, max_size
 		FROM container
 		WHERE sealed = FALSE and quarantine = FALSE
 		ORDER BY id
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
-	`).Scan(&id, &filename, &currentSize)
+	`).Scan(&id, &filename, &currentSize, &maxSize)
 
 	if err == nil {
 		// Found existing open container
-		return id, filename, currentSize, nil
+		fullPath := filepath.Join(ContainersDir, filename)
+
+		container, err := OpenContainer(fullPath, maxSize)
+		if err != nil {
+			return ActiveContainer{}, err
+		}
+
+		return ActiveContainer{
+			ID:        id,
+			Filename:  filename,
+			Container: container,
+			MaxSize:   maxSize,
+		}, nil
 	}
 
 	if err != sql.ErrNoRows {
-		return 0, "", 0, err
+		return ActiveContainer{}, err
 	}
 
 	// 2️⃣ No open container found → create new one
@@ -49,80 +159,49 @@ func GetOrCreateOpenContainer(db db.DBTX) (int64, string, int64, error) {
 	`, filename, ContainerHdrLen, containerMaxSize).Scan(&id)
 
 	if err != nil {
-		return 0, "", 0, err
+		return ActiveContainer{}, err
 	}
 
 	// 3️⃣ Create physical file
 
 	if err := os.MkdirAll(ContainersDir, 0755); err != nil {
-		return 0, "", 0, err
+		return ActiveContainer{}, err
 	}
 
 	fullPath := filepath.Join(ContainersDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
-		return 0, "", 0, err
+		return ActiveContainer{}, err
 	}
-	defer func() { _ = f.Close() }()
 
 	// 4️⃣ Write V0 header
-	if err := writeNewContainerHeaderV0(f, containerMaxSize); err != nil {
-		return 0, "", 0, err
+	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
+		return ActiveContainer{}, err
 	}
 
 	// Ensure header is flushed
 	if err := f.Sync(); err != nil {
-		return 0, "", 0, err
+		return ActiveContainer{}, err
+	}
+	//close file
+	if err = f.Close(); err != nil {
+		return ActiveContainer{}, err
 	}
 
 	currentSize = ContainerHdrLen
 
-	return id, filename, currentSize, nil
-}
-
-func AppendChunkPhysical(filename string, currentSize int64, chunk []byte) (int64, int64, error) {
-
-	containerPath := filepath.Join(ContainersDir, filename)
-
-	f, err := os.OpenFile(containerPath, os.O_APPEND|os.O_WRONLY, 0644)
+	container, err := OpenContainer(fullPath, containerMaxSize)
 	if err != nil {
-		return 0, 0, err
-	}
-	defer func() { _ = f.Close() }()
-
-	// offset where this chunk starts
-	offset := currentSize
-
-	// Write record format:
-	// [32 bytes sha256][4 bytes size][data]
-
-	sum := sha256.Sum256(chunk)
-
-	// Write hash
-	if _, err := f.Write(sum[:]); err != nil {
-		return 0, 0, err
+		return ActiveContainer{}, err
 	}
 
-	// Write size (little endian uint32)
-	sizeBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sizeBuf, uint32(len(chunk)))
-	if _, err := f.Write(sizeBuf); err != nil {
-		return 0, 0, err
-	}
-
-	// Write data
-	if _, err := f.Write(chunk); err != nil {
-		return 0, 0, err
-	}
-	// Ensure data is flushed to disk
-	if err := f.Sync(); err != nil {
-		return 0, 0, err
-	}
-
-	newSize := currentSize + int64(32+4+len(chunk))
-
-	return offset, newSize, nil
+	return ActiveContainer{
+		ID:        id,
+		Filename:  filename,
+		Container: container,
+		MaxSize:   containerMaxSize,
+	}, nil
 }
 
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
@@ -168,7 +247,7 @@ func CheckContainerHashFile(id int, filename, storedHash string) error {
 		return fmt.Errorf("compute container file hash: %w", err)
 	}
 
-	//if stored has is null or empty, we can skip the check (for backward compatibility with old containers)
+	//if stored hash is null or empty, we can skip the check (for backward compatibility with old containers)
 	if len(storedHash) == 0 || storedHash == "null" || storedHash == "NULL" {
 		return fmt.Errorf("container file hash is missing in db for container %d, calculated hash: %s", id, computedHash)
 	}
@@ -179,3 +258,7 @@ func CheckContainerHashFile(id int, filename, storedHash string) error {
 
 	return nil
 }
+
+// --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// --------------------------------------------------------------------------

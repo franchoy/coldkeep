@@ -98,7 +98,7 @@ func VerifySystemFull(dbconn *sql.DB) error {
 	}
 
 	//check that all sealed containers have a valid hash that matches the file content
-	if err = checkContainerHash(dbconn); err != nil {
+	if err = checkSealedContainersHash(dbconn); err != nil {
 		return err
 	}
 

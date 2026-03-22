@@ -24,7 +24,7 @@ const (
 	FLAG_HAS_BLOCK_TBL = 1 << 1 // optional block index present
 )
 
-func writeNewContainerHeaderV0(f *os.File, maxSize int64) error {
+func writeNewContainerHeader(f *os.File, maxSize int64) error {
 	h := make([]byte, ContainerHdrLen)
 
 	// 0..7 magic
