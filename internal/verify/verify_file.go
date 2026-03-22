@@ -80,7 +80,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 							status,
 							total_size
 							from logical_file 
-							where id = ?`, fileId).Scan(&id, &status, &totalSize)
+							where id = $1`, fileId).Scan(&id, &status, &totalSize)
 	if err != nil {
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
@@ -90,7 +90,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	}
 	var hasChunks bool = false
 	//ensure file_chunks exists for the file
-	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = ? order by chunk_order asc`, fileId)
+	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = $1 order by chunk_order asc`, fileId)
 	if err != nil {
 		return fmt.Errorf("failed to query file chunks: %w", err)
 	}
@@ -135,7 +135,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 									c.status
 								FROM chunk c
 								JOIN file_chunk fc ON fc.chunk_id = c.id
-								WHERE fc.logical_file_id = ?
+								WHERE fc.logical_file_id = $1
 								ORDER BY fc.chunk_order ASC`, fileId)
 	if err != nil {
 		return fmt.Errorf("failed to query chunks: %w", err)
@@ -191,7 +191,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
-		WHERE fc.logical_file_id = ?
+		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order
 	`, fileID)
 	if err != nil {
@@ -307,7 +307,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
-		WHERE fc.logical_file_id = ?
+		WHERE fc.logical_file_id = $1
 		ORDER BY ctr.id, c.chunk_offset
 	`, fileID)
 	if err != nil {
@@ -332,20 +332,15 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			return fmt.Errorf("scan file chunk hashes: %w", err)
 		}
 
-		containerFilename := filename
+		fullPath := filepath.Join(container.ContainersDir, filename)
 
 		// Open as plain file (seek)
 		var r io.ReadCloser
 		var f *os.File
 
-		f, err = os.Open(containerFilename)
+		f, err = os.Open(fullPath)
 		if err != nil {
-			return fmt.Errorf("open container %q: %w", containerFilename, err)
-		}
-		// Seek to record start
-		if _, err := f.Seek(chunkOffset, io.SeekStart); err != nil {
-			_ = f.Close()
-			return fmt.Errorf("seek container offset: %w", err)
+			return fmt.Errorf("open container %q: %w", fullPath, err)
 		}
 		// Use file as reader; close via f.Close() below
 		r = f
