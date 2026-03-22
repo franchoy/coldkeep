@@ -68,7 +68,7 @@ func checkContainerFile(id int, filename string, currentSize int64) error {
 
 	fullPath := filepath.Join(container.ContainersDir, filename)
 
-	fileContainer, err := container.OpeneExistingContainer(fullPath, currentSize)
+	fileContainer, err := container.OpeneExistingContainer(true, fullPath, currentSize)
 	if err != nil {
 		return err
 	}

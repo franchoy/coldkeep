@@ -136,7 +136,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			}
 
 			containerPath := filepath.Join(container.ContainersDir, filename)
-			filecontainer, err = container.OpeneExistingContainer(containerPath, maxSize)
+			filecontainer, err = container.OpeneExistingContainer(true, containerPath, maxSize)
 			if err != nil {
 				return fmt.Errorf("open container %q: %w", filename, err)
 			}

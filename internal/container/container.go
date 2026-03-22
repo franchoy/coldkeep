@@ -41,8 +41,14 @@ type ActiveContainer struct {
 // api
 // --------------------------------------------------------------------------
 
-func OpeneExistingContainer(path string, maxSize int64) (*FileContainer, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0644)
+func OpeneExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
+	var f *os.File
+	var err error
+	if readonly {
+		f, err = os.OpenFile(path, os.O_RDONLY, 0644)
+	} else {
+		f, err = os.OpenFile(path, os.O_RDWR, 0644)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +143,7 @@ func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 		// Found existing open container
 		fullPath := filepath.Join(ContainersDir, filename)
 
-		container, err := OpeneExistingContainer(fullPath, maxSize)
+		container, err := OpeneExistingContainer(false, fullPath, maxSize)
 		if err != nil {
 			return ActiveContainer{}, err
 		}
@@ -198,7 +204,7 @@ func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 
 	currentSize = ContainerHdrLen
 
-	container, err := OpeneExistingContainer(fullPath, containerMaxSize)
+	container, err := OpeneExistingContainer(false, fullPath, containerMaxSize)
 	if err != nil {
 		return ActiveContainer{}, err
 	}

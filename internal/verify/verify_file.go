@@ -246,7 +246,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			containerFilename := filename
 
 			fullPath := filepath.Join(container.ContainersDir, containerFilename)
-			fileContainer, err := container.OpeneExistingContainer(fullPath, currentSize)
+			fileContainer, err := container.OpeneExistingContainer(true, fullPath, currentSize)
 			if err != nil {
 				return fmt.Errorf("missing container file: %s: %w", fullPath, err)
 			}
@@ -351,7 +351,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			}
 
 			fullPath := filepath.Join(container.ContainersDir, filename)
-			currentContainer, err = container.OpeneExistingContainer(fullPath, maxSize)
+			currentContainer, err = container.OpeneExistingContainer(true, fullPath, maxSize)
 			if err != nil {
 				return fmt.Errorf("open container %q: %w", fullPath, err)
 			}

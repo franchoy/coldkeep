@@ -198,7 +198,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			continue
 		}
 
-		filecontainer, err := container.OpeneExistingContainer(fullPath, maxSize)
+		filecontainer, err := container.OpeneExistingContainer(true, fullPath, maxSize)
 		if err != nil {
 			log.Printf("Failed to open container %s: %v", fullPath, err)
 			errorCount++
