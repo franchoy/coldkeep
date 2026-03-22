@@ -97,7 +97,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 
 	hasher := sha256.New()
 
-	var filecontainer container.FileContainer
+	var filecontainer *container.FileContainer
 	var containerfilename string = ""
 	// ------------------------------------------------------------
 	// Restore chunk by chunk
@@ -132,22 +132,24 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 
 		if containerfilename != filename {
 
-			err := filecontainer.Close() // close previous container if open
+			if filecontainer != nil {
+				if err := filecontainer.Close(); err != nil {
+					if err != nil {
+						return fmt.Errorf("close container %q: %w", containerfilename, err)
+					}
 
-			if err != nil {
-				return fmt.Errorf("close container %q: %w", containerfilename, err)
+					containerPath := filepath.Join(container.ContainersDir, filename)
+
+					filecontainer, err = container.OpeneExistingContainer(containerPath, maxSize)
+
+					if err != nil {
+						return fmt.Errorf("open container %q: %w", filename, err)
+					}
+
+					containerfilename = filename
+				}
 			}
 
-			containerPath := filepath.Join(container.ContainersDir, filename)
-
-			filecontainer, err := container.OpenContainer(containerPath, container.GetContainerMaxSize())
-
-			if err != nil {
-				return fmt.Errorf("open container %q: %w", filename, err)
-			}
-			defer func() { _ = filecontainer.Close() }()
-
-			containerfilename = filename
 		}
 
 		chunkData, err := readChunkDataFromContainer(filecontainer, offset, expectedSize)
@@ -172,6 +174,11 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		if _, err := hasher.Write(chunkData); err != nil {
 			return fmt.Errorf("hash restored data: %w", err)
 		}
+	}
+
+	if err := filecontainer.Close(); err != nil {
+	if err != nil {
+		return fmt.Errorf("close container %q: %w", containerfilename, err)
 	}
 
 	if expectedOrder == 0 {
@@ -207,7 +214,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	return nil
 }
 
-func readChunkDataFromContainer(container container.FileContainer, offset int64, expectedSize int64) ([]byte, error) {
+func readChunkDataFromContainer(container *container.FileContainer, offset int64, expectedSize int64) ([]byte, error) {
 	err := error(nil)
 
 	// Read record header
