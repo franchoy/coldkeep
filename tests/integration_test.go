@@ -1362,7 +1362,7 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("open container file: %v", err)
 	}
 
-	corruptionOffset := record.chunkOffset + 32 + 4
+	corruptionOffset := record.chunkOffset + container.ChunkRecordHeaderSize
 	if record.chunkSize > 10 {
 		corruptionOffset += 10
 	}
@@ -1650,14 +1650,14 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	containerPath := filepath.Join(container.ContainersDir, containerFilename)
 
 	// Open container and corrupt a byte in the first chunk's data
-	// Skip past the header (32 bytes hash + 4 bytes size) to reach the actual chunk data
+	// Skip past the header to reach the actual chunk data
 	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("open container file: %v", err)
 	}
 	defer f.Close()
 
-	corruptionOffset := chunkOffset + 32 + 4 + 10 // header (32+4 bytes) + 10 bytes into data
+	corruptionOffset := chunkOffset + container.ChunkRecordHeaderSize + 10
 	if _, err := f.WriteAt([]byte{0xFF}, corruptionOffset); err != nil {
 		t.Fatalf("corrupt chunk byte: %v", err)
 	}
