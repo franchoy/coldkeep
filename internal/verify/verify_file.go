@@ -3,10 +3,8 @@ package verify
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -199,7 +197,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 	}
 	defer func() { _ = rows.Close() }()
 
-	const chunkRecordHeaderSize = int64(32 + 4)
+	const chunkRecordHeaderSize = container.ChunkRecordHeaderSize
 
 	type containerInfo struct {
 		path         string
@@ -303,7 +301,8 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			c.chunk_offset,
 			c.size,
 			c.chunk_hash,
-			ctr.filename
+			ctr.filename,
+			ctr.max_size
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN container ctr ON ctr.id = c.container_id
@@ -315,12 +314,16 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 	}
 	defer func() { _ = rows.Close() }()
 
+	var currentContainer *container.FileContainer
+	var currentFilename string
+
 	for rows.Next() {
 		var chunkID int
 		var chunkOffset int64
 		var expectedSize int64
 		var expectedChunkHash string
 		var filename string
+		var maxSize int64
 
 		if err := rows.Scan(
 			&chunkID,
@@ -328,54 +331,29 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			&expectedSize,
 			&expectedChunkHash,
 			&filename,
+			&maxSize,
 		); err != nil {
 			return fmt.Errorf("scan file chunk hashes: %w", err)
 		}
 
-		fullPath := filepath.Join(container.ContainersDir, filename)
+		if currentFilename != filename {
+			if currentContainer != nil {
+				if err := currentContainer.Close(); err != nil {
+					return fmt.Errorf("close container %q: %w", currentFilename, err)
+				}
+			}
 
-		// Open as plain file (seek)
-		var r io.ReadCloser
-		var f *os.File
+			fullPath := filepath.Join(container.ContainersDir, filename)
+			currentContainer, err = container.OpeneExistingContainer(fullPath, maxSize)
+			if err != nil {
+				return fmt.Errorf("open container %q: %w", fullPath, err)
+			}
+			currentFilename = filename
+		}
 
-		f, err = os.Open(fullPath)
+		chunkData, err := container.ReadChunkDataAt(currentContainer, chunkOffset, expectedSize)
 		if err != nil {
-			return fmt.Errorf("open container %q: %w", fullPath, err)
-		}
-		// Use file as reader; close via f.Close() below
-		r = f
-
-		if _, err := io.CopyN(io.Discard, r, chunkOffset); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("seek chunk %d within container stream: %w", chunkID, err)
-		}
-
-		headerHash := make([]byte, sha256.Size)
-		if _, err := io.ReadFull(r, headerHash); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("read chunk %d header hash: %w", chunkID, err)
-		}
-
-		sizeBuf := make([]byte, 4)
-		if _, err := io.ReadFull(r, sizeBuf); err != nil {
-			_ = r.Close()
-			return fmt.Errorf("read chunk %d header size: %w", chunkID, err)
-		}
-
-		recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
-		if recordSize != expectedSize {
-			_ = r.Close()
-			return fmt.Errorf("chunk %d size mismatch: expected %d got %d", chunkID, expectedSize, recordSize)
-		}
-
-		chunkData := make([]byte, recordSize)
-		if _, err := io.ReadFull(r, chunkData); err != nil {
-			_ = r.Close()
 			return fmt.Errorf("read chunk %d data: %w", chunkID, err)
-		}
-
-		if err := r.Close(); err != nil {
-			return fmt.Errorf("close container reader for chunk %d: %w", chunkID, err)
 		}
 
 		sum := sha256.Sum256(chunkData)
@@ -383,13 +361,16 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 		if computedHash != expectedChunkHash {
 			return fmt.Errorf("chunk %d corrupted: expected %s got %s", chunkID, expectedChunkHash, computedHash)
 		}
-		if hex.EncodeToString(headerHash) != expectedChunkHash {
-			return fmt.Errorf("chunk %d record header hash mismatch", chunkID)
-		}
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate file chunk hashes: %w", err)
+	}
+
+	if currentContainer != nil {
+		if err := currentContainer.Close(); err != nil {
+			return fmt.Errorf("close container %q: %w", currentFilename, err)
+		}
 	}
 
 	return nil

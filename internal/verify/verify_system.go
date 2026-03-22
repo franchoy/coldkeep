@@ -1,13 +1,10 @@
 package verify
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -208,6 +205,15 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			continue
 		}
 
+		filecontainer, err := container.OpeneExistingContainer(fullPath, info.Size())
+		if err != nil {
+			log.Printf("Failed to open container %s: %v", fullPath, err)
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to open container %s: %w", fullPath, err))
+			_ = chunks.Close()
+			continue
+		}
+
 		hasChunks := false
 
 		for chunks.Next() {
@@ -236,60 +242,18 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 				continue
 			}
 
-			if chunkOffset+32+4+chunkSize > fileSize {
+			if chunkOffset+container.ChunkRecordHeaderSize+chunkSize > fileSize {
 				log.Printf("Chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize)
 				errorCount++
 				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize))
 				continue
 			}
 
-			containerPath := filepath.Join(container.ContainersDir, filename)
-
-			// Open as plain file (seek)
-			var r io.ReadCloser
-			var f *os.File
-
-			f, err = os.Open(containerPath)
+			chunkData, err := container.ReadChunkDataAt(filecontainer, chunkOffset, chunkSize)
 			if err != nil {
-				return fmt.Errorf("open container %q: %w", filename, err)
-			}
-			// Seek to record start
-			if _, err := f.Seek(chunkOffset, io.SeekStart); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("seek container %q to offset %d: %w", filename, chunkOffset, err)
-			}
-			// Use file as reader; close via f.Close() below
-			r = f
-
-			// Read record header
-			headerHash := make([]byte, 32)
-			if _, err := io.ReadFull(r, headerHash); err != nil {
-				_ = r.Close()
-				return fmt.Errorf("read chunk header hash for container %q: %w", filename, err)
-			}
-
-			sizeBuf := make([]byte, 4)
-			if _, err := io.ReadFull(r, sizeBuf); err != nil {
-				_ = r.Close()
-				return fmt.Errorf("read chunk header size for container %q: %w", filename, err)
-			}
-			recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
-
-			if recordSize != chunkSize {
-				_ = r.Close()
-				return fmt.Errorf("chunk size mismatch at offset %d (db=%d record=%d) for container %q", chunkOffset, chunkSize, recordSize, filename)
-			}
-
-			// Read chunk data
-			chunkData := make([]byte, recordSize)
-			if _, err := io.ReadFull(r, chunkData); err != nil {
-				_ = r.Close()
+				_ = filecontainer.Close()
+				_ = chunks.Close()
 				return fmt.Errorf("read chunk data for container %q: %w", filename, err)
-			}
-
-			// Close container reader
-			if err := r.Close(); err != nil {
-				return fmt.Errorf("close container reader for container %q: %w", filename, err)
 			}
 
 			// Validate hashes (DB hash and on-disk record hash)
@@ -297,12 +261,16 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 			sumHex := hex.EncodeToString(sum[:])
 
 			if sumHex != chunkHash {
+				_ = filecontainer.Close()
+				_ = chunks.Close()
 				return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s) for container %q", chunkOffset, chunkHash, sumHex, filename)
 			}
-			if !bytes.Equal(sum[:], headerHash) {
-				return fmt.Errorf("chunk record header hash mismatch at offset %d for container %q", chunkOffset, filename)
-			}
 
+		}
+
+		if err := filecontainer.Close(); err != nil {
+			_ = chunks.Close()
+			return fmt.Errorf("close container %q: %w", filename, err)
 		}
 
 		if !hasChunks {
