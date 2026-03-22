@@ -1,10 +1,8 @@
 package storage
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -98,7 +96,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	hasher := sha256.New()
 
 	var filecontainer *container.FileContainer
-	var containerfilename string = ""
+	var containerfilename string
 	// ------------------------------------------------------------
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
@@ -131,28 +129,21 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		expectedOrder++
 
 		if containerfilename != filename {
-
 			if filecontainer != nil {
 				if err := filecontainer.Close(); err != nil {
-					if err != nil {
-						return fmt.Errorf("close container %q: %w", containerfilename, err)
-					}
-
-					containerPath := filepath.Join(container.ContainersDir, filename)
-
-					filecontainer, err = container.OpeneExistingContainer(containerPath, maxSize)
-
-					if err != nil {
-						return fmt.Errorf("open container %q: %w", filename, err)
-					}
-
-					containerfilename = filename
+					return fmt.Errorf("close container %q: %w", containerfilename, err)
 				}
 			}
 
+			containerPath := filepath.Join(container.ContainersDir, filename)
+			filecontainer, err = container.OpeneExistingContainer(containerPath, maxSize)
+			if err != nil {
+				return fmt.Errorf("open container %q: %w", filename, err)
+			}
+			containerfilename = filename
 		}
 
-		chunkData, err := readChunkDataFromContainer(filecontainer, offset, expectedSize)
+		chunkData, err := container.ReadChunkDataAt(filecontainer, offset, expectedSize)
 		if err != nil {
 			return fmt.Errorf("read chunk data: %w", err)
 		}
@@ -176,9 +167,14 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		}
 	}
 
-	if err := filecontainer.Close(); err != nil {
-	if err != nil {
-		return fmt.Errorf("close container %q: %w", containerfilename, err)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate chunk rows: %w", err)
+	}
+
+	if filecontainer != nil {
+		if err := filecontainer.Close(); err != nil {
+			return fmt.Errorf("close container %q: %w", containerfilename, err)
+		}
 	}
 
 	if expectedOrder == 0 {
@@ -188,10 +184,6 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			return fmt.Errorf("no chunks found for file %d but expected hash is not empty", fileID)
 		}
 		// else: empty file, no chunks, valid
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate chunk rows: %w", err)
 	}
 
 	// ------------------------------------------------------------
@@ -212,42 +204,4 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	utils_print.PrintDuration(start)
 
 	return nil
-}
-
-func readChunkDataFromContainer(container *container.FileContainer, offset int64, expectedSize int64) ([]byte, error) {
-	err := error(nil)
-
-	// Read record header
-	var headerHash []byte
-	if headerHash, err = container.ReadAt(offset, 32); err != nil {
-		return nil, fmt.Errorf("read chunk header hash: %w", err)
-	}
-
-	// Read record size
-	var sizeBuf []byte
-	if sizeBuf, err = container.ReadAt(offset+32, 4); err != nil {
-		return nil, fmt.Errorf("read chunk header size: %w", err)
-	}
-
-	recordSize := int64(binary.LittleEndian.Uint32(sizeBuf))
-
-	// validate chunk size
-	if recordSize != expectedSize {
-		return nil, fmt.Errorf("chunk size mismatch at offset %d (db=%d record=%d)", offset, expectedSize, recordSize)
-	}
-
-	// Read chunk data
-	var chunkData []byte
-	if chunkData, err = container.ReadAt(offset+36, recordSize); err != nil {
-		return nil, fmt.Errorf("read chunk data: %w", err)
-	}
-
-	/// Validate on-disk record hash
-	sum := sha256.Sum256(chunkData)
-
-	if !bytes.Equal(sum[:], headerHash) {
-		return nil, fmt.Errorf("chunk record header hash mismatch at offset %d", offset)
-	}
-
-	return chunkData, nil
 }
