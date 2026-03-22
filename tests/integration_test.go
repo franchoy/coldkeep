@@ -192,6 +192,46 @@ func fetchFileIDByHash(t *testing.T, dbconn *sql.DB, fileHash string) int64 {
 	return id
 }
 
+func assertNoProcessingRows(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+
+	var logicalProcessing int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'PROCESSING'`).Scan(&logicalProcessing); err != nil {
+		t.Fatalf("count processing logical_file rows: %v", err)
+	}
+	if logicalProcessing != 0 {
+		t.Fatalf("expected no PROCESSING logical_file rows, got %d", logicalProcessing)
+	}
+
+	var chunkProcessing int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'PROCESSING'`).Scan(&chunkProcessing); err != nil {
+		t.Fatalf("count processing chunk rows: %v", err)
+	}
+	if chunkProcessing != 0 {
+		t.Fatalf("expected no PROCESSING chunk rows, got %d", chunkProcessing)
+	}
+}
+
+func assertUniqueFileChunkOrders(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+
+	var duplicates int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM (
+			SELECT logical_file_id, chunk_order
+			FROM file_chunk
+			GROUP BY logical_file_id, chunk_order
+			HAVING COUNT(*) > 1
+		) dup
+	`).Scan(&duplicates); err != nil {
+		t.Fatalf("count duplicate file_chunk order rows: %v", err)
+	}
+	if duplicates != 0 {
+		t.Fatalf("expected no duplicate file_chunk order rows, got %d duplicate groups", duplicates)
+	}
+}
+
 type fileChunkRecord struct {
 	chunkID              int64
 	containerID          int64
@@ -874,6 +914,195 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	}
 }
 
+func TestConcurrentStoreSameFileStress(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "same-file-stress.bin", 768*1024)
+	fileHash := sha256File(t, inPath)
+
+	const workers = 12
+	start := make(chan struct{})
+	done := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			done <- storage.StoreFileWithDB(dbconn, inPath)
+		}()
+	}
+	close(start)
+
+	for i := 0; i < workers; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("worker %d store failed: %v", i, err)
+			}
+		case <-time.After(45 * time.Second):
+			t.Fatalf("timed out waiting for worker %d", i)
+		}
+	}
+
+	var logicalFiles int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&logicalFiles); err != nil {
+		t.Fatalf("count logical_file: %v", err)
+	}
+	if logicalFiles != 1 {
+		t.Fatalf("expected 1 logical_file row, got %d", logicalFiles)
+	}
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+
+	var status string
+	var retryCount int
+	if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&status, &retryCount); err != nil {
+		t.Fatalf("query logical_file status: %v", err)
+	}
+	if status != "COMPLETED" {
+		t.Fatalf("expected logical file status COMPLETED, got %s", status)
+	}
+	if retryCount < 0 {
+		t.Fatalf("retry_count should never be negative, got %d", retryCount)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "same-file-stress.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore stored file: %v", err)
+	}
+	if gotHash := sha256File(t, outPath); gotHash != fileHash {
+		t.Fatalf("restored hash mismatch: want %s got %s", fileHash, gotHash)
+	}
+}
+
+func TestConcurrentStoreFolderStress(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "folder-stress")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir inputDir: %v", err)
+	}
+
+	expectedHashes := createSampleDataset(t, inputDir)
+	for i := 0; i < 8; i++ {
+		src := expectedHashes["binary.bin"]
+		dupPath := filepath.Join(inputDir, "dup_stress_"+itoa(i)+".bin")
+		if err := os.WriteFile(dupPath, mustRead(t, src), 0o644); err != nil {
+			t.Fatalf("write duplicate stress file: %v", err)
+		}
+	}
+
+	expectedUnique := collectFileHashesByCount(t, inputDir)
+
+	const workers = 4
+	start := make(chan struct{})
+	done := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			done <- storage.StoreFolder(inputDir)
+		}()
+	}
+	close(start)
+
+	for i := 0; i < workers; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("StoreFolder worker %d failed: %v", i, err)
+			}
+		case <-time.After(60 * time.Second):
+			t.Fatalf("timed out waiting for StoreFolder worker %d", i)
+		}
+	}
+
+	var completedFiles int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&completedFiles); err != nil {
+		t.Fatalf("count completed logical files: %v", err)
+	}
+	if completedFiles != len(expectedUnique) {
+		t.Fatalf("expected %d completed logical files, got %d", len(expectedUnique), completedFiles)
+	}
+
+	var nonCompleted int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status <> 'COMPLETED'`).Scan(&nonCompleted); err != nil {
+		t.Fatalf("count non-completed logical files: %v", err)
+	}
+	if nonCompleted != 0 {
+		t.Fatalf("expected no non-completed logical files, got %d", nonCompleted)
+	}
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir outDir: %v", err)
+	}
+
+	rows, err := dbconn.Query(`SELECT id, file_hash FROM logical_file ORDER BY id ASC`)
+	if err != nil {
+		t.Fatalf("query logical_file: %v", err)
+	}
+	defer rows.Close()
+
+	restored := 0
+	for rows.Next() {
+		var id int64
+		var hash string
+		if err := rows.Scan(&id, &hash); err != nil {
+			t.Fatalf("scan logical_file row: %v", err)
+		}
+
+		outPath := filepath.Join(outDir, fmt.Sprintf("%d.restore.bin", id))
+		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+			t.Fatalf("restore file %d: %v", id, err)
+		}
+		if gotHash := sha256File(t, outPath); gotHash != hash {
+			t.Fatalf("restored hash mismatch for file %d: want %s got %s", id, hash, gotHash)
+		}
+		restored++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error: %v", err)
+	}
+	if restored != len(expectedUnique) {
+		t.Fatalf("expected to restore %d files, restored %d", len(expectedUnique), restored)
+	}
+}
+
 func TestRetryAfterAbortedFile(t *testing.T) {
 	requireDB(t)
 
@@ -920,6 +1149,75 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	if status != "COMPLETED" {
 		t.Fatalf("expected status COMPLETED, got %s", status)
 	}
+}
+
+func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "retry_file_stress.bin", 384*1024)
+	fileHash := sha256File(t, inPath)
+
+	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		t.Fatalf("initial store: %v", err)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+		t.Fatalf("set logical file ABORTED: %v", err)
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	done := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			done <- storage.StoreFileWithDB(dbconn, inPath)
+		}()
+	}
+	close(start)
+
+	for i := 0; i < workers; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("retry worker %d failed: %v", i, err)
+			}
+		case <-time.After(45 * time.Second):
+			t.Fatalf("timed out waiting for retry worker %d", i)
+		}
+	}
+
+	var count int
+	var status string
+	if err := dbconn.QueryRow(`SELECT COUNT(*), MIN(status) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&count, &status); err != nil {
+		t.Fatalf("query logical file rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 logical_file row after concurrent retry, got %d", count)
+	}
+	if status != "COMPLETED" {
+		t.Fatalf("expected logical file status COMPLETED after concurrent retry, got %s", status)
+	}
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
 }
 
 func TestRetryAfterAbortedChunk(t *testing.T) {
@@ -981,6 +1279,110 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 		t.Fatalf("expected chunk status COMPLETED, got %s", status)
 	}
 }
+
+func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	sharedPrefix := make([]byte, 256*1024)
+	for i := range sharedPrefix {
+		sharedPrefix[i] = byte((i*31 + 7) % 251)
+	}
+
+	fileAPath := filepath.Join(inputDir, "retry_chunk_a.bin")
+	fileBPath := filepath.Join(inputDir, "retry_chunk_b.bin")
+	if err := os.WriteFile(fileAPath, append(append([]byte{}, sharedPrefix...), []byte("tail-A")...), 0o644); err != nil {
+		t.Fatalf("write fileA: %v", err)
+	}
+	if err := os.WriteFile(fileBPath, append(append([]byte{}, sharedPrefix...), []byte("tail-B")...), 0o644); err != nil {
+		t.Fatalf("write fileB: %v", err)
+	}
+
+	if err := storage.StoreFileWithDB(dbconn, fileAPath); err != nil {
+		t.Fatalf("initial store fileA: %v", err)
+	}
+
+	var chunkID int64
+	var chunkHash string
+	if err := dbconn.QueryRow(`
+		SELECT c.id, c.chunk_hash
+		FROM chunk c
+		JOIN file_chunk fc ON c.id = fc.chunk_id
+		JOIN logical_file lf ON fc.logical_file_id = lf.id
+		WHERE lf.file_hash = $1
+		ORDER BY fc.chunk_order ASC
+		LIMIT 1
+	`, sha256File(t, fileAPath)).Scan(&chunkID, &chunkHash); err != nil {
+		t.Fatalf("find shared chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+		t.Fatalf("set chunk ABORTED: %v", err)
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	done := make(chan error, workers)
+	paths := []string{fileAPath, fileBPath}
+
+	for i := 0; i < workers; i++ {
+		path := paths[i%len(paths)]
+		go func(p string) {
+			<-start
+			done <- storage.StoreFileWithDB(dbconn, p)
+		}(path)
+	}
+	close(start)
+
+	for i := 0; i < workers; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("chunk retry worker %d failed: %v", i, err)
+			}
+		case <-time.After(45 * time.Second):
+			t.Fatalf("timed out waiting for chunk retry worker %d", i)
+		}
+	}
+
+	var status string
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
+		t.Fatalf("query chunk status: %v", err)
+	}
+	if status != "COMPLETED" {
+		t.Fatalf("expected chunk status COMPLETED after concurrent retry, got %s", status)
+	}
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+
+	for _, p := range paths {
+		hash := sha256File(t, p)
+		var count int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hash).Scan(&count); err != nil {
+			t.Fatalf("count logical files for %s: %v", filepath.Base(p), err)
+		}
+		if count != 1 {
+			t.Fatalf("expected 1 logical file row for %s, got %d", filepath.Base(p), count)
+		}
+	}
+}
+
 func TestContainerRollover(t *testing.T) {
 	requireDB(t)
 
