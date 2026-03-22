@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,7 +16,10 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils_print"
+	"github.com/lib/pq"
 )
+
+var errContainerLockContention = errors.New("container row lock contention")
 
 func StoreFile(path string) error {
 	dbconn, err := db.ConnectDB()
@@ -301,16 +305,13 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 	}
 
 	chunkOrder := 0
-
-	tx, err := dbconn.Begin()
-	if err != nil {
-		return err
-	}
-
-	activeContainer, err2 := container.GetOrCreateOpeneContainer(tx)
-	if err2 != nil {
-		return err2
-	}
+	var activeContainer container.ActiveContainer
+	hasContainer := false
+	defer func() {
+		if hasContainer && activeContainer.Container != nil {
+			_ = activeContainer.Container.Close()
+		}
+	}()
 
 	for _, chunkData := range chunks {
 		sum := sha256.Sum256(chunkData)
@@ -323,7 +324,12 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 
 		if chunkStatus == "COMPLETED" {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			_, err = dbconn.Exec(
+			tx, err := dbconn.Begin()
+			if err != nil {
+				return err
+			}
+
+			_, err = tx.Exec(
 				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
 			 VALUES ($1, $2, $3)`,
 				fileID,
@@ -331,8 +337,15 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 				chunkOrder,
 			)
 			if err != nil {
+				_ = tx.Rollback()
 				return err
 			}
+
+			if err = tx.Commit(); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+
 			fmt.Printf("Reusing existing chunk %s for file '%s'\n", hash, path)
 			chunkOrder++
 			continue // Move to next chunk
@@ -340,91 +353,108 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 
 		// At this point, we have a chunk row in "PROCESSING" status for this chunk hash, either created by us or by another process.
 
-		// Append chunk data to container file
-		offset, newSize, err2 := StoreChunk(activeContainer.Container, chunkData)
-		if err2 != nil {
-			_ = tx.Rollback()
+		for {
+			tx, err := dbconn.Begin()
+			if err != nil {
+				return err
+			}
 
-			if _, err3 := dbconn.Exec(
-				`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
+			if !hasContainer {
+				activeContainer, err = container.GetOrCreateOpenContainer(tx)
+				if err != nil {
+					_ = tx.Rollback()
+					return err
+				}
+				hasContainer = true
+			}
+
+			// Ensure we keep a row-level lease for this container during this chunk write.
+			if err = lockContainerRowNowaitWithRetry(tx, activeContainer.ID, containerLockRetryAttempts, containerLockRetryWait); err != nil {
+				_ = tx.Rollback()
+				if errors.Is(err, errContainerLockContention) {
+					if activeContainer.Container != nil {
+						_ = activeContainer.Container.Close()
+						activeContainer.Container = nil
+					}
+					hasContainer = false
+					continue
+				}
+				return err
+			}
+
+			// Append chunk data to container file
+			offset, newSize, err := StoreChunk(activeContainer.Container, chunkData)
+			if err != nil {
+				_ = tx.Rollback()
+				if activeContainer.Container != nil {
+					_ = activeContainer.Container.Close()
+					activeContainer.Container = nil
+				}
+				hasContainer = false
+
+				if _, err3 := dbconn.Exec(
+					`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
+					claimedChunkID,
+				); err3 != nil {
+					return err3
+				}
+				return err
+			}
+
+			// Update chunk row with container_id and chunk_offset, and mark it as "COMPLETED"
+			if _, err := tx.Exec(
+				`UPDATE chunk SET container_id = $1, chunk_offset = $2, status = 'COMPLETED' WHERE id = $3`,
+				activeContainer.ID,
+				offset,
 				claimedChunkID,
-			); err3 != nil {
-				return err3
-			}
-			return err2
-		}
-
-		// Update chunk row with container_id and chunk_offset, and mark it as "COMPLETED"
-		if _, err2 := tx.Exec(
-			`UPDATE chunk SET container_id = $1, chunk_offset = $2, status = 'COMPLETED' WHERE id = $3`,
-			activeContainer.ID,
-			offset,
-			claimedChunkID,
-		); err2 != nil {
-			_ = tx.Rollback()
-			return err2
-		}
-
-		// Update container current size
-		if err2 := container.UpdateContainerSize(tx, activeContainer.ID, newSize); err2 != nil {
-			_ = tx.Rollback()
-			return err2
-		}
-
-		// Seal if reached max size
-		var maxSize int64
-		if err2 := tx.QueryRow(`SELECT max_size FROM container WHERE id = $1`, activeContainer.ID).Scan(&maxSize); err2 != nil {
-			_ = tx.Rollback()
-			return err2
-		}
-
-		if newSize >= maxSize {
-			// After sealing the full container, we need to sync and close the file handle before we can open a new one for the next chunks
-			if err2 := SyncCloseAndSealContainer(tx, activeContainer); err2 != nil {
+			); err != nil {
 				_ = tx.Rollback()
-				return err2
+				return err
 			}
-			//request a new active container for next chunks
-			activeContainer, err2 = container.GetOrCreateOpeneContainer(tx)
-			if err2 != nil {
+
+			// Update container current size
+			if err := container.UpdateContainerSize(tx, activeContainer.ID, newSize); err != nil {
 				_ = tx.Rollback()
-				return err2
+				return err
 			}
-			fmt.Printf("Container %d sealed at size %d bytes. Created new active container %d for next chunks.\n", activeContainer.ID, newSize, activeContainer.ID)
-			// Note: it's possible that multiple containers get sealed around the same time if we have many concurrent writers, which is fine.
-			// The important part is that we don't exceed the max size for any container, and that we can continue writing new chunks to new containers as needed.
+
+			// Link file ↔ chunk
+			_, err = tx.Exec(
+				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+				 VALUES ($1, $2, $3)`,
+				fileID,
+				claimedChunkID,
+				chunkOrder,
+			)
+			if err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+
+			// Seal if reached max size.
+			// NOTE: container max size is best-effort under concurrency.
+			if newSize >= activeContainer.MaxSize {
+				// After sealing the full container, we need to sync and close the file handle before we can open a new one for the next chunks
+				if err := SyncCloseAndSealContainer(tx, activeContainer); err != nil {
+					_ = tx.Rollback()
+					return err
+				}
+				fmt.Printf("Container %d sealed at size %d bytes.\n", activeContainer.ID, newSize)
+				activeContainer.Container = nil
+				hasContainer = false
+				// Note: it's possible that multiple containers get sealed around the same time if we have many concurrent writers, which is fine.
+				// The important part is that we don't exceed the max size for any container, and that we can continue writing new chunks to new containers as needed.
+			}
+
+			if err = tx.Commit(); err != nil {
+				return err
+			}
+
+			fmt.Printf("Stored new chunk %s for file '%s'\n", hash, path)
+
+			chunkOrder++
+			break
 		}
-
-		// Link file ↔ chunk
-		_, err = tx.Exec(
-			`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-			 VALUES ($1, $2, $3)`,
-			fileID,
-			claimedChunkID,
-			chunkOrder,
-		)
-		if err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-
-		if err = tx.Commit(); err != nil {
-			return err
-		}
-
-		fmt.Printf("Stored new chunk %s for file '%s'\n", hash, path)
-
-		chunkOrder++
-	}
-
-	// Ensure all data is flushed to disk before we mark the file as completed
-	if err := activeContainer.Container.Sync(); err != nil {
-		return err
-	}
-	// Close the file handle since we're done storing chunks for this file
-	// Note: we don't seal the container here since it can still be used by other concurrent writers, but we do need to close it to release the file handle and allow other processes to open it if needed.
-	if err := activeContainer.Container.Close(); err != nil {
-		return err
 	}
 
 	// After all chunks are stored and linked, mark logical file as "COMPLETED"
@@ -446,6 +476,32 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 
 	return nil
 }
+
+func isLockNotAvailable(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == "55P03"
+	}
+	return false
+}
+
+func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int, wait time.Duration) error {
+	for attempt := 0; attempt < attempts; attempt++ {
+		_, err := tx.Exec(`SELECT id FROM container WHERE id = $1 FOR UPDATE NOWAIT`, containerID)
+		if err == nil {
+			return nil
+		}
+		if !isLockNotAvailable(err) {
+			return err
+		}
+		if attempt < attempts-1 {
+			time.Sleep(wait)
+		}
+	}
+
+	return fmt.Errorf("%w for container %d after %d attempts", errContainerLockContention, containerID, attempts)
+}
+
 func StoreFolder(root string) error {
 	start := time.Now()
 
@@ -530,7 +586,7 @@ func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveConta
 		return err
 	}
 	// seal active container in DB
-	if err := container.SealContainer(nil, activecontainer.ID, activecontainer.Filename); err != nil {
+	if err := container.SealContainer(tx, activecontainer.ID, activecontainer.Filename); err != nil {
 		return err
 	}
 
