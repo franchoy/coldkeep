@@ -236,7 +236,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 				continue
 			}
 
-			if chunkOffset+chunkSize > fileSize {
+			if chunkOffset+32+4+chunkSize > fileSize {
 				log.Printf("Chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize)
 				errorCount++
 				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize))
