@@ -105,7 +105,7 @@ func (c *FileContainer) Close() error {
 // functions
 // --------------------------------------------------------------------------
 
-func GetOrCreateOpeneExistingContainer(db db.DBTX) (ActiveContainer, error) {
+func GetOrCreateOpeneContainer(db db.DBTX) (ActiveContainer, error) {
 	var id int64
 	var filename string
 	var currentSize int64
