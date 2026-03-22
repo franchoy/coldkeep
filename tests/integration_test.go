@@ -1103,6 +1103,99 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	}
 }
 
+func TestConcurrentStoreStressForcesRotation(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir inputDir: %v", err)
+	}
+
+	inPath := createTempFile(t, inputDir, "rotation-stress.bin", 6*1024*1024+123)
+	fileHash := sha256File(t, inPath)
+
+	const workers = 12
+	start := make(chan struct{})
+	done := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			done <- storage.StoreFileWithDB(dbconn, inPath)
+		}()
+	}
+	close(start)
+
+	for i := 0; i < workers; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("worker %d store failed: %v", i, err)
+			}
+		case <-time.After(60 * time.Second):
+			t.Fatalf("timed out waiting for worker %d", i)
+		}
+	}
+
+	var logicalFiles int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&logicalFiles); err != nil {
+		t.Fatalf("count logical_file: %v", err)
+	}
+	if logicalFiles != 1 {
+		t.Fatalf("expected 1 logical_file row, got %d", logicalFiles)
+	}
+
+	var containerCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&containerCount); err != nil {
+		t.Fatalf("count containers: %v", err)
+	}
+	if containerCount < 2 {
+		t.Fatalf("expected rotation to create multiple containers, got %d", containerCount)
+	}
+
+	var sealedCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedCount); err != nil {
+		t.Fatalf("count sealed containers: %v", err)
+	}
+	if sealedCount < 1 {
+		t.Fatalf("expected at least 1 sealed container after rotation, got %d", sealedCount)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir outDir: %v", err)
+	}
+	outPath := filepath.Join(outDir, "rotation-stress.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore stored file: %v", err)
+	}
+	if gotHash := sha256File(t, outPath); gotHash != fileHash {
+		t.Fatalf("restored hash mismatch: want %s got %s", fileHash, gotHash)
+	}
+}
+
 func TestRetryAfterAbortedFile(t *testing.T) {
 	requireDB(t)
 
