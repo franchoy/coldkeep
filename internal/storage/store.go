@@ -308,7 +308,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		return err
 	}
 
-	activeContainer, err2 := container.GetOrCreateOpenContainer(tx)
+	activeContainer, err2 := container.GetOrCreateOpeneExistingContainer(tx)
 	if err2 != nil {
 		return err2
 	}
@@ -380,25 +380,20 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		}
 
 		if newSize >= maxSize {
-			if err2 := container.SealContainer(tx, activeContainer.ID, activeContainer.Filename); err2 != nil {
+			// After sealing the full container, we need to sync and close the file handle before we can open a new one for the next chunks
+			if err2 := SyncCloseAndSealContainer(tx, activeContainer); err2 != nil {
 				_ = tx.Rollback()
 				return err2
-			} else {
-				// After sealing the full container, we need to sync and close the file handle before we can open a new one for the next chunks
-				if err2 := SyncCloseAndSealContainer(tx, activeContainer); err2 != nil {
-					_ = tx.Rollback()
-					return err2
-				}
-				//request a new active container for next chunks
-				activeContainer, err2 = container.GetOrCreateOpenContainer(tx)
-				if err2 != nil {
-					_ = tx.Rollback()
-					return err2
-				}
-				fmt.Printf("Container %d sealed at size %d bytes. Created new active container %d for next chunks.\n", activeContainer.ID, newSize, activeContainer.ID)
-				// Note: it's possible that multiple containers get sealed around the same time if we have many concurrent writers, which is fine.
-				// The important part is that we don't exceed the max size for any container, and that we can continue writing new chunks to new containers as needed.
 			}
+			//request a new active container for next chunks
+			activeContainer, err2 = container.GetOrCreateOpeneExistingContainer(tx)
+			if err2 != nil {
+				_ = tx.Rollback()
+				return err2
+			}
+			fmt.Printf("Container %d sealed at size %d bytes. Created new active container %d for next chunks.\n", activeContainer.ID, newSize, activeContainer.ID)
+			// Note: it's possible that multiple containers get sealed around the same time if we have many concurrent writers, which is fine.
+			// The important part is that we don't exceed the max size for any container, and that we can continue writing new chunks to new containers as needed.
 		}
 
 		// Link file ↔ chunk
@@ -428,6 +423,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 		return err
 	}
 	// Close the file handle since we're done storing chunks for this file
+	// Note: we don't seal the container here since it can still be used by other concurrent writers, but we do need to close it to release the file handle and allow other processes to open it if needed.
 	if err := activeContainer.Container.Close(); err != nil {
 		return err
 	}
@@ -513,7 +509,7 @@ func StoreFolder(root string) error {
 // --------------------------------------------------------------------------
 // --------------------------------------------------------------------------
 
-func StoreChunk(c container.Container, chunk []byte) (offset int64, size int64, err error) {
+func StoreChunk(c container.Container, chunk []byte) (offset int64, newsize int64, err error) {
 	// hash (storage responsibility)
 	sum := sha256.Sum256(chunk)
 
@@ -530,7 +526,7 @@ func StoreChunk(c container.Container, chunk []byte) (offset int64, size int64, 
 		return 0, 0, err
 	}
 
-	return offset, int64(len(record)), nil
+	return offset, offset + int64(len(record)), nil
 }
 
 func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer) error {
