@@ -21,7 +21,6 @@ func main() {
 	err := recovery.SystemRecovery()
 	if err != nil {
 		log.Printf("System recovery failed: %v\n", err)
-		os.Exit(1)
 	}
 
 	if len(os.Args) < 2 {
@@ -33,7 +32,6 @@ func main() {
 	case "store":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: coldkeep store <filePath>")
-			os.Exit(1)
 		}
 
 		err = storage.StoreFile(os.Args[2])
@@ -41,7 +39,6 @@ func main() {
 	case "store-folder":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: coldkeep store-folder <folderPath>")
-			os.Exit(1)
 		}
 
 		err = storage.StoreFolder(os.Args[2])
@@ -49,12 +46,10 @@ func main() {
 	case "restore":
 		if len(os.Args) < 4 {
 			log.Fatal("Usage: coldkeep restore <fileID> <outputDir>")
-			os.Exit(1)
 		}
 		fileID, parseErr := strconv.ParseInt(os.Args[2], 10, 64)
 		if parseErr != nil {
 			log.Fatal("Invalid fileID: ", parseErr)
-			os.Exit(1)
 		}
 
 		err = storage.RestoreFile(fileID, os.Args[3])
@@ -62,12 +57,10 @@ func main() {
 	case "remove":
 		if len(os.Args) < 3 {
 			log.Fatal("Usage: coldkeep remove <fileID>")
-			os.Exit(1)
 		}
 		fileID, parseErr := strconv.ParseInt(os.Args[2], 10, 64)
 		if parseErr != nil {
 			log.Fatal("Invalid fileID: ", parseErr)
-			os.Exit(1)
 		}
 
 		err = storage.RemoveFile(fileID)
@@ -79,7 +72,6 @@ func main() {
 				err = maintenance.RunGC(true)
 			default:
 				log.Fatal("Unknown option for gc: ", os.Args[2])
-				os.Exit(1)
 			}
 		} else {
 			err = maintenance.RunGC(false)
@@ -120,7 +112,6 @@ func main() {
 						verifyLevel = verify.VerifyDeep
 					default:
 						log.Fatal("Unknown option for system verify: ", os.Args[3])
-						os.Exit(1)
 					}
 				} else {
 					verifyLevel = verify.VerifyStandard
@@ -130,11 +121,9 @@ func main() {
 					fileID, err = strconv.ParseInt(os.Args[3], 10, 64)
 					if err != nil {
 						log.Fatal("Invalid fileID: ", err)
-						os.Exit(1)
 					}
 				} else {
 					log.Fatal("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
-					os.Exit(1)
 				}
 				if len(os.Args) > 4 {
 					switch os.Args[4] {
@@ -146,14 +135,12 @@ func main() {
 						verifyLevel = verify.VerifyDeep
 					default:
 						log.Fatal("Unknown option for file verify: ", os.Args[4])
-						os.Exit(1)
 					}
 				} else {
 					verifyLevel = verify.VerifyStandard
 				}
 			default:
 				log.Fatal("Unknown target for verify: ", target)
-				os.Exit(1)
 			}
 			//call verify command with target, fileID, and verifyLevel
 			err = maintenance.VerifyCommand(target, int(fileID), verifyLevel)
