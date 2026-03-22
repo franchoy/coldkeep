@@ -70,7 +70,7 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 
 	off := c.offset
 
-	n, err := c.f.Write(data)
+	n, err := c.f.WriteAt(data, off)
 	if err != nil {
 		return 0, err
 	}
