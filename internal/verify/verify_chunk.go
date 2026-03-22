@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -235,7 +236,7 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 			continue
 		}
 
-		if c.chunkOffset < 0 || c.size <= 0 || c.chunkOffset > c.containerSize-(c.size+32+4) {
+		if c.chunkOffset < 0 || c.size <= 0 || c.chunkOffset > c.containerSize-(c.size+container.ChunkRecordHeaderSize) {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d in container %d has invalid location: chunk_offset=%d size=%d container_size=%d", c.id, c.containerID, c.chunkOffset, c.size, c.containerSize))
 		}
