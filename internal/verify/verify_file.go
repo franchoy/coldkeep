@@ -261,6 +261,9 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			}
 			containerInfoByID[containerID] = info
 
+			// Assumes verification runs against a consistent recovered state.
+			// During in-flight writes or immediately after a crash (before recovery),
+			// filesystem and DB metadata can temporarily diverge.
 			if physicalSize != currentSize {
 				return fmt.Errorf("container %d size mismatch: expected %d got %d", containerID, currentSize, physicalSize)
 			}

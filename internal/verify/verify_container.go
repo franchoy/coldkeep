@@ -77,6 +77,9 @@ func checkContainerFile(id int, filename string, currentSize int64) error {
 	actualSize := info.Size()
 
 	// check if file size matches the DB record
+	// Assumes verification runs against a consistent recovered state.
+	// During in-flight writes or immediately after a crash (before recovery),
+	// filesystem and DB metadata can temporarily diverge.
 	if actualSize != currentSize {
 		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, actualSize)
 	}
