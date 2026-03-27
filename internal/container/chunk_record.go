@@ -13,17 +13,6 @@ const (
 	ChunkRecordHeaderSize = ChunkHashSize + ChunkRecordSizeSize
 )
 
-func BuildChunkRecord(chunk []byte) []byte {
-	sum := sha256.Sum256(chunk)
-	record := make([]byte, ChunkRecordHeaderSize+len(chunk))
-
-	copy(record[0:ChunkHashSize], sum[:])
-	binary.LittleEndian.PutUint32(record[ChunkHashSize:ChunkRecordHeaderSize], uint32(len(chunk)))
-	copy(record[ChunkRecordHeaderSize:], chunk)
-
-	return record
-}
-
 func ReadChunkDataAt(c Container, offset int64, expectedSize int64) ([]byte, error) {
 	headerHash, err := c.ReadAt(offset, ChunkHashSize)
 	if err != nil {

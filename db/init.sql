@@ -93,6 +93,29 @@ CREATE INDEX IF NOT EXISTS idx_file_chunk_chunk_id ON file_chunk(chunk_id);
 
 
 -- =========================
+-- blocks table
+-- =========================
+
+CREATE TABLE IF NOT EXISTS blocks (
+    id BIGSERIAL PRIMARY KEY,
+    chunk_id BIGINT NOT NULL UNIQUE
+        REFERENCES chunk(id) ON DELETE RESTRICT,
+    codec TEXT NOT NULL CHECK (codec IN ('plain', 'aes-gcm')),
+    format_version INTEGER NOT NULL CHECK (format_version > 0),
+    plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+    stored_size BIGINT NOT NULL CHECK (stored_size > 0),
+    nonce BYTEA,
+    container_id BIGINT NOT NULL
+        REFERENCES container(id) ON DELETE RESTRICT,
+    block_offset BIGINT NOT NULL CHECK (block_offset >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_blocks_container_id ON blocks(container_id);
+CREATE INDEX IF NOT EXISTS idx_blocks_codec ON blocks(codec);
+
+-- =========================
 -- updated_at trigger
 -- =========================
 
@@ -116,6 +139,11 @@ EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER trg_logical_file_updated_at
 BEFORE UPDATE ON logical_file
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_blocks_updated_at
+BEFORE UPDATE ON blocks
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 

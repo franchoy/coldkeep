@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -256,6 +258,12 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 	start := time.Now()
 
+	blockRepo := &blocks.Repository{
+		DB: dbconn,
+	}
+
+	ctx := context.Background()
+
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -315,9 +323,9 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 
 	for _, chunkData := range chunks {
 		sum := sha256.Sum256(chunkData)
-		hash := hex.EncodeToString(sum[:])
+		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, err := claimChunk(dbconn, hash, int64(len(chunkData)))
+		claimedChunkID, chunkStatus, err := claimChunk(dbconn, chunkHash, int64(len(chunkData)))
 		if err != nil {
 			return err
 		}
@@ -346,7 +354,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 				return err
 			}
 
-			fmt.Printf("Reusing existing chunk %s for file '%s'\n", hash, path)
+			fmt.Printf("Reusing existing chunk %s for file '%s'\n", chunkHash, path)
 			chunkOrder++
 			continue // Move to next chunk
 		}
@@ -383,7 +391,19 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 			}
 
 			// Append chunk data to container file
-			offset, newSize, err := StoreChunk(activeContainer.Container, chunkData)
+			offset, newSize, desc, err := storeChunkAsPlainBlock(
+				ctx,
+				tx,
+				blockRepo,
+				activeContainer,
+				claimedChunkID,
+				chunkHash,
+				chunkData,
+			)
+			_ = offset
+			_ = desc
+
+
 			if err != nil {
 				_ = tx.Rollback()
 				if activeContainer.Container != nil {
@@ -401,11 +421,11 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 				return err
 			}
 
-			// Update chunk row with container_id and chunk_offset, and mark it as "COMPLETED"
+			_ = desc
+
+			// Mark chunk as completed
 			if _, err := tx.Exec(
-				`UPDATE chunk SET container_id = $1, chunk_offset = $2, status = 'COMPLETED' WHERE id = $3`,
-				activeContainer.ID,
-				offset,
+				`UPDATE chunk SET status = 'COMPLETED' WHERE id = $1`,
 				claimedChunkID,
 			); err != nil {
 				_ = tx.Rollback()
@@ -450,7 +470,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 				return err
 			}
 
-			fmt.Printf("Stored new chunk %s for file '%s'\n", hash, path)
+			fmt.Printf("Stored new chunk %s for file '%s'\n", chunkHash, path)
 
 			chunkOrder++
 			break
@@ -564,16 +584,51 @@ func StoreFolder(root string) error {
 // --------------------------------------------------------------------------
 // --------------------------------------------------------------------------
 
-func StoreChunk(c container.Container, chunk []byte) (offset int64, newsize int64, err error) {
-	record := container.BuildChunkRecord(chunk)
+// StoreBlock is the new version of StoreChunk that takes care of block encoding and metadata management in the blocks table
+func storeChunkAsPlainBlock(
+	ctx context.Context,
+	tx *sql.Tx,
+	repo *blocks.Repository,
+	ac container.ActiveContainer,
+	chunkID int64,
+	chunkHash string,
+	chunk []byte,
+) (offset int64, newSize int64, desc *blocks.Descriptor, err error) {
+	//plain transformer
+	transformer := &blocks.PlainTransformer{}
 
-	// append to container
-	offset, err = c.Append(record)
+	encoded, err := transformer.Encode(ctx, blocks.EncodeInput{
+		ChunkID:   chunkID,
+		ChunkHash: chunkHash,
+		Plaintext: chunk,
+	})
+	if err != nil {
+		return 0, 0, nil, err
+	}
+
+	offset, newSize, err = StoreBlockPayload(ac.Container, encoded.Payload)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+
+	encoded.Descriptor.ContainerID = ac.ID
+	encoded.Descriptor.BlockOffset = offset
+
+	if err := repo.Insert(ctx, tx, &encoded.Descriptor); err != nil {
+		return 0, 0, nil, err
+	}
+
+	return offset, newSize, &encoded.Descriptor, nil
+}
+
+// new store payload data into a container directly, without the chunk record wrapper
+func StoreBlockPayload(c container.Container, payload []byte) (offset int64, newSize int64, err error) {
+	offset, err = c.Append(payload)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	return offset, offset + int64(len(record)), nil
+	return offset, offset + int64(len(payload)), nil
 }
 
 func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer) error {
