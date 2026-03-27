@@ -99,18 +99,18 @@ func VerifySystemFull(dbconn *sql.DB) error {
 		return err
 	}
 
-	//check that all chunks are correctly associated with their containers (if container_id != NULL → chunk.status must be COMPLETED)
+	//check that all chunks are correctly associated with their containers (if blocks.container_id exists → chunk.status must be COMPLETED)
 	if err = checkChunkContainerConsistency(dbconn); err != nil {
 		return err
 	}
 
-	//check that all chunks have location (container_id + chunk_offset) consistent with their status
-	//if status = COMPLETED → container_id NOT NULL chunk_offset NOT NULL
+	//check that all chunks have location (blocks.container_id + blocks.block_offset) consistent with their status
+	//if status = COMPLETED → blocks row with container_id and block_offset must exist
 	if err = checkChunkOffsets(dbconn); err != nil {
 		return err
 	}
 
-	//check that all chunks with status = COMPLETED have valid container_id and chunk_offset values and that the chunk_offset + size does not exceed the container's current_size
+	//check that all chunks with status = COMPLETED have valid blocks.container_id and blocks.block_offset values and that block_offset + size does not exceed the container current_size
 	if err = checkChunkOffsetValidity(dbconn); err != nil {
 		return err
 	}

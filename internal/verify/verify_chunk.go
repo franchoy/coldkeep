@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -116,16 +115,17 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 }
 
 func checkChunkOffsets(dbconn *sql.DB) error {
-	// Check that all chunks have location (container_id + chunk_offset) consistent with their status
-	// if status = COMPLETED → container_id NOT NULL chunk_offset NOT NULL
+	// Check that all chunks have location (container_id + block_offset in blocks) consistent with their status
+	// if status = COMPLETED → blocks row exists with container_id and block_offset
 
 	log.Printf("Checking chunk offsets consistency with status...")
 	var errorList []error
 	var errorCount int
-	rows1, err := dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
-							FROM chunk 
-							WHERE status = 'COMPLETED' 
-							AND (container_id IS NULL OR chunk_offset IS NULL);`)
+	rows1, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, c.status
+							FROM chunk c
+							LEFT JOIN blocks b ON b.chunk_id = c.id
+							WHERE c.status = 'COMPLETED'
+							AND (b.container_id IS NULL OR b.block_offset IS NULL);`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query completed chunks: %v", err)
@@ -134,22 +134,21 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	defer func() { _ = rows1.Close() }()
 
 	type chunkInfo struct {
-		id          int
-		containerID int
-		chunkOffset int64
-		size        int64
-		status      string
+		id               int
+		blockContainerID sql.NullInt64
+		blockOffset      sql.NullInt64
+		status           string
 	}
 
 	for rows1.Next() {
 		var c chunkInfo
-		if err := rows1.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.status); err != nil {
+		if err := rows1.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.status); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan completed chunk: %w", err))
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status COMPLETED but missing location info: container_id=%v chunk_offset=%v", c.id, c.containerID, c.chunkOffset))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status COMPLETED but missing location info in blocks: container_id=%v block_offset=%v", c.id, c.blockContainerID, c.blockOffset))
 	}
 
 	if err := rows1.Err(); err != nil {
@@ -159,11 +158,12 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 
 	_ = rows1.Close()
 
-	// if status != COMPLETED → container_id NULL chunk_offset NULL
-	rows2, err := dbconn.Query(`SELECT id, container_id, chunk_offset, size, status 
-							FROM chunk 
-							WHERE status != 'COMPLETED' 
-							AND (container_id IS NOT NULL OR chunk_offset IS NOT NULL);`)
+	// if status != COMPLETED → no row should exist in blocks
+	rows2, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, c.status
+							FROM chunk c
+							LEFT JOIN blocks b ON b.chunk_id = c.id
+							WHERE c.status != 'COMPLETED'
+							AND (b.container_id IS NOT NULL OR b.block_offset IS NOT NULL);`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query non-completed chunks: %v", err)
@@ -173,13 +173,13 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 
 	for rows2.Next() {
 		var c chunkInfo
-		if err := rows2.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.status); err != nil {
+		if err := rows2.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.status); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan non-completed chunk: %w", err))
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status %s but has location info: container_id=%v chunk_offset=%v", c.id, c.status, c.containerID, c.chunkOffset))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status %s but has location info in blocks: container_id=%v block_offset=%v", c.id, c.status, c.blockContainerID, c.blockOffset))
 	}
 
 	if err := rows2.Err(); err != nil {
@@ -204,14 +204,15 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 }
 
 func checkChunkOffsetValidity(dbconn *sql.DB) error {
-	// Check that all chunks with status = COMPLETED have valid container_id and chunk_offset values
-	// and that the chunk_offset + size does not exceed the container's current_size
+	// Check that all chunks with status = COMPLETED have valid blocks.container_id and blocks.block_offset values
+	// and that the block_offset + stored_size does not exceed the container's current_size
 	log.Printf("Checking chunk offset validity for completed chunks...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT c.id, c.container_id, c.chunk_offset, c.size, cont.current_size 
-		FROM chunk c 
-		JOIN container cont ON c.container_id = cont.id 
+	rows, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, b.stored_size, cont.current_size
+		FROM chunk c
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container cont ON b.container_id = cont.id
 		WHERE c.status = 'COMPLETED';`)
 	if err != nil {
 		log.Println(" ERROR ")
@@ -221,24 +222,24 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 	defer func() { _ = rows.Close() }()
 
 	type chunkInfo struct {
-		id            int
-		containerID   int
-		chunkOffset   int64
-		size          int64
-		containerSize int64
+		id               int
+		blockContainerID int
+		blockOffset      int64
+		storedSize       int64
+		containerSize    int64
 	}
 
 	for rows.Next() {
 		var c chunkInfo
-		if err := rows.Scan(&c.id, &c.containerID, &c.chunkOffset, &c.size, &c.containerSize); err != nil {
+		if err := rows.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.storedSize, &c.containerSize); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan completed chunk for offset validity: %w", err))
 			continue
 		}
 
-		if c.chunkOffset < 0 || c.size <= 0 || c.chunkOffset > c.containerSize - c.size {
+		if c.blockOffset < 0 || c.storedSize <= 0 || c.blockOffset > c.containerSize-c.storedSize {
 			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d in container %d has invalid location: chunk_offset=%d size=%d container_size=%d", c.id, c.containerID, c.chunkOffset, c.size, c.containerSize))
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("block for chunk ID %d in container %d has invalid location: block_offset=%d stored_size=%d container_size=%d", c.id, c.blockContainerID, c.blockOffset, c.storedSize, c.containerSize))
 		}
 	}
 

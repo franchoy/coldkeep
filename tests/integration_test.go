@@ -439,15 +439,15 @@ func fetchFirstChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunk
 	err := dbconn.QueryRow(`
 		SELECT
 			c.id,
-			c.container_id,
+			b.container_id,
 			b.block_offset,
 			b.stored_size,
 			ctr.filename,
 			ctr.current_size
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN block b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = c.container_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
@@ -1615,8 +1615,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
-		INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
-		VALUES ($1, $2, 'PROCESSING', NULL, NULL, 0, 0)
+		INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+		VALUES ($1, $2, 'PROCESSING', 0, 0)
 	`, "dummy_chunk_hash", int64(128*1024))
 	if err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
@@ -1742,8 +1742,8 @@ func TestVerifyStandard(t *testing.T) {
 	t.Run("detects orphan chunk", func(t *testing.T) {
 		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
-			VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', NULL, NULL, 1, 0)
+				INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+				VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', 1, 0)
 		`); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
@@ -1812,8 +1812,8 @@ func TestVerifyFull(t *testing.T) {
 
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
-			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', NULL, NULL, 0, 0)
+			INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', 0, 0)
 		`); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
 		}
@@ -2134,8 +2134,8 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	err = dbconn.QueryRow(`
 		SELECT b.block_offset, b.stored_size, ctr.filename
 		FROM chunk c
-		JOIN container ctr ON ctr.id = c.container_id
-		JOIN block b ON b.chunk_id = c.id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
 		WHERE c.status = 'COMPLETED'
 		ORDER BY b.block_offset ASC
 		LIMIT 1
