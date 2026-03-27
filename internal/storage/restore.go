@@ -163,12 +163,12 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 		// Read block payload
 		payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
 		if err != nil {
-			return err
+			return fmt.Errorf("read block payload: %w", err)
 		}
 
 		transformer, err := blocks.GetBlockTransformer(blocks.Codec(blocksCodec))
 		if err != nil {
-			return err
+			return fmt.Errorf("get block transformer: %w", err)
 		}
 
 		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
@@ -186,7 +186,12 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			Payload: payload,
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("decode block payload: %w", err)
+		}
+
+		// Validate plaintext size
+		if int64(len(plaintext)) != plaintextSize {
+			return fmt.Errorf("plaintext size mismatch: expected %d got %d", plaintextSize, len(plaintext))
 		}
 
 		// Validate hashes (DB hash and on-disk record hash)

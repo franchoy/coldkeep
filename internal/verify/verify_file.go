@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -9,12 +10,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func checkFileChunkOrdering(dbconn *sql.DB) error {
-	// Check that file_chunks for each file are ordered by chunk_offset without gaps
+	// Check that all files have properly ordered chunks with no gaps (file_chunk.chunk_order should be sequential starting from 0 for each logical file)
 	log.Printf("Checking file chunk ordering and gaps...")
 	var errorList []error
 	var errorCount int
@@ -124,15 +126,14 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 		return fmt.Errorf("logical file %d has no chunks", fileId)
 	}
 
-	//ensure all chunks exists with status COMPLETED and have valid container_id and chunk_offset
+	//ensure all chunks have status COMPLETED and have associated blocks
 	chunkrows, err := dbconn.Query(`SELECT
 									c.id,
-									c.container_id,
-									c.chunk_offset,
-									c.size,
-									c.status
+									c.status,
+									b.id
 								FROM chunk c
 								JOIN file_chunk fc ON fc.chunk_id = c.id
+								JOIN blocks b ON b.chunk_id = c.id
 								WHERE fc.logical_file_id = $1
 								ORDER BY fc.chunk_order ASC`, fileId)
 	if err != nil {
@@ -142,23 +143,19 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 
 	var chunkCount int
 	for chunkrows.Next() {
-		var id int
-		var containerId sql.NullInt64
-		var chunkOffset sql.NullInt64
-		var size int64
-		var status string
-		if err := chunkrows.Scan(&id, &containerId, &chunkOffset, &size, &status); err != nil {
+		var chunkid int
+		var chunkStatus string
+		var blockId sql.NullInt64
+		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId); err != nil {
 			return fmt.Errorf("failed to scan chunk info: %w", err)
 		}
-		if status != "COMPLETED" {
-			return fmt.Errorf("chunk with ID %d has invalid status: expected COMPLETED but got %s", id, status)
+		if chunkStatus != "COMPLETED" {
+			return fmt.Errorf("chunk with ID %d has invalid status: expected COMPLETED but got %s", chunkid, chunkStatus)
 		}
-		if !containerId.Valid {
-			return fmt.Errorf("chunk with ID %d has invalid location info: container_id is NULL", id)
+		if !blockId.Valid {
+			return fmt.Errorf("chunk %d has no associated block", chunkid)
 		}
-		if !chunkOffset.Valid {
-			return fmt.Errorf("chunk with ID %d has invalid location info: chunk_offset is NULL", id)
-		}
+
 		chunkCount++
 	}
 	if err := chunkrows.Err(); err != nil {
@@ -178,8 +175,8 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 	rows, err := db.Query(`
 		SELECT
 			c.id,
-			c.chunk_offset,
-			c.size,
+			b.block_offset,
+			b.stored_size,
 			ctr.id,
 			ctr.filename,
 			ctr.current_size,
@@ -188,7 +185,8 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			ctr.container_hash 
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN container ctr ON ctr.id = c.container_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order
 	`, fileID)
@@ -196,8 +194,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		return fmt.Errorf("query file containers and offsets: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-
-	const chunkRecordHeaderSize = container.ChunkRecordHeaderSize
 
 	type containerInfo struct {
 		path         string
@@ -209,8 +205,8 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 
 	for rows.Next() {
 		var chunkID int
-		var chunkOffset int64
-		var chunkSize int64
+		var blockOffset int64
+		var storedSize int64
 		var containerID int64
 		var filename string
 		var currentSize int64
@@ -220,8 +216,8 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 
 		if err := rows.Scan(
 			&chunkID,
-			&chunkOffset,
-			&chunkSize,
+			&blockOffset,
+			&storedSize,
 			&containerID,
 			&filename,
 			&currentSize,
@@ -269,12 +265,12 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 			}
 		}
 
-		recordEnd := chunkOffset + chunkRecordHeaderSize + chunkSize
+		recordEnd := blockOffset + storedSize
 		if recordEnd > info.currentSize {
-			return fmt.Errorf("chunk %d exceeds container %d bounds in metadata", chunkID, containerID)
+			return fmt.Errorf("block for chunk %d exceeds container %d bounds in metadata", chunkID, containerID)
 		}
 		if recordEnd > info.physicalSize {
-			return fmt.Errorf("chunk %d exceeds container %d physical file size", chunkID, containerID)
+			return fmt.Errorf("block for chunk %d exceeds container %d physical file size", chunkID, containerID)
 		}
 	}
 
@@ -301,18 +297,24 @@ func VerifyFileFull(dbconn *sql.DB, fileId int) error {
 
 func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 	rows, err := db.Query(`
-		SELECT
+			SELECT
 			c.id,
-			c.chunk_offset,
-			c.size,
+			b.block_offset,
+			b.stored_size,
+			b.plaintext_size,
 			c.chunk_hash,
+			b.codec,
+			b.format_version,
+			b.nonce,
+			b.container_id,
 			ctr.filename,
 			ctr.max_size
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN container ctr ON ctr.id = c.container_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
 		WHERE fc.logical_file_id = $1
-		ORDER BY ctr.id, c.chunk_offset
+		ORDER BY fc.chunk_order
 	`, fileID)
 	if err != nil {
 		return fmt.Errorf("query file chunk hashes: %w", err)
@@ -324,17 +326,27 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 
 	for rows.Next() {
 		var chunkID int
-		var chunkOffset int64
-		var expectedSize int64
+		var blockOffset int64
+		var storedSize int64
+		var plaintextSize int64
 		var expectedChunkHash string
+		var codec string
+		var formatVersion int
+		var nonce []byte
+		var containerID int64
 		var filename string
 		var maxSize int64
 
 		if err := rows.Scan(
 			&chunkID,
-			&chunkOffset,
-			&expectedSize,
+			&blockOffset,
+			&storedSize,
+			&plaintextSize,
 			&expectedChunkHash,
+			&codec,
+			&formatVersion,
+			&nonce,
+			&containerID,
 			&filename,
 			&maxSize,
 		); err != nil {
@@ -356,12 +368,35 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 			currentFilename = filename
 		}
 
-		chunkData, err := container.ReadChunkDataAt(currentContainer, chunkOffset, expectedSize)
+		payload, err := container.ReadPayloadAt(currentContainer, blockOffset, storedSize)
 		if err != nil {
-			return fmt.Errorf("read chunk %d data: %w", chunkID, err)
+			return fmt.Errorf("read block payload for chunk %d: %w", chunkID, err)
 		}
 
-		sum := sha256.Sum256(chunkData)
+		transformer, err := blocks.GetBlockTransformer(blocks.Codec(codec))
+		if err != nil {
+			return fmt.Errorf("get transformer for codec %q: %w", codec, err)
+		}
+
+		plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+			ChunkHash: expectedChunkHash,
+			Descriptor: blocks.Descriptor{
+				ChunkID:       int64(chunkID),
+				Codec:         blocks.Codec(codec),
+				FormatVersion: formatVersion,
+				PlaintextSize: plaintextSize,
+				StoredSize:    storedSize,
+				Nonce:         nonce,
+				ContainerID:   containerID,
+				BlockOffset:   blockOffset,
+			},
+			Payload: payload,
+		})
+		if err != nil {
+			return fmt.Errorf("decode chunk %d data: %w", chunkID, err)
+		}
+
+		sum := sha256.Sum256(plaintext)
 		computedHash := hex.EncodeToString(sum[:])
 		if computedHash != expectedChunkHash {
 			return fmt.Errorf("chunk %d corrupted: expected %s got %s", chunkID, expectedChunkHash, computedHash)
