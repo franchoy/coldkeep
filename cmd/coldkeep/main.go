@@ -49,6 +49,8 @@ func main() {
 	}
 
 	switch parsed.method {
+	case "init":
+		err = initCommand()
 	case "store":
 		err = runStoreCommand(parsed)
 	case "store-folder":
@@ -245,6 +247,7 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
+		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory"},
@@ -284,6 +287,7 @@ func printHelp() {
 	fmt.Println("  COLDKEEP_KEY (required for aes-gcm)")
 	fmt.Println()
 	fmt.Println("Example:")
+	fmt.Println("  coldkeep init")
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep store --codec aes-gcm myfile.bin")
 	fmt.Println("  coldkeep store-folder --codec plain ./samples")
