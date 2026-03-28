@@ -235,8 +235,8 @@ func assertUniqueFileChunkOrders(t *testing.T, dbconn *sql.DB) {
 type fileChunkRecord struct {
 	chunkID              int64
 	containerID          int64
-	chunkOffset          int64
-	chunkSize            int64
+	blockOffset          int64
+	storedSize           int64
 	containerFilename    string
 	containerCurrentSize int64
 }
@@ -439,22 +439,23 @@ func fetchFirstChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunk
 	err := dbconn.QueryRow(`
 		SELECT
 			c.id,
-			c.container_id,
-			c.chunk_offset,
-			c.size,
+			b.container_id,
+			b.block_offset,
+			b.stored_size,
 			ctr.filename,
 			ctr.current_size
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN container ctr ON ctr.id = c.container_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
 	`, fileID).Scan(
 		&record.chunkID,
 		&record.containerID,
-		&record.chunkOffset,
-		&record.chunkSize,
+		&record.blockOffset,
+		&record.storedSize,
 		&record.containerFilename,
 		&record.containerCurrentSize,
 	)
@@ -1614,8 +1615,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
-		INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
-		VALUES ($1, $2, 'PROCESSING', NULL, NULL, 0, 0)
+		INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+		VALUES ($1, $2, 'PROCESSING', 0, 0)
 	`, "dummy_chunk_hash", int64(128*1024))
 	if err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
@@ -1741,8 +1742,8 @@ func TestVerifyStandard(t *testing.T) {
 	t.Run("detects orphan chunk", func(t *testing.T) {
 		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
-			VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', NULL, NULL, 1, 0)
+				INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+				VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', 1, 0)
 		`); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
@@ -1811,8 +1812,8 @@ func TestVerifyFull(t *testing.T) {
 
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, size, status, container_id, chunk_offset, ref_count, retry_count)
-			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', NULL, NULL, 0, 0)
+			INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', 0, 0)
 		`); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
 		}
@@ -1857,8 +1858,8 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("open container file: %v", err)
 	}
 
-	corruptionOffset := record.chunkOffset + container.ChunkRecordHeaderSize
-	if record.chunkSize > 10 {
+	corruptionOffset := record.blockOffset
+	if record.storedSize > 10 {
 		corruptionOffset += 10
 	}
 
@@ -2127,17 +2128,18 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	}
 
 	// Fetch first chunk record to find where to corrupt
-	var chunkOffset int64
-	var chunkSize int64
+	var blockOffset int64
+	var storedSize int64
 	var containerFilename string
 	err = dbconn.QueryRow(`
-		SELECT c.chunk_offset, c.size, ctr.filename
+		SELECT b.block_offset, b.stored_size, ctr.filename
 		FROM chunk c
-		JOIN container ctr ON ctr.id = c.container_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
 		WHERE c.status = 'COMPLETED'
-		ORDER BY c.chunk_offset ASC
+		ORDER BY b.block_offset ASC
 		LIMIT 1
-	`).Scan(&chunkOffset, &chunkSize, &containerFilename)
+	`).Scan(&blockOffset, &storedSize, &containerFilename)
 	if err != nil {
 		t.Fatalf("query first chunk: %v", err)
 	}
@@ -2152,7 +2154,7 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	}
 	defer f.Close()
 
-	corruptionOffset := chunkOffset + container.ChunkRecordHeaderSize + 10
+	corruptionOffset := blockOffset + 10
 	if _, err := f.WriteAt([]byte{0xFF}, corruptionOffset); err != nil {
 		t.Fatalf("corrupt chunk byte: %v", err)
 	}

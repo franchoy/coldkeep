@@ -101,12 +101,13 @@ func RunStats() error {
 		Valid: healthyContainerSize.Valid || quarantinedContainerSize.Valid,
 	}
 
-	// Chunk live/dead stats
+	// Physical live/dead stats use block stored size (on-disk bytes), not logical chunk size.
 	err = dbconn.QueryRow(`
 		SELECT
-			COALESCE(SUM(CASE WHEN ref_count > 0 THEN size ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN ref_count = 0 THEN size ELSE 0 END),0)
-		FROM chunk
+			COALESCE(SUM(CASE WHEN ch.ref_count > 0 THEN b.stored_size ELSE 0 END),0),
+			COALESCE(SUM(CASE WHEN ch.ref_count = 0 THEN b.stored_size ELSE 0 END),0)
+		FROM blocks b
+		JOIN chunk ch ON ch.id = b.chunk_id
 	`).Scan(&liveBytes, &deadBytes)
 	if err != nil {
 		return fmt.Errorf("Failed to query chunk live/dead stats: %w", err)
@@ -144,8 +145,8 @@ func RunStats() error {
 	fmt.Printf("Total containers:                %d\n", totalContainers)
 	fmt.Printf("Total container bytes:           %.2f MB\n", bytesToMB(totalContainerSize.Int64))
 
-	fmt.Printf("Live chunk bytes:                %.2f MB\n", bytesToMB(liveBytes.Int64))
-	fmt.Printf("Dead chunk bytes:                %.2f MB\n", bytesToMB(deadBytes.Int64))
+	fmt.Printf("Live block bytes (physical):     %.2f MB\n", bytesToMB(liveBytes.Int64))
+	fmt.Printf("Dead block bytes (physical):     %.2f MB\n", bytesToMB(deadBytes.Int64))
 
 	if completedLogicalSize.Int64 > 0 {
 		dedupRatio := 1.0 - (float64(liveBytes.Int64) / float64(completedLogicalSize.Int64))
@@ -209,11 +210,12 @@ func RunStats() error {
 			c.id,
 			c.filename,
 			c.current_size,
-			COALESCE(SUM(CASE WHEN ch.ref_count > 0 THEN ch.size ELSE 0 END),0) AS live,
-			COALESCE(SUM(CASE WHEN ch.ref_count = 0 THEN ch.size ELSE 0 END),0) AS dead,
+			COALESCE(SUM(CASE WHEN ch.ref_count > 0 THEN b.stored_size ELSE 0 END),0) AS live,
+			COALESCE(SUM(CASE WHEN ch.ref_count = 0 THEN b.stored_size ELSE 0 END),0) AS dead,
 			c.quarantine
 		FROM container c
-		LEFT JOIN chunk ch ON ch.container_id = c.id
+		LEFT JOIN blocks b ON b.container_id = c.id
+		LEFT JOIN chunk ch ON ch.id = b.chunk_id
 		GROUP BY c.id
 		ORDER BY c.id
 	`)

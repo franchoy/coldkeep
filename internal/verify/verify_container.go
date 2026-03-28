@@ -89,14 +89,14 @@ func checkContainerFile(id int, filename string, currentSize int64) error {
 
 func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	// Check that all chunks are correctly associated with their containers
-	// if container_id != NULL → chunk.status must be COMPLETED
+	// if blocks.container_id exists for a chunk → chunk.status must be COMPLETED
 	log.Printf("Checking chunk-container consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT id 
-							FROM chunk 
-							WHERE container_id IS NOT NULL 
-							AND status != 'COMPLETED';`)
+	rows, err := dbconn.Query(`SELECT c.id
+							FROM chunk c
+							JOIN blocks b ON b.chunk_id = c.id
+							WHERE c.status != 'COMPLETED';`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query chunk-container consistency: %v", err)
@@ -112,7 +112,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk with id %d has container_id but status is not COMPLETED", id))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk with id %d has blocks.container_id but status is not COMPLETED", id))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -206,9 +206,10 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 		WHERE sealed = TRUE
 		AND EXISTS (
 			SELECT 1
-			FROM chunk
-			WHERE chunk.container_id = container.id
-			AND chunk.status != 'COMPLETED'
+			FROM blocks b
+			JOIN chunk ch ON ch.id = b.chunk_id
+			WHERE b.container_id = container.id
+			AND ch.status != 'COMPLETED'
 		)`)
 	if err != nil {
 		log.Println(" ERROR ")

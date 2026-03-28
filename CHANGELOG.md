@@ -10,6 +10,59 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.7.0] - 2026-03-28
+
+Block Abstraction & Encryption Foundations.
+
+This release introduces a major evolution of the storage engine by decoupling
+logical data (chunks) from physical storage (blocks), and adding a pluggable
+encoding layer with support for encryption.
+
+### Added
+
+- Block abstraction layer separating logical chunks from physical storage
+- New `blocks` table storing codec, offsets, sizes, and encryption metadata
+- Pluggable block transformer interface for encoding/decoding
+- AES-GCM encryption support (`aes-gcm` codec)
+- Per-block random nonce storage for encryption
+- CLI support for codec selection (`--codec`)
+- Environment-based configuration (`COLDKEEP_CODEC`, `COLDKEEP_KEY`)
+- `init` command to generate encryption keys and bootstrap local setup
+- Dual-mode CI testing (plain + encrypted storage paths)
+- Improved CLI structure and help output
+
+### Changed
+
+- Storage engine now writes encoded blocks instead of raw chunk records
+- Restore pipeline now decodes blocks before reconstructing files
+- Verification system operates on decoded block payloads
+- Stats now report physical storage using block sizes (`stored_size`)
+- Garbage collection operates on blocks and uses `ref_count` as deletion invariant
+- CLI command handling refactored for extensibility and clarity
+
+### Removed
+
+- Legacy chunk physical fields (`chunk.container_id`, `chunk.chunk_offset`)
+- Chunk record header format (`ChunkRecordHeaderSize` and related logic)
+- Direct chunk-to-container storage model
+
+### Security
+
+- Data at rest can now be encrypted using AES-GCM
+- Encryption keys are externalized via environment variables (not stored in DB or repo)
+- `.env` files are created with restricted permissions (0600)
+- Fail-fast behavior when encryption is requested but no key is provided
+
+### Notes
+
+- This is a foundational release for future features such as key rotation,
+  multi-key support, and advanced encoding strategies.
+- Existing data stored with the `plain` codec remains fully compatible.
+- Coldkeep remains an experimental research project and is not production ready.
+- On-disk formats may continue to evolve before v1.0.
+
+------------------------------------------------------------------------
+
 ## [0.6.0] - 2026-03-22
 
 Storage model evolution and container API redesign.

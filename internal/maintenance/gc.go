@@ -65,9 +65,11 @@ func RunGC(dryRun bool) error {
 		err = tx.QueryRow(`
 			SELECT 
 				COALESCE(sealed, false) AND NOT EXISTS (
-					SELECT 1 FROM chunk
-					WHERE container_id = $1
-					AND ref_count > 0
+					SELECT 1
+					FROM blocks b
+					JOIN chunk ch ON ch.id = b.chunk_id
+					WHERE b.container_id = $1
+					AND ch.ref_count > 0
 				)
 			FROM container where id = $1
 		`, containerID).Scan(&stillEmpty)
@@ -90,8 +92,18 @@ func RunGC(dryRun bool) error {
 			continue
 		}
 
-		// Delete chunks
-		_, err = tx.Exec(`DELETE FROM chunk WHERE container_id = $1 AND status = 'COMPLETED'`, containerID)
+		// Delete location records and then chunk rows linked to this container.
+		_, err = tx.Exec(`
+			WITH deleted_blocks AS (
+				DELETE FROM blocks
+				WHERE container_id = $1
+				RETURNING chunk_id
+			)
+			DELETE FROM chunk c
+			USING deleted_blocks db
+			WHERE c.id = db.chunk_id
+			AND c.ref_count = 0
+		`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return err

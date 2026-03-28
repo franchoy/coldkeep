@@ -6,25 +6,25 @@
 ![Status](https://img.shields.io/badge/status-research%20experimental-orange)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> **Status:** Experimental research project.\
+> **Status:** Experimental research project.  
 > **Not production-ready. Do not use for real or sensitive data.**  
 > On-disk format and APIs may change before v1.0.
 
 coldkeep is a content-addressed storage engine for cold data.
 
 It splits files into content-defined chunks, deduplicates them using SHA-256,
-and stores them in append-only container files with database-backed metadata.
+and stores them as encoded blocks in append-only container files with database-backed metadata.
 
 coldkeep guarantees deterministic, byte-identical restore of stored data,
 validated by end-to-end hashing and resilient across garbage collection
-and restart/recovery.
+and system restart/recovery.
 
-The system prioritizes correctness, determinism, and recoverability
-over performance or feature completeness.
+> coldkeep is designed as a correctness-first storage engine, prioritizing
+> determinism and recoverability over performance and feature completeness.
 
-------------------------------------------------------------------------
+---
 
-# What it does (today)
+## What it does (today)
 
 - Store files or folders by splitting them into content-defined chunks.
 - Deduplicate chunks using SHA-256 (content-addressed storage).
@@ -37,8 +37,141 @@ over performance or feature completeness.
 - Recover from interrupted operations on startup.
 - Provide storage statistics and container health information.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
+- Store data in a format designed for deterministic recovery and long-term integrity.
 
-------------------------------------------------------------------------
+---
+
+## ✨ What’s new in v0.7
+
+- Block abstraction layer (logical vs physical separation)
+- Pluggable codecs (plain + aes-gcm)
+- AES-GCM encryption
+- CLI codec selection
+- `init` command for key setup
+- CI coverage for both modes
+
+---
+
+## 🔐 Encryption model
+
+coldkeep supports pluggable block encoding via codecs:
+
+| Codec | Description |
+| --- | --- |
+| `plain` | No encoding (raw data) |
+| `aes-gcm` | AES-256-GCM authenticated encryption |
+
+Key properties:
+
+- Encryption is applied at the **block level**
+- Hashing is always performed on **plaintext**
+- Each block uses a **random nonce**
+- Encryption keys are **externalized via environment variables**
+
+> The system fails fast if encryption is requested and no key is provided.
+>
+> Encryption is applied after chunking and before storage, ensuring
+> deduplication operates on plaintext while data at rest remains protected.
+
+---
+
+## 🔑 Initialization (Encryption Setup)
+
+Before storing encrypted data, generate a key:
+
+```bash
+coldkeep init
+```
+
+This will:
+
+- generate a secure 256-bit encryption key
+- print it to the console
+- create a `.env` file if it does not already exist
+
+Example:
+
+```bash
+COLDKEEP_KEY=...
+COLDKEEP_CODEC=aes-gcm
+```
+
+Load it into your shell:
+
+```bash
+export $(cat .env | xargs)
+```
+
+Docker:
+
+The `/app` mount ensures the `.env` file created by `init` persists on the host.
+
+```bash
+docker compose run --rm -v "$PWD:/app" app init
+```
+
+> ⚠️ Data encrypted with a key cannot be recovered without it.  
+> There is currently no key rotation or recovery mechanism.
+
+---
+
+## ⚙️ Codec selection
+
+```bash
+coldkeep store --codec plain file.txt
+coldkeep store --codec aes-gcm file.txt
+```
+
+### Codec notes
+
+- `aes-gcm` requires `COLDKEEP_KEY`
+- The CLI flag overrides environment configuration
+- The default codec is `aes-gcm`
+- Using `plain` stores data unencrypted and prints a warning
+
+---
+
+## 🚀 Quickstart
+
+A small `samples/` folder is included for testing.
+
+### Quick start (local, no Docker)
+
+``` bash
+# 1. Generate encryption key and write .env
+coldkeep init
+
+# 2. Load the key into your shell
+export $(cat .env | xargs)
+
+# 3. Store a file
+coldkeep store file.txt
+```
+
+> **Security note:** If you lose the key, data cannot be recovered.  
+> Never commit `.env` to version control.
+
+### Quick start (Docker)
+
+The `/app` mount ensures the `.env` file created by `init` persists on the host.
+
+``` bash
+# 1. Start services
+docker compose up -d --build
+
+# 2. Generate encryption key
+docker compose run --rm -v "$PWD:/app" app init
+
+# 3. Store a file (pass the key from the generated .env)
+docker compose run --rm \
+  --env-file .env \
+  -v "$PWD/samples:/samples" \
+  app store /samples/hello.txt
+```
+
+> **Security note:** If you lose the key, data cannot be recovered.
+
+---
 
 ## Verification
 
@@ -84,11 +217,11 @@ coldkeep verify file <file_id> --level deep
 Deep verification performs full reads of container files and may be slow.  
 Recommended for periodic integrity audits rather than frequent execution.
 
-------------------------------------------------------------------------
+---
 
-# Deterministic restore guarantees (v0.5)
+## Deterministic restore guarantees (v0.5)
 
-Coldkeep v0.5 guarantees deterministic restore at the logical file level.
+coldkeep guarantees deterministic restore at the logical file level (introduced in v0.5).
 
 Current integration coverage validates:
 
@@ -103,9 +236,9 @@ Coldkeep does not yet define a first-class contract for restoring full
 directory trees with exact original layout. Current tests restore logical
 files individually rather than reconstructing folder structure.
 
-------------------------------------------------------------------------
+---
 
-# Design sketch
+## Design sketch
 
 Core tables:
 
@@ -113,19 +246,28 @@ Core tables:
   User-visible file entry (name, size, file_hash).
 
 - **chunk**  
-  Content-addressed chunk (chunk_hash, size, ref_count, container_id, offset).
+  Logical identity of a content-addressed chunk (chunk_hash, size, ref_count).
+
+- **blocks**  
+  Physical placement and codec metadata for each chunk (codec, block_offset, stored_size, container_id).
 
 - **file_chunk**  
   Ordered mapping between logical files and chunks.
 
 - **container**  
-  Physical container file storing chunk data.
+  Physical container file storing raw block payloads.
 
 Containers are stored on disk under:
 
 storage/containers/
 
 Containers follow an append-only write model.
+
+Storage pipeline:
+
+```text
+logical_file -> file_chunk -> chunk -> blocks -> container
+```
 
 Lifecycle states:
 
@@ -135,44 +277,43 @@ Lifecycle states:
 These states allow coldkeep to detect interrupted operations and
 recover safely on startup.
 
-------------------------------------------------------------------------
+---
 
-# Project structure
+## Project structure
 
-    coldkeep/
-    │
-    ├─ cmd/
-    │   └─ coldkeep/          # CLI entrypoint
-    │
-    ├─ internal/
-    │   ├─ chunk/             # chunking logic
-    │   ├─ container/         # container format + management
-    │   ├─ db/                # database helpers
-    │   ├─ listing/           # file listing operations
-    │   ├─ maintenance/       # gc, stats, verify_command
-    │   ├─ recovery/          # system recovery logic
-    │   ├─ storage/           # store / restore / remove pipeline
-    │   ├─ utils_env/         # env helpers
-    │   ├─ utils_print/       # print helpers
-    │   └─ verify/            # verification logic
-    │
-    ├─ tests/                 # integration tests
-    ├─ scripts/               # smoke / development scripts
-    ├─ db/                    # database schema
-    │
-    ├─ docker-compose.yml
-    ├─ go.mod
-    └─ README.md
+```text
+coldkeep/
+│
+├─ cmd/
+│   └─ coldkeep/          # CLI entrypoint
+│
+├─ internal/
+│   ├─ blocks/            # block encoding (plain, aes-gcm)
+│   ├─ chunk/             # chunking logic
+│   ├─ container/         # container format + management
+│   ├─ db/                # database helpers
+│   ├─ listing/           # file listing operations
+│   ├─ maintenance/       # gc, stats, verify_command
+│   ├─ recovery/          # system recovery logic
+│   ├─ storage/           # store / restore / remove pipeline
+│   ├─ utils_env/         # env helpers
+│   ├─ utils_print/       # print helpers
+│   └─ verify/            # verification logic
+│
+├─ tests/                 # integration tests
+├─ scripts/               # smoke / development scripts
+├─ db/                    # database schema
+│
+├─ docker-compose.yml
+├─ go.mod
+└─ README.md
+```
 
-------------------------------------------------------------------------
+---
 
-# Quickstart
+## Development
 
-A small `samples/` folder is included for testing.
-
-------------------------------------------------------------------------
-
-# 🐳 Local development (With Docker)
+### 🐳 Local development (with Docker)
 
 Start services:
 
@@ -216,9 +357,9 @@ Run garbage collection:
 docker compose run --rm app gc
 ```
 
-------------------------------------------------------------------------
+---
 
-# 💻 Local development (without Docker)
+### 💻 Local development (without Docker)
 
 Start Postgres (example):
 
@@ -226,11 +367,7 @@ Start Postgres (example):
 docker compose up -d postgres
 ```
 
-Build the CLI:
-
-``` bash
-go build -o coldkeep ./cmd/coldkeep
-```
+Build the CLI first using the build command below.
 
 Store the sample folder:
 
@@ -262,9 +399,60 @@ Run GC:
 ./coldkeep gc
 ```
 
-------------------------------------------------------------------------
+---
 
-# Configuration
+### Build
+
+``` bash
+go build -o coldkeep ./cmd/coldkeep
+```
+
+### Tests
+
+Run all tests:
+
+``` bash
+go test ./...
+```
+
+Integration tests live under:
+
+tests/
+
+and require a running PostgreSQL instance.
+
+---
+
+### Smoke test
+
+`scripts/smoke.sh` runs a full end-to-end workflow using the `samples/` directory.
+
+store -> stats -> list -> restore -> dedup check.
+
+#### Local
+
+``` bash
+docker compose up -d postgres
+go build -o coldkeep ./cmd/coldkeep
+bash scripts/smoke.sh
+```
+
+#### Docker
+
+``` bash
+docker compose up -d postgres
+
+docker compose run --rm \
+  -e COLDKEEP_SAMPLES_DIR=/samples \
+  -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage \
+  -v "$PWD/samples:/samples" \
+  --entrypoint bash \
+  app scripts/smoke.sh
+```
+
+---
+
+## Configuration
 
 Database configuration is read from environment variables\
 (see `docker-compose.yml` for defaults).
@@ -280,11 +468,11 @@ Additional environment variables used in development:
 - COLDKEEP_STORAGE_DIR
 - COLDKEEP_SAMPLES_DIR
 
-------------------------------------------------------------------------
+---
 
-# Known limitations
+## Known limitations
 
-## Crash recovery
+### Crash recovery
 
 coldkeep includes a crash recovery model based on lifecycle states.
 
@@ -308,14 +496,13 @@ guarantees across filesystem and database layers are not yet complete.
 
 Use only with **disposable test data**.
 
-
-## Container compression
+### Container compression
 
 Whole-container compression has been removed in v0.6.
 
 Future versions may introduce block-level compression.
 
-## Concurrency & integrity
+### Concurrency & integrity
 
 Concurrency support has been significantly improved in v0.6,
 including locking and retry mechanisms.
@@ -323,66 +510,17 @@ including locking and retry mechanisms.
 However, it is still evolving and not yet optimized for
 extreme parallel workloads.
 
-------------------------------------------------------------------------
+---
 
-# Security
+## Security
 
 See `SECURITY.md`.
 
-This is an experimental research project 
+This is an experimental research project with evolving on-disk formats.
 
-Do not use for real or sensitive data
+Do not use for real or sensitive data.
 
-------------------------------------------------------------------------
-
-# Development
-
-## Build
-
-go build -o coldkeep ./cmd/coldkeep
-
-## Tests
-
-Run all tests:
-
-go test ./...
-
-Integration tests live under:
-
-tests/
-
-and require a running PostgreSQL instance.
-
-------------------------------------------------------------------------
-
-## Smoke test
-
-`scripts/smoke.sh` runs a full end-to-end workflow : using the `samples/` directory.
-
-store → stats → list → restore → dedup check.
-
-### Local
-
-``` bash
-docker compose up -d postgres
-go build -o coldkeep ./cmd/coldkeep
-bash scripts/smoke.sh
-```
-
-### Docker
-
-``` bash
-docker compose up -d postgres
-
-docker compose run --rm \
-  -e COLDKEEP_SAMPLES_DIR=/samples \
-  -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage \
-  -v "$PWD/samples:/samples" \
-  --entrypoint bash \
-  app scripts/smoke.sh
-```
-
-------------------------------------------------------------------------
+---
 
 ## Roadmap
 
@@ -420,16 +558,16 @@ class of failure until the system becomes fully trustworthy.
 - **v1.0 — Storage Engine Stable**  
   Coldkeep becomes a trustworthy storage engine for real cold backups.
 
-------------------------------------------------------------------------
+---
 
-# Contributing
+## Contributing
 
 Contributions and discussion are welcome.
 
 See `CONTRIBUTING.md`.
 
-------------------------------------------------------------------------
+---
 
-# License
+## License
 
 Apache-2.0. See `LICENSE`

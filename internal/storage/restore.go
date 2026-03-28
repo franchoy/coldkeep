@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils_print"
@@ -33,6 +35,9 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	// ------------------------------------------------------------
 	// Fetch logical file metadata
 	// ------------------------------------------------------------
+
+	ctx := context.Background()
+
 	var expectedFileHash string
 	var originalName string
 
@@ -47,26 +52,31 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("query logical_file: %w", err)
 	}
-
-	// ------------------------------------------------------------
-	// Fetch chunks in correct order
-	// NOTE: chunk_offset points to the *start of the record* inside the container:
-	//   [32 bytes sha256][4 bytes little-endian uint32 size][<size> bytes data]
-	// ------------------------------------------------------------
+	// ----------------------------------------------------------------------------------------------
+	// Fetch chunk metadata for the logical file from chunk and blocks tables, ordered by chunk_order
+	// ----------------------------------------------------------------------------------------------
 	rows, err := dbconn.Query(`
-		SELECT
-			fc.chunk_order,
-			c.chunk_offset,
-			c.size,
-			c.chunk_hash,
-			ct.filename,
-			c.status,
-			ct.max_size
-		FROM file_chunk fc
-		JOIN chunk c ON fc.chunk_id = c.id
-		JOIN container ct ON c.container_id = ct.id
-		WHERE fc.logical_file_id = $1 
-		ORDER BY fc.chunk_order ASC
+					SELECT
+				fc.chunk_order,
+				b.block_offset,
+				b.plaintext_size,
+				b.stored_size,
+				c.chunk_hash,
+				c.size,
+				b.codec,
+				b.format_version,
+				b.nonce,
+				b.container_id,
+				ctr.filename,
+				c.status,
+				ctr.max_size,
+				c.id
+			FROM file_chunk fc
+			JOIN chunk c ON c.id = fc.chunk_id
+			JOIN blocks b ON b.chunk_id = c.id
+			JOIN container ctr ON ctr.id = b.container_id
+			WHERE fc.logical_file_id = $1
+			ORDER BY fc.chunk_order ASC
 	`, fileID)
 
 	if err != nil {
@@ -104,14 +114,21 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 	for rows.Next() {
 
 		var chunkOrder int64
-		var offset int64
-		var expectedSize int64
+		var blockOffset int64
+		var plaintextSize int64
+		var storedSize int64
 		var expectedChunkHash string
+		var chunksize int64
+		var blocksCodec string
+		var blocksFormatVersion int
+		var blocksNonce []byte
+		var blocksContainerID int64
 		var filename string
 		var chunkStatus string
 		var maxSize int64
+		var chunkID int64
 
-		if err := rows.Scan(&chunkOrder, &offset, &expectedSize, &expectedChunkHash, &filename, &chunkStatus, &maxSize); err != nil {
+		if err := rows.Scan(&chunkOrder, &blockOffset, &plaintextSize, &storedSize, &expectedChunkHash, &chunksize, &blocksCodec, &blocksFormatVersion, &blocksNonce, &blocksContainerID, &filename, &chunkStatus, &maxSize, &chunkID); err != nil {
 			return fmt.Errorf("scan chunk row: %w", err)
 		}
 
@@ -143,26 +160,54 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 			containerfilename = filename
 		}
 
-		chunkData, err := container.ReadChunkDataAt(filecontainer, offset, expectedSize)
+		// Read block payload
+		payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
 		if err != nil {
-			return fmt.Errorf("read chunk data: %w", err)
+			return fmt.Errorf("read block payload: %w", err)
+		}
+
+		transformer, err := blocks.GetBlockTransformer(blocks.Codec(blocksCodec))
+		if err != nil {
+			return fmt.Errorf("get block transformer: %w", err)
+		}
+
+		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
+			ChunkHash: expectedChunkHash,
+			Descriptor: blocks.Descriptor{
+				ChunkID:       chunkID, // if you have it available
+				Codec:         blocks.Codec(blocksCodec),
+				FormatVersion: blocksFormatVersion,
+				PlaintextSize: plaintextSize,
+				StoredSize:    storedSize,
+				Nonce:         blocksNonce,
+				ContainerID:   blocksContainerID,
+				BlockOffset:   blockOffset,
+			},
+			Payload: payload,
+		})
+		if err != nil {
+			return fmt.Errorf("decode block payload: %w", err)
+		}
+
+		// Validate plaintext size
+		if int64(len(plaintext)) != plaintextSize {
+			return fmt.Errorf("plaintext size mismatch: expected %d got %d", plaintextSize, len(plaintext))
 		}
 
 		// Validate hashes (DB hash and on-disk record hash)
-		sum := sha256.Sum256(chunkData)
-		sumHex := hex.EncodeToString(sum[:])
-
-		if sumHex != expectedChunkHash {
-			return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s)", offset, expectedChunkHash, sumHex)
+		sum := sha256.Sum256(plaintext)
+		gotHash := hex.EncodeToString(sum[:])
+		if gotHash != expectedChunkHash {
+			return fmt.Errorf("restored chunk hash mismatch: expected %s got %s", expectedChunkHash, gotHash)
 		}
 
 		// Write to output
-		if _, err := outFile.Write(chunkData); err != nil {
+		if _, err := outFile.Write(plaintext); err != nil {
 			return fmt.Errorf("write output file: %w", err)
 		}
 
 		// Update file hash
-		if _, err := hasher.Write(chunkData); err != nil {
+		if _, err := hasher.Write(plaintext); err != nil {
 			return fmt.Errorf("hash restored data: %w", err)
 		}
 	}

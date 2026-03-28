@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -8,7 +9,7 @@ import (
 	"log"
 	"path/filepath"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
@@ -60,7 +61,7 @@ func VerifySystemStandard(dbconn *sql.DB) error {
 		return err
 	}
 
-	//check that file_chunks for each file are ordered by chunk_offset without gaps
+	//check that all files have properly ordered chunks with no gaps (file_chunk.chunk_order should be sequential starting from 0 for each logical file)
 	if err = checkFileChunkOrdering(dbconn); err != nil {
 		return err
 	}
@@ -98,17 +99,18 @@ func VerifySystemFull(dbconn *sql.DB) error {
 		return err
 	}
 
-	//check that all chunks are correctly associated with their containers (if container_id != NULL → chunk.status must be COMPLETED)
+	//check that all chunks are correctly associated with their containers (if blocks.container_id exists → chunk.status must be COMPLETED)
 	if err = checkChunkContainerConsistency(dbconn); err != nil {
 		return err
 	}
 
-	//check that all chunks have location (container_id + chunk_offset) consistent with their status (if status = COMPLETED → container_id NOT NULL chunk_offset NOT NULL, if status != COMPLETED → container_id NULL chunk_offset NULL)
+	//check that all chunks have location (blocks.container_id + blocks.block_offset) consistent with their status
+	//if status = COMPLETED → blocks row with container_id and block_offset must exist
 	if err = checkChunkOffsets(dbconn); err != nil {
 		return err
 	}
 
-	//check that all chunks with status = COMPLETED have valid container_id and chunk_offset values and that the chunk_offset + size does not exceed the container's current_size
+	//check that all chunks with status = COMPLETED have valid blocks.container_id and blocks.block_offset values and that block_offset + size does not exceed the container current_size
 	if err = checkChunkOffsetValidity(dbconn); err != nil {
 		return err
 	}
@@ -165,8 +167,6 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 	}
 	defer func() { _ = containers.Close() }()
 
-	maxChunkSize := chunk.MaxChunkSize
-
 	for containers.Next() {
 		processedContainers++
 		var containerID int
@@ -186,11 +186,18 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		fileSize := currentSize
 
 		//fetch chunks ordered by offset
-		chunks, err := dbconn.Query(`SELECT chunk_offset, size, chunk_hash
-								FROM chunk
-								WHERE container_id = $1
-								AND status = 'COMPLETED'
-								ORDER BY chunk_offset`, containerID)
+		chunks, err := dbconn.Query(`SELECT 
+									b.block_offset,
+									b.stored_size,
+									b.plaintext_size,
+									c.chunk_hash,
+									b.codec,
+									b.format_version,
+									b.nonce
+								FROM blocks b
+								JOIN chunk c ON c.id = b.chunk_id
+								WHERE b.container_id = $1
+								ORDER BY b.block_offset`, containerID)
 		if err != nil {
 			log.Printf("Failed to query chunks for container %d: %v", containerID, err)
 			errorCount++
@@ -211,52 +218,83 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 
 		for chunks.Next() {
 			hasChunks = true
-			var chunkOffset int64
-			var chunkSize int64
+			var blockOffset int64
+			var storedSize int64
+			var plaintextSize int64
 			var chunkHash string
-			if err := chunks.Scan(&chunkOffset, &chunkSize, &chunkHash); err != nil {
+			var codec string
+			var formatVersion int
+			var nonce []byte
+			if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &chunkHash, &codec, &formatVersion, &nonce); err != nil {
 				log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
 				errorCount++
 				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
 				continue
 			}
 
-			if chunkOffset < 0 || chunkSize < 0 {
-				log.Printf("Invalid chunk offset or size for container %d at offset %d: chunk size %d", containerID, chunkOffset, chunkSize)
+			if blockOffset < 0 || storedSize < 0 {
+				log.Printf("Invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize)
 				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid chunk offset or size for container %d at offset %d: chunk size %d", containerID, chunkOffset, chunkSize))
+				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize))
 				continue
 			}
 
-			if chunkSize > int64(maxChunkSize) {
-				log.Printf("Chunk size %d exceeds maximum allowed size %d for chunk in container %d", chunkSize, maxChunkSize, containerID)
+			if blockOffset+storedSize > fileSize {
+				log.Printf("Block exceeds file size for container %d at offset %d: block size %d, file size %d", containerID, blockOffset, storedSize, fileSize)
 				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk size %d exceeds maximum allowed size %d for chunk in container %d", chunkSize, maxChunkSize, containerID))
+				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("block exceeds file size for container %d at offset %d: block size %d, file size %d", containerID, blockOffset, storedSize, fileSize))
 				continue
 			}
 
-			if chunkOffset+container.ChunkRecordHeaderSize+chunkSize > fileSize {
-				log.Printf("Chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk exceeds file size for container %d at offset %d: chunk size %d, file size %d", containerID, chunkOffset, chunkSize, fileSize))
-				continue
-			}
-
-			chunkData, err := container.ReadChunkDataAt(filecontainer, chunkOffset, chunkSize)
+			payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
 			if err != nil {
 				_ = filecontainer.Close()
 				_ = chunks.Close()
-				return fmt.Errorf("read chunk data for container %q: %w", filename, err)
+				return fmt.Errorf("read block payload for container %q: %w", filename, err)
+			}
+			transformer, err := blocks.GetBlockTransformer(blocks.Codec(codec))
+			if err != nil {
+				_ = filecontainer.Close()
+				_ = chunks.Close()
+				return fmt.Errorf("get transformer for codec %q: %w", codec, err)
+			}
+
+			plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+				ChunkHash: chunkHash,
+				Descriptor: blocks.Descriptor{
+					Codec:         blocks.Codec(codec),
+					FormatVersion: formatVersion,
+					PlaintextSize: plaintextSize,
+					StoredSize:    storedSize,
+					Nonce:         nonce,
+					ContainerID:   int64(containerID),
+					BlockOffset:   blockOffset,
+				},
+				Payload: payload,
+			})
+			if err != nil {
+				_ = filecontainer.Close()
+				_ = chunks.Close()
+				return fmt.Errorf("decode block payload for container %q: %w", filename, err)
+			}
+
+			if int64(len(plaintext)) != plaintextSize {
+				return fmt.Errorf(
+					"plaintext size mismatch at offset %d: expected %d got %d",
+					blockOffset,
+					plaintextSize,
+					len(plaintext),
+				)
 			}
 
 			// Validate hashes (DB hash and on-disk record hash)
-			sum := sha256.Sum256(chunkData)
+			sum := sha256.Sum256(plaintext)
 			sumHex := hex.EncodeToString(sum[:])
 
 			if sumHex != chunkHash {
 				_ = filecontainer.Close()
 				_ = chunks.Close()
-				return fmt.Errorf("chunk hash mismatch at offset %d (db=%s computed=%s) for container %q", chunkOffset, chunkHash, sumHex, filename)
+				return fmt.Errorf("block hash mismatch at offset %d (db=%s computed=%s) for container %q", blockOffset, chunkHash, sumHex, filename)
 			}
 
 		}
