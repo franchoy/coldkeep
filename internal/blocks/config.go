@@ -2,6 +2,7 @@ package blocks
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
@@ -17,8 +18,12 @@ func ParseCodec(value string) (Codec, error) {
 	}
 }
 
-// default to AES-GCM if not set
+// LoadDefaultCodec resolves codec from env with a secure default.
+// Precedence: env (COLDKEEP_CODEC) -> default (aes-gcm).
 func LoadDefaultCodec() (Codec, error) {
-	value := utils_env.GetenvOrDefault("COLDKEEP_CODEC", string(CodecPlain))
+	value := utils_env.GetenvOrDefault("COLDKEEP_CODEC", string(CodecAESGCM))
+	if strings.TrimSpace(value) == "" {
+		value = string(CodecAESGCM)
+	}
 	return ParseCodec(value)
 }

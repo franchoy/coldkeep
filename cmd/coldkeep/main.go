@@ -280,6 +280,8 @@ func printHelp() {
 	fmt.Println("  DB_NAME")
 	fmt.Println("  COLDKEEP_STORAGE_DIR (default: ./storage/containers)")
 	fmt.Println("  COLDKEEP_CONTAINER_MAX_SIZE_MB (default: 64)")
+	fmt.Println("  COLDKEEP_CODEC (default: aes-gcm)")
+	fmt.Println("  COLDKEEP_KEY (required for aes-gcm)")
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep store myfile.bin")

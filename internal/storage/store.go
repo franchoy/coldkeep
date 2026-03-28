@@ -284,6 +284,14 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (err error) {
 	start := time.Now()
 
+	transformer, err := blocks.GetBlockTransformer(codec)
+	if err != nil {
+		if codec == blocks.CodecAESGCM {
+			return fmt.Errorf("encryption key required for aes-gcm: %w", err)
+		}
+		return fmt.Errorf("initialize codec %s: %w", codec, err)
+	}
+
 	blockRepo := &blocks.Repository{
 		DB: dbconn,
 	}
@@ -425,7 +433,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 				claimedChunkID,
 				chunkHash,
 				chunkData,
-				codec,
+				transformer,
 			)
 			_ = offset
 			_ = desc
@@ -637,15 +645,8 @@ func storeChunkAsPlainBlock(
 	chunkID int64,
 	chunkHash string,
 	chunk []byte,
-	codec blocks.Codec,
+	transformer blocks.Transformer,
 ) (offset int64, newSize int64, desc *blocks.Descriptor, err error) {
-
-	//plain transformer
-	transformer, err := blocks.GetBlockTransformer(codec)
-	if err != nil {
-		return 0, 0, nil, fmt.Errorf("get block transformer: %w", err)
-	}
-
 	encoded, err := transformer.Encode(ctx, blocks.EncodeInput{
 		ChunkID:   chunkID,
 		ChunkHash: chunkHash,
