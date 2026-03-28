@@ -17,7 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 var flagsWithValues = map[string]bool{
 	"codec":    true,
@@ -250,7 +250,7 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 }
 
 func printHelp() {
-	fmt.Println("coldkeep (V0.6.0)")
+	fmt.Println("coldkeep (V0.7.0)")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
