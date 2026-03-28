@@ -38,7 +38,15 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test (race enabled)
+      - name: Test plain codec (race enabled)
+        env:
+          COLDKEEP_CODEC: plain
+        run: go test -race ./...
+
+      - name: Test aes-gcm codec (race enabled)
+        env:
+          COLDKEEP_CODEC: aes-gcm
+          COLDKEEP_KEY: ${{ secrets.COLDKEEP_KEY }}
         run: go test -race ./...
 
       - name: Build packages
