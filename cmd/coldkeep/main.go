@@ -38,6 +38,8 @@ func main() {
 		log.Printf("System recovery failed: %v\n", err)
 	}
 
+	checkEnvFilePermissions()
+
 	if len(os.Args) < 2 {
 		printHelp()
 		return
@@ -99,6 +101,10 @@ func runStoreCommand(parsed parsedCommandLine) error {
 		return storage.StoreFile(path)
 	}
 
+	if codecName == "plain" {
+		fmt.Fprintln(os.Stderr, "WARNING: storing data without encryption")
+	}
+
 	return storage.StoreFileWithCodec(path, codecName)
 }
 
@@ -114,6 +120,10 @@ func runStoreFolderCommand(parsed parsedCommandLine) error {
 	codecName, _ := parsed.firstFlagValue("codec")
 	if codecName == "" {
 		return storage.StoreFolder(path)
+	}
+
+	if codecName == "plain" {
+		fmt.Fprintln(os.Stderr, "WARNING: storing data without encryption")
 	}
 
 	return storage.StoreFolderWithCodec(path, codecName)

@@ -58,3 +58,14 @@ func isRunningInContainer() bool {
 	_, err := os.Stat("/.dockerenv")
 	return err == nil
 }
+
+// checkEnvFilePermissions warns if .env exists with permissions other than 0600.
+func checkEnvFilePermissions() {
+	info, err := os.Stat(".env")
+	if err != nil {
+		return // .env does not exist, nothing to check
+	}
+	if info.Mode().Perm() != 0600 {
+		fmt.Fprintf(os.Stderr, "WARNING: .env has permissions %s — should be 0600. Run: chmod 0600 .env\n", info.Mode().Perm())
+	}
+}

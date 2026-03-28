@@ -177,6 +177,40 @@ recover safely on startup.
 
 A small `samples/` folder is included for testing.
 
+## Quick start (local, no Docker)
+
+``` bash
+# 1. Generate encryption key and write .env
+coldkeep init
+
+# 2. Load the key into your shell
+export $(cat .env | xargs)
+
+# 3. Store a file
+coldkeep store file.txt
+```
+
+> **Security note:** If you lose the key, data cannot be recovered.  
+> Never commit `.env` to version control.
+
+## Quick start (Docker)
+
+``` bash
+# 1. Start services
+docker compose up -d --build
+
+# 2. Generate encryption key — mounted volume persists .env on the host
+docker compose run --rm -v "$PWD:/app" app init
+
+# 3. Store a file (pass the key from the generated .env)
+docker compose run --rm \
+  --env-file .env \
+  -v "$PWD/samples:/samples" \
+  app store /samples/hello.txt
+```
+
+> **Security note:** If you lose the key, data cannot be recovered.
+
 ------------------------------------------------------------------------
 
 # 🐳 Local development (With Docker)

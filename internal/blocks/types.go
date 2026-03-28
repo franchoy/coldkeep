@@ -53,7 +53,7 @@ func GetBlockTransformer(codec Codec) (Transformer, error) {
 	case CodecAESGCM:
 		key, err := LoadEncryptionKey()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("aes-gcm requires COLDKEEP_KEY\n\nRun:\n  coldkeep init")
 		}
 		return &AESGCMTransformer{Key: key}, nil
 	default:
