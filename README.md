@@ -113,19 +113,26 @@ Core tables:
   User-visible file entry (name, size, file_hash).
 
 - **chunk**  
-  Content-addressed chunk (chunk_hash, size, ref_count, container_id, offset).
+  Logical identity of a content-addressed chunk (chunk_hash, size, ref_count).
+
+- **blocks**  
+  Physical placement and codec metadata for each chunk (codec, block_offset, stored_size, container_id).
 
 - **file_chunk**  
   Ordered mapping between logical files and chunks.
 
 - **container**  
-  Physical container file storing chunk data.
+  Physical container file storing raw block payloads.
 
 Containers are stored on disk under:
 
 storage/containers/
 
 Containers follow an append-only write model.
+
+Storage pipeline:
+
+    logical_file -> file_chunk -> chunk -> blocks -> container
 
 Lifecycle states:
 

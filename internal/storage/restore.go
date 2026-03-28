@@ -68,7 +68,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 				b.nonce,
 				b.container_id,
 				ctr.filename,
-				c.chunk_status,
+				c.status,
 				ctr.max_size,
 				c.id
 			FROM file_chunk fc

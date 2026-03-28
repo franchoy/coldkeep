@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 INSERT INTO schema_version(version)
-SELECT 2
+SELECT 3
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 
 -- =========================
@@ -40,9 +40,6 @@ CREATE TABLE IF NOT EXISTS chunk (
   chunk_hash TEXT NOT NULL,
   size BIGINT NOT NULL CHECK (size > 0),
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
-  container_id BIGINT
-    REFERENCES container(id) ON DELETE RESTRICT,
-  chunk_offset BIGINT CHECK (chunk_offset >= 0),
   ref_count BIGINT NOT NULL DEFAULT 0 CHECK (ref_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -50,7 +47,6 @@ CREATE TABLE IF NOT EXISTS chunk (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
-CREATE INDEX IF NOT EXISTS idx_chunk_container ON chunk(container_id);
 CREATE INDEX IF NOT EXISTS idx_chunk_ref_count ON chunk(ref_count);
 CREATE INDEX IF NOT EXISTS idx_chunk_status ON chunk(status);
 

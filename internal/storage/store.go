@@ -403,7 +403,6 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 			_ = offset
 			_ = desc
 
-
 			if err != nil {
 				_ = tx.Rollback()
 				if activeContainer.Container != nil {

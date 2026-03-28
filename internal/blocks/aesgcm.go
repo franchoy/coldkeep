@@ -2,7 +2,11 @@ package blocks
 
 import "context"
 
-// AESGCMTransformer stores chunks using AES-GCM encryption.
+// WARNING: AESGCMTransformer is a NON-FUNCTIONAL PLACEHOLDER.
+// It does NOT encrypt data. It passes plaintext through unchanged.
+// The codec field is set to "aes-gcm" but no encryption is performed.
+// Do NOT use this in production or treat it as encryption-capable.
+// This must be replaced with a real AES-GCM implementation before enabling.
 type AESGCMTransformer struct{}
 
 func (t *AESGCMTransformer) Encode(ctx context.Context, in EncodeInput) (*EncodedBlock, error) {
@@ -22,7 +26,8 @@ func (t *AESGCMTransformer) Encode(ctx context.Context, in EncodeInput) (*Encode
 	}, nil
 }
 
-// No transformation needed for plain codec, just return the payload as-is.
+// No encryption performed — plaintext is copied through unchanged.
+// This is a placeholder stub; see WARNING above.
 func (t *AESGCMTransformer) Decode(ctx context.Context, in DecodeInput) ([]byte, error) {
 	// Copy payload to avoid mutation
 	out := append([]byte(nil), in.Payload...)
