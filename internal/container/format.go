@@ -15,7 +15,7 @@ const (
 
 const (
 	ContainerVersionMajor = 0
-	ContainerVersionMinor = 6
+	ContainerVersionMinor = 7
 )
 
 // Reserved future flags (not used yet)

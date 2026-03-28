@@ -145,8 +145,8 @@ func RunStats() error {
 	fmt.Printf("Total containers:                %d\n", totalContainers)
 	fmt.Printf("Total container bytes:           %.2f MB\n", bytesToMB(totalContainerSize.Int64))
 
-	fmt.Printf("Live chunk bytes:                %.2f MB\n", bytesToMB(liveBytes.Int64))
-	fmt.Printf("Dead chunk bytes:                %.2f MB\n", bytesToMB(deadBytes.Int64))
+	fmt.Printf("Live block bytes (physical):     %.2f MB\n", bytesToMB(liveBytes.Int64))
+	fmt.Printf("Dead block bytes (physical):     %.2f MB\n", bytesToMB(deadBytes.Int64))
 
 	if completedLogicalSize.Int64 > 0 {
 		dedupRatio := 1.0 - (float64(liveBytes.Int64) / float64(completedLogicalSize.Int64))
