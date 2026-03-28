@@ -24,17 +24,34 @@ import (
 var errContainerLockContention = errors.New("container row lock contention")
 
 func StoreFile(path string) error {
+	codec, err := blocks.LoadDefaultCodec()
+	if err != nil {
+		return err
+	}
+
+	return storeFile(path, codec)
+}
+
+func StoreFileWithCodec(path string, codecName string) error {
+	codec, err := blocks.ParseCodec(codecName)
+	if err != nil {
+		return err
+	}
+
+	return storeFile(path, codec)
+}
+
+func storeFile(path string, codec blocks.Codec) error {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	if err := StoreFileWithDB(dbconn, path); err != nil {
+	if err := StoreFileWithDBAndCodec(dbconn, path, codec); err != nil {
 		return err
 	}
 	return nil
-
 }
 
 func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
@@ -256,6 +273,15 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 }
 
 func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
+	codec, err := blocks.LoadDefaultCodec()
+	if err != nil {
+		return err
+	}
+
+	return StoreFileWithDBAndCodec(dbconn, path, codec)
+}
+
+func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (err error) {
 	start := time.Now()
 
 	blockRepo := &blocks.Repository{
@@ -399,6 +425,7 @@ func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
 				claimedChunkID,
 				chunkHash,
 				chunkData,
+				codec,
 			)
 			_ = offset
 			_ = desc
@@ -522,6 +549,24 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int
 }
 
 func StoreFolder(root string) error {
+	codec, err := blocks.LoadDefaultCodec()
+	if err != nil {
+		return err
+	}
+
+	return storeFolder(root, codec)
+}
+
+func StoreFolderWithCodec(root string, codecName string) error {
+	codec, err := blocks.ParseCodec(codecName)
+	if err != nil {
+		return err
+	}
+
+	return storeFolder(root, codec)
+}
+
+func storeFolder(root string, codec blocks.Codec) error {
 	start := time.Now()
 
 	dbconn, err := db.ConnectDB()
@@ -539,7 +584,7 @@ func StoreFolder(root string) error {
 	for i := 0; i < workerCount; i++ {
 		go func() {
 			for p := range fileChan {
-				if err := StoreFileWithDB(dbconn, p); err != nil {
+				if err := StoreFileWithDBAndCodec(dbconn, p, codec); err != nil {
 					errChan <- err
 					return
 				}
@@ -592,9 +637,14 @@ func storeChunkAsPlainBlock(
 	chunkID int64,
 	chunkHash string,
 	chunk []byte,
+	codec blocks.Codec,
 ) (offset int64, newSize int64, desc *blocks.Descriptor, err error) {
+
 	//plain transformer
-	transformer := &blocks.PlainTransformer{}
+	transformer, err := blocks.GetBlockTransformer(codec)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("get block transformer: %w", err)
+	}
 
 	encoded, err := transformer.Encode(ctx, blocks.EncodeInput{
 		ChunkID:   chunkID,

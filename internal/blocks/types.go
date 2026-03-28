@@ -51,8 +51,12 @@ func GetBlockTransformer(codec Codec) (Transformer, error) {
 	case CodecPlain:
 		return &PlainTransformer{}, nil
 	case CodecAESGCM:
-		return &AESGCMTransformer{}, nil
+		key, err := LoadEncryptionKey()
+		if err != nil {
+			return nil, err
+		}
+		return &AESGCMTransformer{Key: key}, nil
 	default:
-		return nil, fmt.Errorf("unsupported codec: %s", codec)
+		return nil, fmt.Errorf("unknown codec: %s", codec)
 	}
 }

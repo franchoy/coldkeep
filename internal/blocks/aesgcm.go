@@ -1,35 +1,66 @@
 package blocks
 
-import "context"
+import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"fmt"
+	"io"
+)
 
-// WARNING: AESGCMTransformer is a NON-FUNCTIONAL PLACEHOLDER.
-// It does NOT encrypt data. It passes plaintext through unchanged.
-// The codec field is set to "aes-gcm" but no encryption is performed.
-// Do NOT use this in production or treat it as encryption-capable.
-// This must be replaced with a real AES-GCM implementation before enabling.
-type AESGCMTransformer struct{}
+type AESGCMTransformer struct {
+	Key []byte
+}
 
 func (t *AESGCMTransformer) Encode(ctx context.Context, in EncodeInput) (*EncodedBlock, error) {
-	// Copy plaintext to avoid accidental mutation
-	payload := append([]byte(nil), in.Plaintext...)
+	block, err := aes.NewCipher(t.Key)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("generate nonce: %w", err)
+	}
+
+	ciphertext := aead.Seal(nil, nonce, in.Plaintext, nil)
+
+	desc := Descriptor{
+		ChunkID:       in.ChunkID,
+		Codec:         CodecAESGCM,
+		FormatVersion: 1,
+		PlaintextSize: int64(len(in.Plaintext)),
+		StoredSize:    int64(len(ciphertext)),
+		Nonce:         nonce,
+	}
 
 	return &EncodedBlock{
-		Descriptor: Descriptor{
-			ChunkID:       in.ChunkID,
-			Codec:         CodecAESGCM,
-			FormatVersion: 1,
-			PlaintextSize: int64(len(in.Plaintext)),
-			StoredSize:    int64(len(payload)),
-			Nonce:         nil,
-		},
-		Payload: payload,
+		Descriptor: desc,
+		Payload:    ciphertext,
 	}, nil
 }
 
-// No encryption performed — plaintext is copied through unchanged.
-// This is a placeholder stub; see WARNING above.
 func (t *AESGCMTransformer) Decode(ctx context.Context, in DecodeInput) ([]byte, error) {
-	// Copy payload to avoid mutation
-	out := append([]byte(nil), in.Payload...)
-	return out, nil
+	block, err := aes.NewCipher(t.Key)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+
+	plaintext, err := aead.Open(nil, in.Descriptor.Nonce, in.Payload, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt payload: %w", err)
+	}
+
+	return plaintext, nil
 }
