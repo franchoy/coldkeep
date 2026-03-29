@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -21,12 +23,27 @@ import (
 
 const version = "0.7.0"
 
+const (
+	exitSuccess = 0
+	exitGeneral = 1
+	exitUsage   = 2
+	exitVerify  = 3
+)
+
 var flagsWithValues = map[string]bool{
 	"codec":    true,
 	"name":     true,
 	"min-size": true,
 	"max-size": true,
+	"output":   true,
 }
+
+type cliOutputMode string
+
+const (
+	outputModeText cliOutputMode = "text"
+	outputModeJSON cliOutputMode = "json"
+)
 
 type parsedCommandLine struct {
 	method      string
@@ -35,21 +52,47 @@ type parsedCommandLine struct {
 }
 
 func main() {
+	code := runCLI(os.Args[1:])
+	if code != exitSuccess {
+		os.Exit(code)
+	}
+}
+
+func runCLI(args []string) int {
+	startupMode := inferOutputModeFromArgs(args)
+	if startupMode == outputModeJSON {
+		prevOutput := log.Writer()
+		prevFlags := log.Flags()
+		log.SetOutput(io.Discard)
+		log.SetFlags(0)
+		defer func() {
+			log.SetOutput(prevOutput)
+			log.SetFlags(prevFlags)
+		}()
+	}
+
 	err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir)
 	if err != nil {
 		log.Printf("System recovery failed: %v\n", err)
 	}
 
-	checkEnvFilePermissions()
-
-	if len(os.Args) < 2 {
-		printHelp()
-		return
+	if startupMode != outputModeJSON {
+		checkEnvFilePermissions()
 	}
 
-	parsed, err := parseCommandLine(os.Args[1:], flagsWithValues)
+	if len(args) < 1 {
+		printHelp()
+		return exitSuccess
+	}
+
+	parsed, err := parseCommandLine(args, flagsWithValues)
 	if err != nil {
-		log.Fatal(err)
+		return printCLIError(err, outputModeText)
+	}
+
+	outputMode, err := resolveOutputMode(parsed)
+	if err != nil {
+		return printCLIError(err, outputModeText)
 	}
 
 	switch parsed.method {
@@ -66,27 +109,175 @@ func main() {
 	case "gc":
 		err = runGCCommand(parsed)
 	case "stats":
-		err = runStatsCommand(parsed)
+		err = runStatsCommand(parsed, outputMode)
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
 		fmt.Println("coldkeep version", version)
 	case "list":
-		err = runListCommand(parsed)
+		err = runListCommand(parsed, outputMode)
 	case "search":
-		err = runSearchCommand(parsed)
+		err = runSearchCommand(parsed, outputMode)
 	case "verify":
 		err = runVerifyCommand(parsed)
 	default:
-		fmt.Println("Unknown command:", parsed.method)
-		fmt.Println()
-		printHelp()
+		err = fmt.Errorf("unknown command: %s", parsed.method)
 	}
 
 	if err != nil {
-		log.Printf("Error: %v\n", err)
-		os.Exit(1)
+		return printCLIError(err, outputMode)
 	}
+
+	printCLISuccess(parsed, outputMode)
+
+	return exitSuccess
+}
+
+func printCLIError(err error, mode cliOutputMode) int {
+	code := classifyExitCode(err)
+	if mode == outputModeJSON {
+		payload := map[string]any{
+			"status":      "error",
+			"error_class": exitCodeLabel(code),
+			"exit_code":   code,
+			"message":     strings.TrimSpace(err.Error()),
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Fprintln(os.Stderr, string(encoded))
+		return code
+	}
+
+	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitCodeLabel(code), strings.TrimSpace(err.Error()))
+	return code
+}
+
+func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
+	if mode != outputModeJSON {
+		return
+	}
+	if parsed.method != "verify" {
+		// list/search/stats emit their own JSON payload; nothing to add here.
+		return
+	}
+
+	payload := map[string]any{
+		"status":  "ok",
+		"command": parsed.method,
+	}
+
+	if len(parsed.positionals) > 0 {
+		payload["target"] = parsed.positionals[0]
+	}
+	if verifyLevel, err := parseVerifyLevel(parsed); err == nil {
+		payload["level"] = verifyLevelToString(verifyLevel)
+	}
+
+	encoded, _ := json.Marshal(payload)
+	fmt.Println(string(encoded))
+}
+
+func verifyLevelToString(level verify.VerifyLevel) string {
+	switch level {
+	case verify.VerifyStandard:
+		return "standard"
+	case verify.VerifyFull:
+		return "full"
+	case verify.VerifyDeep:
+		return "deep"
+	default:
+		return "unknown"
+	}
+}
+
+func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
+	value, hasValue := parsed.firstFlagValue("output")
+	if !hasValue {
+		return outputModeText, nil
+	}
+
+	switch parsed.method {
+	case "verify", "list", "search", "stats":
+		// --output supported
+	default:
+		return outputModeText, fmt.Errorf("--output is not supported for command %q", parsed.method)
+	}
+
+	switch strings.ToLower(value) {
+	case "", "text":
+		return outputModeText, nil
+	case "json":
+		return outputModeJSON, nil
+	default:
+		return outputModeText, fmt.Errorf("invalid --output value %q (allowed: text, json)", value)
+	}
+}
+
+var outputSupportedCommands = map[string]bool{
+	"verify": true,
+	"list":   true,
+	"search": true,
+	"stats":  true,
+}
+
+func inferOutputModeFromArgs(args []string) cliOutputMode {
+	if len(args) < 1 || !outputSupportedCommands[args[0]] {
+		return outputModeText
+	}
+
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--output=") {
+			if strings.EqualFold(strings.TrimPrefix(arg, "--output="), "json") {
+				return outputModeJSON
+			}
+		}
+		if arg == "--output" && i+1 < len(args) {
+			if strings.EqualFold(args[i+1], "json") {
+				return outputModeJSON
+			}
+		}
+	}
+
+	return outputModeText
+}
+
+func exitCodeLabel(code int) string {
+	switch code {
+	case exitUsage:
+		return "USAGE"
+	case exitVerify:
+		return "VERIFY"
+	default:
+		return "GENERAL"
+	}
+}
+
+func classifyExitCode(err error) int {
+	if err == nil {
+		return exitSuccess
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+
+	if strings.Contains(msg, "usage:") ||
+		strings.Contains(msg, "missing command") ||
+		strings.Contains(msg, "missing value for --") ||
+		strings.Contains(msg, "unknown flag(s)") ||
+		strings.Contains(msg, "unknown command") ||
+		strings.Contains(msg, "unknown option for gc") ||
+		strings.Contains(msg, "invalid fileid") ||
+		strings.Contains(msg, "unknown target for verify") ||
+		strings.Contains(msg, "unknown verify level") ||
+		strings.Contains(msg, "multiple verify levels provided") ||
+		strings.Contains(msg, "verify level provided both as flag and positional argument") {
+		return exitUsage
+	}
+
+	if strings.Contains(msg, "verification failed") || strings.Contains(msg, "verify ") {
+		return exitVerify
+	}
+
+	return exitGeneral
 }
 
 func runStoreCommand(parsed parsedCommandLine) error {
@@ -215,38 +406,89 @@ func runGCCommand(parsed parsedCommandLine) error {
 	return maintenance.RunGCWithContainersDir(dryRun, container.ContainersDir)
 }
 
-func runStatsCommand(parsed parsedCommandLine) error {
-	if err := ensureAllowedFlags(parsed); err != nil {
+func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
 		return errors.New("Usage: coldkeep stats")
 	}
 
+	if outputMode == outputModeJSON {
+		r, err := maintenance.RunStatsResult()
+		if err != nil {
+			return err
+		}
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "stats",
+			"data":    r,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
 	return maintenance.RunStats()
 }
 
-func runListCommand(parsed parsedCommandLine) error {
-	if err := ensureAllowedFlags(parsed); err != nil {
+func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
 		return errors.New("Usage: coldkeep list")
 	}
 
+	if outputMode == outputModeJSON {
+		files, err := listing.ListFilesResult()
+		if err != nil {
+			return err
+		}
+		if files == nil {
+			files = []listing.FileRecord{}
+		}
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "list",
+			"files":   files,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
 	return listing.ListFiles()
 }
 
-func runSearchCommand(parsed parsedCommandLine) error {
-	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size"); err != nil {
+func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "output"); err != nil {
 		return err
+	}
+
+	if outputMode == outputModeJSON {
+		files, err := listing.SearchFilesResult(searchArgs(parsed))
+		if err != nil {
+			return err
+		}
+		if files == nil {
+			files = []listing.FileRecord{}
+		}
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "search",
+			"files":   files,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
 	}
 
 	return listing.SearchFiles(searchArgs(parsed))
 }
 
 func runVerifyCommand(parsed parsedCommandLine) error {
-	if err := ensureAllowedFlags(parsed, "standard", "full", "deep"); err != nil {
+	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) == 0 {
