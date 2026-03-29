@@ -1,12 +1,21 @@
 package container
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/lib/pq"
 )
+
+var ErrContainerLockContention = errors.New("container row lock contention")
+
+var defaultLockRetryAttempts = 3
+
+var defaultLockRetryWait = 25 * time.Millisecond
 
 // LocalPlacement describes where a payload was physically appended.
 type LocalPlacement struct {
@@ -16,6 +25,9 @@ type LocalPlacement struct {
 	StoredSize       int64
 	NewContainerSize int64
 	Rotated          bool
+	PreviousID       int64
+	PreviousFilename string
+	PreviousSize     int64
 	Full             bool
 }
 
@@ -76,7 +88,14 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	}
 
 	rotated := false
+	var previousID int64
+	var previousFilename string
+	var previousSize int64
 	if w.activeSize+int64(len(payload)) > w.maxSize {
+		previousID = w.activeID
+		previousFilename = w.activeFile
+		previousSize = w.activeSize
+
 		if err := w.finalizePhysicalOnly(); err != nil {
 			return LocalPlacement{}, fmt.Errorf("rotate finalize active container: %w", err)
 		}
@@ -85,6 +104,11 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 			return LocalPlacement{}, fmt.Errorf("rotate ensure new active container: %w", err)
 		}
 		rotated = true
+	}
+
+	// Lock the container row that will actually receive the append payload.
+	if err := lockContainerRowNowaitWithRetry(tx, w.activeID, defaultLockRetryAttempts, defaultLockRetryWait); err != nil {
+		return LocalPlacement{}, err
 	}
 
 	offset, err := w.activeHandle.Append(payload)
@@ -102,9 +126,37 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		StoredSize:       int64(len(payload)),
 		NewContainerSize: newSize,
 		Rotated:          rotated,
+		PreviousID:       previousID,
+		PreviousFilename: previousFilename,
+		PreviousSize:     previousSize,
 		Full:             newSize >= w.maxSize,
 	}, nil
 
+}
+
+func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int, wait time.Duration) error {
+	for attempt := 0; attempt < attempts; attempt++ {
+		_, err := tx.Exec(`SELECT id FROM container WHERE id = $1 FOR UPDATE NOWAIT`, containerID)
+		if err == nil {
+			return nil
+		}
+		if !isLockNotAvailable(err) {
+			return err
+		}
+		if attempt < attempts-1 {
+			time.Sleep(wait)
+		}
+	}
+
+	return fmt.Errorf("%w for container %d after %d attempts", ErrContainerLockContention, containerID, attempts)
+}
+
+func isLockNotAvailable(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return string(pqErr.Code) == "55P03"
+	}
+	return false
 }
 
 // ActiveContainerState returns the currently opened local container state, if any.
@@ -187,4 +239,12 @@ func (w *LocalWriter) FinalizeContainer() error {
 
 func (w *LocalWriter) ContainerCount() int {
 	return w.containers
+}
+
+func (w *LocalWriter) Dir() string {
+	return w.dir
+}
+
+func (w *LocalWriter) MaxSize() int64 {
+	return w.maxSize
 }
