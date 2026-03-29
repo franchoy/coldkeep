@@ -62,6 +62,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 	// ----------------------------------------------------------------------------------------------
 	// Fetch chunk metadata for the logical file from chunk and blocks tables, ordered by chunk_order
+	// Only restore from sealed containers to ensure data integrity
+	// Only process chunks with COMPLETED status for consistency
 	// ----------------------------------------------------------------------------------------------
 	rows, err := dbconn.Query(`
 					SELECT
@@ -83,7 +85,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			JOIN chunk c ON c.id = fc.chunk_id
 			JOIN blocks b ON b.chunk_id = c.id
 			JOIN container ctr ON ctr.id = b.container_id
-			WHERE fc.logical_file_id = $1
+			WHERE fc.logical_file_id = $1 AND ctr.sealed = TRUE AND c.status = 'COMPLETED'
 			ORDER BY fc.chunk_order ASC
 	`, fileID)
 
@@ -105,16 +107,36 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		outputPath = filepath.Join(outputPath, originalName)
 	}
 
+	// Create parent directories if they don't exist
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("create parent directories for %s: %w", outputPath, err)
+	}
+
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("create output file: %w", err)
+		return fmt.Errorf("create output file %s: %w", outputPath, err)
 	}
-	defer func() { _ = outFile.Close() }()
+	defer func() {
+		if err := outFile.Close(); err != nil {
+			fmt.Printf("warning: close output file: %v\n", err)
+		}
+	}()
 
 	hasher := sha256.New()
 
 	var filecontainer *container.FileContainer
 	var containerfilename string
+
+	// Cache transformers by codec to avoid repeated allocations
+	transformerCache := make(map[blocks.Codec]blocks.Transformer)
+
+	// Ensure container is closed on early error
+	defer func() {
+		if filecontainer != nil {
+			_ = filecontainer.Close()
+		}
+	}()
+
 	// ------------------------------------------------------------
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
@@ -147,23 +169,25 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// Validate monotonically contiguous chunk sequence
 		if chunkOrder != expectedOrder {
 			return fmt.Errorf(
-				"chunk order discontinuity for file %d: expected order %d got %d",
+				"chunk order discontinuity for file %d: expected order %d got %d (possible missing chunk or unsealed container reference)",
 				fileID, expectedOrder, chunkOrder,
 			)
 		}
 		expectedOrder++
 
 		if containerfilename != filename {
+			// Close previous container before opening new one
 			if filecontainer != nil {
 				if err := filecontainer.Close(); err != nil {
 					return fmt.Errorf("close container %q: %w", containerfilename, err)
 				}
+				filecontainer = nil
 			}
 
 			containerPath := filepath.Join(containersDir, filename)
-			filecontainer, err = container.OpenExistingContainer(true, containerPath, maxSize)
+			filecontainer, err = container.OpenExistingContainer(false, containerPath, maxSize)
 			if err != nil {
-				return fmt.Errorf("open container %q: %w", filename, err)
+				return fmt.Errorf("open sealed container %q at %s: %w", filename, containerPath, err)
 			}
 			containerfilename = filename
 		}
@@ -171,19 +195,26 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// Read block payload
 		payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
 		if err != nil {
-			return fmt.Errorf("read block payload: %w", err)
+			return fmt.Errorf("read payload from container=%s offset=%d size=%d: %w", filename, blockOffset, storedSize, err)
 		}
 
-		transformer, err := blocks.GetBlockTransformer(blocks.Codec(blocksCodec))
-		if err != nil {
-			return fmt.Errorf("get block transformer: %w", err)
+		// Use cached transformer to avoid repeated allocations
+		codec := blocks.Codec(blocksCodec)
+		transformer, ok := transformerCache[codec]
+		if !ok {
+			var err error
+			transformer, err = blocks.GetBlockTransformer(codec)
+			if err != nil {
+				return fmt.Errorf("get block transformer for codec %s: %w", blocksCodec, err)
+			}
+			transformerCache[codec] = transformer
 		}
 
 		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
 			ChunkHash: expectedChunkHash,
 			Descriptor: blocks.Descriptor{
-				ChunkID:       chunkID, // if you have it available
-				Codec:         blocks.Codec(blocksCodec),
+				ChunkID:       chunkID,
+				Codec:         codec,
 				FormatVersion: blocksFormatVersion,
 				PlaintextSize: plaintextSize,
 				StoredSize:    storedSize,
@@ -194,7 +225,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			Payload: payload,
 		})
 		if err != nil {
-			return fmt.Errorf("decode block payload: %w", err)
+			return fmt.Errorf("decode block from chunk=%d container=%s codec=%s: %w", chunkOrder, filename, blocksCodec, err)
 		}
 
 		// Validate plaintext size
@@ -211,7 +242,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 
 		// Write to output
 		if _, err := outFile.Write(plaintext); err != nil {
-			return fmt.Errorf("write output file: %w", err)
+			return fmt.Errorf("write chunk %d to output file: %w", chunkOrder, err)
 		}
 
 		// Update file hash
@@ -224,12 +255,6 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return fmt.Errorf("iterate chunk rows: %w", err)
 	}
 
-	if filecontainer != nil {
-		if err := filecontainer.Close(); err != nil {
-			return fmt.Errorf("close container %q: %w", containerfilename, err)
-		}
-	}
-
 	if expectedOrder == 0 {
 		// valid ONLY if expectedFileHash == sha256("")
 		const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -237,6 +262,11 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			return fmt.Errorf("no chunks found for file %d but expected hash is not empty", fileID)
 		}
 		// else: empty file, no chunks, valid
+	}
+
+	// Fsync ensures data is written to disk before returning
+	if err := outFile.Sync(); err != nil {
+		return fmt.Errorf("fsync output file: %w", err)
 	}
 
 	// ------------------------------------------------------------
