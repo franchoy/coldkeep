@@ -23,36 +23,9 @@ import (
 
 var errContainerLockContention = errors.New("container row lock contention")
 
-func StoreFile(path string) error {
-	codec, err := blocks.LoadDefaultCodec()
-	if err != nil {
-		return err
-	}
-
-	return storeFile(path, codec)
-}
-
-func StoreFileWithCodec(path string, codecName string) error {
-	codec, err := blocks.ParseCodec(codecName)
-	if err != nil {
-		return err
-	}
-
-	return storeFile(path, codec)
-}
-
-func storeFile(path string, codec blocks.Codec) error {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return fmt.Errorf("Failed to connect to DB: %w", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	if err := StoreFileWithDBAndCodec(dbconn, path, codec); err != nil {
-		return err
-	}
-	return nil
-}
+// -----------------------------------------------------------------------------
+// CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
+// -----------------------------------------------------------------------------
 
 func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
 
@@ -272,16 +245,51 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 	return chunkID, chunkstatus, nil
 }
 
-func StoreFileWithDB(dbconn *sql.DB, path string) (err error) {
+// -----------------------------------------------------------------------------
+// HIGH-LEVEL FILE AND FOLDER STORAGE FUNCTIONS
+// -----------------------------------------------------------------------------
+
+func StoreFile(path string) error {
 	codec, err := blocks.LoadDefaultCodec()
 	if err != nil {
 		return err
 	}
 
-	return StoreFileWithDBAndCodec(dbconn, path, codec)
+	return StoreFileWithCodec(path, codec)
 }
 
-func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (err error) {
+func StoreFileWithCodecString(path string, codecName string) error {
+	codec, err := blocks.ParseCodec(codecName)
+	if err != nil {
+		return err
+	}
+
+	return StoreFileWithCodec(path, codec)
+}
+
+func StoreFileWithCodec(path string, codec blocks.Codec) error {
+	cgstx, err := LoadDefaultStorageContext()
+	if err != nil {
+		return fmt.Errorf("load default storage context: %w", err)
+	}
+	defer func() { _ = cgstx.Close() }()
+
+	if err := StoreFileWithStorageContextAndCodec(cgstx, path, codec); err != nil {
+		return err
+	}
+	return nil
+}
+
+func StoreFileWithStorageContext(sgctx StorageContext, path string) (err error) {
+	codec, err := blocks.LoadDefaultCodec()
+	if err != nil {
+		return err
+	}
+
+	return StoreFileWithStorageContextAndCodec(sgctx, path, codec)
+}
+
+func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, codec blocks.Codec) (err error) {
 	start := time.Now()
 
 	transformer, err := blocks.GetBlockTransformer(codec)
@@ -293,7 +301,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 	}
 
 	blockRepo := &blocks.Repository{
-		DB: dbconn,
+		DB: sgctx.DB,
 	}
 
 	ctx := context.Background()
@@ -321,7 +329,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 	}
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := claimLogicalFile(dbconn, fileinfo, fileHash)
+	fileID, filestatus, err := claimLogicalFile(sgctx.DB, fileinfo, fileHash)
 	if err != nil {
 		return err
 	}
@@ -334,7 +342,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 	completed := false
 	defer func() {
 		if !completed {
-			if _, err := dbconn.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID); err != nil {
+			if _, err := sgctx.DB.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID); err != nil {
 				fmt.Printf("failed to mark logical file %d as ABORTED: %v\n", fileID, err)
 			}
 		}
@@ -359,14 +367,14 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, err := claimChunk(dbconn, chunkHash, int64(len(chunkData)))
+		claimedChunkID, chunkStatus, err := claimChunk(sgctx.DB, chunkHash, int64(len(chunkData)))
 		if err != nil {
 			return err
 		}
 
 		if chunkStatus == "COMPLETED" {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			tx, err := dbconn.Begin()
+			tx, err := sgctx.DB.Begin()
 			if err != nil {
 				return err
 			}
@@ -396,13 +404,13 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 		// At this point, we have a chunk row in "PROCESSING" status for this chunk hash, either created by us or by another process.
 
 		for {
-			tx, err := dbconn.Begin()
+			tx, err := sgctx.DB.Begin()
 			if err != nil {
 				return err
 			}
 
 			if !hasContainer {
-				activeContainer, err = container.GetOrCreateOpenContainer(tx)
+				activeContainer, err = container.GetOrCreateOpenContainerInDir(tx, sgctx.EffectiveContainerDir())
 				if err != nil {
 					_ = tx.Rollback()
 					return err
@@ -446,7 +454,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 				}
 				hasContainer = false
 
-				if _, err3 := dbconn.Exec(
+				if _, err3 := sgctx.DB.Exec(
 					`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
 					claimedChunkID,
 				); err3 != nil {
@@ -489,7 +497,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 			// NOTE: container max size is best-effort under concurrency.
 			if newSize >= activeContainer.MaxSize {
 				// After sealing the full container, we need to sync and close the file handle before we can open a new one for the next chunks
-				if err := SyncCloseAndSealContainer(tx, activeContainer); err != nil {
+				if err := SyncCloseAndSealContainer(tx, activeContainer, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
 					return err
 				}
@@ -512,7 +520,7 @@ func StoreFileWithDBAndCodec(dbconn *sql.DB, path string, codec blocks.Codec) (e
 	}
 
 	// After all chunks are stored and linked, mark logical file as "COMPLETED"
-	_, err = dbconn.Exec(
+	_, err = sgctx.DB.Exec(
 		`UPDATE logical_file SET status='COMPLETED' WHERE id=$1`,
 		fileID,
 	)
@@ -556,13 +564,23 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int
 	return fmt.Errorf("%w for container %d after %d attempts", errContainerLockContention, containerID, attempts)
 }
 
+// -----------------------------------------------------------------------------
+// STORE FOLDER FUNCTION (RECURSIVE)
+// -----------------------------------------------------------------------------
+
 func StoreFolder(root string) error {
 	codec, err := blocks.LoadDefaultCodec()
 	if err != nil {
 		return err
 	}
 
-	return storeFolder(root, codec)
+	sgctx, err := LoadDefaultStorageContext()
+	if err != nil {
+		return fmt.Errorf("load default storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	return StoreFolderWithStorageContextAndCodec(sgctx, root, codec)
 }
 
 func StoreFolderWithCodec(root string, codecName string) error {
@@ -571,17 +589,26 @@ func StoreFolderWithCodec(root string, codecName string) error {
 		return err
 	}
 
-	return storeFolder(root, codec)
+	sgctx, err := LoadDefaultStorageContext()
+	if err != nil {
+		return fmt.Errorf("load default storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	return StoreFolderWithStorageContextAndCodec(sgctx, root, codec)
 }
 
-func storeFolder(root string, codec blocks.Codec) error {
-	start := time.Now()
-
-	dbconn, err := db.ConnectDB()
+func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
+	codec, err := blocks.LoadDefaultCodec()
 	if err != nil {
-		return fmt.Errorf("failed to connect DB: %w", err)
+		return err
 	}
-	defer func() { _ = dbconn.Close() }()
+
+	return StoreFolderWithStorageContextAndCodec(sgctx, root, codec)
+}
+
+func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
+	start := time.Now()
 
 	workerCount := runtime.NumCPU()
 
@@ -592,7 +619,7 @@ func storeFolder(root string, codec blocks.Codec) error {
 	for i := 0; i < workerCount; i++ {
 		go func() {
 			for p := range fileChan {
-				if err := StoreFileWithDBAndCodec(dbconn, p, codec); err != nil {
+				if err := StoreFileWithStorageContextAndCodec(sgctx, p, codec); err != nil {
 					errChan <- err
 					return
 				}
@@ -681,7 +708,7 @@ func StoreBlockPayload(c container.Container, payload []byte) (offset int64, new
 	return offset, offset + int64(len(payload)), nil
 }
 
-func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer) error {
+func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer, containersDir string) error {
 	// sync active container to disk
 	if err := activecontainer.Container.Sync(); err != nil {
 		return err
@@ -691,7 +718,7 @@ func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveConta
 		return err
 	}
 	// seal active container in DB
-	if err := container.SealContainer(tx, activecontainer.ID, activecontainer.Filename); err != nil {
+	if err := container.SealContainerInDir(tx, activecontainer.ID, activecontainer.Filename, containersDir); err != nil {
 		return err
 	}
 
