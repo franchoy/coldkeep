@@ -1652,6 +1652,69 @@ func TestContainerRollover(t *testing.T) {
 	}
 }
 
+func TestRotationSealsAllPreviousContainers(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "rotation-seal.bin", 8*1024*1024+137)
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store file with forced rotations: %v", err)
+	}
+
+	var totalContainers int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&totalContainers); err != nil {
+		t.Fatalf("count containers: %v", err)
+	}
+	if totalContainers < 2 {
+		t.Fatalf("expected at least 2 containers after forced rotations, got %d", totalContainers)
+	}
+
+	var oldUnsealed int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM container c
+		WHERE c.id < (SELECT MAX(id) FROM container)
+		  AND c.sealed = FALSE
+	`).Scan(&oldUnsealed); err != nil {
+		t.Fatalf("count old unsealed containers: %v", err)
+	}
+	if oldUnsealed != 0 {
+		t.Fatalf("expected all previous containers to be sealed after rotation, found %d old unsealed", oldUnsealed)
+	}
+
+	var unsealedTotal int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE`).Scan(&unsealedTotal); err != nil {
+		t.Fatalf("count unsealed containers: %v", err)
+	}
+	if unsealedTotal > 1 {
+		t.Fatalf("expected at most one unsealed active container, found %d", unsealedTotal)
+	}
+}
+
 func TestStartupRecoverySimulation(t *testing.T) {
 	requireDB(t)
 
