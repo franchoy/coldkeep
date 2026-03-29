@@ -11,6 +11,10 @@ import (
 )
 
 func RunGC(dryRun bool) error {
+	return RunGCWithContainersDir(dryRun, container.ContainersDir)
+}
+
+func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return fmt.Errorf("failed to connect to DB: %w", err)
@@ -121,7 +125,7 @@ func RunGC(dryRun bool) error {
 		}
 
 		// After commit, delete file from disk
-		containerPath := filepath.Join(container.ContainersDir, filename)
+		containerPath := filepath.Join(containersDir, filename)
 
 		if err := os.Remove(containerPath); err != nil {
 			log.Println("warning: failed to delete container file:", err)

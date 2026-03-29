@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -17,6 +18,10 @@ import (
 //verify file <id> --deep
 
 func VerifyCommand(target string, fileId int, verifyLevel verify.VerifyLevel) error {
+	return VerifyCommandWithContainersDir(container.ContainersDir, target, fileId, verifyLevel)
+}
+
+func VerifyCommandWithContainersDir(containersDir string, target string, fileId int, verifyLevel verify.VerifyLevel) error {
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -26,27 +31,27 @@ func VerifyCommand(target string, fileId int, verifyLevel verify.VerifyLevel) er
 
 	switch target {
 	case "system":
-		return verifySystem(dbconn, verifyLevel)
+		return verifySystem(dbconn, containersDir, verifyLevel)
 	case "file":
-		return verifyFile(dbconn, fileId, verifyLevel)
+		return verifyFile(dbconn, containersDir, fileId, verifyLevel)
 	default:
 		return fmt.Errorf("invalid target for verify command: %s", target)
 	}
 }
 
-func verifySystem(dbconn *sql.DB, verifyLevel verify.VerifyLevel) error {
+func verifySystem(dbconn *sql.DB, containersDir string, verifyLevel verify.VerifyLevel) error {
 
 	switch verifyLevel {
 	case verify.VerifyStandard:
-		if err := verify.VerifySystemStandard(dbconn); err != nil {
+		if err := verify.VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
 			return fmt.Errorf("system standard verification failed: %w", err)
 		}
 	case verify.VerifyFull:
-		if err := verify.VerifySystemFull(dbconn); err != nil {
+		if err := verify.VerifySystemFullWithContainersDir(dbconn, containersDir); err != nil {
 			return fmt.Errorf("system full verification failed: %w", err)
 		}
 	case verify.VerifyDeep:
-		if err := verify.VerifySystemDeep(dbconn); err != nil {
+		if err := verify.VerifySystemDeepWithContainersDir(dbconn, containersDir); err != nil {
 			return fmt.Errorf("system deep verification failed: %w", err)
 		}
 	default:
@@ -56,7 +61,7 @@ func verifySystem(dbconn *sql.DB, verifyLevel verify.VerifyLevel) error {
 	return nil
 }
 
-func verifyFile(dbconn *sql.DB, fileId int, verifyLevel verify.VerifyLevel) error {
+func verifyFile(dbconn *sql.DB, containersDir string, fileId int, verifyLevel verify.VerifyLevel) error {
 
 	//verify that the file id exists
 	var exists bool
@@ -70,15 +75,15 @@ func verifyFile(dbconn *sql.DB, fileId int, verifyLevel verify.VerifyLevel) erro
 
 	switch verifyLevel {
 	case verify.VerifyStandard:
-		if err := verify.VerifyFileStandard(dbconn, fileId); err != nil {
+		if err := verify.VerifyFileStandardWithContainersDir(dbconn, fileId, containersDir); err != nil {
 			return fmt.Errorf("file standard verification failed: %w", err)
 		}
 	case verify.VerifyFull:
-		if err := verify.VerifyFileFull(dbconn, fileId); err != nil {
+		if err := verify.VerifyFileFullWithContainersDir(dbconn, fileId, containersDir); err != nil {
 			return fmt.Errorf("file full verification failed: %w", err)
 		}
 	case verify.VerifyDeep:
-		if err := verify.VerifyFileDeep(dbconn, fileId); err != nil {
+		if err := verify.VerifyFileDeepWithContainersDir(dbconn, fileId, containersDir); err != nil {
 			return fmt.Errorf("file deep verification failed: %w", err)
 		}
 	default:

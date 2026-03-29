@@ -12,6 +12,10 @@ import (
 )
 
 func SystemRecovery() error {
+	return SystemRecoveryWithContainersDir(container.ContainersDir)
+}
+
+func SystemRecoveryWithContainersDir(containersDir string) error {
 	log.Println("Starting system recovery process")
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -27,11 +31,11 @@ func SystemRecovery() error {
 	if err != nil {
 		return err
 	}
-	err = quarantineMissingContainers(dbconn)
+	err = quarantineMissingContainers(dbconn, containersDir)
 	if err != nil {
 		return err
 	}
-	err = quarantineOrphanContainers(dbconn)
+	err = quarantineOrphanContainers(dbconn, containersDir)
 	if err != nil {
 		return err
 	}
@@ -58,7 +62,7 @@ func abortProcessingChunks(dbconn *sql.DB) error {
 	return nil
 }
 
-func quarantineMissingContainers(dbconn *sql.DB) error {
+func quarantineMissingContainers(dbconn *sql.DB, containersDir string) error {
 	log.Println("Quarantining container records with missing files")
 	rows, err := dbconn.Query(`SELECT id, filename FROM container WHERE quarantine = FALSE`)
 	if err != nil {
@@ -75,7 +79,7 @@ func quarantineMissingContainers(dbconn *sql.DB) error {
 			return err
 		}
 
-		path := filepath.Join(container.ContainersDir, filename)
+		path := filepath.Join(containersDir, filename)
 
 		_, err := os.Stat(path)
 
@@ -96,10 +100,10 @@ func quarantineMissingContainers(dbconn *sql.DB) error {
 	return rows.Err()
 }
 
-func quarantineOrphanContainers(dbconn *sql.DB) error {
+func quarantineOrphanContainers(dbconn *sql.DB, containersDir string) error {
 	log.Println("Checking for orphan container files in the containers directory")
 	// recover files in container folder
-	entries, err := os.ReadDir(container.ContainersDir)
+	entries, err := os.ReadDir(containersDir)
 	if os.IsNotExist(err) {
 		return nil
 	}
