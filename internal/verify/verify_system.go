@@ -38,6 +38,10 @@ func printCounters(dbconn *sql.DB) error {
 }
 
 func VerifySystemStandard(dbconn *sql.DB) error {
+	return VerifySystemStandardWithContainersDir(dbconn, container.ContainersDir)
+}
+
+func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	standard
 	//		reference count check
 	//		orphan chunk check
@@ -72,6 +76,10 @@ func VerifySystemStandard(dbconn *sql.DB) error {
 }
 
 func VerifySystemFull(dbconn *sql.DB) error {
+	return VerifySystemFullWithContainersDir(dbconn, container.ContainersDir)
+}
+
+func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	full
 	//		standard checks +
 	//			container file existence and size check
@@ -85,17 +93,17 @@ func VerifySystemFull(dbconn *sql.DB) error {
 	var err error
 
 	//first verify standard checks
-	if err = VerifySystemStandard(dbconn); err != nil {
+	if err = VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
 		return err
 	}
 
 	//check that all containers have their files present on disk and that the file sizes match the DB records
-	if err = checkContainersFileExistence(dbconn); err != nil {
+	if err = checkContainersFileExistence(dbconn, containersDir); err != nil {
 		return err
 	}
 
 	//check that all sealed containers have a valid hash that matches the file content
-	if err = checkSealedContainersHash(dbconn); err != nil {
+	if err = checkSealedContainersHash(dbconn, containersDir); err != nil {
 		return err
 	}
 
@@ -126,6 +134,10 @@ func VerifySystemFull(dbconn *sql.DB) error {
 }
 
 func VerifySystemDeep(dbconn *sql.DB) error {
+	return VerifySystemDeepWithContainersDir(dbconn, container.ContainersDir)
+}
+
+func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	deep
 	//		standard checks +
 	//		full checks +
@@ -135,7 +147,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 	var err error
 
 	//first verify full checks
-	if err = VerifySystemFull(dbconn); err != nil {
+	if err = VerifySystemFullWithContainersDir(dbconn, containersDir); err != nil {
 		return err
 	}
 
@@ -181,7 +193,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
 
 		//construct full path
-		fullPath := filepath.Join(container.ContainersDir, filename)
+		fullPath := filepath.Join(containersDir, filename)
 
 		fileSize := currentSize
 

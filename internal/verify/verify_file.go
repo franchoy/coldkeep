@@ -67,6 +67,10 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 }
 
 func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
+	return VerifyFileStandardWithContainersDir(dbconn, fileId, container.ContainersDir)
+}
+
+func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
 	log.Printf("starting standard file verification for logical file with ID %d...", fileId)
 	if fileId <= 0 {
 		return fmt.Errorf("invalid file ID: %d", fileId)
@@ -171,7 +175,7 @@ func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
 	return nil
 }
 
-func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
+func verifyFileContainersAndOffsets(db *sql.DB, fileID int, containersDir string) error {
 	rows, err := db.Query(`
 		SELECT
 			c.id,
@@ -242,7 +246,7 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 		if !ok {
 			containerFilename := filename
 
-			fullPath := filepath.Join(container.ContainersDir, containerFilename)
+			fullPath := filepath.Join(containersDir, containerFilename)
 			fileInfo, err := os.Stat(fullPath)
 			if err != nil {
 				return fmt.Errorf("missing container file: %s: %w", fullPath, err)
@@ -282,12 +286,16 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int) error {
 }
 
 func VerifyFileFull(dbconn *sql.DB, fileId int) error {
-	if err := VerifyFileStandard(dbconn, fileId); err != nil {
+	return VerifyFileFullWithContainersDir(dbconn, fileId, container.ContainersDir)
+}
+
+func VerifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
+	if err := VerifyFileStandardWithContainersDir(dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("standard verification failed: %w", err)
 	}
 
 	log.Printf("starting Full file verification for logical file with ID %d...", fileId)
-	if err := verifyFileContainersAndOffsets(dbconn, fileId); err != nil {
+	if err := verifyFileContainersAndOffsets(dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("container and offset verification failed: %w", err)
 	}
 	log.Printf("Full file verification for logical file with ID %d completed successfully", fileId)
@@ -295,7 +303,7 @@ func VerifyFileFull(dbconn *sql.DB, fileId int) error {
 	return nil
 }
 
-func verifyFileChunkHashes(db *sql.DB, fileID int) error {
+func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 	rows, err := db.Query(`
 			SELECT
 			c.id,
@@ -360,7 +368,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 				}
 			}
 
-			fullPath := filepath.Join(container.ContainersDir, filename)
+			fullPath := filepath.Join(containersDir, filename)
 			currentContainer, err = container.OpenExistingContainer(true, fullPath, maxSize)
 			if err != nil {
 				return fmt.Errorf("open container %q: %w", fullPath, err)
@@ -417,12 +425,16 @@ func verifyFileChunkHashes(db *sql.DB, fileID int) error {
 }
 
 func VerifyFileDeep(dbconn *sql.DB, fileId int) error {
-	if err := VerifyFileFull(dbconn, fileId); err != nil {
+	return VerifyFileDeepWithContainersDir(dbconn, fileId, container.ContainersDir)
+}
+
+func VerifyFileDeepWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
+	if err := VerifyFileFullWithContainersDir(dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("full verification failed: %w", err)
 	}
 
 	log.Printf("starting deep file verification for logical file with ID %d...", fileId)
-	if err := verifyFileChunkHashes(dbconn, fileId); err != nil {
+	if err := verifyFileChunkHashes(dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("chunk hash verification failed: %w", err)
 	}
 	log.Printf("Deep file verification for logical file with ID %d completed successfully", fileId)

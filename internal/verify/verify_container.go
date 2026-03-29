@@ -11,7 +11,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
-func checkContainersFileExistence(dbconn *sql.DB) error {
+func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 	// Check that all containers have their files present on disk
 	// and that the file sizes match the DB records
 	log.Printf("Checking container file existence and size consistency...")
@@ -37,7 +37,7 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 			continue
 		}
 		// Check if the file exists on disk and has the correct size
-		if err := checkContainerFile(id, filename, currentSize); err != nil {
+		if err := checkContainerFile(id, filename, currentSize, containersDir); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("container file check failed for container %d: %w", id, err))
 		}
@@ -64,10 +64,10 @@ func checkContainersFileExistence(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkContainerFile(id int, filename string, currentSize int64) error {
+func checkContainerFile(id int, filename string, currentSize int64, containersDir string) error {
 	// Check if the file exists on disk and has the correct size
 
-	fullPath := filepath.Join(container.ContainersDir, filename)
+	fullPath := filepath.Join(containersDir, filename)
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -136,7 +136,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	return nil
 }
 
-func checkSealedContainersHash(dbconn *sql.DB) error {
+func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	// Check that all sealed containers have a valid hash that matches the file content
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
@@ -169,7 +169,7 @@ func checkSealedContainersHash(dbconn *sql.DB) error {
 			continue
 		}
 		// Check if the file exists on disk and has the correct hash
-		if err := container.CheckContainerHashFile(id, filename, storedHash); err != nil {
+		if err := container.CheckContainerHashFileInDir(id, filename, storedHash, containersDir); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("container hash check failed for container %d: %w", id, err))
 		}
