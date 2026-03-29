@@ -2359,6 +2359,154 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	}
 }
 
+func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_full_non_contiguous.bin", 4*1024*1024)
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var secondChunkID int64
+	var secondBlockOffset int64
+	err = dbconn.QueryRow(`
+		SELECT b.chunk_id, b.block_offset
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		WHERE c.status = 'COMPLETED'
+		ORDER BY b.container_id ASC, b.block_offset ASC
+		OFFSET 1
+		LIMIT 1
+	`).Scan(&secondChunkID, &secondBlockOffset)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			t.Skip("not enough completed chunks to validate offset continuity")
+		}
+		t.Fatalf("query second chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE chunk_id = $2`, secondBlockOffset+1, secondChunkID); err != nil {
+		t.Fatalf("corrupt block offset continuity: %v", err)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
+		t.Fatal("verify system --full should detect non-contiguous block offsets")
+	}
+}
+
+func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_deep_aggregate.bin", 4*1024*1024)
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT b.block_offset, b.stored_size, ctr.filename
+		FROM chunk c
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE c.status = 'COMPLETED'
+		ORDER BY b.container_id ASC, b.block_offset ASC
+		LIMIT 2
+	`)
+	if err != nil {
+		t.Fatalf("query chunks for corruption: %v", err)
+	}
+	defer rows.Close()
+
+	type chunkToCorrupt struct {
+		blockOffset int64
+		storedSize  int64
+		filename    string
+	}
+	var chunksToCorrupt []chunkToCorrupt
+	for rows.Next() {
+		var c chunkToCorrupt
+		if err := rows.Scan(&c.blockOffset, &c.storedSize, &c.filename); err != nil {
+			t.Fatalf("scan chunk for corruption: %v", err)
+		}
+		chunksToCorrupt = append(chunksToCorrupt, c)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate chunks for corruption: %v", err)
+	}
+	if len(chunksToCorrupt) < 2 {
+		t.Skip("not enough completed chunks to validate deep aggregation")
+	}
+
+	for _, c := range chunksToCorrupt {
+		containerPath := filepath.Join(container.ContainersDir, c.filename)
+		f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatalf("open container file: %v", err)
+		}
+
+		corruptionOffset := c.blockOffset
+		if c.storedSize > 1 {
+			corruptionOffset++
+		}
+		if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
+			_ = f.Close()
+			t.Fatalf("corrupt chunk byte: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close container file: %v", err)
+		}
+	}
+
+	err = maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
+	if err == nil {
+		t.Fatal("verify system --deep should detect multiple corrupted chunks")
+	}
+	if !strings.Contains(err.Error(), "found 2 errors in deep verification of container files") {
+		t.Fatalf("expected aggregated deep verification error count, got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // v0.5 deterministic-restore guarantee tests
 // ---------------------------------------------------------------------------
