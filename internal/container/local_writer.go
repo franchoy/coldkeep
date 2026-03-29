@@ -100,7 +100,7 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 			return LocalPlacement{}, fmt.Errorf("rotate finalize active container: %w", err)
 		}
 		w.clearActive()
-		if err := w.ensureActive(tx); err != nil {
+		if err := w.ensureActiveExcluding(tx, previousID); err != nil {
 			return LocalPlacement{}, fmt.Errorf("rotate ensure new active container: %w", err)
 		}
 		rotated = true
@@ -169,6 +169,10 @@ func (w *LocalWriter) ActiveContainerState() (ActiveContainer, int64, bool) {
 }
 
 func (w *LocalWriter) ensureActive(tx db.DBTX) error {
+	return w.ensureActiveExcluding(tx, 0)
+}
+
+func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 	if w.hasActive {
 		return nil
 	}
@@ -176,7 +180,7 @@ func (w *LocalWriter) ensureActive(tx db.DBTX) error {
 		return fmt.Errorf("ensure container directory %s: %w", w.dir, err)
 	}
 
-	ac, err := GetOrCreateOpenContainerInDir(tx, w.dir)
+	ac, err := GetOrCreateOpenContainerInDirExcluding(tx, w.dir, excludeID)
 	if err != nil {
 		return fmt.Errorf("get or create open container in %s: %w", w.dir, err)
 	}

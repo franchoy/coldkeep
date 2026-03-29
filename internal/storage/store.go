@@ -474,6 +474,39 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				if strings.Contains(err.Error(), "container full") {
 					continue
 				}
+				if strings.Contains(err.Error(), "blocks_chunk_id_key") {
+					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
+					// block metadata already exists for this chunk ID.
+					tx2, err2 := sgctx.DB.Begin()
+					if err2 != nil {
+						return err2
+					}
+
+					if _, err2 = tx2.Exec(`UPDATE chunk SET status = 'COMPLETED' WHERE id = $1`, claimedChunkID); err2 != nil {
+						_ = tx2.Rollback()
+						return err2
+					}
+
+					if _, err2 = tx2.Exec(
+						`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+						 VALUES ($1, $2, $3)
+						 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
+						fileID,
+						claimedChunkID,
+						chunkOrder,
+					); err2 != nil {
+						_ = tx2.Rollback()
+						return err2
+					}
+
+					if err2 = tx2.Commit(); err2 != nil {
+						_ = tx2.Rollback()
+						return err2
+					}
+
+					chunkOrder++
+					break
+				}
 
 				if _, err3 := sgctx.DB.Exec(
 					`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,

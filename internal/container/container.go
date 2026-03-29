@@ -146,21 +146,39 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 }
 
 func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveContainer, error) {
+	return getOrCreateOpenContainerInDirExcluding(db, containersDir, 0)
+}
+
+func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
 	containersDir = containersDirOrDefault(containersDir)
 
 	var id int64
 	var filename string
 	var maxSize int64
 
-	// 1 Try to find an existing open container
-	err := db.QueryRow(`
-		SELECT id, filename, max_size
-		FROM container
-		WHERE sealed = FALSE and quarantine = FALSE
-		ORDER BY id
-		LIMIT 1
-		FOR UPDATE SKIP LOCKED
-	`).Scan(&id, &filename, &maxSize)
+	// 1 Try to find an existing open container.
+	// During rotation we may need to skip the previously active container until
+	// the caller seals it in the same transaction.
+	var err error
+	if excludeID > 0 {
+		err = db.QueryRow(`
+			SELECT id, filename, max_size
+			FROM container
+			WHERE sealed = FALSE and quarantine = FALSE AND id <> $1
+			ORDER BY id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		`, excludeID).Scan(&id, &filename, &maxSize)
+	} else {
+		err = db.QueryRow(`
+			SELECT id, filename, max_size
+			FROM container
+			WHERE sealed = FALSE and quarantine = FALSE
+			ORDER BY id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		`).Scan(&id, &filename, &maxSize)
+	}
 
 	if err == nil {
 		// Found existing open container
@@ -243,6 +261,10 @@ func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveCont
 		Container: container,
 		MaxSize:   containerMaxSize,
 	}, nil
+}
+
+func GetOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
+	return getOrCreateOpenContainerInDirExcluding(db, containersDir, excludeID)
 }
 
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
