@@ -125,11 +125,24 @@ func (c *FileContainer) Close() error {
 	return err
 }
 
+func containersDirOrDefault(dir string) string {
+	if dir == "" {
+		return ContainersDir
+	}
+	return dir
+}
+
 // --------------------------------------------------------------------------
 // functions
 // --------------------------------------------------------------------------
 
 func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
+	return GetOrCreateOpenContainerInDir(db, ContainersDir)
+}
+
+func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveContainer, error) {
+	containersDir = containersDirOrDefault(containersDir)
+
 	var id int64
 	var filename string
 	var maxSize int64
@@ -146,7 +159,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 
 	if err == nil {
 		// Found existing open container
-		fullPath := filepath.Join(ContainersDir, filename)
+		fullPath := filepath.Join(containersDir, filename)
 
 		container, err := OpenExistingContainer(false, fullPath, maxSize)
 		if err != nil {
@@ -182,11 +195,11 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 
 	// 3 Create physical file
 
-	if err := os.MkdirAll(ContainersDir, 0755); err != nil {
+	if err := os.MkdirAll(containersDir, 0755); err != nil {
 		return ActiveContainer{}, err
 	}
 
-	fullPath := filepath.Join(ContainersDir, filename)
+	fullPath := filepath.Join(containersDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
@@ -237,8 +250,13 @@ func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
 }
 
 func SealContainer(tx db.DBTX, containerID int64, filename string) error {
+	return SealContainerInDir(tx, containerID, filename, ContainersDir)
+}
 
-	originalPath := filepath.Join(ContainersDir, filename)
+func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containersDir string) error {
+	containersDir = containersDirOrDefault(containersDir)
+
+	originalPath := filepath.Join(containersDir, filename)
 
 	// Compute file hash
 	sumHex, err := utils_hash.ComputeFileHashHex(originalPath)
@@ -263,7 +281,12 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 }
 
 func CheckContainerHashFile(id int, filename, storedHash string) error {
-	containerPath := filepath.Join(ContainersDir, filename)
+	return CheckContainerHashFileInDir(id, filename, storedHash, ContainersDir)
+}
+
+func CheckContainerHashFileInDir(id int, filename, storedHash string, containersDir string) error {
+	containersDir = containersDirOrDefault(containersDir)
+	containerPath := filepath.Join(containersDir, filename)
 
 	computedHash, err := utils_hash.ComputeFileHashHex(containerPath)
 	if err != nil {
