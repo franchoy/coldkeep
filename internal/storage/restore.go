@@ -169,7 +169,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// Validate monotonically contiguous chunk sequence
 		if chunkOrder != expectedOrder {
 			return fmt.Errorf(
-				"chunk order discontinuity for file %d: expected order %d got %d (possible missing chunk or unsealed container reference)",
+				"chunk order discontinuity for file %d: expected order %d got %d (possible missing chunk, broken file graph, or unsealed container reference)",
 				fileID, expectedOrder, chunkOrder,
 			)
 		}
