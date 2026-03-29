@@ -31,6 +31,14 @@ func RestoreFile(id int64, outputPath string) error {
 }
 
 func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
+	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir)
+}
+
+func RestoreFileWithStorageContext(sgctx StorageContext, fileID int64, outputPath string) error {
+	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir())
+}
+
+func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string) error {
 	start := time.Now()
 	// ------------------------------------------------------------
 	// Fetch logical file metadata
@@ -152,7 +160,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 				}
 			}
 
-			containerPath := filepath.Join(container.ContainersDir, filename)
+			containerPath := filepath.Join(containersDir, filename)
 			filecontainer, err = container.OpenExistingContainer(true, containerPath, maxSize)
 			if err != nil {
 				return fmt.Errorf("open container %q: %w", filename, err)
