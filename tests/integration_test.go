@@ -69,12 +69,12 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 		return
 	}
 
-	// 2) Walk upwards from cwd to find db/init.sql
+	// 2) Walk upwards from cwd to find db/schema_postgres.sql
 	cwd, err := os.Getwd()
 	if err == nil {
 		dir := cwd
 		for i := 0; i < 6; i++ { // climb up a few levels
-			candidate := filepath.Join(dir, "db", "init.sql")
+			candidate := filepath.Join(dir, "db", "schema_postgres.sql")
 			if _, statErr := os.Stat(candidate); statErr == nil {
 				b, err := os.ReadFile(candidate)
 				if err != nil {
@@ -95,12 +95,12 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 
 	// 3) Common fallbacks for containers / mounts
 	candidates := []string{
-		"../db/init.sql",
-		"../../db/init.sql",
-		"/repo/db/init.sql",
-		"/work/db/init.sql",
-		"/db/init.sql",
-		"/app/db/init.sql",
+		"../db/schema_postgres.sql",
+		"../../db/schema_postgres.sql",
+		"/repo/db/schema_postgres.sql",
+		"/work/db/schema_postgres.sql",
+		"/db/schema_postgres.sql",
+		"/app/db/schema_postgres.sql",
 	}
 	for _, p := range candidates {
 		if _, statErr := os.Stat(p); statErr == nil {
@@ -115,7 +115,7 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 		}
 	}
 
-	t.Fatalf("could not find db/init.sql; set COLDKEEP_SCHEMA_PATH to an absolute path")
+	t.Fatalf("could not find db/schema_postgres.sql; set COLDKEEP_SCHEMA_PATH to an absolute path")
 }
 
 func isDuplicateSchemaError(err error) bool {
@@ -232,6 +232,14 @@ func assertUniqueFileChunkOrders(t *testing.T, dbconn *sql.DB) {
 	}
 }
 
+func newTestContext(dbconn *sql.DB) storage.StorageContext {
+	return storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDir(container.ContainersDir, container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+}
+
 type fileChunkRecord struct {
 	chunkID              int64
 	containerID          int64
@@ -254,7 +262,6 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	defer func() { _ = dbconn.Close() }()
 
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
@@ -268,8 +275,9 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 	inPath := createTempFile(t, inputDir, filename, size)
 	fileHash := sha256File(t, inPath)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
-		_ = dbconn.Close()
+	sgctx := newTestContext(dbconn)
+
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -492,8 +500,13 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	want := mustRead(t, inPath)
 	wantHash := sha256File(t, inPath)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
-		t.Fatalf("storeFileWithDB: %v", err)
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("storeFileWithStorageContext: %v", err)
 	}
 
 	fileID := fetchFileIDByHash(t, dbconn, wantHash)
@@ -539,10 +552,15 @@ func TestDedupSameFile(t *testing.T) {
 	inPath := createTempFile(t, inputDir, "dup.bin", 256*1024)
 	fileHash := sha256File(t, inPath)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("first store: %v", err)
 	}
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("second store: %v", err)
 	}
 
@@ -618,7 +636,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 
 	// Run storeFolder with timeout to catch deadlocks/hangs.
 	done := make(chan error, 1)
-	go func() { done <- storage.StoreFolder(inputDir) }()
+	go func() { done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir) }()
 
 	select {
 	case err := <-done:
@@ -693,10 +711,14 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	fileB := fileBPath
 
 	// Store both
-	if err := storage.StoreFileWithDB(dbconn, fileA); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, fileA); err != nil {
 		t.Fatalf("store fileA: %v", err)
 	}
-	if err := storage.StoreFileWithDB(dbconn, fileB); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, fileB); err != nil {
 		t.Fatalf("store fileB: %v", err)
 	}
 
@@ -725,22 +747,22 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// Run verify before GC to check for any issues with ref_counts or metadata integrity.
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 		t.Fatalf("verify standard after GC: %v", err)
 	}
 
 	// Run GC -- dry run first to check it doesn't delete anything prematurely
-	if err := maintenance.RunGC(true); err != nil {
+	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
 		t.Fatalf("runGC (dry-run): %v", err)
 	}
 
 	// Verify again after dry-run GC to ensure it doesn't break anything.
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify full after GC: %v", err)
 	}
 
 	// Run GC
-	if err := maintenance.RunGC(false); err != nil {
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
 		t.Fatalf("runGC 'real' run: %v", err)
 	}
 
@@ -817,8 +839,20 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 
 	// Start two goroutines trying to store the same file
 	done := make(chan error, 2)
-	go func() { done <- storage.StoreFileWithDB(dbconn, inPath) }()
-	go func() { done <- storage.StoreFileWithDB(dbconn, inPath) }()
+	go func() {
+		sgctx := storage.StorageContext{
+			DB:     dbconn,
+			Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+		}
+		done <- storage.StoreFileWithStorageContext(sgctx, inPath)
+	}()
+	go func() {
+		sgctx := storage.StorageContext{
+			DB:     dbconn,
+			Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+		}
+		done <- storage.StoreFileWithStorageContext(sgctx, inPath)
+	}()
 
 	// Wait for both to complete
 	err1 := <-done
@@ -884,8 +918,20 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 
 	// Start two goroutines storing the files concurrently
 	done := make(chan error, 2)
-	go func() { done <- storage.StoreFileWithDB(dbconn, fileAPath) }()
-	go func() { done <- storage.StoreFileWithDB(dbconn, fileBPath) }()
+	go func() {
+		sgctx := storage.StorageContext{
+			DB:     dbconn,
+			Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+		}
+		done <- storage.StoreFileWithStorageContext(sgctx, fileAPath)
+	}()
+	go func() {
+		sgctx := storage.StorageContext{
+			DB:     dbconn,
+			Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+		}
+		done <- storage.StoreFileWithStorageContext(sgctx, fileBPath)
+	}()
 
 	// Wait for both to complete
 	err1 := <-done
@@ -944,7 +990,11 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			<-start
-			done <- storage.StoreFileWithDB(dbconn, inPath)
+			sgctx := storage.StorageContext{
+				DB:     dbconn,
+				Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+			}
+			done <- storage.StoreFileWithStorageContext(sgctx, inPath)
 		}()
 	}
 	close(start)
@@ -1034,7 +1084,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			<-start
-			done <- storage.StoreFolder(inputDir)
+			done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir)
 		}()
 	}
 	close(start)
@@ -1140,7 +1190,11 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			<-start
-			done <- storage.StoreFileWithDB(dbconn, inPath)
+			sgctx := storage.StorageContext{
+				DB:     dbconn,
+				Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+			}
+			done <- storage.StoreFileWithStorageContext(sgctx, inPath)
 		}()
 	}
 	close(start)
@@ -1218,9 +1272,13 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "retry_file.bin", 256*1024)
 	fileHash := sha256File(t, inPath)
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
 
 	// Store the file initially
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
 
@@ -1231,7 +1289,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	}
 
 	// Now try to store the same file again - it should retry and succeed
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("retry store after abort: %v", err)
 	}
 
@@ -1267,7 +1325,12 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	inPath := createTempFile(t, inputDir, "retry_file_stress.bin", 384*1024)
 	fileHash := sha256File(t, inPath)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	initialSgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
+	if err := storage.StoreFileWithStorageContext(initialSgctx, inPath); err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
 
@@ -1283,7 +1346,11 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			<-start
-			done <- storage.StoreFileWithDB(dbconn, inPath)
+			sgctx := storage.StorageContext{
+				DB:     dbconn,
+				Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+			}
+			done <- storage.StoreFileWithStorageContext(sgctx, inPath)
 		}()
 	}
 	close(start)
@@ -1335,8 +1402,13 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "retry_chunk.bin", 256*1024)
 
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
 	// Store the file initially to create chunks
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
 
@@ -1360,7 +1432,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 
 	// Now try to store the same file again - it should retry the aborted chunk and succeed
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("retry store after chunk abort: %v", err)
 	}
 
@@ -1408,7 +1480,12 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 		t.Fatalf("write fileB: %v", err)
 	}
 
-	if err := storage.StoreFileWithDB(dbconn, fileAPath); err != nil {
+	initialSgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
+	if err := storage.StoreFileWithStorageContext(initialSgctx, fileAPath); err != nil {
 		t.Fatalf("initial store fileA: %v", err)
 	}
 
@@ -1439,7 +1516,11 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 		path := paths[i%len(paths)]
 		go func(p string) {
 			<-start
-			done <- storage.StoreFileWithDB(dbconn, p)
+			sgctx := storage.StorageContext{
+				DB:     dbconn,
+				Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+			}
+			done <- storage.StoreFileWithStorageContext(sgctx, p)
 		}(path)
 	}
 	close(start)
@@ -1510,7 +1591,11 @@ func TestContainerRollover(t *testing.T) {
 	}
 
 	// Store first file
-	if err := storage.StoreFileWithDB(dbconn, files[0]); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, files[0]); err != nil {
 		t.Fatalf("store first file: %v", err)
 	}
 
@@ -1524,7 +1609,7 @@ func TestContainerRollover(t *testing.T) {
 	}
 
 	// Store second file - should trigger rollover
-	if err := storage.StoreFileWithDB(dbconn, files[1]); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, files[1]); err != nil {
 		t.Fatalf("store second file: %v", err)
 	}
 
@@ -1658,7 +1743,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 
 	// Now run system recovery
-	if err := recovery.SystemRecovery(); err != nil {
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
 		t.Fatalf("system recovery: %v", err)
 	}
 
@@ -1711,12 +1796,17 @@ func TestVerifyStandard(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_standard.bin", 256*1024)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
 	t.Run("passes on clean database", func(t *testing.T) {
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err != nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 			t.Fatalf("RunVerify on clean DB should not fail: %v", err)
 		}
 	})
@@ -1734,7 +1824,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err == nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
 			t.Fatal("RunVerify should have detected the corrupted ref_count but returned nil")
 		}
 	})
@@ -1754,7 +1844,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyStandard); err == nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
 			t.Fatal("RunVerify should have detected the orphan chunk but returned nil")
 		}
 	})
@@ -1773,7 +1863,7 @@ func TestVerifyStandard(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
 			t.Fatal("verify full should detect missing container file")
 		}
 	})
@@ -1800,12 +1890,17 @@ func TestVerifyFull(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_full.bin", 256*1024)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
 	t.Run("passes on clean database", func(t *testing.T) {
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 			t.Fatalf("RunVerify full on clean DB should not fail: %v", err)
 		}
 	})
@@ -1821,7 +1916,7 @@ func TestVerifyFull(t *testing.T) {
 			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'verify_full_bad_chunk'`)
 		}()
 
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
 			t.Fatal("RunVerify full should have detected malformed completed chunk but returned nil")
 		}
 	})
@@ -1840,7 +1935,7 @@ func TestVerifyFull(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
 			t.Fatal("verify full should detect missing container file")
 		}
 	})
@@ -1871,7 +1966,7 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyDeep); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep); err == nil {
 		t.Fatal("verify file --deep should detect chunk data corruption")
 	}
 }
@@ -1880,7 +1975,7 @@ func TestVerifyFileStandardPassesOnCleanStoredFile(t *testing.T) {
 	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_clean.bin", 256*1024)
 	defer dbconn.Close()
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyStandard); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard); err != nil {
 		t.Fatalf("verify file --standard on clean file should pass: %v", err)
 	}
 }
@@ -1889,7 +1984,7 @@ func TestVerifyFileFullPassesOnCleanStoredFile(t *testing.T) {
 	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_clean.bin", 256*1024)
 	defer dbconn.Close()
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyFull); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err != nil {
 		t.Fatalf("verify file --full on clean file should pass: %v", err)
 	}
 }
@@ -1898,7 +1993,7 @@ func TestVerifyFileDeepPassesOnCleanStoredFile(t *testing.T) {
 	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_deep_clean.bin", 256*1024)
 	defer dbconn.Close()
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyDeep); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep); err != nil {
 		t.Fatalf("verify file --deep on clean file should pass: %v", err)
 	}
 }
@@ -1919,7 +2014,7 @@ func TestVerifyFileFullDetectsContainerTruncation(t *testing.T) {
 		t.Fatalf("truncate container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyFull); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err == nil {
 		t.Fatal("verify file --full should detect truncated container data")
 	}
 }
@@ -1935,7 +2030,7 @@ func TestVerifyFileFullDetectsMissingContainerFile(t *testing.T) {
 		t.Fatalf("remove container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyFull); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err == nil {
 		t.Fatal("verify file --full should detect a missing container file")
 	}
 }
@@ -1954,7 +2049,7 @@ func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
 		t.Fatalf("delete chunk row: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyStandard); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard); err == nil {
 		t.Fatal("verify file should detect missing chunk metadata")
 	}
 }
@@ -1967,7 +2062,7 @@ func TestVerifyFileStandardDetectsBrokenChunkOrder(t *testing.T) {
 		t.Fatalf("corrupt chunk ordering: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("file", int(fileID), verify.VerifyStandard); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard); err == nil {
 		t.Fatal("verify file should detect broken chunk ordering")
 	}
 }
@@ -1991,7 +2086,7 @@ func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
 		t.Fatal("verify system --full should detect a container hash mismatch")
 	}
 }
@@ -2034,10 +2129,14 @@ func TestSharedChunkSafety(t *testing.T) {
 	}
 
 	// Store both files
-	if err := storage.StoreFileWithDB(dbconn, fileA); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, fileA); err != nil {
 		t.Fatalf("store fileA: %v", err)
 	}
-	if err := storage.StoreFileWithDB(dbconn, fileB); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, fileB); err != nil {
 		t.Fatalf("store fileB: %v", err)
 	}
 
@@ -2047,7 +2146,7 @@ func TestSharedChunkSafety(t *testing.T) {
 	}
 
 	// Run GC
-	if err := maintenance.RunGC(false); err != nil {
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
 		t.Fatalf("run GC: %v", err)
 	}
 
@@ -2093,11 +2192,15 @@ func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_deep_clean.bin", 512*1024)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyDeep); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err != nil {
 		t.Fatalf("verify system --deep on clean stored file should pass: %v", err)
 	}
 }
@@ -2123,7 +2226,11 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_deep_corruption.bin", 512*1024)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -2159,7 +2266,7 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("corrupt chunk byte: %v", err)
 	}
 
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyDeep); err == nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should detect chunk data corruption but returned nil")
 	}
 }
@@ -2203,7 +2310,11 @@ func TestZeroByteFile(t *testing.T) {
 		t.Fatalf("unexpected hash for empty file: %s", gotHash)
 	}
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store empty file: %v", err)
 	}
 
@@ -2256,7 +2367,11 @@ func TestRepeatRestoreDeterminism(t *testing.T) {
 	wantHash := sha256File(t, inPath)
 	wantBytes := mustRead(t, inPath)
 
-	if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 
@@ -2311,7 +2426,11 @@ func TestStoreGCRestore(t *testing.T) {
 	keeperHash := sha256File(t, keeperPath)
 	keeperBytes := mustRead(t, keeperPath)
 
-	if err := storage.StoreFileWithDB(dbconn, keeperPath); err != nil {
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, keeperPath); err != nil {
 		t.Fatalf("store keeper: %v", err)
 	}
 	keeperID := fetchFileIDByHash(t, dbconn, keeperHash)
@@ -2320,7 +2439,7 @@ func TestStoreGCRestore(t *testing.T) {
 	noisePath := createTempFile(t, inputDir, "noise.bin", 512*1024)
 	noiseHash := sha256File(t, noisePath)
 
-	if err := storage.StoreFileWithDB(dbconn, noisePath); err != nil {
+	if err := storage.StoreFileWithStorageContext(sgctx, noisePath); err != nil {
 		t.Fatalf("store noise: %v", err)
 	}
 	noiseID := fetchFileIDByHash(t, dbconn, noiseHash)
@@ -2330,12 +2449,12 @@ func TestStoreGCRestore(t *testing.T) {
 	}
 
 	// Dry-run GC must not break anything.
-	if err := maintenance.RunGC(true); err != nil {
+	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
 		t.Fatalf("GC dry-run: %v", err)
 	}
 
 	// Real GC.
-	if err := maintenance.RunGC(false); err != nil {
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
 		t.Fatalf("GC real run: %v", err)
 	}
 
@@ -2397,7 +2516,11 @@ func TestChunkBoundaryMatrix(t *testing.T) {
 			wantHash := sha256File(t, inPath)
 			wantBytes := mustRead(t, inPath)
 
-			if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+			sgctx := storage.StorageContext{
+				DB:     dbconn,
+				Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+			}
+			if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 				t.Fatalf("store: %v", err)
 			}
 
@@ -2564,7 +2687,8 @@ func storeFolderSequentialWithDB(t *testing.T, dbconn *sql.DB, root string) erro
 
 	sort.Strings(files)
 	for _, filePath := range files {
-		if err := storage.StoreFileWithDB(dbconn, filePath); err != nil {
+		sgctx := newTestContext(dbconn)
+		if err := storage.StoreFileWithStorageContext(sgctx, filePath); err != nil {
 			return err
 		}
 	}
@@ -2601,11 +2725,13 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 		expectedUniqueHashes[hash] = true
 	}
 
-	if err := storage.StoreFolder(inputDir); err != nil {
+	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
 		if strings.Contains(err.Error(), "container_filename_key") {
 			t.Logf("store folder hit container filename race, retrying deterministically: %v", err)
 			resetDB(t, dbconn)
 			resetStorage(t)
+			// Temporary workaround for known concurrent container filename collision.
+			// TODO(v0.6): eliminate this fallback after fixing container naming race.
 			if err := storeFolderSequentialWithDB(t, dbconn, inputDir); err != nil {
 				t.Fatalf("store folder %s (sequential fallback): %v", fixtureDir, err)
 			}
@@ -2614,21 +2740,21 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 		}
 	}
 
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify after store for %s: %v", fixtureDir, err)
 	}
 
-	if err := maintenance.RunGC(true); err != nil {
+	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
 		t.Fatalf("gc dry-run for %s: %v", fixtureDir, err)
 	}
-	if err := maintenance.RunGC(false); err != nil {
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
 		t.Fatalf("gc real for %s: %v", fixtureDir, err)
 	}
 
 	if err := dbconn.Close(); err != nil {
 		t.Fatalf("close db before restart for %s: %v", fixtureDir, err)
 	}
-	if err := recovery.SystemRecovery(); err != nil {
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
 		t.Fatalf("system recovery for %s: %v", fixtureDir, err)
 	}
 	dbconn, err = db.ConnectDB()
@@ -2725,7 +2851,11 @@ func TestSameInputSameChunkGraph(t *testing.T) {
 			t.Fatalf("%s: write file: %v", label, err)
 		}
 
-		if err := storage.StoreFileWithDB(dbconn, inPath); err != nil {
+		sgctx := storage.StorageContext{
+			DB:     dbconn,
+			Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+		}
+		if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 			t.Fatalf("%s: store: %v", label, err)
 		}
 
@@ -2795,24 +2925,24 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 	// -----------------------------
 	// Store folder
 	// -----------------------------
-	if err := storage.StoreFolder(inputDir); err != nil {
+	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
 		t.Fatalf("store folder: %v", err)
 	}
 
 	// -----------------------------
 	// Verify system
 	// -----------------------------
-	if err := maintenance.VerifyCommand("system", 0, verify.VerifyFull); err != nil {
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify after store: %v", err)
 	}
 
 	// -----------------------------
 	// Run GC (dry + real)
 	// -----------------------------
-	if err := maintenance.RunGC(true); err != nil {
+	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
 		t.Fatalf("gc dry-run: %v", err)
 	}
-	if err := maintenance.RunGC(false); err != nil {
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
 		t.Fatalf("gc real: %v", err)
 	}
 
