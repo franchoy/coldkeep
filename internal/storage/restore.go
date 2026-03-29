@@ -61,9 +61,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return fmt.Errorf("query logical_file: %w", err)
 	}
 	// ----------------------------------------------------------------------------------------------
-	// Fetch chunk metadata for the logical file from chunk and blocks tables, ordered by chunk_order
-	// Only restore from sealed containers to ensure data integrity
-	// Only process chunks with COMPLETED status for consistency
+	// Fetch chunk metadata for the logical file from chunk and blocks tables, ordered by chunk_order.
+	// Only process chunks with COMPLETED status for consistency.
+	// Chunks may legitimately live in the active (unsealed) container.
 	// ----------------------------------------------------------------------------------------------
 	rows, err := dbconn.Query(`
 					SELECT
@@ -85,7 +85,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			JOIN chunk c ON c.id = fc.chunk_id
 			JOIN blocks b ON b.chunk_id = c.id
 			JOIN container ctr ON ctr.id = b.container_id
-			WHERE fc.logical_file_id = $1 AND ctr.sealed = TRUE AND c.status = 'COMPLETED'
+			WHERE fc.logical_file_id = $1 AND c.status = 'COMPLETED'
 			ORDER BY fc.chunk_order ASC
 	`, fileID)
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -92,13 +93,30 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 
 		switch filestatus {
 		case "COMPLETED":
-			// File already stored and ready: we can reuse it
-			_ = tx.Rollback() // Don't hold locks while waiting
+			// File is marked COMPLETED. Before reusing it, ensure linked chunks are still COMPLETED.
+			_ = tx.Rollback() // Don't hold locks while validating
 			txclosed = true
-			fmt.Printf("File '%s' already stored\n", fileinfo.Name())
-			fmt.Printf("  FileID: %d\n", existingID)
-			fmt.Printf("  SHA256: %s\n", fileHash)
-			return existingID, filestatus, nil
+
+			var inconsistentChunks int
+			if err := dbconn.QueryRow(`
+				SELECT COUNT(*)
+				FROM file_chunk fc
+				JOIN chunk c ON c.id = fc.chunk_id
+				WHERE fc.logical_file_id = $1
+				AND c.status != 'COMPLETED'
+			`, existingID).Scan(&inconsistentChunks); err != nil {
+				return 0, "", err
+			}
+
+			if inconsistentChunks == 0 {
+				fmt.Printf("File '%s' already stored\n", fileinfo.Name())
+				fmt.Printf("  FileID: %d\n", existingID)
+				fmt.Printf("  SHA256: %s\n", fileHash)
+				return existingID, filestatus, nil
+			}
+
+			// Chunk graph is inconsistent; force a retry on the same logical_file row.
+			filestatus = "ABORTED"
 		case "PROCESSING":
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
@@ -407,7 +425,8 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 
 			_, err = tx.Exec(
 				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-			 VALUES ($1, $2, $3)`,
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
 				fileID,
 				claimedChunkID,
 				chunkOrder,
@@ -452,6 +471,9 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				if errors.Is(err, container.ErrContainerLockContention) {
 					continue
 				}
+				if strings.Contains(err.Error(), "container full") {
+					continue
+				}
 
 				if _, err3 := sgctx.DB.Exec(
 					`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
@@ -493,7 +515,8 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 			// Link file ↔ chunk
 			_, err = tx.Exec(
 				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-				 VALUES ($1, $2, $3)`,
+				 VALUES ($1, $2, $3)
+				 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
 				fileID,
 				claimedChunkID,
 				chunkOrder,

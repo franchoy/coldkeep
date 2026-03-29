@@ -44,18 +44,18 @@ func SystemRecoveryWithContainersDir(containersDir string) error {
 }
 
 func abortProcessingLogicalFiles(dbconn *sql.DB) error {
-	log.Println("Aborting logical files stuck in PROCESSING state for more than 10 minutes")
-	_, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
+	log.Println("Aborting logical files left in PROCESSING state from interrupted operations")
+	_, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE status = 'PROCESSING'`)
 	if err != nil {
 		return fmt.Errorf("query update logical_file to ABORTED: %w", err)
 	}
-	log.Println("Aborting logical files stuck in PROCESSING state for more than 10 minutes - done")
+	log.Println("Aborting logical files left in PROCESSING state from interrupted operations - done")
 	return nil
 }
 
 func abortProcessingChunks(dbconn *sql.DB) error {
-	log.Println("Aborting chunks stuck in PROCESSING state for more than 10 minutes")
-	_, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING' AND updated_at < NOW() - INTERVAL '10 minutes'`)
+	log.Println("Aborting chunks left in PROCESSING state from interrupted operations")
+	_, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING'`)
 	if err != nil {
 		return fmt.Errorf("query update chunk to ABORTED: %w", err)
 	}

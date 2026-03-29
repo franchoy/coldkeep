@@ -1172,7 +1172,8 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 	resetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
-	container.SetContainerMaxSize(1 * 1024 * 1024)
+	// Keep max size above max chunk payload to force rotation without rejecting chunks.
+	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	inputDir := filepath.Join(tmp, "input")
@@ -1589,6 +1590,12 @@ func TestContainerRollover(t *testing.T) {
 		createTempFile(t, inputDir, "file1.bin", 600*1024), // 600KB
 		createTempFile(t, inputDir, "file2.bin", 600*1024), // 600KB, should trigger rollover
 	}
+	// Ensure file2 is distinct so logical-file dedupe does not bypass rollover assertions.
+	file2Data := mustRead(t, files[1])
+	file2Data[0] ^= 0xFF
+	if err := os.WriteFile(files[1], file2Data, 0o644); err != nil {
+		t.Fatalf("rewrite file2 with distinct content: %v", err)
+	}
 
 	// Store first file
 	sgctx := storage.StorageContext{
@@ -1670,7 +1677,8 @@ func TestRotationSealsAllPreviousContainers(t *testing.T) {
 	resetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
-	container.SetContainerMaxSize(1 * 1024 * 1024)
+	// Keep max size above max chunk payload so forced rotations happen without payload rejection.
+	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	inputDir := filepath.Join(tmp, "input")
@@ -2108,6 +2116,10 @@ func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
 		t.Fatalf("drop file_chunk foreign key: %v", err)
 	}
 
+	if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, record.chunkID); err != nil {
+		t.Fatalf("delete block row: %v", err)
+	}
+
 	if _, err := dbconn.Exec(`DELETE FROM chunk WHERE id = $1`, record.chunkID); err != nil {
 		t.Fatalf("delete chunk row: %v", err)
 	}
@@ -2141,7 +2153,11 @@ func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open container file: %v", err)
 	}
-	if _, err := file.WriteAt([]byte{0xAB}, 0); err != nil {
+	corruptionOffset := record.blockOffset
+	if record.storedSize > 10 {
+		corruptionOffset += 10
+	}
+	if _, err := file.WriteAt([]byte{0xAB}, corruptionOffset); err != nil {
 		_ = file.Close()
 		t.Fatalf("mutate container file: %v", err)
 	}
@@ -2149,8 +2165,8 @@ func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
-		t.Fatal("verify system --full should detect a container hash mismatch")
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
+		t.Fatal("verify system --deep should detect a container content mismatch")
 	}
 }
 
@@ -2190,6 +2206,10 @@ func TestSharedChunkSafety(t *testing.T) {
 	if err := os.WriteFile(fileB, data, 0o644); err != nil {
 		t.Fatalf("write fileB: %v", err)
 	}
+	// Make fileB a distinct logical file while preserving most content overlap.
+	if err := os.WriteFile(fileB, append(data, 0x01), 0o644); err != nil {
+		t.Fatalf("rewrite fileB: %v", err)
+	}
 
 	// Store both files
 	sgctx := storage.StorageContext{
@@ -2203,8 +2223,11 @@ func TestSharedChunkSafety(t *testing.T) {
 		t.Fatalf("store fileB: %v", err)
 	}
 
+	fileAHash := sha256File(t, fileA)
+	fileAID := fetchFileIDByHash(t, dbconn, fileAHash)
+
 	// Remove file A
-	if err := storage.RemoveFileWithDB(dbconn, 1); err != nil {
+	if err := storage.RemoveFileWithDB(dbconn, fileAID); err != nil {
 		t.Fatalf("remove fileA: %v", err)
 	}
 
@@ -2220,8 +2243,10 @@ func TestSharedChunkSafety(t *testing.T) {
 	}
 
 	outPath := filepath.Join(restoreDir, "fileB.bin")
+	fileBHash := sha256File(t, fileB)
+	fileBID := fetchFileIDByHash(t, dbconn, fileBHash)
 
-	if err := storage.RestoreFileWithDB(dbconn, 2, outPath); err != nil {
+	if err := storage.RestoreFileWithDB(dbconn, fileBID, outPath); err != nil {
 		t.Fatalf("restore fileB: %v", err)
 	}
 
@@ -2500,6 +2525,12 @@ func TestStoreGCRestore(t *testing.T) {
 
 	// Store a second file, then remove it so GC has something to collect.
 	noisePath := createTempFile(t, inputDir, "noise.bin", 512*1024)
+	// Ensure noise differs from keeper to avoid same-logical-file dedupe aliasing.
+	noiseBytes := mustRead(t, noisePath)
+	noiseBytes[0] ^= 0xFF
+	if err := os.WriteFile(noisePath, noiseBytes, 0o644); err != nil {
+		t.Fatalf("rewrite noise file with distinct content: %v", err)
+	}
 	noiseHash := sha256File(t, noisePath)
 
 	if err := storage.StoreFileWithStorageContext(sgctx, noisePath); err != nil {

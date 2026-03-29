@@ -214,9 +214,8 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int, containersDir string
 		var containerID int64
 		var filename string
 		var currentSize int64
-		var sealed bool
 		var quarantine bool
-		var containerHash string
+		var containerHash sql.NullString
 
 		if err := rows.Scan(
 			&chunkID,
@@ -225,21 +224,15 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int, containersDir string
 			&containerID,
 			&filename,
 			&currentSize,
-			&sealed,
+			new(bool),
 			&quarantine,
 			&containerHash,
 		); err != nil {
 			return fmt.Errorf("scan file containers and offsets: %w", err)
 		}
 
-		if !sealed {
-			return fmt.Errorf("container %d is not sealed", containerID)
-		}
 		if quarantine {
 			return fmt.Errorf("container %d is quarantined", containerID)
-		}
-		if containerHash == "" {
-			return fmt.Errorf("container %d missing hash", containerID)
 		}
 
 		info, ok := containerInfoByID[containerID]

@@ -17,9 +17,18 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 	log.Printf("Checking container file existence and size consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, current_size 
-				from container 
-				where quarantine = false and sealed = true`)
+	rows, err := dbconn.Query(`
+		SELECT ctr.id, ctr.filename, ctr.current_size
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = ctr.id
+			AND c.status = 'COMPLETED'
+		)
+	`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container files: %v", err)

@@ -160,22 +160,44 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	log.Println("Starting deep verification of container files...")
 	var errorList []error
 	var errorCount int
-	//retrieve sealer container count
+	// Count all non-quarantined containers that currently hold completed chunks.
 	containerCount := 0
-	containerCountErr := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed=true`).Scan(&containerCount)
+	containerCountErr := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = ctr.id
+			AND c.status = 'COMPLETED'
+		)
+	`).Scan(&containerCount)
 	if containerCountErr != nil {
 		log.Println(" ERROR ")
-		log.Printf("Failed to query sealed container count: %v", containerCountErr)
-		return fmt.Errorf("failed to query sealed container count: %w", containerCountErr)
+		log.Printf("Failed to query deep-verify container count: %v", containerCountErr)
+		return fmt.Errorf("failed to query deep-verify container count: %w", containerCountErr)
 	}
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`SELECT id, filename, current_size, max_size FROM container WHERE sealed=true`)
+	containers, err := dbconn.Query(`
+		SELECT ctr.id, ctr.filename, ctr.current_size, ctr.max_size
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = ctr.id
+			AND c.status = 'COMPLETED'
+		)
+	`)
 	if err != nil {
 		log.Println(" ERROR ")
-		log.Printf("Failed to query sealed containers: %v", err)
-		return fmt.Errorf("failed to query sealed containers: %w", err)
+		log.Printf("Failed to query deep-verify containers: %v", err)
+		return fmt.Errorf("failed to query deep-verify containers: %w", err)
 	}
 	defer func() { _ = containers.Close() }()
 
@@ -209,6 +231,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 								FROM blocks b
 								JOIN chunk c ON c.id = b.chunk_id
 								WHERE b.container_id = $1
+								AND c.status = 'COMPLETED'
 								ORDER BY b.block_offset`, containerID)
 		if err != nil {
 			log.Printf("Failed to query chunks for container %d: %v", containerID, err)
