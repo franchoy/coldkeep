@@ -10,6 +10,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -33,7 +35,7 @@ type parsedCommandLine struct {
 }
 
 func main() {
-	err := recovery.SystemRecovery()
+	err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir)
 	if err != nil {
 		log.Printf("System recovery failed: %v\n", err)
 	}
@@ -97,15 +99,27 @@ func runStoreCommand(parsed parsedCommandLine) error {
 
 	path := parsed.positionals[0]
 	codecName, _ := parsed.firstFlagValue("codec")
+
+	sgctx, err := storage.LoadDefaultStorageContext()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
 	if codecName == "" {
-		return storage.StoreFile(path)
+		return storage.StoreFileWithStorageContext(sgctx, path)
 	}
 
 	if codecName == "plain" {
 		fmt.Fprintln(os.Stderr, "WARNING: storing data without encryption")
 	}
 
-	return storage.StoreFileWithCodec(path, codecName)
+	codec, err := blocks.ParseCodec(codecName)
+	if err != nil {
+		return err
+	}
+
+	return storage.StoreFileWithStorageContextAndCodec(sgctx, path, codec)
 }
 
 func runStoreFolderCommand(parsed parsedCommandLine) error {
@@ -118,15 +132,27 @@ func runStoreFolderCommand(parsed parsedCommandLine) error {
 
 	path := parsed.positionals[0]
 	codecName, _ := parsed.firstFlagValue("codec")
+
+	sgctx, err := storage.LoadDefaultStorageContext()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
 	if codecName == "" {
-		return storage.StoreFolder(path)
+		return storage.StoreFolderWithStorageContext(sgctx, path)
 	}
 
 	if codecName == "plain" {
 		fmt.Fprintln(os.Stderr, "WARNING: storing data without encryption")
 	}
 
-	return storage.StoreFolderWithCodec(path, codecName)
+	codec, err := blocks.ParseCodec(codecName)
+	if err != nil {
+		return err
+	}
+
+	return storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
 }
 
 func runRestoreCommand(parsed parsedCommandLine) error {
@@ -142,7 +168,13 @@ func runRestoreCommand(parsed parsedCommandLine) error {
 		return fmt.Errorf("Invalid fileID: %w", err)
 	}
 
-	return storage.RestoreFile(fileID, parsed.positionals[1])
+	sgctx, err := storage.LoadDefaultStorageContext()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	return storage.RestoreFileWithStorageContext(sgctx, fileID, parsed.positionals[1])
 }
 
 func runRemoveCommand(parsed parsedCommandLine) error {
@@ -180,7 +212,7 @@ func runGCCommand(parsed parsedCommandLine) error {
 		return errors.New("Usage: coldkeep gc [--dry-run]")
 	}
 
-	return maintenance.RunGC(dryRun)
+	return maintenance.RunGCWithContainersDir(dryRun, container.ContainersDir)
 }
 
 func runStatsCommand(parsed parsedCommandLine) error {
@@ -232,7 +264,7 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 		if len(parsed.positionals) > 2 {
 			return errors.New("Usage: coldkeep verify system [--standard|--full|--deep]")
 		}
-		return maintenance.VerifyCommand(target, 0, verifyLevel)
+		return maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
 			return errors.New("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
@@ -243,7 +275,7 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 			return fmt.Errorf("Invalid fileID: %w", err)
 		}
 
-		return maintenance.VerifyCommand(target, int(fileID), verifyLevel)
+		return maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel)
 	default:
 		return fmt.Errorf("Unknown target for verify: %s", target)
 	}
