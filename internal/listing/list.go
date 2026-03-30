@@ -54,17 +54,3 @@ func ListFilesResult() ([]FileRecord, error) {
 	}
 	return records, nil
 }
-
-func ListFiles() error {
-	records, err := ListFilesResult()
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("%-6s %-25s %-15s %-20s\n", "ID", "NAME", "SIZE(bytes)", "CREATED_AT")
-	fmt.Println("---------------------------------------------------------------------")
-	for _, r := range records {
-		fmt.Printf("%-6d %-25s %-15d %-20s\n", r.ID, r.Name, r.SizeBytes, r.CreatedAt)
-	}
-	return nil
-}

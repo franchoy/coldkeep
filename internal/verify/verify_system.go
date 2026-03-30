@@ -355,7 +355,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			}
 
 			if !hasChunks {
-				appendDeepError(fmt.Errorf("container %d returned no completed chunks despite filter", containerID))
+				return fmt.Errorf("database invariant violation: container %d claimed to have completed chunks but returned none", containerID)
 			}
 
 			if err := chunks.Err(); err != nil {

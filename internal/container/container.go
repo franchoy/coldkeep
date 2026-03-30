@@ -47,11 +47,8 @@ type ActiveContainer struct {
 // api
 // --------------------------------------------------------------------------
 
-// OpenExistingContainer opens an existing container using the provided mode.
-//
-// Deprecated: prefer OpenReadOnlyContainer or OpenWritableContainer to make
-// call-site intent explicit and avoid boolean-parameter misuse.
-func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
+// openExistingContainer opens an existing container using the provided mode.
+func openExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
 	var f *os.File
 	var err error
 	if readonly {
@@ -79,17 +76,17 @@ func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 // OpenReadOnlyContainer opens an existing container in read-only mode.
 //
 // This wrapper avoids ambiguous boolean call sites like
-// OpenExistingContainer(true, ...) and makes intent explicit.
+// openExistingContainer(true, ...) and makes intent explicit.
 func OpenReadOnlyContainer(path string, maxSize int64) (*FileContainer, error) {
-	return OpenExistingContainer(true, path, maxSize)
+	return openExistingContainer(true, path, maxSize)
 }
 
 // OpenWritableContainer opens an existing container in writable mode.
 //
 // This wrapper avoids ambiguous boolean call sites like
-// OpenExistingContainer(false, ...) and makes intent explicit.
+// openExistingContainer(false, ...) and makes intent explicit.
 func OpenWritableContainer(path string, maxSize int64) (*FileContainer, error) {
-	return OpenExistingContainer(false, path, maxSize)
+	return openExistingContainer(false, path, maxSize)
 }
 
 func (c *FileContainer) Append(data []byte) (int64, error) {
@@ -342,7 +339,6 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
-	fmt.Printf("Container %d sealed successfully: %s\n", containerID, originalPath)
 	return nil
 }
 

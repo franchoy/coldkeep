@@ -7,10 +7,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func bytesToMB(bytes int64) float64 {
-	return float64(bytes) / (1024 * 1024)
-}
-
 // StatsResult holds the snapshot emitted by RunStatsResult.
 type StatsResult struct {
 	TotalFiles               int64                 `json:"total_files"`
@@ -213,49 +209,4 @@ func RunStatsResult() (*StatsResult, error) {
 	}
 
 	return r, nil
-}
-
-func RunStats() error {
-	r, err := RunStatsResult()
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("\n====== coldkeep Stats ======")
-	fmt.Printf("Logical files (total):           %d\n", r.TotalFiles)
-	fmt.Printf("Logical stored size (total):     %.2f MB\n", bytesToMB(r.TotalLogicalSizeBytes))
-	fmt.Printf("  Completed files:               %d (%.2f MB)\n", r.CompletedFiles, bytesToMB(r.CompletedSizeBytes))
-	fmt.Printf("  Processing files:              %d (%.2f MB)\n", r.ProcessingFiles, bytesToMB(r.ProcessingSizeBytes))
-	fmt.Printf("  Aborted files:                 %d (%.2f MB)\n", r.AbortedFiles, bytesToMB(r.AbortedSizeBytes))
-	fmt.Printf("Healthy containers:              %d\n", r.HealthyContainers)
-	fmt.Printf("Healthy container bytes:         %.2f MB\n", bytesToMB(r.HealthyContainerBytes))
-	fmt.Printf("Quarantined containers:          %d\n", r.QuarantineContainers)
-	fmt.Printf("Quarantined container bytes:     %.2f MB\n", bytesToMB(r.QuarantineContainerBytes))
-	fmt.Printf("Total containers:                %d\n", r.TotalContainers)
-	fmt.Printf("Total container bytes:           %.2f MB\n", bytesToMB(r.TotalContainerBytes))
-	fmt.Printf("Live block bytes (physical):     %.2f MB\n", bytesToMB(r.LiveBlockBytes))
-	fmt.Printf("Dead block bytes (physical):     %.2f MB\n", bytesToMB(r.DeadBlockBytes))
-	if r.GlobalDedupRatioPct > 0 {
-		fmt.Printf("Global dedup ratio:              %.2f%%\n", r.GlobalDedupRatioPct)
-	}
-	if r.FragmentationRatioPct > 0 {
-		fmt.Printf("Fragmentation ratio:             %.2f%%\n", r.FragmentationRatioPct)
-	}
-	fmt.Printf("File retry stats:                total=%d, avg=%.2f, max=%d\n", r.TotalFileRetries, r.AvgFileRetries, r.MaxFileRetries)
-	fmt.Printf("Chunk retry stats:               total=%d, avg=%.2f, max=%d\n", r.TotalChunkRetries, r.AvgChunkRetries, r.MaxChunkRetries)
-	fmt.Println("============================")
-	fmt.Printf("Chunks (total):           %d\n", r.TotalChunks)
-	fmt.Printf("  Completed chunks:       %d (%.2f MB)\n", r.CompletedChunks, bytesToMB(r.CompletedChunkBytes))
-	fmt.Printf("  Processing chunks:      %d\n", r.ProcessingChunks)
-	fmt.Printf("  Aborted chunks:         %d\n", r.AbortedChunks)
-	fmt.Println("============================")
-	fmt.Println("\nPer-container breakdown:")
-	for _, c := range r.Containers {
-		fmt.Printf("Container %d (%s): quarantined=%t : total=%.2fMB live=%.2fMB dead=%.2fMB live_ratio=%.2f%%\n",
-			c.ID, c.Filename, c.Quarantine,
-			bytesToMB(c.TotalBytes), bytesToMB(c.LiveBytes), bytesToMB(c.DeadBytes),
-			c.LiveRatioPct,
-		)
-	}
-	return nil
 }

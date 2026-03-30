@@ -17,7 +17,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 type payloadStatefulWriter interface {
@@ -27,6 +26,14 @@ type payloadStatefulWriter interface {
 
 type optionalContainerSealer interface {
 	SealContainer(tx db.DBTX, containerID int64, filename string, containersDir string) error
+}
+
+// StoreFileResult contains structured metadata about a store operation.
+type StoreFileResult struct {
+	FileID        int64  `json:"file_id"`
+	FileHash      string `json:"file_hash"`
+	Path          string `json:"path"`
+	AlreadyStored bool   `json:"already_stored"`
 }
 
 func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, containerID int64, filename string, containersDir string) error {
@@ -108,9 +115,6 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			}
 
 			if inconsistentChunks == 0 {
-				fmt.Printf("File '%s' already stored\n", fileinfo.Name())
-				fmt.Printf("  FileID: %d\n", existingID)
-				fmt.Printf("  SHA256: %s\n", fileHash)
 				return existingID, filestatus, nil
 			}
 
@@ -120,8 +124,6 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			fmt.Printf("File '%s' is currently being stored by another process. Waiting...\n", fileinfo.Name())
-
 			for keep_waiting := true; keep_waiting; {
 
 				// Poll every logicalFileWaitingtime milliseconds until the other process finishes
@@ -137,9 +139,6 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 
 				switch finalStatus {
 				case "COMPLETED":
-					fmt.Printf("File '%s' already stored\n", fileinfo.Name())
-					fmt.Printf("  FileID: %d\n", existingID)
-					fmt.Printf("  SHA256: %s\n", fileHash)
 					return existingID, finalStatus, nil
 				case "ABORTED":
 					// Previous attempt was aborted while we were waiting: we can try to store again
@@ -229,8 +228,6 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			fmt.Printf("Chunk '%s' is currently being stored by another process. Waiting...\n", chunkHash)
-
 			for keep_waiting := true; keep_waiting; {
 
 				// Poll every chunkWaitingtime milliseconds until the other process finishes
@@ -245,7 +242,6 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 				}
 				switch finalStatus {
 				case "COMPLETED":
-					fmt.Printf("Chunk '%s' already stored\n", chunkHash)
 					return chunkID, finalStatus, nil
 				case "ABORTED":
 					// Previous attempt was aborted while we were waiting: we can try to store again
@@ -332,15 +328,32 @@ func StoreFileWithStorageContext(sgctx StorageContext, path string) (err error) 
 	return StoreFileWithStorageContextAndCodec(sgctx, path, codec)
 }
 
+// StoreFileWithStorageContextResult stores one file and returns structured result metadata.
+func StoreFileWithStorageContextResult(sgctx StorageContext, path string) (StoreFileResult, error) {
+	codec, err := blocks.LoadDefaultCodec()
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+
+	return StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+}
+
 func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, codec blocks.Codec) (err error) {
-	start := time.Now()
+	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	return err
+}
+
+// StoreFileWithStorageContextAndCodecResult stores one file and returns
+// metadata suitable for CLI text and JSON output.
+func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
+	result.Path = path
 
 	transformer, err := blocks.GetBlockTransformer(codec)
 	if err != nil {
 		if codec == blocks.CodecAESGCM {
-			return fmt.Errorf("encryption key required for aes-gcm: %w", err)
+			return StoreFileResult{}, fmt.Errorf("encryption key required for aes-gcm: %w", err)
 		}
-		return fmt.Errorf("initialize codec %s: %w", codec, err)
+		return StoreFileResult{}, fmt.Errorf("initialize codec %s: %w", codec, err)
 	}
 
 	blockRepo := &blocks.Repository{
@@ -351,56 +364,57 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
 	defer func() { _ = file.Close() }()
 
 	fileinfo, err := file.Stat()
 	if err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
 
 	// Compute full file hash
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
+	result.FileHash = fileHash
 
 	if _, err := file.Seek(0, 0); err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
 
 	// Try to claim logical file for this hash (concurrency-safe)
 	fileID, filestatus, err := claimLogicalFile(sgctx.DB, fileinfo, fileHash)
 	if err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
+	result.FileID = fileID
 
 	if filestatus == "COMPLETED" {
 		// File already stored and ready: we can reuse it
-		return nil
+		result.AlreadyStored = true
+		return result, nil
 	}
 
 	completed := false
 	defer func() {
 		if !completed {
-			if _, err := sgctx.DB.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID); err != nil {
-				fmt.Printf("failed to mark logical file %d as ABORTED: %v\n", fileID, err)
-			}
+			_, _ = sgctx.DB.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID)
 		}
 	}()
 
 	// At this point, we have a logical_file row in "PROCESSING" status for this file hash, either created by us or by another process.
 	chunks, err := chunk.ChunkFile(path)
 	if err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
 
 	chunkOrder := 0
 	writer, ok := sgctx.Writer.(payloadStatefulWriter)
 	if !ok {
-		return fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
+		return StoreFileResult{}, fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
 	}
 	defer func() {
 		_ = writer.FinalizeContainer()
@@ -412,14 +426,14 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 		// Try to claim chunk for this hash (concurrency-safe)
 		claimedChunkID, chunkStatus, err := claimChunk(sgctx.DB, chunkHash, int64(len(chunkData)))
 		if err != nil {
-			return err
+			return StoreFileResult{}, err
 		}
 
 		if chunkStatus == "COMPLETED" {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
 			tx, err := sgctx.DB.Begin()
 			if err != nil {
-				return err
+				return StoreFileResult{}, err
 			}
 
 			_, err = tx.Exec(
@@ -432,12 +446,12 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 			)
 			if err != nil {
 				_ = tx.Rollback()
-				return err
+				return StoreFileResult{}, err
 			}
 
 			if err = tx.Commit(); err != nil {
 				_ = tx.Rollback()
-				return err
+				return StoreFileResult{}, err
 			}
 
 			chunkOrder++
@@ -449,7 +463,7 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 		for {
 			tx, err := sgctx.DB.Begin()
 			if err != nil {
-				return err
+				return StoreFileResult{}, err
 			}
 
 			// Append chunk data to container file
@@ -478,12 +492,12 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 					// block metadata already exists for this chunk ID.
 					tx2, err2 := sgctx.DB.Begin()
 					if err2 != nil {
-						return err2
+						return StoreFileResult{}, err2
 					}
 
 					if _, err2 = tx2.Exec(`UPDATE chunk SET status = 'COMPLETED' WHERE id = $1`, claimedChunkID); err2 != nil {
 						_ = tx2.Rollback()
-						return err2
+						return StoreFileResult{}, err2
 					}
 
 					if _, err2 = tx2.Exec(
@@ -495,28 +509,28 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 						chunkOrder,
 					); err2 != nil {
 						_ = tx2.Rollback()
-						return err2
+						return StoreFileResult{}, err2
 					}
 
 					if err2 = tx2.Commit(); err2 != nil {
 						_ = tx2.Rollback()
-						return err2
+						return StoreFileResult{}, err2
 					}
 
 					chunkOrder++
 					break
 				}
 				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
-					return getBlockErr
+					return StoreFileResult{}, getBlockErr
 				}
 
 				if _, err3 := sgctx.DB.Exec(
 					`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
 					claimedChunkID,
 				); err3 != nil {
-					return err3
+					return StoreFileResult{}, err3
 				}
-				return err
+				return StoreFileResult{}, err
 			}
 
 			// Mark chunk as completed
@@ -525,7 +539,7 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				claimedChunkID,
 			); err != nil {
 				_ = tx.Rollback()
-				return err
+				return StoreFileResult{}, err
 			}
 
 			if placement.Rotated {
@@ -533,18 +547,18 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				// Caller must persist final size and seal the previously active container row in DB.
 				if err := container.UpdateContainerSize(tx, placement.PreviousID, placement.PreviousSize); err != nil {
 					_ = tx.Rollback()
-					return err
+					return StoreFileResult{}, err
 				}
 				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
-					return err
+					return StoreFileResult{}, err
 				}
 			}
 
 			// Always persist size for the container that received this payload.
 			if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
 				_ = tx.Rollback()
-				return err
+				return StoreFileResult{}, err
 			}
 
 			// Link file ↔ chunk
@@ -558,24 +572,24 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 			)
 			if err != nil {
 				_ = tx.Rollback()
-				return err
+				return StoreFileResult{}, err
 			}
 
 			// Seal if reached max size.
 			if placement.Full {
 				if err := writer.FinalizeContainer(); err != nil {
 					_ = tx.Rollback()
-					return err
+					return StoreFileResult{}, err
 				}
 				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
 				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
-					return err
+					return StoreFileResult{}, err
 				}
-				}
+			}
 
 			if err = tx.Commit(); err != nil {
-				return err
+				return StoreFileResult{}, err
 			}
 
 			chunkOrder++
@@ -589,18 +603,12 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 		fileID,
 	)
 	if err != nil {
-		return err
+		return StoreFileResult{}, err
 	}
 	// Mark the operation as completed to avoid aborting it in the deferred function
 	completed = true
 
-	utils_print.PrintSuccess("File stored successfully")
-	fmt.Printf("  FileID:   %d\n", fileID)
-	fmt.Printf("  Path:   %s\n", path)
-	fmt.Printf("  SHA256: %s\n", fileHash)
-	utils_print.PrintDuration(start)
-
-	return nil
+	return result, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -647,7 +655,6 @@ func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
 }
 
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
-	start := time.Now()
 
 	workerCount := runtime.NumCPU()
 
@@ -701,9 +708,6 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 			return werr
 		}
 	}
-
-	utils_print.PrintSuccess("Folder stored successfully")
-	utils_print.PrintDuration(start)
 
 	return nil
 }

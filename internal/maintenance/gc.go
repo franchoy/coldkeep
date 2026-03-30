@@ -10,14 +10,29 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
+// GCResult contains structured metadata about a GC run.
+type GCResult struct {
+	DryRun             bool     `json:"dry_run"`
+	AffectedContainers int      `json:"affected_containers"`
+	ContainerFilenames []string `json:"container_filenames"`
+}
+
 func RunGC(dryRun bool) error {
-	return RunGCWithContainersDir(dryRun, container.ContainersDir)
+	_, err := RunGCWithContainersDirResult(dryRun, container.ContainersDir)
+	return err
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
+	_, err := RunGCWithContainersDirResult(dryRun, containersDir)
+	return err
+}
+
+func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCResult, err error) {
+	result.DryRun = dryRun
+
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return fmt.Errorf("failed to connect to DB: %w", err)
+		return GCResult{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
@@ -26,11 +41,11 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 
 	err = dbconn.QueryRow("SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
 	if err != nil {
-		return fmt.Errorf("failed to attempt advisory lock: %w", err)
+		return GCResult{}, fmt.Errorf("failed to attempt advisory lock: %w", err)
 	}
 
 	if !locked {
-		return fmt.Errorf("GC already running (advisory lock held)")
+		return GCResult{}, fmt.Errorf("GC already running (advisory lock held)")
 	}
 
 	defer func() {
@@ -45,7 +60,7 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
 	`)
 	if err != nil {
-		return err
+		return GCResult{}, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -56,12 +71,12 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 		var filename string
 
 		if err := rows.Scan(&containerID, &filename); err != nil {
-			return err
+			return GCResult{}, err
 		}
 
 		tx, err := dbconn.Begin()
 		if err != nil {
-			return err
+			return GCResult{}, err
 		}
 
 		// Re-check inside transaction
@@ -79,7 +94,7 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 		`, containerID).Scan(&stillEmpty)
 		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return GCResult{}, err
 		}
 
 		if !stillEmpty {
@@ -90,9 +105,9 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 		// If dry-run, rollback transaction and skip file deletion
 		// dry-run is just simulation and count
 		if dryRun {
-			fmt.Println("[DRY-RUN] Would delete container:", filename)
 			_ = tx.Rollback()
 			affectedContainers++
+			result.ContainerFilenames = append(result.ContainerFilenames, filename)
 			continue
 		}
 
@@ -110,18 +125,18 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 		`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return GCResult{}, err
 		}
 
 		// Delete container row
 		_, err = tx.Exec(`DELETE FROM container WHERE id = $1`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return GCResult{}, err
 		}
 
 		if err := tx.Commit(); err != nil {
-			return err
+			return GCResult{}, err
 		}
 
 		// After commit, delete file from disk
@@ -132,22 +147,13 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 		}
 
 		affectedContainers++
-		fmt.Println("Deleted container:", filename)
+		result.ContainerFilenames = append(result.ContainerFilenames, filename)
 	}
 
 	if err := rows.Err(); err != nil {
-		return err
+		return GCResult{}, err
 	}
 
-	if affectedContainers == 0 {
-		fmt.Println("GC completed. No containers eligible for deletion.")
-		return nil
-	}
-
-	if dryRun {
-		fmt.Printf("GC dry-run completed. Containers eligible for deletion: %d\n", affectedContainers)
-	} else {
-		fmt.Printf("GC completed. Containers deleted: %d\n", affectedContainers)
-	}
-	return nil
+	result.AffectedContainers = affectedContainers
+	return result, nil
 }

@@ -16,8 +16,8 @@ import (
 )
 
 func checkFileChunkOrdering(dbconn *sql.DB) error {
-	// Check that all files have properly ordered chunks with no gaps (file_chunk.chunk_order should be sequential starting from 0 for each logical file)
-	log.Printf("Checking file chunk ordering and gaps...")
+	// Check that all non-empty files have chunk rows and that chunk_order is contiguous from 0 with no duplicates.
+	log.Printf("Checking file chunk ordering continuity and gaps...")
 	var errorList []error
 	var errorCount int
 	rows, err := dbconn.Query(`SELECT id
@@ -47,6 +47,47 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 	}
 
 	if err := rows.Err(); err != nil {
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
+	}
+
+	rows2, err := dbconn.Query(`WITH ordered_file_chunks AS (
+									SELECT
+										fc.logical_file_id,
+										fc.chunk_order,
+										ROW_NUMBER() OVER (
+											PARTITION BY fc.logical_file_id
+											ORDER BY fc.chunk_order
+										) - 1 AS expected_order
+									FROM file_chunk fc
+									JOIN logical_file lf ON lf.id = fc.logical_file_id
+									WHERE lf.total_size > 0
+								)
+								SELECT logical_file_id, chunk_order, expected_order
+								FROM ordered_file_chunks
+								WHERE chunk_order <> expected_order
+								ORDER BY logical_file_id, expected_order;`)
+	if err != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query file chunk continuity: %v", err)
+		return fmt.Errorf("failed to query file chunk continuity: %w", err)
+	}
+	defer func() { _ = rows2.Close() }()
+
+	for rows2.Next() {
+		var logicalFileID int
+		var chunkOrder int
+		var expectedOrder int
+		if err := rows2.Scan(&logicalFileID, &chunkOrder, &expectedOrder); err != nil {
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan file chunk continuity info: %w", err))
+			continue
+		}
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("file chunk ordering error for logical file ID %d: expected chunk_order %d but got %d", logicalFileID, expectedOrder, chunkOrder))
+	}
+
+	if err := rows2.Err(); err != nil {
 		errorCount++
 		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
 	}

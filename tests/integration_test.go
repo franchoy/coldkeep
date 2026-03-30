@@ -1948,6 +1948,26 @@ func TestVerifyStandard(t *testing.T) {
 		}
 	})
 
+	t.Run("detects broken file chunk ordering continuity", func(t *testing.T) {
+		var fileID int
+		if err := dbconn.QueryRow(`SELECT id FROM logical_file ORDER BY id ASC LIMIT 1`).Scan(&fileID); err != nil {
+			t.Fatalf("query logical file id: %v", err)
+		}
+
+		if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order + 1 WHERE logical_file_id = $1`, fileID); err != nil {
+			t.Fatalf("corrupt file chunk ordering: %v", err)
+		}
+		defer func() {
+			if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order - 1 WHERE logical_file_id = $1`, fileID); err != nil {
+				t.Fatalf("restore file chunk ordering: %v", err)
+			}
+		}()
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected broken file chunk ordering continuity but returned nil")
+		}
+	})
+
 	t.Run("detects missing container file", func(t *testing.T) {
 		var filename string
 		err := dbconn.QueryRow(`SELECT filename FROM container LIMIT 1`).Scan(&filename)

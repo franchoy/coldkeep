@@ -148,3 +148,53 @@ func TestClassifyExitCodeFallbackStringMatch(t *testing.T) {
 		t.Fatalf("expected usage exit code from fallback matching %d, got %d", exitUsage, got)
 	}
 }
+
+func TestResolveOutputModeInvalidValueClassifiesAsUsage(t *testing.T) {
+	parsed := parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"output": {"yaml"},
+		},
+	}
+
+	_, err := resolveOutputMode(parsed)
+	if err == nil {
+		t.Fatal("expected error for invalid output mode")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
+	err := runSimulateCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"store"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil {
+		t.Fatal("expected error for missing simulate args")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
+	err := runSimulateCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"noop", "target"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil {
+		t.Fatal("expected error for unknown simulate subcommand")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
