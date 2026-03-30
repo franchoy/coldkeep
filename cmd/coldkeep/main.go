@@ -418,7 +418,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		result, err = storage.StoreFileWithStorageContextResult(sgctx, path)
 	} else {
 		if codecName == "plain" {
-			fmt.Fprintln(os.Stderr, "WARNING: storing data without encryption")
+			fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 		}
 
 		codec, err := blocks.ParseCodec(codecName)
@@ -479,7 +479,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 		err = storage.StoreFolderWithStorageContext(sgctx, path)
 	} else {
 		if codecName == "plain" {
-			fmt.Fprintln(os.Stderr, "WARNING: storing data without encryption")
+			fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 		}
 
 		codec, err := blocks.ParseCodec(codecName)
@@ -518,7 +518,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
 	if err != nil {
-		return &cliError{code: exitUsage, err: fmt.Errorf("Invalid fileID: %w", err)}
+		return usageErrorf("Invalid fileID: %v", err)
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -560,7 +560,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
 	if err != nil {
-		return &cliError{code: exitUsage, err: fmt.Errorf("Invalid fileID: %w", err)}
+		return usageErrorf("Invalid fileID: %v", err)
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -831,7 +831,7 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 
 		fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
 		if err != nil {
-			return &cliError{code: exitUsage, err: fmt.Errorf("Invalid fileID: %w", err)}
+			return usageErrorf("Invalid fileID: %v", err)
 		}
 
 		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel))
@@ -873,7 +873,7 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	var codec blocks.Codec
 	if codecName != "" {
 		if codecName == "plain" {
-			fmt.Fprintln(os.Stderr, "WARNING: simulating storage without encryption")
+			fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 		}
 		var err error
 		codec, err = blocks.ParseCodec(codecName)
@@ -890,7 +890,7 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 
 	// Run the simulation with stdout suppressed so that internal progress prints
 	// don't appear before the structured simulation report.
-	simErr := suppressStdoutDuring(func() error {
+	err = suppressStdoutDuring(func() error {
 		switch subcommand {
 		case "store":
 			if codecName == "" {
@@ -905,8 +905,8 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 		}
 		return nil
 	})
-	if simErr != nil {
-		return simErr
+	if err != nil {
+		return err
 	}
 
 	return emitSimulateReport(sgctx, subcommand, path, outputMode)
