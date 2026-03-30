@@ -418,12 +418,12 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		result, err = storage.StoreFileWithStorageContextResult(sgctx, path)
 	} else {
 		if codecName == "plain" {
-			fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
+			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 		}
 
-		codec, err := blocks.ParseCodec(codecName)
-		if err != nil {
-			return err
+		codec, parseErr := blocks.ParseCodec(codecName)
+		if parseErr != nil {
+			return parseErr
 		}
 
 		result, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
@@ -449,12 +449,12 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 
 	if result.AlreadyStored {
-		fmt.Fprintln(os.Stdout, "File already stored: "+result.Path)
+		_, _ = fmt.Fprintln(os.Stdout, "File already stored: "+result.Path)
 	} else {
-		fmt.Fprintln(os.Stdout, "File stored successfully: "+result.Path)
+		_, _ = fmt.Fprintln(os.Stdout, "File stored successfully: "+result.Path)
 	}
-	fmt.Fprintln(os.Stdout, "  FileID: "+strconv.FormatInt(result.FileID, 10))
-	fmt.Fprintln(os.Stdout, "  SHA256: "+result.FileHash)
+	_, _ = fmt.Fprintln(os.Stdout, "  FileID: "+strconv.FormatInt(result.FileID, 10))
+	_, _ = fmt.Fprintln(os.Stdout, "  SHA256: "+result.FileHash)
 	return nil
 }
 
@@ -479,12 +479,12 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 		err = storage.StoreFolderWithStorageContext(sgctx, path)
 	} else {
 		if codecName == "plain" {
-			fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
+			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
 		}
 
-		codec, err := blocks.ParseCodec(codecName)
-		if err != nil {
-			return err
+		codec, parseErr := blocks.ParseCodec(codecName)
+		if parseErr != nil {
+			return parseErr
 		}
 
 		err = storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
@@ -504,7 +504,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 		return nil
 	}
 
-	fmt.Fprintln(os.Stdout, "Folder stored successfully: "+path)
+	_, _ = fmt.Fprintln(os.Stdout, "Folder stored successfully: "+path)
 	return nil
 }
 

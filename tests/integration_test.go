@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -2955,35 +2954,6 @@ func collectFileHashesByCount(t *testing.T, root string) map[string]int {
 	}
 
 	return hashCount
-}
-
-func storeFolderSequentialWithDB(t *testing.T, dbconn *sql.DB, root string) error {
-	t.Helper()
-
-	var files []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	sort.Strings(files)
-	for _, filePath := range files {
-		sgctx := newTestContext(dbconn)
-		if err := storage.StoreFileWithStorageContext(sgctx, filePath); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {

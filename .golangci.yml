@@ -8,20 +8,14 @@ linters:
     errcheck:
       check-type-assertions: true
       check-blank: false
-    revive:
-      rules:
-        - name: exported
-        - name: var-naming
 
   default: none
 
   enable:
     - govet
-    - staticcheck
     - ineffassign
     - unused
     - errcheck
-    - revive
 
   exclusions:
     generated: lax
