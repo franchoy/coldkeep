@@ -20,9 +20,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/internal/version"
 )
-
-const version = "0.8.0"
 
 const (
 	exitSuccess = 0
@@ -162,7 +161,7 @@ func runCLI(args []string) int {
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
-		fmt.Println("coldkeep version", version)
+		fmt.Println("coldkeep version", version.String())
 	case "list":
 		err = runListCommand(parsed, outputMode)
 	case "search":
@@ -992,7 +991,7 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 }
 
 func printHelp() {
-	fmt.Printf("coldkeep (v%s)\n", version)
+	fmt.Printf("coldkeep (v%s)\n", version.String())
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
