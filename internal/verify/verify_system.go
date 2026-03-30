@@ -38,6 +38,10 @@ func printCounters(dbconn *sql.DB) error {
 }
 
 func VerifySystemStandard(dbconn *sql.DB) error {
+	return VerifySystemStandardWithContainersDir(dbconn, container.ContainersDir)
+}
+
+func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	standard
 	//		reference count check
 	//		orphan chunk check
@@ -72,6 +76,10 @@ func VerifySystemStandard(dbconn *sql.DB) error {
 }
 
 func VerifySystemFull(dbconn *sql.DB) error {
+	return VerifySystemFullWithContainersDir(dbconn, container.ContainersDir)
+}
+
+func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	full
 	//		standard checks +
 	//			container file existence and size check
@@ -85,17 +93,17 @@ func VerifySystemFull(dbconn *sql.DB) error {
 	var err error
 
 	//first verify standard checks
-	if err = VerifySystemStandard(dbconn); err != nil {
+	if err = VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
 		return err
 	}
 
 	//check that all containers have their files present on disk and that the file sizes match the DB records
-	if err = checkContainersFileExistence(dbconn); err != nil {
+	if err = checkContainersFileExistence(dbconn, containersDir); err != nil {
 		return err
 	}
 
 	//check that all sealed containers have a valid hash that matches the file content
-	if err = checkSealedContainersHash(dbconn); err != nil {
+	if err = checkSealedContainersHash(dbconn, containersDir); err != nil {
 		return err
 	}
 
@@ -126,6 +134,10 @@ func VerifySystemFull(dbconn *sql.DB) error {
 }
 
 func VerifySystemDeep(dbconn *sql.DB) error {
+	return VerifySystemDeepWithContainersDir(dbconn, container.ContainersDir)
+}
+
+func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	deep
 	//		standard checks +
 	//		full checks +
@@ -135,7 +147,7 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 	var err error
 
 	//first verify full checks
-	if err = VerifySystemFull(dbconn); err != nil {
+	if err = VerifySystemFullWithContainersDir(dbconn, containersDir); err != nil {
 		return err
 	}
 
@@ -148,22 +160,50 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 	log.Println("Starting deep verification of container files...")
 	var errorList []error
 	var errorCount int
-	//retrieve sealer container count
+	appendDeepError := func(err error) {
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, err)
+	}
+	transformerCache := make(map[blocks.Codec]blocks.Transformer)
+
+	// Count all non-quarantined containers that currently hold completed chunks.
 	containerCount := 0
-	containerCountErr := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed=true`).Scan(&containerCount)
+	containerCountErr := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = ctr.id
+			AND c.status = 'COMPLETED'
+		)
+	`).Scan(&containerCount)
 	if containerCountErr != nil {
 		log.Println(" ERROR ")
-		log.Printf("Failed to query sealed container count: %v", containerCountErr)
-		return fmt.Errorf("failed to query sealed container count: %w", containerCountErr)
+		log.Printf("Failed to query deep-verify container count: %v", containerCountErr)
+		return fmt.Errorf("failed to query deep-verify container count: %w", containerCountErr)
 	}
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`SELECT id, filename, current_size, max_size FROM container WHERE sealed=true`)
+	containers, err := dbconn.Query(`
+		SELECT ctr.id, ctr.filename, ctr.current_size, ctr.max_size
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = ctr.id
+			AND c.status = 'COMPLETED'
+		)
+	`)
 	if err != nil {
 		log.Println(" ERROR ")
-		log.Printf("Failed to query sealed containers: %v", err)
-		return fmt.Errorf("failed to query sealed containers: %w", err)
+		log.Printf("Failed to query deep-verify containers: %v", err)
+		return fmt.Errorf("failed to query deep-verify containers: %w", err)
 	}
 	defer func() { _ = containers.Close() }()
 
@@ -174,19 +214,19 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 		var currentSize int64
 		var maxSize int64
 		if err := containers.Scan(&containerID, &filename, &currentSize, &maxSize); err != nil {
-			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container info: %w", err))
+			appendDeepError(fmt.Errorf("failed to scan container info: %w", err))
 			continue
 		}
 		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
 
 		//construct full path
-		fullPath := filepath.Join(container.ContainersDir, filename)
+		fullPath := filepath.Join(containersDir, filename)
 
 		fileSize := currentSize
 
-		//fetch chunks ordered by offset
-		chunks, err := dbconn.Query(`SELECT 
+		processContainerErr := func() (retErr error) {
+			//fetch chunks ordered by offset
+			chunks, err := dbconn.Query(`SELECT 
 									b.block_offset,
 									b.stored_size,
 									b.plaintext_size,
@@ -197,132 +237,141 @@ func VerifySystemDeep(dbconn *sql.DB) error {
 								FROM blocks b
 								JOIN chunk c ON c.id = b.chunk_id
 								WHERE b.container_id = $1
+								AND c.status = 'COMPLETED'
 								ORDER BY b.block_offset`, containerID)
-		if err != nil {
-			log.Printf("Failed to query chunks for container %d: %v", containerID, err)
-			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to query chunks for container %d: %w", containerID, err))
-			continue
-		}
-
-		filecontainer, err := container.OpenExistingContainer(true, fullPath, maxSize)
-		if err != nil {
-			log.Printf("Failed to open container %s: %v", fullPath, err)
-			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to open container %s: %w", fullPath, err))
-			_ = chunks.Close()
-			continue
-		}
-
-		hasChunks := false
-
-		for chunks.Next() {
-			hasChunks = true
-			var blockOffset int64
-			var storedSize int64
-			var plaintextSize int64
-			var chunkHash string
-			var codec string
-			var formatVersion int
-			var nonce []byte
-			if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &chunkHash, &codec, &formatVersion, &nonce); err != nil {
-				log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
-				continue
-			}
-
-			if blockOffset < 0 || storedSize < 0 {
-				log.Printf("Invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize))
-				continue
-			}
-
-			if blockOffset+storedSize > fileSize {
-				log.Printf("Block exceeds file size for container %d at offset %d: block size %d, file size %d", containerID, blockOffset, storedSize, fileSize)
-				errorCount++
-				errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("block exceeds file size for container %d at offset %d: block size %d, file size %d", containerID, blockOffset, storedSize, fileSize))
-				continue
-			}
-
-			payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
 			if err != nil {
-				_ = filecontainer.Close()
-				_ = chunks.Close()
-				return fmt.Errorf("read block payload for container %q: %w", filename, err)
+				return fmt.Errorf("failed to query chunks for container %d: %w", containerID, err)
 			}
-			transformer, err := blocks.GetBlockTransformer(blocks.Codec(codec))
+			defer func() { _ = chunks.Close() }()
+
+			// Open in read-only mode for verification safety.
+			filecontainer, err := container.OpenReadOnlyContainer(fullPath, maxSize)
 			if err != nil {
-				_ = filecontainer.Close()
-				_ = chunks.Close()
-				return fmt.Errorf("get transformer for codec %q: %w", codec, err)
+				return fmt.Errorf("failed to open container %s: %w", fullPath, err)
+			}
+			defer func() {
+				if closeErr := filecontainer.Close(); closeErr != nil && retErr == nil {
+					retErr = fmt.Errorf("close container %q: %w", filename, closeErr)
+				}
+			}()
+
+			hasChunks := false
+			expectedOffset := int64(container.ContainerHdrLen)
+
+			for chunks.Next() {
+				hasChunks = true
+				var blockOffset int64
+				var storedSize int64
+				var plaintextSize int64
+				var chunkHash string
+				var codec string
+				var formatVersion int
+				var nonce []byte
+				if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &chunkHash, &codec, &formatVersion, &nonce); err != nil {
+					log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
+					appendDeepError(fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
+					continue
+				}
+
+				if blockOffset < 0 || storedSize <= 0 {
+					log.Printf("Invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize)
+					appendDeepError(fmt.Errorf("invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize))
+					continue
+				}
+
+				if blockOffset != expectedOffset {
+					log.Printf("Non-contiguous block offsets for container %d: expected %d got %d", containerID, expectedOffset, blockOffset)
+					appendDeepError(fmt.Errorf("non-contiguous block offsets for container %d: expected %d got %d", containerID, expectedOffset, blockOffset))
+				}
+
+				nextExpectedOffset := blockOffset + storedSize
+				if nextExpectedOffset > fileSize {
+					log.Printf("Block exceeds file size for container %d at offset %d: block size %d, file size %d", containerID, blockOffset, storedSize, fileSize)
+					appendDeepError(fmt.Errorf("block exceeds file size for container %d at offset %d: block size %d, file size %d", containerID, blockOffset, storedSize, fileSize))
+					expectedOffset = nextExpectedOffset
+					continue
+				}
+
+				payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
+				if err != nil {
+					appendDeepError(fmt.Errorf("read block payload for container %q at offset %d: %w", filename, blockOffset, err))
+					expectedOffset = nextExpectedOffset
+					continue
+				}
+				codecType := blocks.Codec(codec)
+				transformer, ok := transformerCache[codecType]
+				if !ok {
+					transformer, err = blocks.GetBlockTransformer(codecType)
+					if err != nil {
+						appendDeepError(fmt.Errorf("get transformer for codec %q in container %q: %w", codec, filename, err))
+						expectedOffset = nextExpectedOffset
+						continue
+					}
+					transformerCache[codecType] = transformer
+				}
+
+				plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+					ChunkHash: chunkHash,
+					Descriptor: blocks.Descriptor{
+						Codec:         codecType,
+						FormatVersion: formatVersion,
+						PlaintextSize: plaintextSize,
+						StoredSize:    storedSize,
+						Nonce:         nonce,
+						ContainerID:   int64(containerID),
+						BlockOffset:   blockOffset,
+					},
+					Payload: payload,
+				})
+				if err != nil {
+					appendDeepError(fmt.Errorf("decode block payload for container %q at offset %d: %w", filename, blockOffset, err))
+					expectedOffset = nextExpectedOffset
+					continue
+				}
+
+				if int64(len(plaintext)) != plaintextSize {
+					appendDeepError(fmt.Errorf(
+						"plaintext size mismatch in container %q at offset %d: expected %d got %d",
+						filename,
+						blockOffset,
+						plaintextSize,
+						len(plaintext),
+					))
+					expectedOffset = nextExpectedOffset
+					continue
+				}
+
+				// Validate hashes (DB hash and on-disk record hash)
+				sum := sha256.Sum256(plaintext)
+				sumHex := hex.EncodeToString(sum[:])
+
+				if sumHex != chunkHash {
+					appendDeepError(fmt.Errorf("block hash mismatch at offset %d (db=%s computed=%s) for container %q", blockOffset, chunkHash, sumHex, filename))
+					expectedOffset = nextExpectedOffset
+					continue
+				}
+
+				expectedOffset = nextExpectedOffset
 			}
 
-			plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
-				ChunkHash: chunkHash,
-				Descriptor: blocks.Descriptor{
-					Codec:         blocks.Codec(codec),
-					FormatVersion: formatVersion,
-					PlaintextSize: plaintextSize,
-					StoredSize:    storedSize,
-					Nonce:         nonce,
-					ContainerID:   int64(containerID),
-					BlockOffset:   blockOffset,
-				},
-				Payload: payload,
-			})
-			if err != nil {
-				_ = filecontainer.Close()
-				_ = chunks.Close()
-				return fmt.Errorf("decode block payload for container %q: %w", filename, err)
+			// defensive — should not happen unless DB changes mid-run
+			if !hasChunks {
+				return fmt.Errorf("database invariant violation: container %d claimed to have completed chunks but returned none", containerID)
 			}
 
-			if int64(len(plaintext)) != plaintextSize {
-				return fmt.Errorf(
-					"plaintext size mismatch at offset %d: expected %d got %d",
-					blockOffset,
-					plaintextSize,
-					len(plaintext),
-				)
+			if err := chunks.Err(); err != nil {
+				appendDeepError(fmt.Errorf("row iteration failed for chunks of container %d: %w", containerID, err))
 			}
 
-			// Validate hashes (DB hash and on-disk record hash)
-			sum := sha256.Sum256(plaintext)
-			sumHex := hex.EncodeToString(sum[:])
-
-			if sumHex != chunkHash {
-				_ = filecontainer.Close()
-				_ = chunks.Close()
-				return fmt.Errorf("block hash mismatch at offset %d (db=%s computed=%s) for container %q", blockOffset, chunkHash, sumHex, filename)
-			}
-
-		}
-
-		if err := filecontainer.Close(); err != nil {
-			_ = chunks.Close()
-			return fmt.Errorf("close container %q: %w", filename, err)
-		}
-
-		if !hasChunks {
-			log.Printf("WARNING: container %d has no chunks", containerID)
-			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("container %d has no chunks", containerID))
-			_ = chunks.Close()
+			return nil
+		}()
+		if processContainerErr != nil {
+			appendDeepError(fmt.Errorf("container %d (%s) deep verification failed: %w", containerID, filename, processContainerErr))
 			continue
 		}
-
-		if err := chunks.Err(); err != nil {
-			errorCount++
-			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed for chunks of container %d: %w", containerID, err))
-			_ = chunks.Close()
-			continue
-		}
-
-		_ = chunks.Close()
 	}
 	if err := containers.Err(); err != nil {
-		return fmt.Errorf("row iteration failed for containers: %w", err)
+		appendDeepError(fmt.Errorf("row iteration failed for containers: %w", err))
 	}
 
 	if len(errorList) > 0 {

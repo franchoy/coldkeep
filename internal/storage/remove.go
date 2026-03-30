@@ -7,6 +7,12 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
+// RemoveFileResult contains structured metadata about a remove operation.
+type RemoveFileResult struct {
+	FileID          int64 `json:"file_id"`
+	RemovedMappings int   `json:"removed_mappings"`
+}
+
 func RemoveFile(fileID int64) error {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -14,17 +20,23 @@ func RemoveFile(fileID int64) error {
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	if err := RemoveFileWithDB(dbconn, fileID); err != nil {
+	if _, err := RemoveFileWithDBResult(dbconn, fileID); err != nil {
 		return err
 	}
 	return nil
 }
 
 func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
+	_, err := RemoveFileWithDBResult(dbconn, fileID)
+	return err
+}
+
+func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResult, err error) {
+	result.FileID = fileID
 
 	tx, err := dbconn.Begin()
 	if err != nil {
-		return err
+		return RemoveFileResult{}, err
 	}
 	defer func() {
 		if err != nil {
@@ -39,12 +51,11 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 		fileID,
 	).Scan(&exists)
 	if err != nil {
-		return err
+		return RemoveFileResult{}, err
 	}
 
 	if !exists {
-		fmt.Println("File ID", fileID, "not found.")
-		return fmt.Errorf("file ID %d not found", fileID)
+		return RemoveFileResult{}, fmt.Errorf("file ID %d not found", fileID)
 	}
 
 	// Get chunk IDs
@@ -55,7 +66,7 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 	`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return RemoveFileResult{}, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -64,10 +75,11 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			_ = tx.Rollback()
-			return err
+			return RemoveFileResult{}, err
 		}
 		chunkIDs = append(chunkIDs, id)
 	}
+	result.RemovedMappings = len(chunkIDs)
 
 	// Decrement ref_count
 	for _, chunkID := range chunkIDs {
@@ -82,11 +94,11 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 
 		if err == sql.ErrNoRows {
 			_ = tx.Rollback()
-			return fmt.Errorf("invalid ref_count transition for chunk %d", chunkID)
+			return RemoveFileResult{}, fmt.Errorf("invalid ref_count transition for chunk %d", chunkID)
 		}
 		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return RemoveFileResult{}, err
 		}
 	}
 
@@ -94,20 +106,19 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 	_, err = tx.Exec(`DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return RemoveFileResult{}, err
 	}
 
 	// Remove logical file
 	_, err = tx.Exec(`DELETE FROM logical_file WHERE id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return RemoveFileResult{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return err
+		return RemoveFileResult{}, err
 	}
 
-	fmt.Println("Logical file", fileID, "removed. Ref counts updated.")
-	return nil
+	return result, nil
 }

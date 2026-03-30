@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -213,7 +214,8 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container cont ON b.container_id = cont.id
-		WHERE c.status = 'COMPLETED';`)
+		WHERE c.status = 'COMPLETED'
+		ORDER BY b.container_id, b.block_offset;`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query completed chunks for offset validity: %v", err)
@@ -229,6 +231,9 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		containerSize    int64
 	}
 
+	lastContainerID := -1
+	expectedOffset := int64(container.ContainerHdrLen)
+
 	for rows.Next() {
 		var c chunkInfo
 		if err := rows.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.storedSize, &c.containerSize); err != nil {
@@ -237,9 +242,23 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 			continue
 		}
 
+		if c.blockContainerID != lastContainerID {
+			lastContainerID = c.blockContainerID
+			expectedOffset = int64(container.ContainerHdrLen)
+		}
+
+		if c.blockOffset != expectedOffset {
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("non-contiguous offsets in container %d: expected %d got %d for chunk ID %d", c.blockContainerID, expectedOffset, c.blockOffset, c.id))
+		}
+
 		if c.blockOffset < 0 || c.storedSize <= 0 || c.blockOffset > c.containerSize-c.storedSize {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("block for chunk ID %d in container %d has invalid location: block_offset=%d stored_size=%d container_size=%d", c.id, c.blockContainerID, c.blockOffset, c.storedSize, c.containerSize))
+		}
+
+		if c.blockOffset >= 0 && c.storedSize > 0 {
+			expectedOffset = c.blockOffset + c.storedSize
 		}
 	}
 

@@ -7,10 +7,11 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
-func SearchFiles(args []string) error {
+// SearchFilesResult returns matching records without printing them.
+func SearchFilesResult(args []string) ([]FileRecord, error) {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return fmt.Errorf("Failed to connect to DB: %w", err)
+		return nil, fmt.Errorf("Failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
@@ -26,7 +27,7 @@ func SearchFiles(args []string) error {
 		switch args[i] {
 		case "--name":
 			if i+1 >= len(args) {
-				return fmt.Errorf("Missing argument for --name")
+				return nil, fmt.Errorf("Missing argument for --name")
 			}
 			i++
 			query += fmt.Sprintf(" AND original_name ILIKE $%d", paramIndex)
@@ -35,7 +36,7 @@ func SearchFiles(args []string) error {
 
 		case "--min-size":
 			if i+1 >= len(args) {
-				return fmt.Errorf("Missing argument for --min-size")
+				return nil, fmt.Errorf("Missing argument for --min-size")
 			}
 			i++
 			query += fmt.Sprintf(" AND total_size >= $%d", paramIndex)
@@ -44,7 +45,7 @@ func SearchFiles(args []string) error {
 
 		case "--max-size":
 			if i+1 >= len(args) {
-				return fmt.Errorf("Missing argument for --max-size")
+				return nil, fmt.Errorf("Missing argument for --max-size")
 			}
 			i++
 			query += fmt.Sprintf(" AND total_size <= $%d", paramIndex)
@@ -57,29 +58,28 @@ func SearchFiles(args []string) error {
 
 	rows, err := dbconn.Query(query, params...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	fmt.Printf("%-6s %-25s %-15s %-20s\n", "ID", "NAME", "SIZE(bytes)", "CREATED_AT")
-	fmt.Println("---------------------------------------------------------------------")
-
+	var records []FileRecord
 	for rows.Next() {
 		var id int64
 		var name string
 		var size int64
 		var created time.Time
-
 		if err := rows.Scan(&id, &name, &size, &created); err != nil {
-			return err
+			return nil, err
 		}
-
-		fmt.Printf("%-6d %-25s %-15d %-20s\n",
-			id,
-			name,
-			size,
-			created.Format("2006-01-02 15:04:05"),
-		)
+		records = append(records, FileRecord{
+			ID:        id,
+			Name:      name,
+			SizeBytes: size,
+			CreatedAt: created.Format("2006-01-02 15:04:05"),
+		})
 	}
-	return nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
 }

@@ -1,7 +1,10 @@
 package container
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +14,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
+
+// ErrContainerFull is returned by Container.Append when the payload would exceed the container's max size.
+var ErrContainerFull = errors.New("container full")
 
 // --------------------------------------------------------------------------
 // structures
@@ -25,6 +31,7 @@ type FileContainer struct {
 type Container interface {
 	Append(data []byte) (offset int64, err error)
 	ReadAt(offset int64, size int64) ([]byte, error)
+	Size() int64
 	Sync() error
 	Close() error
 }
@@ -40,7 +47,8 @@ type ActiveContainer struct {
 // api
 // --------------------------------------------------------------------------
 
-func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
+// openExistingContainer opens an existing container using the provided mode.
+func openExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
 	var f *os.File
 	var err error
 	if readonly {
@@ -65,13 +73,29 @@ func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 	}, nil
 }
 
+// OpenReadOnlyContainer opens an existing container in read-only mode.
+//
+// This wrapper avoids ambiguous boolean call sites like
+// openExistingContainer(true, ...) and makes intent explicit.
+func OpenReadOnlyContainer(path string, maxSize int64) (*FileContainer, error) {
+	return openExistingContainer(true, path, maxSize)
+}
+
+// OpenWritableContainer opens an existing container in writable mode.
+//
+// This wrapper avoids ambiguous boolean call sites like
+// openExistingContainer(false, ...) and makes intent explicit.
+func OpenWritableContainer(path string, maxSize int64) (*FileContainer, error) {
+	return openExistingContainer(false, path, maxSize)
+}
+
 func (c *FileContainer) Append(data []byte) (int64, error) {
 	if c.f == nil {
 		return 0, fmt.Errorf("container is closed")
 	}
 
 	if c.offset+int64(len(data)) > c.maxSize {
-		return 0, fmt.Errorf("container full")
+		return 0, ErrContainerFull
 	}
 
 	off := c.offset
@@ -108,6 +132,10 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	return buf, nil
 }
 
+func (c *FileContainer) Size() int64 {
+	return c.offset
+}
+
 func (c *FileContainer) Sync() error {
 	if c.f == nil {
 		return fmt.Errorf("container is closed")
@@ -125,30 +153,74 @@ func (c *FileContainer) Close() error {
 	return err
 }
 
+func containersDirOrDefault(dir string) string {
+	if dir == "" {
+		return ContainersDir
+	}
+	return dir
+}
+
 // --------------------------------------------------------------------------
 // functions
 // --------------------------------------------------------------------------
 
 func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
+	return GetOrCreateOpenContainerInDir(db, ContainersDir)
+}
+
+func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveContainer, error) {
+	return getOrCreateOpenContainerInDirExcluding(db, containersDir, 0)
+}
+
+// newContainerFilename returns a collision-resistant filename by combining the
+// current nanosecond timestamp with 8 random bytes. This prevents the
+// container_filename_key unique constraint from being violated when multiple
+// goroutines attempt to create a new container at the same instant.
+func newContainerFilename() string {
+	var rnd [8]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		// Extremely unlikely; fall back to an extra timestamp component.
+		return fmt.Sprintf("container_%d_%d.bin", time.Now().UnixNano(), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("container_%d_%s.bin", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
+}
+
+func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
+	containersDir = containersDirOrDefault(containersDir)
+
 	var id int64
 	var filename string
 	var maxSize int64
 
-	// 1 Try to find an existing open container
-	err := db.QueryRow(`
-		SELECT id, filename, max_size
-		FROM container
-		WHERE sealed = FALSE and quarantine = FALSE
-		ORDER BY id
-		LIMIT 1
-		FOR UPDATE SKIP LOCKED
-	`).Scan(&id, &filename, &maxSize)
+	// 1 Try to find an existing open container.
+	// During rotation we may need to skip the previously active container until
+	// the caller seals it in the same transaction.
+	var err error
+	if excludeID > 0 {
+		err = db.QueryRow(`
+			SELECT id, filename, max_size
+			FROM container
+			WHERE sealed = FALSE and quarantine = FALSE AND id <> $1
+			ORDER BY id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		`, excludeID).Scan(&id, &filename, &maxSize)
+	} else {
+		err = db.QueryRow(`
+			SELECT id, filename, max_size
+			FROM container
+			WHERE sealed = FALSE and quarantine = FALSE
+			ORDER BY id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		`).Scan(&id, &filename, &maxSize)
+	}
 
 	if err == nil {
 		// Found existing open container
-		fullPath := filepath.Join(ContainersDir, filename)
+		fullPath := filepath.Join(containersDir, filename)
 
-		container, err := OpenExistingContainer(false, fullPath, maxSize)
+		container, err := OpenWritableContainer(fullPath, maxSize)
 		if err != nil {
 			return ActiveContainer{}, err
 		}
@@ -167,7 +239,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 
 	// 2 No open container found → create new one
 
-	filename = fmt.Sprintf("container_%d.bin", time.Now().UnixNano())
+	filename = newContainerFilename()
 
 	// Insert DB row with current_size initialized to header size
 	err = db.QueryRow(`
@@ -182,11 +254,11 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 
 	// 3 Create physical file
 
-	if err := os.MkdirAll(ContainersDir, 0755); err != nil {
+	if err := os.MkdirAll(containersDir, 0755); err != nil {
 		return ActiveContainer{}, err
 	}
 
-	fullPath := filepath.Join(ContainersDir, filename)
+	fullPath := filepath.Join(containersDir, filename)
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
@@ -214,7 +286,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	}
 	closeOnError = false
 
-	container, err := OpenExistingContainer(false, fullPath, containerMaxSize)
+	container, err := OpenWritableContainer(fullPath, containerMaxSize)
 	if err != nil {
 		return ActiveContainer{}, err
 	}
@@ -227,6 +299,10 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 	}, nil
 }
 
+func GetOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
+	return getOrCreateOpenContainerInDirExcluding(db, containersDir, excludeID)
+}
+
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
 	_, err := tx.Exec(
 		`UPDATE container SET current_size = $1 WHERE id = $2`,
@@ -237,8 +313,13 @@ func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
 }
 
 func SealContainer(tx db.DBTX, containerID int64, filename string) error {
+	return SealContainerInDir(tx, containerID, filename, ContainersDir)
+}
 
-	originalPath := filepath.Join(ContainersDir, filename)
+func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containersDir string) error {
+	containersDir = containersDirOrDefault(containersDir)
+
+	originalPath := filepath.Join(containersDir, filename)
 
 	// Compute file hash
 	sumHex, err := utils_hash.ComputeFileHashHex(originalPath)
@@ -258,12 +339,16 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 		return fmt.Errorf("update/seal container failed: %w", err)
 	}
 
-	fmt.Printf("Container %d sealed successfully: %s\n", containerID, originalPath)
 	return nil
 }
 
 func CheckContainerHashFile(id int, filename, storedHash string) error {
-	containerPath := filepath.Join(ContainersDir, filename)
+	return CheckContainerHashFileInDir(id, filename, storedHash, ContainersDir)
+}
+
+func CheckContainerHashFileInDir(id int, filename, storedHash string, containersDir string) error {
+	containersDir = containersDirOrDefault(containersDir)
+	containerPath := filepath.Join(containersDir, filename)
 
 	computedHash, err := utils_hash.ComputeFileHashHex(containerPath)
 	if err != nil {

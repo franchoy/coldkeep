@@ -71,7 +71,7 @@ export DB_NAME=coldkeep
 Initialize the schema:
 
 ``` bash
-psql -U coldkeep -d coldkeep -f db/init.sql
+psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
 ```
 
 Build:

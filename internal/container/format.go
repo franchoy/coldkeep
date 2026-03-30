@@ -6,16 +6,13 @@ import (
 	"hash/crc32"
 	"os"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/version"
 )
 
 const (
 	ContainerMagic  = "ColdKeep" // must be exactly 8 bytes
 	ContainerHdrLen = 64         // fixed header size in bytes
-)
-
-const (
-	ContainerVersionMajor = 0
-	ContainerVersionMinor = 7
 )
 
 // Reserved future flags (not used yet)
@@ -31,8 +28,8 @@ func writeNewContainerHeader(f *os.File, maxSize int64) error {
 	copy(h[0:8], []byte(ContainerMagic))
 
 	// version
-	binary.LittleEndian.PutUint16(h[8:10], ContainerVersionMajor)  // major
-	binary.LittleEndian.PutUint16(h[10:12], ContainerVersionMinor) // minor
+	binary.LittleEndian.PutUint16(h[8:10], uint16(version.Major))  // major
+	binary.LittleEndian.PutUint16(h[10:12], uint16(version.Minor)) // minor
 
 	// header length
 	binary.LittleEndian.PutUint32(h[12:16], uint32(ContainerHdrLen))

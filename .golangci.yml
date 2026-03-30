@@ -1,25 +1,48 @@
+version: "2"
+
 run:
-  timeout: 3m
+  timeout: 5m
 
 linters:
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    revive:
+      rules:
+        - name: exported
+        - name: var-naming
+
+  default: none
+
   enable:
     - govet
     - staticcheck
     - ineffassign
     - unused
     - errcheck
+    - gofmt
+    - revive
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - errcheck
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
 
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

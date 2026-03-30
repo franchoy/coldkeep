@@ -24,6 +24,22 @@ and system restart/recovery.
 
 ---
 
+## Why coldkeep?
+
+coldkeep is designed for correctness-first cold storage.
+
+Unlike traditional backup tools, it provides:
+
+- Deterministic, byte-identical restore guarantees
+- Content-addressed deduplication with strong integrity validation
+- Explicit lifecycle management for safe recovery
+- Multi-level verification (metadata, container, and full data integrity)
+- Simulation capabilities to evaluate storage impact before committing data
+
+The goal is not maximum performance, but maximum confidence in stored data.
+
+---
+
 ## What it does (today)
 
 - Store files or folders by splitting them into content-defined chunks.
@@ -37,7 +53,82 @@ and system restart/recovery.
 - Recover from interrupted operations on startup.
 - Provide storage statistics and container health information.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
-- Store data in a format designed for deterministic recovery and long-term integrity.
+- Simulate storage operations without writing data to disk (v0.8).
+- Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
+
+---
+
+## ✨ What’s new in v0.8
+
+- `simulate` command for dry-run storage analysis
+- Simulation reuses the real chunking, deduplication, and metadata pipeline for accurate results
+- JSON output mode (`--output json`) across CLI commands
+- Structured result models for store, restore, remove, gc, stats
+- Typed CLI error handling and stable exit codes
+- Startup recovery JSON reporting
+- Improved CLI validation and consistent command behavior
+- Enhanced verification consistency and deep-check correctness
+- Improved retry handling in storage pipeline
+- Stronger integration test coverage and CLI contract tests
+
+---
+
+## 🔍 Simulation (v0.8)
+
+coldkeep now supports simulation to evaluate storage impact without writing data.
+
+### Example
+
+```bash
+coldkeep simulate store-folder ./data
+coldkeep simulate store file.txt --output json
+```
+
+### What simulation does
+
+- Uses real chunking and deduplication
+- Executes the full metadata pipeline in an isolated temporary database
+- Simulates container packing behavior
+- Produces realistic statistics:
+  - logical size (input data)
+  - stored size (deduplicated physical storage)
+  - deduplication ratio
+  - container count
+
+### What simulation does NOT do
+
+- Does not write container files
+- Does not persist data
+- Does not modify real storage
+
+Simulation is designed as a **decision tool** for evaluating coldkeep before adoption,
+providing realistic estimates of storage efficiency and expected container usage.
+
+---
+
+## CLI Output (v0.8)
+
+coldkeep supports structured output for automation.
+
+### Output modes
+
+- `text` (default)
+- `json`
+
+### Example
+
+```bash
+coldkeep stats --output json
+coldkeep list --output json
+coldkeep simulate store-folder ./data --output json
+```
+
+### Notes
+
+- JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
+- CLI exit codes are now consistent and machine-friendly
+- Errors are classified into usage, verification, and runtime categories
+- Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
 
 ---
 
@@ -102,7 +193,7 @@ Load it into your shell:
 export $(cat .env | xargs)
 ```
 
-Docker:
+### Docker:
 
 The `/app` mount ensures the `.env` file created by `init` persists on the host.
 
@@ -133,35 +224,58 @@ coldkeep store --codec aes-gcm file.txt
 
 ## 🚀 Quickstart
 
-A small `samples/` folder is included for testing.
+A small `samples/` folder is included for testing and experimentation.
 
 ### Quick start (local, no Docker)
 
-``` bash
+```bash
 # 1. Generate encryption key and write .env
 coldkeep init
-
-# 2. Load the key into your shell
-export $(cat .env | xargs)
-
-# 3. Store a file
-coldkeep store file.txt
 ```
 
 > **Security note:** If you lose the key, data cannot be recovered.  
 > Never commit `.env` to version control.
 
+```bash
+# 2. Load the key into your shell
+export $(cat .env | xargs)
+```
+
+```bash
+# 3. Store a file
+coldkeep store file.txt
+```
+
+#### Optional: simulate storage impact before storing
+
+```bash
+coldkeep simulate store file.txt
+```
+
+> Simulation does not write any data and can be safely used before storing files.
+
+---
+
 ### Quick start (Docker)
 
 The `/app` mount ensures the `.env` file created by `init` persists on the host.
 
-``` bash
+```bash
 # 1. Start services
 docker compose up -d --build
+```
 
-# 2. Generate encryption key
+```bash
+# 2. Generate encryption key (required before storing data)
 docker compose run --rm -v "$PWD:/app" app init
+```
 
+> **Important:** This creates a `.env` file with your encryption key.  
+> You must pass this file to subsequent commands using `--env-file`.
+
+> **Security note:** If you lose the key, data cannot be recovered.
+
+```bash
 # 3. Store a file (pass the key from the generated .env)
 docker compose run --rm \
   --env-file .env \
@@ -169,7 +283,15 @@ docker compose run --rm \
   app store /samples/hello.txt
 ```
 
-> **Security note:** If you lose the key, data cannot be recovered.
+#### Optional: simulate storage impact before storing
+
+```bash
+docker compose run --rm \
+  -v "$PWD/samples:/samples" \
+  app simulate store /samples/hello.txt
+```
+
+> Simulation does not write any data and can be safely used before storing files.
 
 ---
 
@@ -212,10 +334,15 @@ coldkeep verify file <file_id> --level full
 coldkeep verify file <file_id> --level deep
 ```
 
+Verification results can be exported in JSON format using `--output json`.
+
 ### Notes
 
-Deep verification performs full reads of container files and may be slow.  
+Deep verification performs full reads of container files and may be slow,
+especially for large datasets.
 Recommended for periodic integrity audits rather than frequent execution.
+
+
 
 ---
 
@@ -233,8 +360,54 @@ Current integration coverage validates:
 This guarantee applies to logical files and dataset-level workflows.
 
 Coldkeep does not yet define a first-class contract for restoring full
-directory trees with exact original layout. Current tests restore logical
-files individually rather than reconstructing folder structure.
+directory trees with exact original layout. 
+Current support focuses on logical file reconstruction, with tests restoring
+files individually rather than reconstructing full directory structure.
+
+---
+
+## Container lifecycle and restore boundaries
+
+coldkeep uses an append-only container model where data is written
+sequentially and containers are sealed once they reach their maximum size.
+
+At any given time, there may be an **active (unsealed) container**
+receiving new data.
+
+### Restore behavior
+
+Restore operations may read data from both:
+
+- sealed containers
+- the active unsealed container
+
+This ensures that recently stored data can be restored immediately,
+without waiting for container rotation or sealing.
+
+### Verification behavior
+
+Verification distinguishes between container states:
+
+- **Standard / Full verification**
+  - Focus on metadata and structural consistency
+  - Do not require all containers to be sealed
+
+- **Deep verification**
+  - Reads and validates actual stored data
+  - Assumes the system has completed startup recovery.
+
+### Why this distinction exists
+
+This design allows:
+
+- immediate restore availability after store operations
+- safe append-only writes without blocking on container sealing
+- strong integrity guarantees through explicit verification steps
+
+In short:
+
+- **Restore prioritizes availability**
+- **Verification enforces correctness**
 
 ---
 
@@ -261,7 +434,7 @@ Containers are stored on disk under:
 
 storage/containers/
 
-Containers follow an append-only write model.
+Containers follow an append-only write model, ensuring deterministic writes and simplifying recovery.
 
 Storage pipeline:
 
@@ -488,8 +661,8 @@ On startup the system:
 This model ensures that partially written data does not corrupt
 the logical state of the system.
 
-In v0.6, the append-only container model further simplifies recovery
-by eliminating in-place mutations of container data.
+The append-only container model simplifies recovery by eliminating
+in-place mutations of container data.
 
 However, the system is still experimental and full transactional
 guarantees across filesystem and database layers are not yet complete.
@@ -504,8 +677,7 @@ Future versions may introduce block-level compression.
 
 ### Concurrency & integrity
 
-Concurrency support has been significantly improved in v0.6,
-including locking and retry mechanisms.
+Concurrency support has been significantly improved, including locking and retry mechanisms.
 
 However, it is still evolving and not yet optimized for
 extreme parallel workloads.
@@ -549,8 +721,8 @@ class of failure until the system becomes fully trustworthy.
   and encryption in a controlled and extensible way.
 
 - **v0.8 — Simulation & CLI Stabilization**  
-  Add simulation capabilities for storage planning and define a stable
-  command-line interface.
+  Add simulation capabilities for storage planning and establish a stable,
+  automation-friendly command-line interface (introduced in v0.8).
 
 - **v0.9 — Internal Hardening**  
   Improve reliability, simplify internals, and finalize implementation details.
