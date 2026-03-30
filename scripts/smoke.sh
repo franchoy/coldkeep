@@ -54,15 +54,44 @@ ensure_postgres_schema() {
   fi
 }
 
+reset_smoke_state() {
+  if [[ "${COLDKEEP_SMOKE_RESET_DB:-0}" != "1" ]]; then
+    return
+  fi
+
+  if [[ -z "${COLDKEEP_TEST_DB:-}" ]]; then
+    echo "[smoke] WARN: COLDKEEP_SMOKE_RESET_DB=1 ignored because COLDKEEP_TEST_DB is not set"
+    return
+  fi
+
+  local host="${DB_HOST:-127.0.0.1}"
+  local port="${DB_PORT:-5432}"
+  local user="${DB_USER:-coldkeep}"
+  local name="${DB_NAME:-coldkeep}"
+
+  echo "[smoke] resetting db tables"
+  PGPASSWORD="${DB_PASSWORD:-}" psql \
+    -h "$host" -p "$port" -U "$user" -d "$name" \
+    -v ON_ERROR_STOP=1 \
+    -c "TRUNCATE TABLE file_chunk, blocks, chunk, logical_file, container RESTART IDENTITY CASCADE;" >/dev/null
+
+  echo "[smoke] resetting storage dir: $COLDKEEP_STORAGE_DIR"
+  find "$COLDKEEP_STORAGE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+}
+
 echo "[smoke] starting"
 
 : "${COLDKEEP_STORAGE_DIR:=./storage/containers}"
 mkdir -p "$COLDKEEP_STORAGE_DIR"
 
 ensure_postgres_schema
+reset_smoke_state
 
 echo "[smoke] stats (before)"
 coldkeep stats || true
+
+echo "[smoke] simulate store-folder samples"
+coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$COLDKEEP_SAMPLES_DIR"
 
 echo "[smoke] store-folder samples"
 coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"

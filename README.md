@@ -610,6 +610,16 @@ go build -o coldkeep ./cmd/coldkeep
 bash scripts/smoke.sh
 ```
 
+For repeatable local reruns against an existing DB, enable smoke reset mode:
+
+``` bash
+COLDKEEP_TEST_DB=1 COLDKEEP_SMOKE_RESET_DB=1 \
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep \
+bash scripts/smoke.sh
+```
+
+This option truncates smoke tables and clears `COLDKEEP_STORAGE_DIR` before running.
+
 #### Docker
 
 ``` bash
