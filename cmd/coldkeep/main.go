@@ -21,7 +21,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 const (
 	exitSuccess = 0
@@ -71,10 +71,11 @@ func runCLI(args []string) int {
 		}()
 	}
 
-	err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir)
-	if err != nil {
-		log.Printf("System recovery failed: %v\n", err)
+	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if recoveryErr != nil {
+		log.Printf("System recovery failed: %v\n", recoveryErr)
 	}
+	emitStartupRecoveryReport(startupMode, recoveryReport, recoveryErr)
 
 	if startupMode != outputModeJSON {
 		checkEnvFilePermissions()
@@ -95,6 +96,22 @@ func runCLI(args []string) int {
 		return printCLIError(err, outputModeText)
 	}
 
+	// In JSON mode, suppress internal text output for write commands so that
+	// progress prints don't pollute the structured JSON response.
+	if outputMode == outputModeJSON {
+		switch parsed.method {
+		case "store", "store-folder", "restore", "remove", "gc":
+			if devNull, openErr := os.Open(os.DevNull); openErr == nil {
+				oldStdout := os.Stdout
+				os.Stdout = devNull
+				defer func() {
+					os.Stdout = oldStdout
+					_ = devNull.Close()
+				}()
+			}
+		}
+	}
+
 	switch parsed.method {
 	case "init":
 		err = initCommand()
@@ -108,6 +125,8 @@ func runCLI(args []string) int {
 		err = runRemoveCommand(parsed)
 	case "gc":
 		err = runGCCommand(parsed)
+	case "simulate":
+		err = runSimulateCommand(parsed, outputMode)
 	case "stats":
 		err = runStatsCommand(parsed, outputMode)
 	case "help", "-h", "--help":
@@ -133,6 +152,57 @@ func runCLI(args []string) int {
 	return exitSuccess
 }
 
+func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err error) {
+	if mode == outputModeJSON {
+		payload := map[string]any{
+			"event":                          "startup_recovery",
+			"status":                         "ok",
+			"aborted_logical_files":          report.AbortedLogicalFiles,
+			"aborted_chunks":                 report.AbortedChunks,
+			"quarantined_missing_containers": report.QuarantinedMissing,
+			"quarantined_orphan_containers":  report.QuarantinedOrphan,
+			"checked_container_records":      report.CheckedContainerRecord,
+			"checked_disk_files":             report.CheckedDiskFiles,
+			"skipped_dir_entries":            report.SkippedDirEntries,
+		}
+		if err != nil {
+			payload["status"] = "error"
+			payload["message"] = strings.TrimSpace(err.Error())
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Fprintln(os.Stderr, string(encoded))
+		return
+	}
+
+	if err != nil {
+		fmt.Fprintf(
+			os.Stderr,
+			"RECOVERY status=error aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d message=%q\n",
+			report.AbortedLogicalFiles,
+			report.AbortedChunks,
+			report.QuarantinedMissing,
+			report.QuarantinedOrphan,
+			report.CheckedContainerRecord,
+			report.CheckedDiskFiles,
+			report.SkippedDirEntries,
+			strings.TrimSpace(err.Error()),
+		)
+		return
+	}
+
+	fmt.Fprintf(
+		os.Stderr,
+		"RECOVERY status=ok aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d\n",
+		report.AbortedLogicalFiles,
+		report.AbortedChunks,
+		report.QuarantinedMissing,
+		report.QuarantinedOrphan,
+		report.CheckedContainerRecord,
+		report.CheckedDiskFiles,
+		report.SkippedDirEntries,
+	)
+}
+
 func printCLIError(err error, mode cliOutputMode) int {
 	code := classifyExitCode(err)
 	if mode == outputModeJSON {
@@ -155,8 +225,9 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	if mode != outputModeJSON {
 		return
 	}
-	if parsed.method != "verify" {
-		// list/search/stats emit their own JSON payload; nothing to add here.
+	// These commands emit their own structured JSON payload.
+	switch parsed.method {
+	case "list", "search", "stats", "simulate":
 		return
 	}
 
@@ -168,8 +239,10 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	if len(parsed.positionals) > 0 {
 		payload["target"] = parsed.positionals[0]
 	}
-	if verifyLevel, err := parseVerifyLevel(parsed); err == nil {
-		payload["level"] = verifyLevelToString(verifyLevel)
+	if parsed.method == "verify" {
+		if verifyLevel, err := parseVerifyLevel(parsed); err == nil {
+			payload["level"] = verifyLevelToString(verifyLevel)
+		}
 	}
 
 	encoded, _ := json.Marshal(payload)
@@ -195,13 +268,6 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 		return outputModeText, nil
 	}
 
-	switch parsed.method {
-	case "verify", "list", "search", "stats":
-		// --output supported
-	default:
-		return outputModeText, fmt.Errorf("--output is not supported for command %q", parsed.method)
-	}
-
 	switch strings.ToLower(value) {
 	case "", "text":
 		return outputModeText, nil
@@ -213,10 +279,16 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 }
 
 var outputSupportedCommands = map[string]bool{
-	"verify": true,
-	"list":   true,
-	"search": true,
-	"stats":  true,
+	"verify":       true,
+	"list":         true,
+	"search":       true,
+	"stats":        true,
+	"store":        true,
+	"store-folder": true,
+	"restore":      true,
+	"remove":       true,
+	"gc":           true,
+	"simulate":     true,
 }
 
 func inferOutputModeFromArgs(args []string) cliOutputMode {
@@ -269,7 +341,10 @@ func classifyExitCode(err error) int {
 		strings.Contains(msg, "unknown target for verify") ||
 		strings.Contains(msg, "unknown verify level") ||
 		strings.Contains(msg, "multiple verify levels provided") ||
-		strings.Contains(msg, "verify level provided both as flag and positional argument") {
+		strings.Contains(msg, "verify level provided both as flag and positional argument") ||
+		strings.Contains(msg, "invalid --min-size") ||
+		strings.Contains(msg, "invalid --max-size") ||
+		strings.Contains(msg, "unknown simulate subcommand") {
 		return exitUsage
 	}
 
@@ -466,6 +541,18 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 
+	// Validate numeric filter values at CLI level before forwarding to SQL.
+	if v, ok := parsed.firstFlagValue("min-size"); ok {
+		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+			return fmt.Errorf("invalid --min-size value %q: must be a non-negative integer", v)
+		}
+	}
+	if v, ok := parsed.firstFlagValue("max-size"); ok {
+		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+			return fmt.Errorf("invalid --max-size value %q: must be a non-negative integer", v)
+		}
+	}
+
 	if outputMode == outputModeJSON {
 		files, err := listing.SearchFilesResult(searchArgs(parsed))
 		if err != nil {
@@ -523,8 +610,144 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 	}
 }
 
+// SimulateReport holds the result of a dry-run simulation.
+type SimulateReport struct {
+	Subcommand        string  `json:"subcommand"`
+	Path              string  `json:"path"`
+	Files             int64   `json:"files"`
+	Chunks            int64   `json:"chunks"`
+	Containers        int64   `json:"containers"`
+	LogicalSizeBytes  int64   `json:"logical_size_bytes"`
+	PhysicalSizeBytes int64   `json:"physical_size_bytes"`
+	DedupRatioPct     float64 `json:"dedup_ratio_pct"`
+}
+
+func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 2 {
+		return errors.New("Usage: coldkeep simulate <store|store-folder> [--codec <codec>] <path>")
+	}
+
+	subcommand := parsed.positionals[0]
+	path := parsed.positionals[1]
+	codecName, _ := parsed.firstFlagValue("codec")
+
+	switch subcommand {
+	case "store", "store-folder":
+	default:
+		return fmt.Errorf("unknown simulate subcommand %q (expected: store, store-folder)", subcommand)
+	}
+
+	var codec blocks.Codec
+	if codecName != "" {
+		if codecName == "plain" {
+			fmt.Fprintln(os.Stderr, "WARNING: simulating storage without encryption")
+		}
+		var err error
+		codec, err = blocks.ParseCodec(codecName)
+		if err != nil {
+			return err
+		}
+	}
+
+	sgctx, err := storage.ParseStorageContext("simulated")
+	if err != nil {
+		return fmt.Errorf("create simulated storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	// Run the simulation with stdout suppressed so that internal progress prints
+	// don't appear before the structured simulation report.
+	simErr := suppressStdoutDuring(func() error {
+		switch subcommand {
+		case "store":
+			if codecName == "" {
+				return storage.StoreFileWithStorageContext(sgctx, path)
+			}
+			return storage.StoreFileWithStorageContextAndCodec(sgctx, path, codec)
+		case "store-folder":
+			if codecName == "" {
+				return storage.StoreFolderWithStorageContext(sgctx, path)
+			}
+			return storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
+		}
+		return nil
+	})
+	if simErr != nil {
+		return simErr
+	}
+
+	return emitSimulateReport(sgctx, subcommand, path, outputMode)
+}
+
+// suppressStdoutDuring redirects os.Stdout to /dev/null for the duration of fn.
+func suppressStdoutDuring(fn func() error) error {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return fn()
+	}
+	old := os.Stdout
+	os.Stdout = devNull
+	fnErr := fn()
+	os.Stdout = old
+	_ = devNull.Close()
+	return fnErr
+}
+
+func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, outputMode cliOutputMode) error {
+	r := &SimulateReport{
+		Subcommand: subcommand,
+		Path:       path,
+	}
+
+	queries := []struct {
+		dest  interface{}
+		query string
+	}{
+		{&r.Files, `SELECT COUNT(*) FROM logical_file WHERE status='COMPLETED'`},
+		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status='COMPLETED'`},
+		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status='COMPLETED'`},
+		{&r.Containers, `SELECT COUNT(*) FROM container`},
+		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.ref_count > 0`},
+	}
+	for _, q := range queries {
+		if err := sgctx.DB.QueryRow(q.query).Scan(q.dest); err != nil {
+			return fmt.Errorf("query simulate stats: %w", err)
+		}
+	}
+
+	if r.LogicalSizeBytes > 0 {
+		r.DedupRatioPct = (1.0 - float64(r.PhysicalSizeBytes)/float64(r.LogicalSizeBytes)) * 100
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":    "ok",
+			"command":   "simulate",
+			"simulated": true,
+			"data":      r,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Printf("[SIMULATE] subcommand=%s path=%s (dry run — no data written to storage)\n", subcommand, path)
+	fmt.Printf("  Files:          %d\n", r.Files)
+	fmt.Printf("  Chunks:         %d\n", r.Chunks)
+	fmt.Printf("  Containers:     %d\n", r.Containers)
+	fmt.Printf("  Logical size:   %d bytes (%.2f MB)\n", r.LogicalSizeBytes, float64(r.LogicalSizeBytes)/(1024*1024))
+	fmt.Printf("  Physical size:  %d bytes (%.2f MB)\n", r.PhysicalSizeBytes, float64(r.PhysicalSizeBytes)/(1024*1024))
+	if r.DedupRatioPct > 0 {
+		fmt.Printf("  Dedup savings:  %.2f%%\n", r.DedupRatioPct)
+	}
+	return nil
+}
+
 func printHelp() {
-	fmt.Println("coldkeep (V0.7.0)")
+	fmt.Printf("coldkeep (v%s)\n", version)
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  coldkeep <command> [arguments]")
@@ -534,7 +757,7 @@ func printHelp() {
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
-		{"  restore <fileID> <dir>", "Restore file by ID into directory"},
+		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
 		{"  remove <fileID>", "Remove logical file (decrement refcounts)"},
 		{"  gc [options]", "Run garbage collection"},
 		{"    (no options)", "Perform standard GC"},
@@ -550,6 +773,7 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list", "List stored logical files"},
 		{"  search [filters]", "Search files by filters"},
+		{"  simulate <store|store-folder> <path>", "Dry-run store without writing to storage"},
 	})
 	fmt.Println("    Filters:")
 	fmt.Println("      --name <substring>")
@@ -583,6 +807,8 @@ func printHelp() {
 	fmt.Println("  coldkeep verify file 12 --deep")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
+	fmt.Println("  coldkeep simulate store myfile.bin")
+	fmt.Println("  coldkeep simulate store-folder --codec aes-gcm ./samples")
 }
 
 func printHelpRows(rows [][2]string) {

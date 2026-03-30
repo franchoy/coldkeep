@@ -24,10 +24,23 @@ import (
 
 // NOTE:
 // These tests are integration-style (DB + filesystem).
-// They are skipped unless COLDKEEP_TEST_DB=1 is set.
+// They are organized into three tiers:
 //
-// Run (example):
-//   COLDKEEP_TEST_DB=1 DB_HOST=localhost DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep go test ./app -v
+//	 correctness (default) — all non-stress tests; requires COLDKEEP_TEST_DB=1
+//	 stress                — high-concurrency / long-running tests; additionally
+//	                        requires -short=false (they are skipped under go test -short)
+//
+// Run correctness tier:
+//
+//	COLDKEEP_TEST_DB=1 go test ./tests/... -v
+//
+// Run correctness + stress tier:
+//
+//	COLDKEEP_TEST_DB=1 go test ./tests/... -v -timeout 10m
+//
+// Run correctness only (skip stress regardless of environment):
+//
+//	COLDKEEP_TEST_DB=1 go test ./tests/... -short -v
 
 // -----------------------------------------------------------------------------
 // Helpers and test data
@@ -37,6 +50,16 @@ func requireDB(t *testing.T) {
 	t.Helper()
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
+	}
+}
+
+// requireStress gates tests that spin up many goroutines or run for an extended
+// time. They are skipped when -short is passed so that CI correctness runs
+// remain fast. Run without -short (or with a generous -timeout) to include them.
+func requireStress(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping stress test in -short mode")
 	}
 }
 
@@ -963,6 +986,7 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 
 func TestConcurrentStoreSameFileStress(t *testing.T) {
 	requireDB(t)
+	requireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
@@ -1046,6 +1070,7 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 
 func TestConcurrentStoreFolderStress(t *testing.T) {
 	requireDB(t)
+	requireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
@@ -1156,6 +1181,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 
 func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 	requireDB(t)
+	requireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
@@ -1306,6 +1332,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 
 func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	requireDB(t)
+	requireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
@@ -1449,6 +1476,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 
 func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	requireDB(t)
+	requireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
@@ -2968,18 +2996,7 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 	}
 
 	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
-		if strings.Contains(err.Error(), "container_filename_key") {
-			t.Logf("store folder hit container filename race, retrying deterministically: %v", err)
-			resetDB(t, dbconn)
-			resetStorage(t)
-			// Temporary workaround for known concurrent container filename collision.
-			// TODO(v0.6): eliminate this fallback after fixing container naming race.
-			if err := storeFolderSequentialWithDB(t, dbconn, inputDir); err != nil {
-				t.Fatalf("store folder %s (sequential fallback): %v", fixtureDir, err)
-			}
-		} else {
-			t.Fatalf("store folder %s: %v", fixtureDir, err)
-		}
+		t.Fatalf("store folder %s: %v", fixtureDir, err)
 	}
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {

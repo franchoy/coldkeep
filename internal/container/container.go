@@ -1,7 +1,10 @@
 package container
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +14,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
+
+// ErrContainerFull is returned by Container.Append when the payload would exceed the container's max size.
+var ErrContainerFull = errors.New("container full")
 
 // --------------------------------------------------------------------------
 // structures
@@ -72,7 +78,7 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 	}
 
 	if c.offset+int64(len(data)) > c.maxSize {
-		return 0, fmt.Errorf("container full")
+		return 0, ErrContainerFull
 	}
 
 	off := c.offset
@@ -149,6 +155,19 @@ func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveCont
 	return getOrCreateOpenContainerInDirExcluding(db, containersDir, 0)
 }
 
+// newContainerFilename returns a collision-resistant filename by combining the
+// current nanosecond timestamp with 8 random bytes. This prevents the
+// container_filename_key unique constraint from being violated when multiple
+// goroutines attempt to create a new container at the same instant.
+func newContainerFilename() string {
+	var rnd [8]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		// Extremely unlikely; fall back to an extra timestamp component.
+		return fmt.Sprintf("container_%d_%d.bin", time.Now().UnixNano(), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("container_%d_%s.bin", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
+}
+
 func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
 	containersDir = containersDirOrDefault(containersDir)
 
@@ -203,7 +222,7 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 
 	// 2 No open container found → create new one
 
-	filename = fmt.Sprintf("container_%d.bin", time.Now().UnixNano())
+	filename = newContainerFilename()
 
 	// Insert DB row with current_size initialized to header size
 	err = db.QueryRow(`

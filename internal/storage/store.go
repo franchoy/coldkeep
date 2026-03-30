@@ -441,7 +441,6 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				return err
 			}
 
-			fmt.Printf("Reusing existing chunk %s for file '%s'\n", chunkHash, path)
 			chunkOrder++
 			continue // Move to next chunk
 		}
@@ -471,7 +470,7 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				if errors.Is(err, container.ErrContainerLockContention) {
 					continue
 				}
-				if strings.Contains(err.Error(), "container full") {
+				if errors.Is(err, container.ErrContainerFull) {
 					continue
 				}
 				if strings.Contains(err.Error(), "blocks_chunk_id_key") {
@@ -570,14 +569,11 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 					_ = tx.Rollback()
 					return err
 				}
-				fmt.Printf("Container %d sealed at size %d bytes.\n", placement.ContainerID, placement.NewContainerSize)
-			}
+				}
 
 			if err = tx.Commit(); err != nil {
 				return err
 			}
-
-			fmt.Printf("Stored new chunk %s for file '%s'\n", chunkHash, path)
 
 			chunkOrder++
 			break

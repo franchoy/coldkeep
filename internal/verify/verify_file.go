@@ -324,6 +324,13 @@ func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 
 	var currentContainer *container.FileContainer
 	var currentFilename string
+	var errorList []error
+	var errorCount int
+	appendHashError := func(err error) {
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, err)
+	}
+	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 
 	for rows.Next() {
 		var chunkID int
@@ -351,39 +358,51 @@ func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 			&filename,
 			&maxSize,
 		); err != nil {
-			return fmt.Errorf("scan file chunk hashes: %w", err)
+			appendHashError(fmt.Errorf("scan file chunk hashes row: %w", err))
+			continue
 		}
 
 		if currentFilename != filename {
 			if currentContainer != nil {
 				if err := currentContainer.Close(); err != nil {
-					return fmt.Errorf("close container %q: %w", currentFilename, err)
+					appendHashError(fmt.Errorf("close container %q: %w", currentFilename, err))
 				}
+				currentContainer = nil
 			}
 
 			fullPath := filepath.Join(containersDir, filename)
+			// Open in read-only mode for verification safety.
 			currentContainer, err = container.OpenExistingContainer(true, fullPath, maxSize)
 			if err != nil {
-				return fmt.Errorf("open container %q: %w", fullPath, err)
+				appendHashError(fmt.Errorf("open container %q: %w", fullPath, err))
+				currentFilename = ""
+				continue
 			}
 			currentFilename = filename
 		}
 
 		payload, err := container.ReadPayloadAt(currentContainer, blockOffset, storedSize)
 		if err != nil {
-			return fmt.Errorf("read block payload for chunk %d: %w", chunkID, err)
+			appendHashError(fmt.Errorf("read block payload for chunk %d: %w", chunkID, err))
+			continue
 		}
 
-		transformer, err := blocks.GetBlockTransformer(blocks.Codec(codec))
-		if err != nil {
-			return fmt.Errorf("get transformer for codec %q: %w", codec, err)
+		codecType := blocks.Codec(codec)
+		transformer, ok := transformerCache[codecType]
+		if !ok {
+			transformer, err = blocks.GetBlockTransformer(codecType)
+			if err != nil {
+				appendHashError(fmt.Errorf("get transformer for codec %q: %w", codec, err))
+				continue
+			}
+			transformerCache[codecType] = transformer
 		}
 
 		plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
 			ChunkHash: expectedChunkHash,
 			Descriptor: blocks.Descriptor{
 				ChunkID:       int64(chunkID),
-				Codec:         blocks.Codec(codec),
+				Codec:         codecType,
 				FormatVersion: formatVersion,
 				PlaintextSize: plaintextSize,
 				StoredSize:    storedSize,
@@ -394,24 +413,37 @@ func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 			Payload: payload,
 		})
 		if err != nil {
-			return fmt.Errorf("decode chunk %d data: %w", chunkID, err)
+			appendHashError(fmt.Errorf("decode chunk %d data: %w", chunkID, err))
+			continue
 		}
 
 		sum := sha256.Sum256(plaintext)
 		computedHash := hex.EncodeToString(sum[:])
 		if computedHash != expectedChunkHash {
-			return fmt.Errorf("chunk %d corrupted: expected %s got %s", chunkID, expectedChunkHash, computedHash)
+			appendHashError(fmt.Errorf("chunk %d corrupted: expected %s got %s", chunkID, expectedChunkHash, computedHash))
 		}
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate file chunk hashes: %w", err)
+		appendHashError(fmt.Errorf("iterate file chunk hashes: %w", err))
 	}
 
 	if currentContainer != nil {
 		if err := currentContainer.Close(); err != nil {
-			return fmt.Errorf("close container %q: %w", currentFilename, err)
+			appendHashError(fmt.Errorf("close container %q: %w", currentFilename, err))
 		}
+	}
+
+	if len(errorList) > 0 {
+		log.Println(" ERROR ")
+		log.Printf("Found %d errors in verifyFileChunkHashes for file ID %d:", errorCount, fileID)
+		if errorCount > utils_print.MaxErrorsToPrint {
+			log.Printf("showing only first %d:", len(errorList))
+		}
+		for _, err := range errorList {
+			log.Printf(" - %v", err)
+		}
+		return fmt.Errorf("found %d errors in file chunk hash verification", errorCount)
 	}
 
 	return nil
