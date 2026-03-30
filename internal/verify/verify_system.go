@@ -354,6 +354,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 				expectedOffset = nextExpectedOffset
 			}
 
+			// defensive — should not happen unless DB changes mid-run
 			if !hasChunks {
 				return fmt.Errorf("database invariant violation: container %d claimed to have completed chunks but returned none", containerID)
 			}
