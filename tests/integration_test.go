@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,6 +70,211 @@ func TestIntegrationHarnessSmoke(t *testing.T) {
 	} else {
 		t.Log("COLDKEEP_TEST_DB is set; DB-backed integration tests can run")
 	}
+}
+
+type cliExecResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	dir := cwd
+	for i := 0; i < 8; i++ {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	t.Fatalf("could not find repo root (go.mod) from cwd %q", cwd)
+	return ""
+}
+
+func buildColdkeepBinary(t *testing.T, repoRoot string) string {
+	t.Helper()
+
+	binPath := filepath.Join(t.TempDir(), "coldkeep-test-bin")
+	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/coldkeep")
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build coldkeep binary: %v\noutput:\n%s", err, string(out))
+	}
+
+	return binPath
+}
+
+func buildCommandEnv(overrides map[string]string) []string {
+	envMap := make(map[string]string)
+	for _, kv := range os.Environ() {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		envMap[parts[0]] = parts[1]
+	}
+
+	for k, v := range overrides {
+		envMap[k] = v
+	}
+
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		env = append(env, k+"="+v)
+	}
+
+	return env
+}
+
+func runColdkeepCommand(t *testing.T, repoRoot, binPath string, env map[string]string, args ...string) cliExecResult {
+	t.Helper()
+
+	cmd := exec.Command(binPath, args...)
+	cmd.Dir = repoRoot
+	cmd.Env = buildCommandEnv(env)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		return cliExecResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: 0}
+	}
+
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return cliExecResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitErr.ExitCode()}
+	}
+
+	t.Fatalf("run coldkeep command %v: %v", args, err)
+	return cliExecResult{}
+}
+
+func tryParseLastJSONLine(output string) (map[string]any, bool) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err == nil {
+			return payload, true
+		}
+	}
+
+	return nil, false
+}
+
+func parseJSONLines(output string) []map[string]any {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	parsed := make([]map[string]any, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err == nil {
+			parsed = append(parsed, payload)
+		}
+	}
+	return parsed
+}
+
+func jsonMap(t *testing.T, payload map[string]any, key string) map[string]any {
+	t.Helper()
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("missing JSON key %q", key)
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("JSON key %q is not an object: %T", key, v)
+	}
+	return m
+}
+
+func jsonInt64(t *testing.T, payload map[string]any, key string) int64 {
+	t.Helper()
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("missing JSON key %q", key)
+	}
+	n, ok := v.(float64)
+	if !ok {
+		t.Fatalf("JSON key %q is not numeric: %T", key, v)
+	}
+	return int64(n)
+}
+
+func assertCLIJSONOK(t *testing.T, res cliExecResult, command string) map[string]any {
+	t.Helper()
+
+	if res.exitCode != 0 {
+		t.Fatalf("command %s failed with exit=%d\nstdout:\n%s\nstderr:\n%s", command, res.exitCode, res.stdout, res.stderr)
+	}
+
+	payload, ok := tryParseLastJSONLine(res.stdout)
+	if !ok {
+		payload, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
+	}
+	if !ok {
+		t.Fatalf("command %s produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", command, res.stdout, res.stderr)
+	}
+
+	if status, _ := payload["status"].(string); status != "ok" {
+		t.Fatalf("command %s did not return status=ok: payload=%v stderr=%s", command, payload, res.stderr)
+	}
+	if got, _ := payload["command"].(string); got != command {
+		t.Fatalf("command mismatch: want %s got %q payload=%v", command, got, payload)
+	}
+
+	return payload
+}
+
+func findCLIErrorPayload(output string) (map[string]any, bool) {
+	for _, payload := range parseJSONLines(output) {
+		if _, ok := payload["error_class"]; ok {
+			return payload, true
+		}
+	}
+	return nil, false
+}
+
+func defaultCLIEnv(storageDir string) map[string]string {
+	return map[string]string{
+		"COLDKEEP_TEST_DB":     "1",
+		"COLDKEEP_CODEC":       "plain",
+		"COLDKEEP_STORAGE_DIR": storageDir,
+		"DB_HOST":              getenvOrDefault("DB_HOST", "127.0.0.1"),
+		"DB_PORT":              getenvOrDefault("DB_PORT", "5432"),
+		"DB_USER":              getenvOrDefault("DB_USER", "coldkeep"),
+		"DB_PASSWORD":          os.Getenv("DB_PASSWORD"),
+		"DB_NAME":              getenvOrDefault("DB_NAME", "coldkeep"),
+		"DB_SSLMODE":           getenvOrDefault("DB_SSLMODE", "disable"),
+	}
+}
+
+func getenvOrDefault(name, fallback string) string {
+	v := os.Getenv(name)
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
 }
 
 func applySchema(t *testing.T, dbconn *sql.DB) {
@@ -458,6 +665,303 @@ func createSampleDataset(t *testing.T, dir string) map[string]string {
 	return paths
 }
 
+func TestCLIJSONOutputContracts(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "json_contract.bin", 256*1024)
+
+	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"simulate", "store", "--codec", "plain", inPath, "--output", "json"), "simulate")
+	simData := jsonMap(t, sim, "data")
+	if got := jsonInt64(t, simData, "files"); got != 1 {
+		t.Fatalf("simulate files mismatch: want 1 got %d", got)
+	}
+
+	store := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", "--codec", "plain", inPath, "--output", "json"), "store")
+	storeData := jsonMap(t, store, "data")
+	fileID := jsonInt64(t, storeData, "file_id")
+	if fileID <= 0 {
+		t.Fatalf("expected positive file_id, got %d", fileID)
+	}
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"stats", "--output", "json"), "stats")
+
+	list := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"list", "--output", "json"), "list")
+	files, ok := list["files"].([]any)
+	if !ok || len(files) == 0 {
+		t.Fatalf("list returned no files: payload=%v", list)
+	}
+
+	search := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"search", "--name", "json_contract", "--output", "json"), "search")
+	searchFiles, ok := search["files"].([]any)
+	if !ok || len(searchFiles) == 0 {
+		t.Fatalf("search returned no files for --name json_contract: payload=%v", search)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileID), outDir, "--output", "json"), "restore")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "file", fmt.Sprintf("%d", fileID), "--full", "--output", "json"), "verify")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", fmt.Sprintf("%d", fileID), "--output", "json"), "remove")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+}
+
+func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	inputDir := filepath.Join(tmp, "dataset")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir dataset: %v", err)
+	}
+	createSampleDataset(t, inputDir)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"simulate", "store-folder", "--codec", "plain", inputDir, "--output", "json"), "simulate")
+	simData := jsonMap(t, sim, "data")
+	simFiles := jsonInt64(t, simData, "files")
+	simLogical := jsonInt64(t, simData, "logical_size_bytes")
+	simPhysical := jsonInt64(t, simData, "physical_size_bytes")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store-folder", "--codec", "plain", inputDir, "--output", "json"), "store-folder")
+
+	stats := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"stats", "--output", "json"), "stats")
+	statsData := jsonMap(t, stats, "data")
+	realFiles := jsonInt64(t, statsData, "completed_files")
+	realLogical := jsonInt64(t, statsData, "completed_size_bytes")
+	realPhysical := jsonInt64(t, statsData, "live_block_bytes")
+
+	if simFiles != realFiles {
+		t.Fatalf("simulation files mismatch: simulated=%d real=%d", simFiles, realFiles)
+	}
+	if simLogical != realLogical {
+		t.Fatalf("simulation logical bytes mismatch: simulated=%d real=%d", simLogical, realLogical)
+	}
+
+	// Allow a small delta for accounting differences while still detecting large drift.
+	const maxPhysicalDeltaBytes int64 = 1024
+	delta := simPhysical - realPhysical
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > maxPhysicalDeltaBytes {
+		t.Fatalf("simulation physical bytes drift too large: simulated=%d real=%d delta=%d", simPhysical, realPhysical, delta)
+	}
+}
+
+func TestCLIJSONOutputStreamSeparation(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "stream_contract.bin", 64*1024)
+
+	res := runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", "--codec", "plain", inPath, "--output", "json")
+	if res.exitCode != 0 {
+		t.Fatalf("store command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	stdoutJSON := parseJSONLines(res.stdout)
+	if len(stdoutJSON) == 0 {
+		t.Fatalf("expected JSON payload on stdout, got:\n%s", res.stdout)
+	}
+
+	storeJSON := stdoutJSON[len(stdoutJSON)-1]
+	if got, _ := storeJSON["command"].(string); got != "store" {
+		t.Fatalf("expected stdout command payload for store, got: %v", storeJSON)
+	}
+	if status, _ := storeJSON["status"].(string); status != "ok" {
+		t.Fatalf("expected stdout status=ok, got payload: %v", storeJSON)
+	}
+
+	if strings.Contains(res.stdout, "startup_recovery") {
+		t.Fatalf("startup recovery JSON must not be written to stdout:\n%s", res.stdout)
+	}
+
+	stderrJSON := parseJSONLines(res.stderr)
+	if len(stderrJSON) == 0 {
+		t.Fatalf("expected startup recovery JSON on stderr, got:\n%s", res.stderr)
+	}
+
+	recoverySeen := false
+	for _, payload := range stderrJSON {
+		if event, _ := payload["event"].(string); event == "startup_recovery" {
+			recoverySeen = true
+		}
+		if command, _ := payload["command"].(string); command == "store" {
+			t.Fatalf("command payload must not be written to stderr: %v", payload)
+		}
+	}
+
+	if !recoverySeen {
+		t.Fatalf("expected startup_recovery JSON event on stderr, got payloads: %v", stderrJSON)
+	}
+}
+
+func TestCLIJSONErrorContracts(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	tests := []struct {
+		name          string
+		args          []string
+		wantExitCode  int
+		wantClass     string
+		messageSubstr string
+	}{
+		{
+			name:          "usage_unknown_command",
+			args:          []string{"nope", "--output", "json"},
+			wantExitCode:  2,
+			wantClass:     "USAGE",
+			messageSubstr: "unknown command",
+		},
+		{
+			name:          "usage_invalid_file_id",
+			args:          []string{"restore", "abc", filepath.Join(tmp, "out"), "--output", "json"},
+			wantExitCode:  2,
+			wantClass:     "USAGE",
+			messageSubstr: "Invalid fileID",
+		},
+		{
+			name:          "general_store_missing_path",
+			args:          []string{"store", filepath.Join(tmp, "missing-file.bin"), "--output", "json"},
+			wantExitCode:  1,
+			wantClass:     "GENERAL",
+			messageSubstr: "no such file",
+		},
+		{
+			name:          "verify_missing_file_id",
+			args:          []string{"verify", "file", "999999", "--deep", "--output", "json"},
+			wantExitCode:  3,
+			wantClass:     "VERIFY",
+			messageSubstr: "does not exist",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runColdkeepCommand(t, repoRoot, binPath, env, tc.args...)
+
+			if res.exitCode != tc.wantExitCode {
+				t.Fatalf("exit code mismatch: want=%d got=%d\nstdout:\n%s\nstderr:\n%s", tc.wantExitCode, res.exitCode, res.stdout, res.stderr)
+			}
+
+			if strings.TrimSpace(res.stdout) != "" {
+				t.Fatalf("expected no stdout for error case, got:\n%s", res.stdout)
+			}
+
+			errPayload, ok := findCLIErrorPayload(res.stderr)
+			if !ok {
+				t.Fatalf("expected JSON error payload in stderr, got:\n%s", res.stderr)
+			}
+
+			if got, _ := errPayload["status"].(string); got != "error" {
+				t.Fatalf("status mismatch: want=error got=%q payload=%v", got, errPayload)
+			}
+			if got, _ := errPayload["error_class"].(string); got != tc.wantClass {
+				t.Fatalf("error_class mismatch: want=%s got=%q payload=%v", tc.wantClass, got, errPayload)
+			}
+			if got := jsonInt64(t, errPayload, "exit_code"); got != int64(tc.wantExitCode) {
+				t.Fatalf("exit_code mismatch in payload: want=%d got=%d payload=%v", tc.wantExitCode, got, errPayload)
+			}
+
+			message, _ := errPayload["message"].(string)
+			if !strings.Contains(strings.ToLower(message), strings.ToLower(tc.messageSubstr)) {
+				t.Fatalf("message mismatch: expected substring %q in %q", tc.messageSubstr, message)
+			}
+		})
+	}
+}
+
 // -----------------------------------------------------------------------------
 // test cases
 // -----------------------------------------------------------------------------
@@ -697,6 +1201,104 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
+}
+
+func TestStoreEdgeCasesFolder(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// Use the repository's edge case samples folder.
+	// It contains:
+	// - samples_edge_cases/pattern.txt (one file with a pattern)
+	// - samples_edge_cases/many_small/ (50 small files)
+	edgeCasesDir := findRepoFixtureDir(t, "samples_edge_cases")
+
+	// Store edge cases folder with timeout to catch deadlocks.
+	done := make(chan error, 1)
+	go func() {
+		done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), edgeCasesDir)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("storeFolder edge cases: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("storeFolder edge cases timed out (possible deadlock)")
+	}
+
+	// Query stats to validate storage succeeded.
+	stats, err := maintenance.RunStatsResult()
+	if err != nil {
+		t.Fatalf("runStatsResult: %v", err)
+	}
+
+	// Should have stored multiple files: pattern.txt + 50 files from many_small/
+	// At minimum, we should have >0 files.
+	if stats.CompletedFiles <= 0 {
+		t.Fatalf("expected >0 completed files, got %d", stats.CompletedFiles)
+	}
+
+	// Verify all stored files are retrievable.
+	rows, err := dbconn.Query(`SELECT id, file_hash, original_name FROM logical_file ORDER BY id ASC`)
+	if err != nil {
+		t.Fatalf("query logical_file: %v", err)
+	}
+	defer rows.Close()
+
+	fileCount := 0
+	restoreDir := filepath.Join(tmp, "restored_edge")
+	_ = os.MkdirAll(restoreDir, 0o755)
+
+	for rows.Next() {
+		var id int64
+		var fileHash, origName string
+		if err := rows.Scan(&id, &fileHash, &origName); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		fileCount++
+
+		// Spot-check: restore first 3 files and compare hashes.
+		if fileCount <= 3 {
+			outPath := filepath.Join(restoreDir, fmt.Sprintf("restored_%d_%s", id, filepath.Base(origName)))
+			if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+				t.Fatalf("restore id=%d: %v", id, err)
+			}
+
+			gotHash := sha256File(t, outPath)
+			if gotHash != fileHash {
+				t.Fatalf("edge case hash mismatch for id=%d want=%s got=%s", id, fileHash, gotHash)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if fileCount == 0 {
+		t.Fatalf("expected >0 files to be stored from edge cases folder, got 0")
+	}
+
+	// Run full system verification.
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify system full: %v", err)
+	}
+
+	// Ensure no processing rows stuck behind.
+	assertNoProcessingRows(t, dbconn)
 }
 
 func TestGCRemovesUnusedContainers(t *testing.T) {

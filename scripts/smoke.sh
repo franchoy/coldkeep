@@ -88,7 +88,7 @@ ensure_postgres_schema
 reset_smoke_state
 
 echo "[smoke] stats (before)"
-coldkeep stats || true
+coldkeep stats
 
 echo "[smoke] simulate store-folder samples"
 coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$COLDKEEP_SAMPLES_DIR"
@@ -114,7 +114,12 @@ if [[ -n "${FIRST_ID}" ]]; then
 fi
 
 echo "[smoke] search test"
-coldkeep search hello || true
+SEARCH_OUTPUT=$(coldkeep search --name hello)
+echo "$SEARCH_OUTPUT"
+if ! grep -qi "hello" <<<"$SEARCH_OUTPUT"; then
+  echo "[smoke] ERROR: search --name hello returned no matching rows"
+  exit 1
+fi
 
 echo "[smoke] remove test"
 if [[ -n "${FIRST_ID}" ]]; then
@@ -125,7 +130,69 @@ fi
 echo "[smoke] gc test"
 coldkeep gc
 
+echo "[smoke] verify system (full)"
+coldkeep verify system --full
+
 echo "[smoke] stats (after gc)"
 coldkeep stats
+
+# Edge cases test: many small files + pattern file
+echo ""
+echo "[smoke] === EDGE CASES TEST ==="
+EDGE_CASES_DIR="${PWD}/samples_edge_cases"
+if [[ ! -d "$EDGE_CASES_DIR" ]]; then
+  echo "[smoke] WARNING: samples_edge_cases directory not found at $EDGE_CASES_DIR, skipping"
+else
+  echo "[smoke] resetting for edge cases run"
+  reset_smoke_state
+
+  echo "[smoke] stats (edge cases before)"
+  coldkeep stats
+
+  echo "[smoke] simulate store-folder edge cases"
+  coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$EDGE_CASES_DIR"
+
+  echo "[smoke] store-folder edge cases"
+  coldkeep store-folder "$EDGE_CASES_DIR"
+
+  echo "[smoke] stats (edge cases after)"
+  coldkeep stats
+
+  echo "[smoke] list edge case files"
+  coldkeep list
+
+  # Try to restore the pattern file if it exists
+  FIRST_EDGE_ID=$(coldkeep list | awk 'NR>2 {print $1; exit}' || true)
+  if [[ -n "${FIRST_EDGE_ID}" ]]; then
+    echo "[smoke] restoring first edge case file id=${FIRST_EDGE_ID}"
+    mkdir -p ./_smoke_out
+    coldkeep restore "${FIRST_EDGE_ID}" ./_smoke_out/
+    echo "[smoke] re-store restored edge case file (should dedupe)"
+    RESTORED=$(ls -1 ./_smoke_out | head -n 1)
+    coldkeep store "./_smoke_out/${RESTORED}" || true
+  fi
+
+  echo "[smoke] search edge cases (pattern.txt)"
+  SEARCH_OUTPUT=$(coldkeep search --name pattern)
+  echo "$SEARCH_OUTPUT"
+  if ! grep -qi "pattern" <<<"$SEARCH_OUTPUT"; then
+    echo "[smoke] WARNING: search --name pattern did not match expected files (might be deduplicated)"
+  fi
+
+  echo "[smoke] remove edge case test"
+  if [[ -n "${FIRST_EDGE_ID}" ]]; then
+    echo "[smoke] removing first edge case file id=${FIRST_EDGE_ID}"
+    coldkeep remove "${FIRST_EDGE_ID}"
+  fi
+
+  echo "[smoke] gc test (edge cases)"
+  coldkeep gc
+
+  echo "[smoke] verify system --full (edge cases)"
+  coldkeep verify system --full
+
+  echo "[smoke] stats (edge cases after gc)"
+  coldkeep stats
+fi
 
 echo "[smoke] done"

@@ -129,18 +129,6 @@ func runCLI(args []string) int {
 		return printCLIError(err, outputModeText)
 	}
 
-	// In JSON mode, suppress internal text output for write commands so that
-	// progress prints don't pollute the structured JSON response.
-	if outputMode == outputModeJSON {
-		switch parsed.method {
-		case "store", "store-folder", "restore", "remove", "gc":
-			restore, suppressErr := suppressStdout()
-			if suppressErr == nil {
-				defer restore()
-			}
-		}
-	}
-
 	switch parsed.method {
 	case "init":
 		err = initCommand()
