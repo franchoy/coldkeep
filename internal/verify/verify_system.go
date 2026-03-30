@@ -245,7 +245,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			defer func() { _ = chunks.Close() }()
 
 			// Open in read-only mode for verification safety.
-			filecontainer, err := container.OpenExistingContainer(true, fullPath, maxSize)
+			filecontainer, err := container.OpenReadOnlyContainer(fullPath, maxSize)
 			if err != nil {
 				return fmt.Errorf("failed to open container %s: %w", fullPath, err)
 			}

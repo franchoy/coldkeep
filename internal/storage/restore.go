@@ -185,7 +185,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			containerPath := filepath.Join(containersDir, filename)
-			filecontainer, err = container.OpenExistingContainer(false, containerPath, maxSize)
+			filecontainer, err = container.OpenWritableContainer(containerPath, maxSize)
 			if err != nil {
 				return fmt.Errorf("open sealed container %q at %s: %w", filename, containerPath, err)
 			}

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -473,7 +472,8 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 				if errors.Is(err, container.ErrContainerFull) {
 					continue
 				}
-				if strings.Contains(err.Error(), "blocks_chunk_id_key") {
+				existingBlock, getBlockErr := blockRepo.GetByChunkID(ctx, claimedChunkID)
+				if getBlockErr == nil && existingBlock != nil {
 					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
 					// block metadata already exists for this chunk ID.
 					tx2, err2 := sgctx.DB.Begin()
@@ -505,6 +505,9 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 
 					chunkOrder++
 					break
+				}
+				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
+					return getBlockErr
 				}
 
 				if _, err3 := sgctx.DB.Exec(

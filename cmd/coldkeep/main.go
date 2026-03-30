@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -30,6 +31,8 @@ const (
 	exitVerify  = 3
 )
 
+var stdoutRedirectMu sync.Mutex
+
 var flagsWithValues = map[string]bool{
 	"codec":    true,
 	"name":     true,
@@ -49,6 +52,37 @@ type parsedCommandLine struct {
 	method      string
 	positionals []string
 	flags       map[string][]string
+}
+
+type cliError struct {
+	code int
+	msg  string
+	err  error
+}
+
+func (e *cliError) Error() string {
+	if e.msg != "" {
+		return e.msg
+	}
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return ""
+}
+
+func (e *cliError) Unwrap() error {
+	return e.err
+}
+
+func usageErrorf(format string, args ...any) error {
+	return &cliError{code: exitUsage, msg: fmt.Sprintf(format, args...)}
+}
+
+func verifyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &cliError{code: exitVerify, err: err}
 }
 
 func main() {
@@ -101,13 +135,9 @@ func runCLI(args []string) int {
 	if outputMode == outputModeJSON {
 		switch parsed.method {
 		case "store", "store-folder", "restore", "remove", "gc":
-			if devNull, openErr := os.Open(os.DevNull); openErr == nil {
-				oldStdout := os.Stdout
-				os.Stdout = devNull
-				defer func() {
-					os.Stdout = oldStdout
-					_ = devNull.Close()
-				}()
+			restore, suppressErr := suppressStdout()
+			if suppressErr == nil {
+				defer restore()
 			}
 		}
 	}
@@ -140,7 +170,7 @@ func runCLI(args []string) int {
 	case "verify":
 		err = runVerifyCommand(parsed)
 	default:
-		err = fmt.Errorf("unknown command: %s", parsed.method)
+		err = usageErrorf("unknown command: %s", parsed.method)
 	}
 
 	if err != nil {
@@ -329,6 +359,18 @@ func classifyExitCode(err error) int {
 		return exitSuccess
 	}
 
+	var ce *cliError
+	if errors.As(err, &ce) {
+		switch ce.code {
+		case exitUsage:
+			return exitUsage
+		case exitVerify:
+			return exitVerify
+		default:
+			return exitGeneral
+		}
+	}
+
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 
 	if strings.Contains(msg, "usage:") ||
@@ -360,7 +402,7 @@ func runStoreCommand(parsed parsedCommandLine) error {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return errors.New("Usage: coldkeep store [--codec <plain|aes-gcm>] <filePath>")
+		return usageErrorf("Usage: coldkeep store [--codec <plain|aes-gcm>] <filePath>")
 	}
 
 	path := parsed.positionals[0]
@@ -393,7 +435,7 @@ func runStoreFolderCommand(parsed parsedCommandLine) error {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return errors.New("Usage: coldkeep store-folder [--codec <plain|aes-gcm>] <folderPath>")
+		return usageErrorf("Usage: coldkeep store-folder [--codec <plain|aes-gcm>] <folderPath>")
 	}
 
 	path := parsed.positionals[0]
@@ -426,12 +468,12 @@ func runRestoreCommand(parsed parsedCommandLine) error {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
-		return errors.New("Usage: coldkeep restore <fileID> <outputDir>")
+		return usageErrorf("Usage: coldkeep restore <fileID> <outputDir>")
 	}
 
 	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
 	if err != nil {
-		return fmt.Errorf("Invalid fileID: %w", err)
+		return &cliError{code: exitUsage, err: fmt.Errorf("Invalid fileID: %w", err)}
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -448,12 +490,12 @@ func runRemoveCommand(parsed parsedCommandLine) error {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return errors.New("Usage: coldkeep remove <fileID>")
+		return usageErrorf("Usage: coldkeep remove <fileID>")
 	}
 
 	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
 	if err != nil {
-		return fmt.Errorf("Invalid fileID: %w", err)
+		return &cliError{code: exitUsage, err: fmt.Errorf("Invalid fileID: %w", err)}
 	}
 
 	return storage.RemoveFile(fileID)
@@ -472,10 +514,10 @@ func runGCCommand(parsed parsedCommandLine) error {
 		case "dry-run", "dryRun":
 			dryRun = true
 		default:
-			return fmt.Errorf("Unknown option for gc: %s", parsed.positionals[0])
+			return usageErrorf("Unknown option for gc: %s", parsed.positionals[0])
 		}
 	default:
-		return errors.New("Usage: coldkeep gc [--dry-run]")
+		return usageErrorf("Usage: coldkeep gc [--dry-run]")
 	}
 
 	return maintenance.RunGCWithContainersDir(dryRun, container.ContainersDir)
@@ -486,7 +528,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
-		return errors.New("Usage: coldkeep stats")
+		return usageErrorf("Usage: coldkeep stats")
 	}
 
 	if outputMode == outputModeJSON {
@@ -512,7 +554,7 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
-		return errors.New("Usage: coldkeep list")
+		return usageErrorf("Usage: coldkeep list")
 	}
 
 	if outputMode == outputModeJSON {
@@ -544,12 +586,12 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	// Validate numeric filter values at CLI level before forwarding to SQL.
 	if v, ok := parsed.firstFlagValue("min-size"); ok {
 		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
-			return fmt.Errorf("invalid --min-size value %q: must be a non-negative integer", v)
+			return usageErrorf("invalid --min-size value %q: must be a non-negative integer", v)
 		}
 	}
 	if v, ok := parsed.firstFlagValue("max-size"); ok {
 		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
-			return fmt.Errorf("invalid --max-size value %q: must be a non-negative integer", v)
+			return usageErrorf("invalid --max-size value %q: must be a non-negative integer", v)
 		}
 	}
 
@@ -579,7 +621,7 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 		return err
 	}
 	if len(parsed.positionals) == 0 {
-		return errors.New("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+		return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
 	}
 
 	verifyLevel, err := parseVerifyLevel(parsed)
@@ -591,22 +633,22 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 	switch target {
 	case "system":
 		if len(parsed.positionals) > 2 {
-			return errors.New("Usage: coldkeep verify system [--standard|--full|--deep]")
+			return usageErrorf("Usage: coldkeep verify system [--standard|--full|--deep]")
 		}
-		return maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
+		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel))
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
-			return errors.New("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+			return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
 		}
 
 		fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
 		if err != nil {
-			return fmt.Errorf("Invalid fileID: %w", err)
+			return &cliError{code: exitUsage, err: fmt.Errorf("Invalid fileID: %w", err)}
 		}
 
-		return maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel)
+		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel))
 	default:
-		return fmt.Errorf("Unknown target for verify: %s", target)
+		return usageErrorf("Unknown target for verify: %s", target)
 	}
 }
 
@@ -684,16 +726,30 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 
 // suppressStdoutDuring redirects os.Stdout to /dev/null for the duration of fn.
 func suppressStdoutDuring(fn func() error) error {
-	devNull, err := os.Open(os.DevNull)
+	restore, err := suppressStdout()
 	if err != nil {
 		return fn()
 	}
+	defer restore()
+	fnErr := fn()
+	return fnErr
+}
+
+func suppressStdout() (func(), error) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return nil, err
+	}
+
+	stdoutRedirectMu.Lock()
 	old := os.Stdout
 	os.Stdout = devNull
-	fnErr := fn()
-	os.Stdout = old
-	_ = devNull.Close()
-	return fnErr
+
+	return func() {
+		os.Stdout = old
+		_ = devNull.Close()
+		stdoutRedirectMu.Unlock()
+	}, nil
 }
 
 func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, outputMode cliOutputMode) error {
@@ -709,7 +765,7 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 		{&r.Files, `SELECT COUNT(*) FROM logical_file WHERE status='COMPLETED'`},
 		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status='COMPLETED'`},
 		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status='COMPLETED'`},
-		{&r.Containers, `SELECT COUNT(*) FROM container`},
+		{&r.Containers, `SELECT COUNT(DISTINCT b.container_id) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.status='COMPLETED'`},
 		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.ref_count > 0`},
 	}
 	for _, q := range queries {
@@ -825,7 +881,7 @@ func printHelpRows(rows [][2]string) {
 
 func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandLine, error) {
 	if len(args) == 0 {
-		return parsedCommandLine{}, errors.New("missing command")
+		return parsedCommandLine{}, usageErrorf("missing command")
 	}
 
 	parsed := parsedCommandLine{
@@ -855,7 +911,7 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 
 		if valueFlags[flagToken] {
 			if i+1 >= len(args) {
-				return parsedCommandLine{}, fmt.Errorf("missing value for --%s", flagToken)
+				return parsedCommandLine{}, usageErrorf("missing value for --%s", flagToken)
 			}
 			i++
 			parsed.flags[flagToken] = append(parsed.flags[flagToken], args[i])
@@ -905,7 +961,7 @@ func ensureAllowedFlags(parsed parsedCommandLine, allowed ...string) error {
 	}
 
 	sort.Strings(unknown)
-	return fmt.Errorf("unknown flag(s) for %s: %s", parsed.method, strings.Join(unknown, ", "))
+	return usageErrorf("unknown flag(s) for %s: %s", parsed.method, strings.Join(unknown, ", "))
 }
 
 func searchArgs(parsed parsedCommandLine) []string {
@@ -938,7 +994,7 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 	}
 
 	if len(selected) > 1 {
-		return verify.VerifyStandard, errors.New("multiple verify levels provided")
+		return verify.VerifyStandard, usageErrorf("multiple verify levels provided")
 	}
 
 	positionalLevel := ""
@@ -951,7 +1007,7 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 
 	if positionalLevel != "" {
 		if len(selected) > 0 {
-			return verify.VerifyStandard, errors.New("verify level provided both as flag and positional argument")
+			return verify.VerifyStandard, usageErrorf("verify level provided both as flag and positional argument")
 		}
 
 		switch positionalLevel {
@@ -962,7 +1018,7 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 		case "deep":
 			return verify.VerifyDeep, nil
 		default:
-			return verify.VerifyStandard, fmt.Errorf("unknown verify level: %s", positionalLevel)
+			return verify.VerifyStandard, usageErrorf("unknown verify level: %s", positionalLevel)
 		}
 	}
 

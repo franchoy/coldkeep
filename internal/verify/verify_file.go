@@ -372,7 +372,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 
 			fullPath := filepath.Join(containersDir, filename)
 			// Open in read-only mode for verification safety.
-			currentContainer, err = container.OpenExistingContainer(true, fullPath, maxSize)
+			currentContainer, err = container.OpenReadOnlyContainer(fullPath, maxSize)
 			if err != nil {
 				appendHashError(fmt.Errorf("open container %q: %w", fullPath, err))
 				currentFilename = ""

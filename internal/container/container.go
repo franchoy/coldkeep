@@ -47,6 +47,10 @@ type ActiveContainer struct {
 // api
 // --------------------------------------------------------------------------
 
+// OpenExistingContainer opens an existing container using the provided mode.
+//
+// Deprecated: prefer OpenReadOnlyContainer or OpenWritableContainer to make
+// call-site intent explicit and avoid boolean-parameter misuse.
 func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileContainer, error) {
 	var f *os.File
 	var err error
@@ -70,6 +74,22 @@ func OpenExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 		offset:  stat.Size(),
 		maxSize: maxSize,
 	}, nil
+}
+
+// OpenReadOnlyContainer opens an existing container in read-only mode.
+//
+// This wrapper avoids ambiguous boolean call sites like
+// OpenExistingContainer(true, ...) and makes intent explicit.
+func OpenReadOnlyContainer(path string, maxSize int64) (*FileContainer, error) {
+	return OpenExistingContainer(true, path, maxSize)
+}
+
+// OpenWritableContainer opens an existing container in writable mode.
+//
+// This wrapper avoids ambiguous boolean call sites like
+// OpenExistingContainer(false, ...) and makes intent explicit.
+func OpenWritableContainer(path string, maxSize int64) (*FileContainer, error) {
+	return OpenExistingContainer(false, path, maxSize)
 }
 
 func (c *FileContainer) Append(data []byte) (int64, error) {
@@ -203,7 +223,7 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 		// Found existing open container
 		fullPath := filepath.Join(containersDir, filename)
 
-		container, err := OpenExistingContainer(false, fullPath, maxSize)
+		container, err := OpenWritableContainer(fullPath, maxSize)
 		if err != nil {
 			return ActiveContainer{}, err
 		}
@@ -269,7 +289,7 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 	}
 	closeOnError = false
 
-	container, err := OpenExistingContainer(false, fullPath, containerMaxSize)
+	container, err := OpenWritableContainer(fullPath, containerMaxSize)
 	if err != nil {
 		return ActiveContainer{}, err
 	}
