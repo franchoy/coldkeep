@@ -55,7 +55,7 @@ func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error)
 	logRecoveryEvent("start", "containers_dir="+containersDir)
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return buildReport(stats), fmt.Errorf("Failed to connect to DB: %w", err)
+		return buildReport(stats), fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 

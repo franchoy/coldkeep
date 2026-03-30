@@ -19,7 +19,7 @@ type FileRecord struct {
 func ListFilesResult() ([]FileRecord, error) {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to DB: %w", err)
+		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 

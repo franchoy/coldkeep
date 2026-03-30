@@ -86,7 +86,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 		fileHash,
 	).Scan(&fileID)
 
-	if insErr == sql.ErrNoRows {
+	switch insErr {
+	case sql.ErrNoRows:
 		// Conflict happened: someone else already stored this file hash
 		var existingID int64
 		if err := tx.QueryRow(
@@ -170,10 +171,10 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			fileID = existingID
 			filestatus = "PROCESSING"
 		}
-	} else if insErr == nil {
+	case nil:
 		// We won: this file is new and we should store it
 		filestatus = "PROCESSING"
-	} else {
+	default:
 		return 0, "", insErr
 	}
 	if !txclosed {
@@ -210,10 +211,11 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 		"PROCESSING",
 	).Scan(&chunkID)
 
-	if insErr == nil {
+	switch insErr {
+	case nil:
 		// We won: this chunk is new
 		chunkstatus = "PROCESSING"
-	} else if insErr == sql.ErrNoRows {
+	case sql.ErrNoRows:
 		// Someone else inserted it first
 		if err := tx.QueryRow(`SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
 			return 0, "", err
@@ -272,7 +274,7 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 			}
 			chunkstatus = "PROCESSING"
 		}
-	} else {
+	default:
 		return 0, "", insErr
 	}
 

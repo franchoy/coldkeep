@@ -45,7 +45,7 @@ func checkReferenceCounts(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("Inconsistent chunk reference count: chunk ID %d has ref_count=%d but actual references=%d", c.id, c.refCount, c.actual))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("inconsistent chunk reference count: chunk ID %d has ref_count=%d but actual references=%d", c.id, c.refCount, c.actual))
 	}
 
 	if err := rows.Err(); err != nil {

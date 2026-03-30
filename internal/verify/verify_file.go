@@ -43,7 +43,7 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("File with no chunks found: logical file ID %d has no chunks", logicalFileID))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("file with no chunks found: logical file ID %d has no chunks", logicalFileID))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -133,7 +133,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	if status != "COMPLETED" {
 		return fmt.Errorf("logical file %d has invalid status: expected COMPLETED but got %s", fileId, status)
 	}
-	var hasChunks bool = false
+	hasChunks := false
 	//ensure file_chunks exists for the file
 	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = $1 order by chunk_order asc`, fileId)
 	if err != nil {
@@ -142,7 +142,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	defer func() { _ = filechunkrows.Close() }()
 
 	var chunkIdList []int
-	var previousChunkOrder int = 0
+	previousChunkOrder := 0
 	for filechunkrows.Next() {
 		hasChunks = true
 

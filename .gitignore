@@ -72,8 +72,10 @@ tmp/
 temp/
 *.swp
 *.swo
+.ci-storage/
 
 # =========================
 # smoke scripts output
 # =========================
 _smoke_out/
+

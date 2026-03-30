@@ -26,7 +26,7 @@ type RestoreFileResult struct {
 func RestoreFile(id int64, outputPath string) error {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return fmt.Errorf("Failed to connect to DB: %w", err)
+		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 

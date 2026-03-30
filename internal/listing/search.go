@@ -11,7 +11,7 @@ import (
 func SearchFilesResult(args []string) ([]FileRecord, error) {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to DB: %w", err)
+		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
@@ -27,7 +27,7 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 		switch args[i] {
 		case "--name":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("Missing argument for --name")
+				return nil, fmt.Errorf("missing argument for --name")
 			}
 			i++
 			query += fmt.Sprintf(" AND original_name ILIKE $%d", paramIndex)
@@ -36,7 +36,7 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 
 		case "--min-size":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("Missing argument for --min-size")
+				return nil, fmt.Errorf("missing argument for --min-size")
 			}
 			i++
 			query += fmt.Sprintf(" AND total_size >= $%d", paramIndex)
@@ -45,7 +45,7 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 
 		case "--max-size":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("Missing argument for --max-size")
+				return nil, fmt.Errorf("missing argument for --max-size")
 			}
 			i++
 			query += fmt.Sprintf(" AND total_size <= $%d", paramIndex)

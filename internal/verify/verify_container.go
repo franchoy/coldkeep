@@ -271,7 +271,7 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("Sealed container with incomplete chunks found: container ID %d has incomplete chunks", containerID))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("sealed container with incomplete chunks found: container ID %d has incomplete chunks", containerID))
 	}
 
 	if err := rows.Err(); err != nil {

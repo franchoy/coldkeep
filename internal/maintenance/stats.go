@@ -56,7 +56,7 @@ type ContainerStatRecord struct {
 func RunStatsResult() (*StatsResult, error) {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to DB: %w", err)
+		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
@@ -69,37 +69,37 @@ func RunStatsResult() (*StatsResult, error) {
 
 	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
 		Scan(&r.TotalFiles, &totalLogical); err != nil {
-		return nil, fmt.Errorf("Failed to query total logical files: %w", err)
+		return nil, fmt.Errorf("failed to query total logical files: %w", err)
 	}
 	r.TotalLogicalSizeBytes = totalLogical.Int64
 
 	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
 		Scan(&r.CompletedFiles, &completedLogical); err != nil {
-		return nil, fmt.Errorf("Failed to query completed logical files: %w", err)
+		return nil, fmt.Errorf("failed to query completed logical files: %w", err)
 	}
 	r.CompletedSizeBytes = completedLogical.Int64
 
 	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
 		Scan(&r.ProcessingFiles, &processingLogical); err != nil {
-		return nil, fmt.Errorf("Failed to query processing logical files: %w", err)
+		return nil, fmt.Errorf("failed to query processing logical files: %w", err)
 	}
 	r.ProcessingSizeBytes = processingLogical.Int64
 
 	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
 		Scan(&r.AbortedFiles, &abortedLogical); err != nil {
-		return nil, fmt.Errorf("Failed to query aborted logical files: %w", err)
+		return nil, fmt.Errorf("failed to query aborted logical files: %w", err)
 	}
 	r.AbortedSizeBytes = abortedLogical.Int64
 
 	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = FALSE`).
 		Scan(&r.HealthyContainers, &healthySize); err != nil {
-		return nil, fmt.Errorf("Failed to query healthy containers: %w", err)
+		return nil, fmt.Errorf("failed to query healthy containers: %w", err)
 	}
 	r.HealthyContainerBytes = healthySize.Int64
 
 	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = TRUE`).
 		Scan(&r.QuarantineContainers, &quarantineSize); err != nil {
-		return nil, fmt.Errorf("Failed to query quarantined containers: %w", err)
+		return nil, fmt.Errorf("failed to query quarantined containers: %w", err)
 	}
 	r.QuarantineContainerBytes = quarantineSize.Int64
 
@@ -114,7 +114,7 @@ func RunStatsResult() (*StatsResult, error) {
 		FROM blocks b
 		JOIN chunk ch ON ch.id = b.chunk_id
 	`).Scan(&liveBytes, &deadBytes); err != nil {
-		return nil, fmt.Errorf("Failed to query chunk live/dead stats: %w", err)
+		return nil, fmt.Errorf("failed to query chunk live/dead stats: %w", err)
 	}
 	r.LiveBlockBytes = liveBytes.Int64
 	r.DeadBlockBytes = deadBytes.Int64
@@ -130,7 +130,7 @@ func RunStatsResult() (*StatsResult, error) {
 		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
 		FROM logical_file
 	`).Scan(&totalFileRetries, &avgFileRetries, &maxFileRetries); err != nil {
-		return nil, fmt.Errorf("Failed to query logical file retry stats: %w", err)
+		return nil, fmt.Errorf("failed to query logical file retry stats: %w", err)
 	}
 	r.TotalFileRetries = totalFileRetries.Int64
 	r.AvgFileRetries = avgFileRetries.Float64
@@ -140,7 +140,7 @@ func RunStatsResult() (*StatsResult, error) {
 		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
 		FROM chunk
 	`).Scan(&totalChunkRetries, &avgChunkRetries, &maxChunkRetries); err != nil {
-		return nil, fmt.Errorf("Failed to query chunk retry stats: %w", err)
+		return nil, fmt.Errorf("failed to query chunk retry stats: %w", err)
 	}
 	r.TotalChunkRetries = totalChunkRetries.Int64
 	r.AvgChunkRetries = avgChunkRetries.Float64
