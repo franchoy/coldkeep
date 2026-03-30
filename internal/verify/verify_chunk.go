@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -231,7 +232,7 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 	}
 
 	lastContainerID := -1
-	expectedOffset := int64(0)
+	expectedOffset := int64(container.ContainerHdrLen)
 
 	for rows.Next() {
 		var c chunkInfo
@@ -243,7 +244,7 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 
 		if c.blockContainerID != lastContainerID {
 			lastContainerID = c.blockContainerID
-			expectedOffset = 0
+			expectedOffset = int64(container.ContainerHdrLen)
 		}
 
 		if c.blockOffset != expectedOffset {

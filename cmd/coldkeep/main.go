@@ -397,7 +397,7 @@ func classifyExitCode(err error) int {
 }
 
 func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "codec"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
@@ -459,7 +459,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "codec"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
@@ -509,7 +509,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed); err != nil {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
@@ -551,7 +551,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed); err != nil {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
@@ -591,7 +591,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 }
 
 func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "dry-run", "dryRun"); err != nil {
+	if err := ensureAllowedFlags(parsed, "dry-run", "dryRun", "output"); err != nil {
 		return err
 	}
 

@@ -256,7 +256,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			}()
 
 			hasChunks := false
-			expectedOffset := int64(0)
+			expectedOffset := int64(container.ContainerHdrLen)
 
 			for chunks.Next() {
 				hasChunks = true
