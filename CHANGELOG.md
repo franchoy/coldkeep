@@ -10,6 +10,63 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.8.0] - 2026-03-30
+
+Simulation and CLI stabilization release.
+
+This version focuses on making coldkeep easier to evaluate, safer to operate,
+and more predictable to automate. It introduces dry-run simulation, structured
+JSON output for CLI commands, richer operation result models, and stronger
+verification and integration coverage.
+
+### Added
+- `simulate store` and `simulate store-folder` commands
+- Simulated storage backend for dry-run ingestion without writing container data
+- Structured JSON output mode for CLI commands via `--output json`
+- Structured result models for store, restore, remove, gc, and stats operations
+- Startup recovery JSON event output
+- CLI contract tests for JSON schema and exit-code classification
+- Retry and fragmentation metrics in stats output
+- Explicit read-only and writable container open helpers
+- Additional deep verification coverage for file and system integrity
+- Expanded integration test coverage for:
+  - concurrent store stress
+  - aborted file/chunk retry recovery
+  - container rotation and sealing
+  - verify standard/full/deep behavior
+  - corruption and truncation detection
+  - shared-chunk safety
+  - startup recovery behavior
+
+### Changed
+- Stabilized CLI command behavior and output handling
+- Improved exit-code classification using typed CLI errors
+- Refined simulation reporting to reflect realistic container usage
+- Updated store path to return structured metadata for CLI and JSON responses
+- Updated restore path to return structured metadata for CLI and JSON responses
+- Updated remove and gc paths to return structured operation summaries
+- Improved verification logic with clearer offset continuity and payload validation
+- Replaced ambiguous container open boolean usage with explicit helper functions
+- Improved retry handling around already-existing block metadata during chunk store
+- Improved search filter validation at CLI level for numeric size arguments
+
+### Fixed
+- Fixed restore path to use explicit read-only container access
+- Fixed several CLI usage/error paths to classify correctly as usage failures
+- Fixed simulation command argument handling and error reporting
+- Fixed deep verification consistency around transformer reuse and offset checks
+- Fixed container counting in simulation output to better match completed stored data
+- Fixed fragile retry behavior that previously depended on string-matching some storage errors
+
+### Notes
+- `simulate` reuses the real chunking, block encoding, and metadata pipeline, but
+  does not persist container payloads to physical storage.
+- coldkeep remains an experimental project and is not production ready.
+- On-disk format and CLI details may continue to evolve before v1.0, but v0.8
+  establishes the intended CLI contract and evaluation workflow.
+
+------------------------------------------------------------------------
+
 ## [0.7.0] - 2026-03-28
 
 Block Abstraction & Encryption Foundations.
