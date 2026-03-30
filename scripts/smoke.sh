@@ -16,10 +16,50 @@ cleanup() {
 
 trap cleanup EXIT
 
+ensure_postgres_schema() {
+  if [[ -z "${COLDKEEP_TEST_DB:-}" ]]; then
+    return
+  fi
+
+  if ! command -v psql >/dev/null 2>&1; then
+    echo "[smoke] ERROR: psql is required to bootstrap db/schema_postgres.sql"
+    exit 1
+  fi
+
+  local host="${DB_HOST:-127.0.0.1}"
+  local port="${DB_PORT:-5432}"
+  local user="${DB_USER:-coldkeep}"
+  local name="${DB_NAME:-coldkeep}"
+  local schema_path="${COLDKEEP_SCHEMA_PATH:-db/schema_postgres.sql}"
+
+  if [[ ! -f "$schema_path" ]]; then
+    echo "[smoke] ERROR: schema file not found: $schema_path"
+    exit 1
+  fi
+
+  local exists
+  exists=$(PGPASSWORD="${DB_PASSWORD:-}" psql \
+    -h "$host" -p "$port" -U "$user" -d "$name" \
+    -tAc "SELECT to_regclass('public.logical_file') IS NOT NULL;" \
+    | tr -d '[:space:]')
+
+  if [[ "$exists" != "t" ]]; then
+    echo "[smoke] applying schema: $schema_path"
+    PGPASSWORD="${DB_PASSWORD:-}" psql \
+      -h "$host" -p "$port" -U "$user" -d "$name" \
+      -v ON_ERROR_STOP=1 \
+      -f "$schema_path" >/dev/null
+  else
+    echo "[smoke] schema already present"
+  fi
+}
+
 echo "[smoke] starting"
 
 : "${COLDKEEP_STORAGE_DIR:=./storage/containers}"
 mkdir -p "$COLDKEEP_STORAGE_DIR"
+
+ensure_postgres_schema
 
 echo "[smoke] stats (before)"
 coldkeep stats || true
