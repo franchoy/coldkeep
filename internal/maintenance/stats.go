@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // StatsResult holds the snapshot emitted by RunStatsResult.
@@ -73,19 +74,19 @@ func RunStatsResult() (*StatsResult, error) {
 	}
 	r.TotalLogicalSizeBytes = totalLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'COMPLETED'`).
+	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).
 		Scan(&r.CompletedFiles, &completedLogical); err != nil {
 		return nil, fmt.Errorf("failed to query completed logical files: %w", err)
 	}
 	r.CompletedSizeBytes = completedLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'PROCESSING'`).
+	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).
 		Scan(&r.ProcessingFiles, &processingLogical); err != nil {
 		return nil, fmt.Errorf("failed to query processing logical files: %w", err)
 	}
 	r.ProcessingSizeBytes = processingLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = 'ABORTED'`).
+	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileAborted).
 		Scan(&r.AbortedFiles, &abortedLogical); err != nil {
 		return nil, fmt.Errorf("failed to query aborted logical files: %w", err)
 	}
@@ -160,12 +161,12 @@ func RunStatsResult() (*StatsResult, error) {
 			return nil, err
 		}
 		switch status {
-		case "COMPLETED":
+		case filestate.ChunkCompleted:
 			r.CompletedChunks = count
 			r.CompletedChunkBytes = bytes
-		case "PROCESSING":
+		case filestate.ChunkProcessing:
 			r.ProcessingChunks = count
-		case "ABORTED":
+		case filestate.ChunkAborted:
 			r.AbortedChunks = count
 		}
 	}

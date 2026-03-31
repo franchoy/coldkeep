@@ -13,6 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // RestoreFileResult contains structured metadata about a restore operation.
@@ -66,7 +67,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	var originalName string
 
 	err = dbconn.QueryRow(
-		"SELECT original_name, file_hash FROM logical_file WHERE status = 'COMPLETED' AND id = $1",
+		"SELECT original_name, file_hash FROM logical_file WHERE status = $1 AND id = $2",
+		filestate.LogicalFileCompleted,
 		fileID,
 	).Scan(&originalName, &expectedFileHash)
 
@@ -102,9 +104,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			JOIN chunk c ON c.id = fc.chunk_id
 			JOIN blocks b ON b.chunk_id = c.id
 			JOIN container ctr ON ctr.id = b.container_id
-			WHERE fc.logical_file_id = $1 AND c.status = 'COMPLETED'
+			WHERE fc.logical_file_id = $1 AND c.status = $2
 			ORDER BY fc.chunk_order ASC
-	`, fileID)
+	`, fileID, filestate.ChunkCompleted)
 
 	if err != nil {
 		return RestoreFileResult{}, fmt.Errorf("query file chunks: %w", err)
@@ -178,7 +180,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			return RestoreFileResult{}, fmt.Errorf("scan chunk row: %w", err)
 		}
 
-		if chunkStatus != "COMPLETED" {
+		if chunkStatus != filestate.ChunkCompleted {
 			return RestoreFileResult{}, fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkOrder, fileID, chunkStatus)
 		}
 

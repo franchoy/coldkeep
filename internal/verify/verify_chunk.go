@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/franchoy/coldkeep/internal/container"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -125,8 +126,8 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	rows1, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, c.status
 							FROM chunk c
 							LEFT JOIN blocks b ON b.chunk_id = c.id
-							WHERE c.status = 'COMPLETED'
-							AND (b.container_id IS NULL OR b.block_offset IS NULL);`)
+							WHERE c.status = $1
+							AND (b.container_id IS NULL OR b.block_offset IS NULL);`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query completed chunks: %v", err)
@@ -163,8 +164,8 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	rows2, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, c.status
 							FROM chunk c
 							LEFT JOIN blocks b ON b.chunk_id = c.id
-							WHERE c.status != 'COMPLETED'
-							AND (b.container_id IS NOT NULL OR b.block_offset IS NOT NULL);`)
+							WHERE c.status != $1
+							AND (b.container_id IS NOT NULL OR b.block_offset IS NOT NULL);`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query non-completed chunks: %v", err)
@@ -214,8 +215,8 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container cont ON b.container_id = cont.id
-		WHERE c.status = 'COMPLETED'
-		ORDER BY b.container_id, b.block_offset;`)
+		WHERE c.status = $1
+		ORDER BY b.container_id, b.block_offset;`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query completed chunks for offset validity: %v", err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -130,7 +131,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
 
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		return fmt.Errorf("logical file %d has invalid status: expected COMPLETED but got %s", fileId, status)
 	}
 	hasChunks := false
@@ -194,7 +195,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId); err != nil {
 			return fmt.Errorf("failed to scan chunk info: %w", err)
 		}
-		if chunkStatus != "COMPLETED" {
+		if chunkStatus != filestate.ChunkCompleted {
 			return fmt.Errorf("chunk with ID %d has invalid status: expected COMPLETED but got %s", chunkid, chunkStatus)
 		}
 		if !blockId.Valid {

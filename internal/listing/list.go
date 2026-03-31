@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // FileRecord is a single logical file entry returned by list/search.
@@ -27,9 +28,9 @@ func ListFilesResult() ([]FileRecord, error) {
 	rows, err := dbconn.Query(`
 		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
-		WHERE status = 'COMPLETED'
+		WHERE status = $1
 		ORDER BY created_at DESC
-	`)
+	`, filestate.LogicalFileCompleted)
 	if err != nil {
 		return nil, err
 	}

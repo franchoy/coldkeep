@@ -19,6 +19,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -425,7 +426,7 @@ func assertNoProcessingRows(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
 
 	var logicalProcessing int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'PROCESSING'`).Scan(&logicalProcessing); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).Scan(&logicalProcessing); err != nil {
 		t.Fatalf("count processing logical_file rows: %v", err)
 	}
 	if logicalProcessing != 0 {
@@ -433,7 +434,7 @@ func assertNoProcessingRows(t *testing.T, dbconn *sql.DB) {
 	}
 
 	var chunkProcessing int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'PROCESSING'`).Scan(&chunkProcessing); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkProcessing).Scan(&chunkProcessing); err != nil {
 		t.Fatalf("count processing chunk rows: %v", err)
 	}
 	if chunkProcessing != 0 {
@@ -1146,13 +1147,13 @@ func TestStoreFolderIdempotentDedup(t *testing.T) {
 	takeSnapshot := func(label string) storageSnapshot {
 		t.Helper()
 		var s storageSnapshot
-		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&s.completedFiles); err != nil {
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).Scan(&s.completedFiles); err != nil {
 			t.Fatalf("[%s] query completed_files: %v", label, err)
 		}
 		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&s.totalChunks); err != nil {
 			t.Fatalf("[%s] query total_chunks: %v", label, err)
 		}
-		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&s.completedChunks); err != nil {
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkCompleted).Scan(&s.completedChunks); err != nil {
 			t.Fatalf("[%s] query completed_chunks: %v", label, err)
 		}
 		if err := dbconn.QueryRow(`
@@ -1236,13 +1237,13 @@ func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
 	takeSnapshot := func(label string) storageSnapshot {
 		t.Helper()
 		var s storageSnapshot
-		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&s.completedFiles); err != nil {
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).Scan(&s.completedFiles); err != nil {
 			t.Fatalf("[%s] query completed_files: %v", label, err)
 		}
 		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&s.totalChunks); err != nil {
 			t.Fatalf("[%s] query total_chunks: %v", label, err)
 		}
-		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&s.completedChunks); err != nil {
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkCompleted).Scan(&s.completedChunks); err != nil {
 			t.Fatalf("[%s] query completed_chunks: %v", label, err)
 		}
 		if err := dbconn.QueryRow(`
@@ -1834,7 +1835,7 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&status, &retryCount); err != nil {
 		t.Fatalf("query logical_file status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected logical file status COMPLETED, got %s", status)
 	}
 	if retryCount < 0 {
@@ -1911,7 +1912,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	}
 
 	var completedFiles int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&completedFiles); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).Scan(&completedFiles); err != nil {
 		t.Fatalf("count completed logical files: %v", err)
 	}
 	if completedFiles != len(expectedUnique) {
@@ -1919,7 +1920,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	}
 
 	var nonCompleted int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status <> 'COMPLETED'`).Scan(&nonCompleted); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status <> $1`, filestate.LogicalFileCompleted).Scan(&nonCompleted); err != nil {
 		t.Fatalf("count non-completed logical files: %v", err)
 	}
 	if nonCompleted != 0 {
@@ -2096,7 +2097,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 
 	// Manually set the file status to ABORTED to simulate a failed store
 	fileID := fetchFileIDByHash(t, dbconn, fileHash)
-	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID); err != nil {
 		t.Fatalf("set status to ABORTED: %v", err)
 	}
 
@@ -2110,7 +2111,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
 		t.Fatalf("check status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected status COMPLETED, got %s", status)
 	}
 }
@@ -2148,7 +2149,7 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	}
 
 	fileID := fetchFileIDByHash(t, dbconn, fileHash)
-	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID); err != nil {
 		t.Fatalf("set logical file ABORTED: %v", err)
 	}
 
@@ -2187,7 +2188,7 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 logical_file row after concurrent retry, got %d", count)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected logical file status COMPLETED after concurrent retry, got %s", status)
 	}
 	assertNoProcessingRows(t, dbconn)
@@ -2240,7 +2241,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 
 	// Set the chunk status to ABORTED
-	if _, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
 		t.Fatalf("set chunk status to ABORTED: %v", err)
 	}
 
@@ -2254,7 +2255,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED, got %s", status)
 	}
 }
@@ -2317,7 +2318,7 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 		t.Fatalf("find shared chunk: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
 		t.Fatalf("set chunk ABORTED: %v", err)
 	}
 
@@ -2354,7 +2355,7 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
 		t.Fatalf("query chunk status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED after concurrent retry, got %s", status)
 	}
 	assertNoProcessingRows(t, dbconn)
@@ -2566,8 +2567,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	_, err = dbconn.Exec(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
-		VALUES ($1, $2, $3, 'PROCESSING', 0)
-	`, filepath.Base(inPath), size, hash)
+		VALUES ($1, $2, $3, $4, 0)
+	`, filepath.Base(inPath), size, hash, filestate.LogicalFileProcessing)
 	if err != nil {
 		t.Fatalf("insert processing logical file: %v", err)
 	}
@@ -2585,8 +2586,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
 		INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
-		VALUES ($1, $2, 'PROCESSING', 0, 0)
-	`, "dummy_chunk_hash", int64(128*1024))
+		VALUES ($1, $2, $3, 0, 0)
+	`, "dummy_chunk_hash", int64(128*1024), filestate.ChunkProcessing)
 	if err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
 	}
@@ -2636,7 +2637,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hash).Scan(&fileStatus); err != nil {
 		t.Fatalf("check logical file status: %v", err)
 	}
-	if fileStatus != "ABORTED" {
+	if fileStatus != filestate.LogicalFileAborted {
 		t.Fatalf("expected logical file status ABORTED, got %s", fileStatus)
 	}
 
@@ -2645,7 +2646,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&chunkStatus); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
-	if chunkStatus != "ABORTED" {
+	if chunkStatus != filestate.ChunkAborted {
 		t.Fatalf("expected chunk status ABORTED, got %s", chunkStatus)
 	}
 
@@ -2717,8 +2718,8 @@ func TestVerifyStandard(t *testing.T) {
 		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
 				INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
-				VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', 1, 0)
-		`); err != nil {
+				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0)
+		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
 		defer func() {
@@ -2812,8 +2813,8 @@ func TestVerifyFull(t *testing.T) {
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
 			INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
-			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', 0, 0)
-		`); err != nil {
+			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0)
+		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
 		}
 		defer func() {
@@ -3164,10 +3165,10 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = 'COMPLETED'
+		WHERE c.status = $1
 		ORDER BY b.block_offset ASC
 		LIMIT 1
-	`).Scan(&blockOffset, &storedSize, &containerFilename)
+	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
 	if err != nil {
 		t.Fatalf("query first chunk: %v", err)
 	}
@@ -3227,11 +3228,11 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		SELECT b.chunk_id, b.block_offset
 		FROM blocks b
 		JOIN chunk c ON c.id = b.chunk_id
-		WHERE c.status = 'COMPLETED'
+		WHERE c.status = $1
 		ORDER BY b.container_id ASC, b.block_offset ASC
 		OFFSET 1
 		LIMIT 1
-	`).Scan(&secondChunkID, &secondBlockOffset)
+	`, filestate.ChunkCompleted).Scan(&secondChunkID, &secondBlockOffset)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			t.Skip("not enough completed chunks to validate offset continuity")
@@ -3282,10 +3283,10 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = 'COMPLETED'
+		WHERE c.status = $1
 		ORDER BY b.container_id ASC, b.block_offset ASC
 		LIMIT 2
-	`)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		t.Fatalf("query chunks for corruption: %v", err)
 	}
@@ -3805,9 +3806,9 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 	rows, err := dbconn.Query(`
 		SELECT id, file_hash
 		FROM logical_file
-		WHERE status = 'COMPLETED'
+		WHERE status = $1
 		ORDER BY id ASC
-	`)
+	`, filestate.LogicalFileCompleted)
 	if err != nil {
 		t.Fatalf("query logical_file for %s: %v", fixtureDir, err)
 	}
@@ -4094,9 +4095,9 @@ func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 	rows, err := dbconn.Query(`
 		SELECT id, original_name, file_hash
 		FROM logical_file
-		WHERE status = 'COMPLETED'
+		WHERE status = $1
 		ORDER BY id ASC
-	`)
+	`, filestate.LogicalFileCompleted)
 	if err != nil {
 		t.Fatalf("query logical_file: %v", err)
 	}

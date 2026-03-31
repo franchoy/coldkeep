@@ -18,6 +18,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 	"github.com/franchoy/coldkeep/internal/version"
@@ -937,15 +938,16 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 	queries := []struct {
 		dest  interface{}
 		query string
+		args  []any
 	}{
-		{&r.Files, `SELECT COUNT(*) FROM logical_file WHERE status='COMPLETED'`},
-		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status='COMPLETED'`},
-		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status='COMPLETED'`},
-		{&r.Containers, `SELECT COUNT(DISTINCT b.container_id) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.status='COMPLETED'`},
-		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.ref_count > 0`},
+		{&r.Files, `SELECT COUNT(*) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
+		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
+		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status = $1`, []any{filestate.ChunkCompleted}},
+		{&r.Containers, `SELECT COUNT(DISTINCT b.container_id) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.status = $1`, []any{filestate.ChunkCompleted}},
+		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.ref_count > 0`, nil},
 	}
 	for _, q := range queries {
-		if err := sgctx.DB.QueryRow(q.query).Scan(q.dest); err != nil {
+		if err := sgctx.DB.QueryRow(q.query, q.args...).Scan(q.dest); err != nil {
 			return fmt.Errorf("query simulate stats: %w", err)
 		}
 	}

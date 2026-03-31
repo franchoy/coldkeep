@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // SearchFilesResult returns matching records without printing them.
@@ -18,10 +19,10 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 	query := `
 		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
-		WHERE status = 'COMPLETED'
+		WHERE status = $1
 	`
-	var params []interface{}
-	paramIndex := 1
+	params := []interface{}{filestate.LogicalFileCompleted}
+	paramIndex := 2
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {

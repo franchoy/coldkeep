@@ -36,6 +36,7 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -54,9 +55,9 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 			FROM blocks b
 			JOIN chunk c ON c.id = b.chunk_id
 			WHERE b.container_id = ctr.id
-			AND c.status = 'COMPLETED'
+			AND c.status = $1
 		)
-	`)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container files: %v", err)
@@ -136,7 +137,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	rows, err := dbconn.Query(`SELECT c.id
 							FROM chunk c
 							JOIN blocks b ON b.chunk_id = c.id
-							WHERE c.status != 'COMPLETED';`)
+							WHERE c.status != $1;`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query chunk-container consistency: %v", err)

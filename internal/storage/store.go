@@ -17,6 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 type payloadStatefulWriter interface {
@@ -78,12 +79,13 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 
 	insErr := tx.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, 'PROCESSING')
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
 		RETURNING id`,
 		fileinfo.Name(),
 		fileinfo.Size(),
 		fileHash,
+		filestate.LogicalFileProcessing,
 	).Scan(&fileID)
 
 	switch insErr {
@@ -99,7 +101,7 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 		}
 
 		switch filestatus {
-		case "COMPLETED":
+		case filestate.LogicalFileCompleted:
 			// File is marked COMPLETED. Before reusing it, ensure linked chunks are still COMPLETED.
 			_ = tx.Rollback() // Don't hold locks while validating
 			txclosed = true
@@ -120,8 +122,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			}
 
 			// Chunk graph is inconsistent; force a retry on the same logical_file row.
-			filestatus = "ABORTED"
-		case "PROCESSING":
+			filestatus = filestate.LogicalFileAborted
+		case filestate.LogicalFileProcessing:
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
@@ -139,9 +141,9 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 				}
 
 				switch finalStatus {
-				case "COMPLETED":
+				case filestate.LogicalFileCompleted:
 					return existingID, finalStatus, nil
-				case "ABORTED":
+				case filestate.LogicalFileAborted:
 					// Previous attempt was aborted while we were waiting: we can try to store again
 					filestatus = finalStatus // Update status to break the loop and retry storing
 					keep_waiting = false
@@ -150,7 +152,7 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 		}
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
-		if filestatus == "ABORTED" {
+		if filestatus == filestate.LogicalFileAborted {
 			// Previous attempt was aborted while we were waiting: we can try to store again
 			// We can reuse the same logical_file row since it has the same file_hash
 			tx2, err := dbconn.Begin()
@@ -158,7 +160,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 				return 0, "", err
 			}
 			if _, err := tx2.Exec(
-				`UPDATE logical_file SET status = 'PROCESSING', retry_count = retry_count + 1 WHERE id = $1`,
+				`UPDATE logical_file SET status = $1, retry_count = retry_count + 1 WHERE id = $2`,
+				filestate.LogicalFileProcessing,
 				existingID,
 			); err != nil {
 				_ = tx2.Rollback()
@@ -169,11 +172,11 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 				return 0, "", err
 			}
 			fileID = existingID
-			filestatus = "PROCESSING"
+			filestatus = filestate.LogicalFileProcessing
 		}
 	case nil:
 		// We won: this file is new and we should store it
-		filestatus = "PROCESSING"
+		filestatus = filestate.LogicalFileProcessing
 	default:
 		return 0, "", insErr
 	}
@@ -208,25 +211,25 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 				RETURNING id`,
 		chunkHash,
 		chunksize,
-		"PROCESSING",
+		filestate.ChunkProcessing,
 	).Scan(&chunkID)
 
 	switch insErr {
 	case nil:
 		// We won: this chunk is new
-		chunkstatus = "PROCESSING"
+		chunkstatus = filestate.ChunkProcessing
 	case sql.ErrNoRows:
 		// Someone else inserted it first
 		if err := tx.QueryRow(`SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
 			return 0, "", err
 		}
 		switch chunkstatus {
-		case "COMPLETED":
+		case filestate.ChunkCompleted:
 			// Chunk already stored and ready: we can reuse it
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
 			return chunkID, chunkstatus, nil
-		case "PROCESSING":
+		case filestate.ChunkProcessing:
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
@@ -243,9 +246,9 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 					return 0, "", err
 				}
 				switch finalStatus {
-				case "COMPLETED":
+				case filestate.ChunkCompleted:
 					return chunkID, finalStatus, nil
-				case "ABORTED":
+				case filestate.ChunkAborted:
 					// Previous attempt was aborted while we were waiting: we can try to store again
 					chunkstatus = finalStatus // Update status to break the loop and retry storing
 					keep_waiting = false
@@ -254,7 +257,7 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 		}
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
-		if chunkstatus == "ABORTED" {
+		if chunkstatus == filestate.ChunkAborted {
 			// Previous attempt was aborted while we were waiting: we can try to store again
 			// We can reuse the same chunk row since it has the same chunk_hash and size
 			tx2, err := dbconn.Begin()
@@ -262,7 +265,8 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 				return 0, "", err
 			}
 			if _, err := tx2.Exec(
-				`UPDATE chunk SET status = 'PROCESSING', retry_count = retry_count + 1 WHERE id = $1`,
+				`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`,
+				filestate.ChunkProcessing,
 				chunkID,
 			); err != nil {
 				_ = tx2.Rollback()
@@ -272,7 +276,7 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 				_ = tx2.Rollback()
 				return 0, chunkstatus, err
 			}
-			chunkstatus = "PROCESSING"
+			chunkstatus = filestate.ChunkProcessing
 		}
 	default:
 		return 0, "", insErr
@@ -394,7 +398,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	}
 	result.FileID = fileID
 
-	if filestatus == "COMPLETED" {
+	if filestatus == filestate.LogicalFileCompleted {
 		// File already stored and ready: we can reuse it
 		result.AlreadyStored = true
 		return result, nil
@@ -403,7 +407,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	completed := false
 	defer func() {
 		if !completed {
-			_, _ = sgctx.DB.Exec(`UPDATE logical_file SET status='ABORTED' WHERE id=$1`, fileID)
+			_, _ = sgctx.DB.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID)
 		}
 	}()
 
@@ -431,7 +435,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			return StoreFileResult{}, err
 		}
 
-		if chunkStatus == "COMPLETED" {
+		if chunkStatus == filestate.ChunkCompleted {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
 			tx, err := sgctx.DB.Begin()
 			if err != nil {
@@ -497,7 +501,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 						return StoreFileResult{}, err2
 					}
 
-					if _, err2 = tx2.Exec(`UPDATE chunk SET status = 'COMPLETED' WHERE id = $1`, claimedChunkID); err2 != nil {
+					if _, err2 = tx2.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
 						_ = tx2.Rollback()
 						return StoreFileResult{}, err2
 					}
@@ -527,7 +531,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				}
 
 				if _, err3 := sgctx.DB.Exec(
-					`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`,
+					`UPDATE chunk SET status = $1 WHERE id = $2`,
+					filestate.ChunkAborted,
 					claimedChunkID,
 				); err3 != nil {
 					return StoreFileResult{}, err3
@@ -537,7 +542,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 			// Mark chunk as completed
 			if _, err := tx.Exec(
-				`UPDATE chunk SET status = 'COMPLETED' WHERE id = $1`,
+				`UPDATE chunk SET status = $1 WHERE id = $2`,
+				filestate.ChunkCompleted,
 				claimedChunkID,
 			); err != nil {
 				_ = tx.Rollback()
@@ -601,7 +607,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 	// After all chunks are stored and linked, mark logical file as "COMPLETED"
 	_, err = sgctx.DB.Exec(
-		`UPDATE logical_file SET status='COMPLETED' WHERE id=$1`,
+		`UPDATE logical_file SET status = $1 WHERE id = $2`,
+		filestate.LogicalFileCompleted,
 		fileID,
 	)
 	if err != nil {
