@@ -22,6 +22,11 @@ and system restart/recovery.
 > coldkeep is designed as a correctness-first storage engine, prioritizing
 > determinism and recoverability over performance and feature completeness.
 
+For v0.9, every change intended for mainline or release delivery is expected to
+pass the full GitHub Actions pipeline before merge or tag publication. The repo
+contains a synthetic required check named `CI Required Gate` that aggregates the
+quality, integration, and smoke jobs across both codecs.
+
 ---
 
 ## Why coldkeep?
@@ -517,6 +522,43 @@ Restore a file:
 ``` bash
 docker compose run --rm app restore 1 _out.bin
 ```
+
+---
+
+## CI Gate Policy (v0.9)
+
+The repository-side workflow now enforces a single final status named `CI Required Gate`.
+That gate fails if any upstream quality, integration, or smoke job fails or is skipped.
+
+To make that gate non-bypassable for pull requests, merges, and release preparation,
+GitHub repository settings must also enforce it.
+
+Recommended GitHub ruleset / branch protection configuration:
+
+- Require pull requests before merging to `main`
+- Require status checks before merging
+- Mark `CI Required Gate` as a required status check
+- Require merge queue and keep `merge_group` enabled in the workflow
+- Apply the same required check to `release/**` and `hotfix/**`
+- Restrict direct pushes to protected branches
+- Restrict tag creation for release tags such as `v*` to trusted maintainers or automation
+
+Recommended rule names to keep policy auditing deterministic:
+
+- `Protect mainline branches`
+- `Protect release tags`
+
+Without those GitHub-side protections, no workflow file can fully prevent an
+administrator or an unrestricted direct push from bypassing CI.
+
+Maintainers can audit the current setup with:
+
+```bash
+scripts/audit_ci_enforcement.sh --local-only
+scripts/audit_ci_enforcement.sh --repo franchoy/coldkeep
+```
+
+The remote audit requires GitHub CLI authentication with repository admin access.
 
 Show stats:
 
