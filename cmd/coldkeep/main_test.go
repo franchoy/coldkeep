@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -196,5 +197,62 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
+	err := runListCommand(parsedCommandLine{
+		method: "list",
+		flags: map[string][]string{
+			"limit": {"-1"},
+		},
+	}, outputModeText)
+
+	if err == nil {
+		t.Fatal("expected error for invalid list limit")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSearchCommandInvalidOffsetClassifiesAsUsage(t *testing.T) {
+	err := runSearchCommand(parsedCommandLine{
+		method: "search",
+		flags: map[string][]string{
+			"offset": {"-3"},
+		},
+	}, outputModeText)
+
+	if err == nil {
+		t.Fatal("expected error for invalid search offset")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
+	args := searchArgs(parsedCommandLine{
+		method: "search",
+		flags: map[string][]string{
+			"name":   {"report"},
+			"limit":  {"25", "50"},
+			"offset": {"100"},
+		},
+		positionals: []string{"ignored-positional"},
+	})
+
+	encoded := strings.Join(args, " ")
+	if !strings.Contains(encoded, "--limit 25") {
+		t.Fatalf("expected first limit value to be forwarded, got %q", encoded)
+	}
+	if strings.Contains(encoded, "--limit 50") {
+		t.Fatalf("expected repeated limit values to be ignored, got %q", encoded)
+	}
+	if !strings.Contains(encoded, "--offset 100") {
+		t.Fatalf("expected offset value to be forwarded, got %q", encoded)
 	}
 }

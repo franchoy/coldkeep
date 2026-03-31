@@ -125,6 +125,7 @@ coldkeep supports structured output for automation.
 ```bash
 coldkeep stats --output json
 coldkeep list --output json
+coldkeep list --limit 50 --offset 100 --output json
 coldkeep simulate store-folder ./data --output json
 ```
 
@@ -594,6 +595,7 @@ List stored files:
 
 ``` bash
 ./coldkeep list
+./coldkeep list --limit 50 --offset 100
 ```
 
 Restore a file:

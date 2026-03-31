@@ -16,6 +16,11 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 	}
 	defer func() { _ = dbconn.Close() }()
 
+	limit, offset, err := parsePaginationArgs(args)
+	if err != nil {
+		return nil, err
+	}
+
 	query := `
 		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
@@ -52,10 +57,17 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 			query += fmt.Sprintf(" AND total_size <= $%d", paramIndex)
 			params = append(params, args[i])
 			paramIndex++
+
+		case "--limit", "--offset":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("missing argument for %s", args[i])
+			}
+			i++
 		}
 	}
 
 	query += " ORDER BY created_at DESC"
+	query, params = applyPagination(query, params, paramIndex, limit, offset)
 
 	rows, err := dbconn.Query(query, params...)
 	if err != nil {

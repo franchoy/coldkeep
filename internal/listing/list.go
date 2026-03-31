@@ -18,19 +18,28 @@ type FileRecord struct {
 }
 
 // ListFilesResult returns the raw records without printing them.
-func ListFilesResult() ([]FileRecord, error) {
+func ListFilesResult(args []string) ([]FileRecord, error) {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	rows, err := dbconn.Query(`
+	limit, offset, err := parsePaginationArgs(args)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
 		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
 		WHERE status = $1
 		ORDER BY created_at DESC
-	`, filestate.LogicalFileCompleted)
+	`
+	params := []interface{}{filestate.LogicalFileCompleted}
+	query, params = applyPagination(query, params, 2, limit, offset)
+
+	rows, err := dbconn.Query(query, params...)
 	if err != nil {
 		return nil, err
 	}

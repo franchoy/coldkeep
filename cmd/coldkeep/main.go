@@ -35,6 +35,8 @@ var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
 	"codec":    true,
+	"limit":    true,
+	"offset":   true,
 	"name":     true,
 	"min-size": true,
 	"max-size": true,
@@ -372,7 +374,9 @@ func classifyExitCode(err error) int {
 		strings.Contains(msg, "unknown verify level") ||
 		strings.Contains(msg, "multiple verify levels provided") ||
 		strings.Contains(msg, "verify level provided both as flag and positional argument") ||
+		strings.Contains(msg, "invalid --limit") ||
 		strings.Contains(msg, "invalid --min-size") ||
+		strings.Contains(msg, "invalid --offset") ||
 		strings.Contains(msg, "invalid --max-size") ||
 		strings.Contains(msg, "unknown simulate subcommand") {
 		return exitUsage
@@ -666,15 +670,21 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "limit", "offset", "output"); err != nil {
+		return err
+	}
+	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
+		return err
+	}
+	if err := validateNonNegativeIntegerFlag(parsed, "offset"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
-		return usageErrorf("Usage: coldkeep list")
+		return usageErrorf("Usage: coldkeep list [--limit <count>] [--offset <count>]")
 	}
 
 	if outputMode == outputModeJSON {
-		files, err := listing.ListFilesResult()
+		files, err := listing.ListFilesResult(listArgs(parsed))
 		if err != nil {
 			return err
 		}
@@ -691,7 +701,7 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return nil
 	}
 
-	files, err := listing.ListFilesResult()
+	files, err := listing.ListFilesResult(listArgs(parsed))
 	if err != nil {
 		return err
 	}
@@ -700,20 +710,22 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "limit", "offset", "output"); err != nil {
 		return err
 	}
 
 	// Validate numeric filter values at CLI level before forwarding to SQL.
-	if v, ok := parsed.firstFlagValue("min-size"); ok {
-		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
-			return usageErrorf("invalid --min-size value %q: must be a non-negative integer", v)
-		}
+	if err := validateNonNegativeIntegerFlag(parsed, "min-size"); err != nil {
+		return err
 	}
-	if v, ok := parsed.firstFlagValue("max-size"); ok {
-		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
-			return usageErrorf("invalid --max-size value %q: must be a non-negative integer", v)
-		}
+	if err := validateNonNegativeIntegerFlag(parsed, "max-size"); err != nil {
+		return err
+	}
+	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
+		return err
+	}
+	if err := validateNonNegativeIntegerFlag(parsed, "offset"); err != nil {
+		return err
 	}
 
 	if outputMode == outputModeJSON {
@@ -1005,14 +1017,16 @@ func printHelp() {
 		{"    verify file <fileID> [options]", "Perform verification for specific file"},
 		{"  help", "Show this help message"},
 		{"  version", "Show version information"},
-		{"  list", "List stored logical files"},
-		{"  search [filters]", "Search files by filters"},
+		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
+		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store without writing to storage"},
 	})
 	fmt.Println("    Filters:")
 	fmt.Println("      --name <substring>")
 	fmt.Println("      --min-size <bytes>")
 	fmt.Println("      --max-size <bytes>")
+	fmt.Println("      --limit <count>")
+	fmt.Println("      --offset <count>")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")
@@ -1033,8 +1047,8 @@ func printHelp() {
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep store --codec aes-gcm myfile.bin")
 	fmt.Println("  coldkeep store-folder --codec plain ./samples")
-	fmt.Println("  coldkeep list")
-	fmt.Println("  coldkeep search --name report --min-size 1024")
+	fmt.Println("  coldkeep list --limit 50 --offset 100")
+	fmt.Println("  coldkeep search --name report --min-size 1024 --limit 25")
 	fmt.Println("  coldkeep restore 12 ./restored")
 	fmt.Println("  coldkeep remove 12")
 	fmt.Println("  coldkeep verify system --full")
@@ -1142,6 +1156,33 @@ func ensureAllowedFlags(parsed parsedCommandLine, allowed ...string) error {
 	return usageErrorf("unknown flag(s) for %s: %s", parsed.method, strings.Join(unknown, ", "))
 }
 
+func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error {
+	value, ok := parsed.firstFlagValue(name)
+	if !ok {
+		return nil
+	}
+
+	parsedValue, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsedValue < 0 {
+		return usageErrorf("invalid --%s value %q: must be a non-negative integer", name, value)
+	}
+
+	return nil
+}
+
+func listArgs(parsed parsedCommandLine) []string {
+	args := make([]string, 0, 4)
+
+	if value, ok := parsed.firstFlagValue("limit"); ok {
+		args = append(args, "--limit", value)
+	}
+	if value, ok := parsed.firstFlagValue("offset"); ok {
+		args = append(args, "--offset", value)
+	}
+
+	return args
+}
+
 func searchArgs(parsed parsedCommandLine) []string {
 	orderedFlags := []string{"name", "min-size", "max-size"}
 	args := make([]string, 0)
@@ -1153,6 +1194,13 @@ func searchArgs(parsed parsedCommandLine) []string {
 				args = append(args, value)
 			}
 		}
+	}
+
+	if value, ok := parsed.firstFlagValue("limit"); ok {
+		args = append(args, "--limit", value)
+	}
+	if value, ok := parsed.firstFlagValue("offset"); ok {
+		args = append(args, "--offset", value)
 	}
 
 	args = append(args, parsed.positionals...)
