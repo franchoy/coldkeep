@@ -104,6 +104,11 @@ check_remote_policy() {
   require_gh
   resolve_repo
 
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[audit] ERROR: jq is required for remote policy inspection" >&2
+    exit 2
+  fi
+
   echo "[audit] checking remote protection policy for $REPO"
 
   local rulesets_json
@@ -115,39 +120,132 @@ check_remote_policy() {
     return 1
   fi
 
-  if grep -Fq '"name": "Protect mainline branches"' <<<"$rulesets_json"; then
-    echo "[audit] ok: ruleset 'Protect mainline branches' exists"
-  else
+  # --- Ruleset: Protect mainline branches ---
+  local mainline_id
+  mainline_id=$(echo "$rulesets_json" | jq -r '.[] | select(.name == "Protect mainline branches") | .id')
+  if [[ -z "$mainline_id" ]]; then
     echo "[audit] ERROR: missing ruleset 'Protect mainline branches'" >&2
     return 1
   fi
+  echo "[audit] ok: ruleset 'Protect mainline branches' exists (id=${mainline_id})"
 
-  if grep -Fq '"name": "Protect release tags"' <<<"$rulesets_json"; then
-    echo "[audit] ok: ruleset 'Protect release tags' exists"
+  local mainline_detail
+  mainline_detail=$(gh api "repos/$REPO/rulesets/${mainline_id}")
+
+  local mainline_enforcement
+  mainline_enforcement=$(echo "$mainline_detail" | jq -r '.enforcement // "disabled"')
+  if [[ "$mainline_enforcement" != "active" ]]; then
+    echo "[audit] ERROR: ruleset 'Protect mainline branches' enforcement is '${mainline_enforcement}', not 'active'" >&2
+    return 1
+  fi
+  echo "[audit] ok: ruleset 'Protect mainline branches' is active"
+
+  # Verify no-direct-push rule is present
+  if echo "$mainline_detail" | jq -e '.rules[] | select(.type == "creation" or .type == "update" or .type == "deletion" or .type == "non_fast_forward")' > /dev/null 2>&1; then
+    echo "[audit] ok: mainline ruleset includes branch protection rules (creation/update/deletion/non_fast_forward)"
   else
+    echo "[audit] WARN: mainline ruleset may be missing branch protection rules (creation, update, deletion, non_fast_forward)" >&2
+  fi
+
+  # Verify required status checks include CI Required Gate
+  local mainline_required_checks
+  mainline_required_checks=$(echo "$mainline_detail" | jq -r '
+    [.rules[] | select(.type == "required_status_checks")
+     | .parameters.required_status_checks[]?.context] | join(",")')
+  if echo "$mainline_required_checks" | grep -Fq "CI Required Gate"; then
+    echo "[audit] ok: mainline ruleset requires 'CI Required Gate' status check"
+  else
+    echo "[audit] ERROR: mainline ruleset does not include 'CI Required Gate' as a required status check" >&2
+    echo "[audit]        found: ${mainline_required_checks:-<none>}" >&2
+    return 1
+  fi
+
+  # Verify bypass actors are not overly permissive
+  local bypass_count
+  bypass_count=$(echo "$mainline_detail" | jq '[.bypass_actors // [] | .[] | select(.bypass_mode == "always")] | length')
+  if [[ "$bypass_count" -gt 0 ]]; then
+    echo "[audit] WARN: mainline ruleset has ${bypass_count} actor(s) with always-bypass permission — review them" >&2
+  else
+    echo "[audit] ok: mainline ruleset has no always-bypass actors"
+  fi
+
+  # --- Ruleset: Protect release tags ---
+  local tags_id
+  tags_id=$(echo "$rulesets_json" | jq -r '.[] | select(.name == "Protect release tags") | .id')
+  if [[ -z "$tags_id" ]]; then
     echo "[audit] ERROR: missing ruleset 'Protect release tags'" >&2
     return 1
   fi
+  echo "[audit] ok: ruleset 'Protect release tags' exists (id=${tags_id})"
 
+  local tags_detail
+  tags_detail=$(gh api "repos/$REPO/rulesets/${tags_id}")
+
+  local tags_enforcement
+  tags_enforcement=$(echo "$tags_detail" | jq -r '.enforcement // "disabled"')
+  if [[ "$tags_enforcement" != "active" ]]; then
+    echo "[audit] ERROR: ruleset 'Protect release tags' enforcement is '${tags_enforcement}', not 'active'" >&2
+    return 1
+  fi
+  echo "[audit] ok: ruleset 'Protect release tags' is active"
+
+  # Verify tag pattern targets v*
+  local tag_pattern
+  tag_pattern=$(echo "$tags_detail" | jq -r '
+    [.conditions.ref_name.include // [] | .[] | select(startswith("refs/tags/"))] | join(",")')
+  if echo "$tag_pattern" | grep -Fq "refs/tags/v"; then
+    echo "[audit] ok: release tags ruleset targets refs/tags/v*"
+  else
+    echo "[audit] WARN: release tags ruleset may not be constraining v* tags (found: ${tag_pattern:-<none>})" >&2
+  fi
+
+  # Verify tag ruleset also requires CI Required Gate
+  local tags_required_checks
+  tags_required_checks=$(echo "$tags_detail" | jq -r '
+    [.rules[] | select(.type == "required_status_checks")
+     | .parameters.required_status_checks[]?.context] | join(",")')
+  if echo "$tags_required_checks" | grep -Fq "CI Required Gate"; then
+    echo "[audit] ok: release tags ruleset requires 'CI Required Gate' status check"
+  else
+    echo "[audit] WARN: release tags ruleset does not require 'CI Required Gate' (found: ${tags_required_checks:-<none>})" >&2
+  fi
+
+  # Verify tag deletion is blocked
+  if echo "$tags_detail" | jq -e '.rules[] | select(.type == "deletion")' > /dev/null 2>&1; then
+    echo "[audit] ok: release tags ruleset blocks deletions"
+  else
+    echo "[audit] WARN: release tags ruleset may not block tag deletions" >&2
+  fi
+
+  # --- Branch protection (legacy API, best-effort) ---
   local protection_json
   if ! protection_json=$(gh api "repos/$REPO/branches/main/protection" 2>/dev/null); then
-    echo "[audit] ERROR: could not read main branch protection" >&2
-    echo "[audit] Use a token with repository admin access and rerun the audit." >&2
-    return 1
-  fi
-
-  if grep -Fq 'CI Required Gate' <<<"$protection_json"; then
-    echo "[audit] ok: main requires 'CI Required Gate'"
+    echo "[audit] WARN: could not read legacy main branch protection (may not be configured — rulesets are preferred)" >&2
   else
-    echo "[audit] ERROR: main does not require 'CI Required Gate'" >&2
-    return 1
-  fi
+    if echo "$protection_json" | jq -e '.required_status_checks.contexts[]? | select(. == "CI Required Gate")' > /dev/null 2>&1; then
+      echo "[audit] ok: legacy branch protection also requires 'CI Required Gate'"
+    else
+      echo "[audit] WARN: legacy branch protection does not list 'CI Required Gate' (ruleset is the authoritative gate)" >&2
+    fi
 
-  if grep -Fq '"required_pull_request_reviews": null' <<<"$protection_json"; then
-    echo "[audit] ERROR: main does not require pull requests / reviews" >&2
-    return 1
+    if echo "$protection_json" | jq -e '.required_pull_request_reviews | . != null' > /dev/null 2>&1; then
+      echo "[audit] ok: main has pull request review protection enabled"
+    else
+      echo "[audit] WARN: legacy branch protection does not require pull request reviews" >&2
+    fi
+
+    if echo "$protection_json" | jq -e '.allow_force_pushes.enabled == false' > /dev/null 2>&1; then
+      echo "[audit] ok: force pushes to main are disabled"
+    else
+      echo "[audit] WARN: force pushes to main may be permitted — verify in settings" >&2
+    fi
+
+    if echo "$protection_json" | jq -e '.allow_deletions.enabled == false' > /dev/null 2>&1; then
+      echo "[audit] ok: deletions of main are disabled"
+    else
+      echo "[audit] WARN: deletions of main may be permitted — verify in settings" >&2
+    fi
   fi
-  echo "[audit] ok: main has pull request review protection enabled"
 }
 
 status=0

@@ -258,7 +258,7 @@ func findCLIErrorPayload(output string) (map[string]any, bool) {
 func defaultCLIEnv(storageDir string) map[string]string {
 	return map[string]string{
 		"COLDKEEP_TEST_DB":     "1",
-		"COLDKEEP_CODEC":       "plain",
+		"COLDKEEP_CODEC":       getenvOrDefault("COLDKEEP_CODEC", "plain"),
 		"COLDKEEP_STORAGE_DIR": storageDir,
 		"DB_HOST":              getenvOrDefault("DB_HOST", "127.0.0.1"),
 		"DB_PORT":              getenvOrDefault("DB_PORT", "5432"),
@@ -692,14 +692,14 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	inPath := createTempFile(t, inputDir, "json_contract.bin", 256*1024)
 
 	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
-		"simulate", "store", "--codec", "plain", inPath, "--output", "json"), "simulate")
+		"simulate", "store", inPath, "--output", "json"), "simulate")
 	simData := jsonMap(t, sim, "data")
 	if got := jsonInt64(t, simData, "files"); got != 1 {
 		t.Fatalf("simulate files mismatch: want 1 got %d", got)
 	}
 
 	store := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
-		"store", "--codec", "plain", inPath, "--output", "json"), "store")
+		"store", inPath, "--output", "json"), "store")
 	storeData := jsonMap(t, store, "data")
 	fileID := jsonInt64(t, storeData, "file_id")
 	if fileID <= 0 {
@@ -767,14 +767,14 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	env := defaultCLIEnv(container.ContainersDir)
 
 	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
-		"simulate", "store-folder", "--codec", "plain", inputDir, "--output", "json"), "simulate")
+		"simulate", "store-folder", inputDir, "--output", "json"), "simulate")
 	simData := jsonMap(t, sim, "data")
 	simFiles := jsonInt64(t, simData, "files")
 	simLogical := jsonInt64(t, simData, "logical_size_bytes")
 	simPhysical := jsonInt64(t, simData, "physical_size_bytes")
 
 	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
-		"store-folder", "--codec", "plain", inputDir, "--output", "json"), "store-folder")
+		"store-folder", inputDir, "--output", "json"), "store-folder")
 
 	stats := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
 		"stats", "--output", "json"), "stats")
@@ -828,7 +828,7 @@ func TestCLIJSONOutputStreamSeparation(t *testing.T) {
 	inPath := createTempFile(t, inputDir, "stream_contract.bin", 64*1024)
 
 	res := runColdkeepCommand(t, repoRoot, binPath, env,
-		"store", "--codec", "plain", inPath, "--output", "json")
+		"store", inPath, "--output", "json")
 	if res.exitCode != 0 {
 		t.Fatalf("store command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
 	}

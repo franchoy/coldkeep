@@ -16,6 +16,11 @@ cleanup() {
 
 trap cleanup EXIT
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[smoke] ERROR: jq is required for JSON-based output parsing"
+  exit 1
+fi
+
 ensure_postgres_schema() {
   if [[ -z "${COLDKEEP_TEST_DB:-}" ]]; then
     return
@@ -105,8 +110,8 @@ coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"
 STATS_AFTER=$(coldkeep stats --output json)
 DEDUP_FAILED=0
 for field in total_files completed_files total_chunks completed_chunks total_logical_size_bytes live_block_bytes total_containers; do
-  before=$(echo "$STATS_BEFORE" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
-  after=$(echo "$STATS_AFTER" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
+  before=$(echo "$STATS_BEFORE" | jq -r ".data.${field}")
+  after=$(echo "$STATS_AFTER" | jq -r ".data.${field}")
   if [[ "$before" != "$after" ]]; then
     echo "[smoke] ERROR: dedup failed: '${field}' changed: ${before} -> ${after}"
     DEDUP_FAILED=1
@@ -121,12 +126,12 @@ echo "[smoke] list files"
 coldkeep list
 
 # Capture first ID before the restore loop (needed for the remove test below)
-FIRST_ID=$(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1; exit}' || true)
+FIRST_ID=$(coldkeep list --output json | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
 
 echo "[smoke] restore-all: restoring every stored file and verifying byte-perfect fidelity"
 rm -rf ./_smoke_out
 RESTORE_ALL_FAILED=0
-while IFS=' ' read -r file_id file_name; do
+while IFS=$'\t' read -r file_id file_name; do
   restore_dir="./_smoke_out/${file_id}"
   mkdir -p "$restore_dir"
   if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
@@ -153,16 +158,16 @@ while IFS=' ' read -r file_id file_name; do
   else
     echo "[smoke]   ok: id=${file_id} ${file_name}"
   fi
-done < <(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1, $2}')
+done < <(coldkeep list --output json | jq -r '.files[] | [(.id | tostring), .name] | @tsv')
 if [[ "$RESTORE_ALL_FAILED" -eq 1 ]]; then
   exit 1
 fi
 echo "[smoke] restore-all PASSED: all stored files restore byte-perfectly"
 
 echo "[smoke] search test"
-SEARCH_OUTPUT=$(coldkeep search --name hello)
+SEARCH_OUTPUT=$(coldkeep search --name hello --output json)
 echo "$SEARCH_OUTPUT"
-if ! grep -qi "hello" <<<"$SEARCH_OUTPUT"; then
+if ! echo "$SEARCH_OUTPUT" | jq -e '(.files | length) > 0' > /dev/null 2>&1; then
   echo "[smoke] ERROR: search --name hello returned no matching rows"
   exit 1
 fi
@@ -210,8 +215,8 @@ else
   EDGE_STATS_AFTER=$(coldkeep stats --output json)
   EDGE_DEDUP_FAILED=0
   for field in total_files completed_files total_chunks completed_chunks total_logical_size_bytes live_block_bytes total_containers; do
-    before=$(echo "$EDGE_STATS_BEFORE" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
-    after=$(echo "$EDGE_STATS_AFTER" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
+    before=$(echo "$EDGE_STATS_BEFORE" | jq -r ".data.${field}")
+    after=$(echo "$EDGE_STATS_AFTER" | jq -r ".data.${field}")
     if [[ "$before" != "$after" ]]; then
       echo "[smoke] ERROR: dedup (edge cases) failed: '${field}' changed: ${before} -> ${after}"
       EDGE_DEDUP_FAILED=1
@@ -226,12 +231,12 @@ else
   coldkeep list
 
   # Capture first ID before the restore loop (needed for the remove test below)
-  FIRST_EDGE_ID=$(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1; exit}' || true)
+  FIRST_EDGE_ID=$(coldkeep list --output json | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
 
   echo "[smoke] restore-all (edge cases): restoring every stored file and verifying byte-perfect fidelity"
   rm -rf ./_smoke_out
   EDGE_RESTORE_ALL_FAILED=0
-  while IFS=' ' read -r file_id file_name; do
+  while IFS=$'\t' read -r file_id file_name; do
     restore_dir="./_smoke_out/${file_id}"
     mkdir -p "$restore_dir"
     if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
@@ -258,16 +263,16 @@ else
     else
       echo "[smoke]   ok: id=${file_id} ${file_name}"
     fi
-  done < <(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1, $2}')
+  done < <(coldkeep list --output json | jq -r '.files[] | [(.id | tostring), .name] | @tsv')
   if [[ "$EDGE_RESTORE_ALL_FAILED" -eq 1 ]]; then
     exit 1
   fi
   echo "[smoke] restore-all (edge cases) PASSED: all stored files restore byte-perfectly"
 
   echo "[smoke] search edge cases (pattern.txt)"
-  SEARCH_OUTPUT=$(coldkeep search --name pattern)
+  SEARCH_OUTPUT=$(coldkeep search --name pattern --output json)
   echo "$SEARCH_OUTPUT"
-  if ! grep -qi "pattern" <<<"$SEARCH_OUTPUT"; then
+  if ! echo "$SEARCH_OUTPUT" | jq -e '(.files | length) > 0' > /dev/null 2>&1; then
     echo "[smoke] WARNING: search --name pattern did not match expected files (might be deduplicated)"
   fi
 
