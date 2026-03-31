@@ -112,8 +112,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 				FROM file_chunk fc
 				JOIN chunk c ON c.id = fc.chunk_id
 				WHERE fc.logical_file_id = $1
-				AND c.status != 'COMPLETED'
-			`, existingID).Scan(&inconsistentChunks); err != nil {
+				AND c.status != $2
+			`, existingID, filestate.ChunkCompleted).Scan(&inconsistentChunks); err != nil {
 				return 0, "", err
 			}
 
