@@ -45,8 +45,12 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 				return nil, fmt.Errorf("missing argument for --min-size")
 			}
 			i++
+			size, err := parseNonNegativeIntArg("min-size", args[i])
+			if err != nil {
+				return nil, err
+			}
 			query += fmt.Sprintf(" AND total_size >= $%d", paramIndex)
-			params = append(params, args[i])
+			params = append(params, size)
 			paramIndex++
 
 		case "--max-size":
@@ -54,8 +58,12 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 				return nil, fmt.Errorf("missing argument for --max-size")
 			}
 			i++
+			size, err := parseNonNegativeIntArg("max-size", args[i])
+			if err != nil {
+				return nil, err
+			}
 			query += fmt.Sprintf(" AND total_size <= $%d", paramIndex)
-			params = append(params, args[i])
+			params = append(params, size)
 			paramIndex++
 
 		case "--limit", "--offset":

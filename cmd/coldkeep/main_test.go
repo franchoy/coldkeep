@@ -246,13 +246,35 @@ func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	})
 
 	encoded := strings.Join(args, " ")
-	if !strings.Contains(encoded, "--limit 25") {
-		t.Fatalf("expected first limit value to be forwarded, got %q", encoded)
+	if !strings.Contains(encoded, "--limit 50") {
+		t.Fatalf("expected last limit value to be forwarded, got %q", encoded)
 	}
-	if strings.Contains(encoded, "--limit 50") {
-		t.Fatalf("expected repeated limit values to be ignored, got %q", encoded)
+	if strings.Contains(encoded, "--limit 25") {
+		t.Fatalf("expected earlier limit values to be ignored, got %q", encoded)
 	}
 	if !strings.Contains(encoded, "--offset 100") {
 		t.Fatalf("expected offset value to be forwarded, got %q", encoded)
+	}
+}
+
+func TestValidateNonNegativeIntegerFlagUsesLastValue(t *testing.T) {
+	err := validateNonNegativeIntegerFlag(parsedCommandLine{
+		method: "search",
+		flags: map[string][]string{
+			"limit": {"invalid", "25"},
+		},
+	}, "limit")
+	if err != nil {
+		t.Fatalf("expected final limit value to be used, got %v", err)
+	}
+
+	err = validateNonNegativeIntegerFlag(parsedCommandLine{
+		method: "search",
+		flags: map[string][]string{
+			"limit": {"25", "invalid"},
+		},
+	}, "limit")
+	if err == nil {
+		t.Fatal("expected invalid final limit value to fail validation")
 	}
 }

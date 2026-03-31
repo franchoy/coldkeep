@@ -41,6 +41,16 @@ func TestParsePaginationArgsRejectsNegativeValues(t *testing.T) {
 	}
 }
 
+func TestParsePaginationArgsRejectsLimitAboveMaximum(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--limit", "10001"})
+	if err == nil {
+		t.Fatal("expected error for limit above maximum")
+	}
+	if !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestApplyPaginationAppendsLimitThenOffset(t *testing.T) {
 	limitValue := int64(10)
 	offsetValue := int64(5)

@@ -5,6 +5,17 @@ import (
 	"strconv"
 )
 
+const maxPaginationLimit int64 = 10000
+
+func parseNonNegativeIntArg(flagName, value string) (int64, error) {
+	parsedValue, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsedValue < 0 {
+		return 0, fmt.Errorf("invalid --%s value %q: must be a non-negative integer", flagName, value)
+	}
+
+	return parsedValue, nil
+}
+
 func parsePaginationArgs(args []string) (*int64, *int64, error) {
 	var limit *int64
 	var offset *int64
@@ -16,21 +27,26 @@ func parsePaginationArgs(args []string) (*int64, *int64, error) {
 				return nil, nil, fmt.Errorf("missing argument for --limit")
 			}
 			i++
-			parsedValue, err := strconv.ParseInt(args[i], 10, 64)
-			if err != nil || parsedValue < 0 {
-				return nil, nil, fmt.Errorf("invalid --limit value %q: must be a non-negative integer", args[i])
+			parsedValue, err := parseNonNegativeIntArg("limit", args[i])
+			if err != nil {
+				return nil, nil, err
 			}
-			limit = &parsedValue
+			if parsedValue > maxPaginationLimit {
+				return nil, nil, fmt.Errorf("invalid --limit value %q: must be <= %d", args[i], maxPaginationLimit)
+			}
+			value := parsedValue
+			limit = &value
 		case "--offset":
 			if i+1 >= len(args) {
 				return nil, nil, fmt.Errorf("missing argument for --offset")
 			}
 			i++
-			parsedValue, err := strconv.ParseInt(args[i], 10, 64)
-			if err != nil || parsedValue < 0 {
-				return nil, nil, fmt.Errorf("invalid --offset value %q: must be a non-negative integer", args[i])
+			parsedValue, err := parseNonNegativeIntArg("offset", args[i])
+			if err != nil {
+				return nil, nil, err
 			}
-			offset = &parsedValue
+			value := parsedValue
+			offset = &value
 		}
 	}
 

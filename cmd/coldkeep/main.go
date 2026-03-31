@@ -283,7 +283,7 @@ func verifyLevelToString(level verify.VerifyLevel) string {
 }
 
 func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
-	value, hasValue := parsed.firstFlagValue("output")
+	value, hasValue := parsed.lastFlagValue("output")
 	if !hasValue {
 		return outputModeText, nil
 	}
@@ -398,7 +398,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 
 	path := parsed.positionals[0]
-	codecName, _ := parsed.firstFlagValue("codec")
+	codecName, _ := parsed.lastFlagValue("codec")
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -460,7 +460,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 	}
 
 	path := parsed.positionals[0]
-	codecName, _ := parsed.firstFlagValue("codec")
+	codecName, _ := parsed.lastFlagValue("codec")
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -863,7 +863,7 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 
 	subcommand := parsed.positionals[0]
 	path := parsed.positionals[1]
-	codecName, _ := parsed.firstFlagValue("codec")
+	codecName, _ := parsed.lastFlagValue("codec")
 
 	switch subcommand {
 	case "store", "store-folder":
@@ -1116,13 +1116,13 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 	return parsed, nil
 }
 
-func (parsed parsedCommandLine) firstFlagValue(name string) (string, bool) {
+func (parsed parsedCommandLine) lastFlagValue(name string) (string, bool) {
 	values, ok := parsed.flags[name]
 	if !ok || len(values) == 0 {
 		return "", false
 	}
 
-	return values[0], true
+	return values[len(values)-1], true
 }
 
 func (parsed parsedCommandLine) hasFlag(names ...string) bool {
@@ -1157,7 +1157,7 @@ func ensureAllowedFlags(parsed parsedCommandLine, allowed ...string) error {
 }
 
 func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error {
-	value, ok := parsed.firstFlagValue(name)
+	value, ok := parsed.lastFlagValue(name)
 	if !ok {
 		return nil
 	}
@@ -1173,10 +1173,10 @@ func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error
 func listArgs(parsed parsedCommandLine) []string {
 	args := make([]string, 0, 4)
 
-	if value, ok := parsed.firstFlagValue("limit"); ok {
+	if value, ok := parsed.lastFlagValue("limit"); ok {
 		args = append(args, "--limit", value)
 	}
-	if value, ok := parsed.firstFlagValue("offset"); ok {
+	if value, ok := parsed.lastFlagValue("offset"); ok {
 		args = append(args, "--offset", value)
 	}
 
@@ -1196,10 +1196,10 @@ func searchArgs(parsed parsedCommandLine) []string {
 		}
 	}
 
-	if value, ok := parsed.firstFlagValue("limit"); ok {
+	if value, ok := parsed.lastFlagValue("limit"); ok {
 		args = append(args, "--limit", value)
 	}
-	if value, ok := parsed.firstFlagValue("offset"); ok {
+	if value, ok := parsed.lastFlagValue("offset"); ok {
 		args = append(args, "--offset", value)
 	}
 
