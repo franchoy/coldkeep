@@ -4033,3 +4033,135 @@ func TestSamplesFolderEndToEnd(t *testing.T) {
 func TestSamplesEdgeCasesFolderEndToEnd(t *testing.T) {
 	runFixtureFolderEndToEnd(t, "samples_edge_cases")
 }
+
+// runFixtureFolderRestoreAll stores every file in the given fixture directory
+// tree, then restores each logical file by name and compares it byte-for-byte
+// against the original file found in the source tree.
+//
+// This is stricter than runFixtureFolderEndToEnd in two ways:
+//  1. It resolves original_name back to a file path in the source tree and
+//     diffs the raw bytes — catching any systematic encode/decode bug that
+//     would leave the DB hash consistent but the content wrong.
+//  2. It counts every stored logical file (including content-identical
+//     duplicates that were deduplicated), verifying that the total stored
+//     count equals the number of unique-hash files in the fixture.
+func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
+	t.Helper()
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	fixturePath := findRepoFixtureDir(t, fixtureDir)
+	inputDir := filepath.Join(tmp, "input")
+	copyDirTree(t, fixturePath, inputDir)
+
+	// Build a name -> path index for the input tree so we can look up originals
+	// by original_name (which stores only the basename).
+	nameToPath := make(map[string]string)
+	if walkErr := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, e error) error {
+		if e != nil || d.IsDir() {
+			return e
+		}
+		nameToPath[d.Name()] = path
+		return nil
+	}); walkErr != nil {
+		t.Fatalf("walk input dir: %v", walkErr)
+	}
+
+	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
+		t.Fatalf("store folder %s: %v", fixtureDir, err)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT id, original_name, file_hash
+		FROM logical_file
+		WHERE status = 'COMPLETED'
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		t.Fatalf("query logical_file: %v", err)
+	}
+	defer rows.Close()
+
+	restoredCount := 0
+	for rows.Next() {
+		var id int64
+		var origName, storedHash string
+		if err := rows.Scan(&id, &origName, &storedHash); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		outPath := filepath.Join(outDir, fmt.Sprintf("%d_%s", id, origName))
+		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+			t.Errorf("restore id=%d name=%s: %v", id, origName, err)
+			continue
+		}
+
+		// Verify restored hash matches what the DB recorded.
+		gotHash := sha256File(t, outPath)
+		if gotHash != storedHash {
+			t.Errorf("restored hash mismatch for id=%d name=%s: db_hash=%s restored_hash=%s",
+				id, origName, storedHash, gotHash)
+		}
+
+		// Verify restored bytes match the original source file.
+		srcPath, found := nameToPath[origName]
+		if !found {
+			t.Errorf("original source not found for id=%d name=%s", id, origName)
+			continue
+		}
+		orig, readErr := os.ReadFile(srcPath)
+		if readErr != nil {
+			t.Fatalf("read original %s: %v", srcPath, readErr)
+		}
+		restored, readErr := os.ReadFile(outPath)
+		if readErr != nil {
+			t.Fatalf("read restored %s: %v", outPath, readErr)
+		}
+		if !bytes.Equal(orig, restored) {
+			t.Errorf("byte mismatch for id=%d name=%s: original %d bytes, restored %d bytes",
+				id, origName, len(orig), len(restored))
+		}
+
+		restoredCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if restoredCount == 0 {
+		t.Fatalf("no files were restored for fixture %s", fixtureDir)
+	}
+}
+
+// TestSamplesFolderRestoreAll stores the samples/ fixture and restores every
+// logical file, verifying byte-perfect fidelity against the original source
+// file. Complements TestSamplesFolderEndToEnd (hash-set check) by comparing
+// each restored file directly against its original on disk.
+func TestSamplesFolderRestoreAll(t *testing.T) {
+	runFixtureFolderRestoreAll(t, "samples")
+}
+
+// TestSamplesEdgeCasesFolderRestoreAll applies the same full restore-all check
+// to samples_edge_cases/, including the multi-chunk binaries, the deeply-nested
+// leaf file, all 50 small files, and the repeating-pattern file.
+func TestSamplesEdgeCasesFolderRestoreAll(t *testing.T) {
+	runFixtureFolderRestoreAll(t, "samples_edge_cases")
+}

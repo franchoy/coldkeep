@@ -120,16 +120,44 @@ echo "[smoke] dedup test PASSED: all key storage counters unchanged after re-sto
 echo "[smoke] list files"
 coldkeep list
 
-# Restore first file id if available
-FIRST_ID=$(coldkeep list | awk 'NR>2 {print $1; exit}' || true)
-if [[ -n "${FIRST_ID}" ]]; then
-  echo "[smoke] restoring first file id=${FIRST_ID}"
-  mkdir -p ./_smoke_out
-  coldkeep restore "${FIRST_ID}" ./_smoke_out/
-  echo "[smoke] re-store restored file (should dedupe)"
-  RESTORED=$(ls -1 ./_smoke_out | head -n 1)
-  coldkeep store "./_smoke_out/${RESTORED}" || true
+# Capture first ID before the restore loop (needed for the remove test below)
+FIRST_ID=$(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1; exit}' || true)
+
+echo "[smoke] restore-all: restoring every stored file and verifying byte-perfect fidelity"
+rm -rf ./_smoke_out
+RESTORE_ALL_FAILED=0
+while IFS=' ' read -r file_id file_name; do
+  restore_dir="./_smoke_out/${file_id}"
+  mkdir -p "$restore_dir"
+  if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
+    echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
+    RESTORE_ALL_FAILED=1
+    continue
+  fi
+  restored="${restore_dir}/${file_name}"
+  if [[ ! -f "$restored" ]]; then
+    echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+    RESTORE_ALL_FAILED=1
+    continue
+  fi
+  original=$(find "$COLDKEEP_SAMPLES_DIR" -name "${file_name}" -type f 2>/dev/null | head -1)
+  if [[ -z "$original" ]]; then
+    echo "[smoke] WARNING: original not found for '${file_name}' (id=${file_id}), skipping hash check"
+    continue
+  fi
+  orig_hash=$(sha256sum "$original" | awk '{print $1}')
+  rest_hash=$(sha256sum "$restored" | awk '{print $1}')
+  if [[ "$orig_hash" != "$rest_hash" ]]; then
+    echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${orig_hash} got=${rest_hash}"
+    RESTORE_ALL_FAILED=1
+  else
+    echo "[smoke]   ok: id=${file_id} ${file_name}"
+  fi
+done < <(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1, $2}')
+if [[ "$RESTORE_ALL_FAILED" -eq 1 ]]; then
+  exit 1
 fi
+echo "[smoke] restore-all PASSED: all stored files restore byte-perfectly"
 
 echo "[smoke] search test"
 SEARCH_OUTPUT=$(coldkeep search --name hello)
@@ -197,16 +225,44 @@ else
   echo "[smoke] list edge case files"
   coldkeep list
 
-  # Try to restore the pattern file if it exists
-  FIRST_EDGE_ID=$(coldkeep list | awk 'NR>2 {print $1; exit}' || true)
-  if [[ -n "${FIRST_EDGE_ID}" ]]; then
-    echo "[smoke] restoring first edge case file id=${FIRST_EDGE_ID}"
-    mkdir -p ./_smoke_out
-    coldkeep restore "${FIRST_EDGE_ID}" ./_smoke_out/
-    echo "[smoke] re-store restored edge case file (should dedupe)"
-    RESTORED=$(ls -1 ./_smoke_out | head -n 1)
-    coldkeep store "./_smoke_out/${RESTORED}" || true
+  # Capture first ID before the restore loop (needed for the remove test below)
+  FIRST_EDGE_ID=$(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1; exit}' || true)
+
+  echo "[smoke] restore-all (edge cases): restoring every stored file and verifying byte-perfect fidelity"
+  rm -rf ./_smoke_out
+  EDGE_RESTORE_ALL_FAILED=0
+  while IFS=' ' read -r file_id file_name; do
+    restore_dir="./_smoke_out/${file_id}"
+    mkdir -p "$restore_dir"
+    if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
+      echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
+      EDGE_RESTORE_ALL_FAILED=1
+      continue
+    fi
+    restored="${restore_dir}/${file_name}"
+    if [[ ! -f "$restored" ]]; then
+      echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+      EDGE_RESTORE_ALL_FAILED=1
+      continue
+    fi
+    original=$(find "$EDGE_CASES_DIR" -name "${file_name}" -type f 2>/dev/null | head -1)
+    if [[ -z "$original" ]]; then
+      echo "[smoke] WARNING: original not found for '${file_name}' (id=${file_id}), skipping hash check"
+      continue
+    fi
+    orig_hash=$(sha256sum "$original" | awk '{print $1}')
+    rest_hash=$(sha256sum "$restored" | awk '{print $1}')
+    if [[ "$orig_hash" != "$rest_hash" ]]; then
+      echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${orig_hash} got=${rest_hash}"
+      EDGE_RESTORE_ALL_FAILED=1
+    else
+      echo "[smoke]   ok: id=${file_id} ${file_name}"
+    fi
+  done < <(coldkeep list | awk 'NR>2 && $1~/^[0-9]+$/ {print $1, $2}')
+  if [[ "$EDGE_RESTORE_ALL_FAILED" -eq 1 ]]; then
+    exit 1
   fi
+  echo "[smoke] restore-all (edge cases) PASSED: all stored files restore byte-perfectly"
 
   echo "[smoke] search edge cases (pattern.txt)"
   SEARCH_OUTPUT=$(coldkeep search --name pattern)
