@@ -81,7 +81,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/\.\.\.' 'integration correctness race run'
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/\.\.\.' 'integration stress race run'
-  require_pattern "$WORKFLOW_FILE" '\[ "\$\{INTEGRATION_STRESS_RESULT\}" != "success" \]' 'required gate rejects skipped integration stress'
+  require_pattern "$WORKFLOW_FILE" 'INTEGRATION_STRESS_RESULT.*!= "success"' 'required gate rejects skipped integration stress'
 }
 
 require_gh() {

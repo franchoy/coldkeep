@@ -27,6 +27,7 @@ func ListFilesResult() ([]FileRecord, error) {
 	rows, err := dbconn.Query(`
 		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
+		WHERE status = 'COMPLETED'
 		ORDER BY created_at DESC
 	`)
 	if err != nil {

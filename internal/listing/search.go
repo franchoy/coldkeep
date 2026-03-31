@@ -18,7 +18,7 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 	query := `
 		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
-		WHERE 1=1
+		WHERE status = 'COMPLETED'
 	`
 	var params []interface{}
 	paramIndex := 1
