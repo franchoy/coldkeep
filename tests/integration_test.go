@@ -1100,6 +1100,190 @@ func TestDedupSameFile(t *testing.T) {
 	}
 }
 
+// TestStoreFolderIdempotentDedup verifies that re-storing the same folder a
+// second time leaves all key storage counters unchanged: file-level and
+// chunk-level deduplication must absorb the entire second pass without writing
+// new logical files, new chunks, new physical blocks, or new containers.
+// This complements TestDedupSameFile (single-file) by exercising the folder
+// pipeline, concurrent workers, and shared-chunk routing.
+func TestStoreFolderIdempotentDedup(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	createSampleDataset(t, inputDir)
+
+	sgctx := newTestContext(dbconn)
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("first store-folder: %v", err)
+	}
+
+	type storageSnapshot struct {
+		completedFiles  int64
+		totalChunks     int64
+		completedChunks int64
+		liveBlockBytes  int64
+		totalContainers int64
+	}
+
+	takeSnapshot := func(label string) storageSnapshot {
+		t.Helper()
+		var s storageSnapshot
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&s.completedFiles); err != nil {
+			t.Fatalf("[%s] query completed_files: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&s.totalChunks); err != nil {
+			t.Fatalf("[%s] query total_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&s.completedChunks); err != nil {
+			t.Fatalf("[%s] query completed_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`
+			SELECT COALESCE(SUM(b.stored_size), 0)
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE c.ref_count > 0
+		`).Scan(&s.liveBlockBytes); err != nil {
+			t.Fatalf("[%s] query live_block_bytes: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&s.totalContainers); err != nil {
+			t.Fatalf("[%s] query total_containers: %v", label, err)
+		}
+		return s
+	}
+
+	before := takeSnapshot("before")
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("second store-folder: %v", err)
+	}
+
+	after := takeSnapshot("after")
+
+	if before.completedFiles != after.completedFiles {
+		t.Errorf("dedup failed: completed_files changed %d -> %d", before.completedFiles, after.completedFiles)
+	}
+	if before.totalChunks != after.totalChunks {
+		t.Errorf("dedup failed: total_chunks changed %d -> %d", before.totalChunks, after.totalChunks)
+	}
+	if before.completedChunks != after.completedChunks {
+		t.Errorf("dedup failed: completed_chunks changed %d -> %d", before.completedChunks, after.completedChunks)
+	}
+	if before.liveBlockBytes != after.liveBlockBytes {
+		t.Errorf("dedup failed: live_block_bytes changed %d -> %d", before.liveBlockBytes, after.liveBlockBytes)
+	}
+	if before.totalContainers != after.totalContainers {
+		t.Errorf("dedup failed: total_containers changed %d -> %d", before.totalContainers, after.totalContainers)
+	}
+}
+
+// TestStoreFolderIdempotentDedupEdgeCases applies the same idempotent re-store
+// guarantee as TestStoreFolderIdempotentDedup but against the samples_edge_cases
+// fixture: many small files plus a repeating-pattern file. This exercises
+// deduplication under high file-count workloads and compressible-data patterns.
+func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	fixturePath := findRepoFixtureDir(t, "samples_edge_cases")
+	inputDir := filepath.Join(tmp, "input")
+	copyDirTree(t, fixturePath, inputDir)
+
+	sgctx := newTestContext(dbconn)
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("first store-folder: %v", err)
+	}
+
+	type storageSnapshot struct {
+		completedFiles  int64
+		totalChunks     int64
+		completedChunks int64
+		liveBlockBytes  int64
+		totalContainers int64
+	}
+
+	takeSnapshot := func(label string) storageSnapshot {
+		t.Helper()
+		var s storageSnapshot
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&s.completedFiles); err != nil {
+			t.Fatalf("[%s] query completed_files: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&s.totalChunks); err != nil {
+			t.Fatalf("[%s] query total_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&s.completedChunks); err != nil {
+			t.Fatalf("[%s] query completed_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`
+			SELECT COALESCE(SUM(b.stored_size), 0)
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE c.ref_count > 0
+		`).Scan(&s.liveBlockBytes); err != nil {
+			t.Fatalf("[%s] query live_block_bytes: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&s.totalContainers); err != nil {
+			t.Fatalf("[%s] query total_containers: %v", label, err)
+		}
+		return s
+	}
+
+	before := takeSnapshot("before")
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("second store-folder: %v", err)
+	}
+
+	after := takeSnapshot("after")
+
+	if before.completedFiles != after.completedFiles {
+		t.Errorf("dedup failed: completed_files changed %d -> %d", before.completedFiles, after.completedFiles)
+	}
+	if before.totalChunks != after.totalChunks {
+		t.Errorf("dedup failed: total_chunks changed %d -> %d", before.totalChunks, after.totalChunks)
+	}
+	if before.completedChunks != after.completedChunks {
+		t.Errorf("dedup failed: completed_chunks changed %d -> %d", before.completedChunks, after.completedChunks)
+	}
+	if before.liveBlockBytes != after.liveBlockBytes {
+		t.Errorf("dedup failed: live_block_bytes changed %d -> %d", before.liveBlockBytes, after.liveBlockBytes)
+	}
+	if before.totalContainers != after.totalContainers {
+		t.Errorf("dedup failed: total_containers changed %d -> %d", before.totalContainers, after.totalContainers)
+	}
+}
+
 func TestStoreFolderParallelSmoke(t *testing.T) {
 	requireDB(t)
 

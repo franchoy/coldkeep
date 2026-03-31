@@ -99,6 +99,24 @@ coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"
 echo "[smoke] stats (after)"
 coldkeep stats
 
+echo "[smoke] dedup test: re-storing same folder should not change key storage counters"
+STATS_BEFORE=$(coldkeep stats --output json)
+coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"
+STATS_AFTER=$(coldkeep stats --output json)
+DEDUP_FAILED=0
+for field in total_files completed_files total_chunks completed_chunks total_logical_size_bytes live_block_bytes total_containers; do
+  before=$(echo "$STATS_BEFORE" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
+  after=$(echo "$STATS_AFTER" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
+  if [[ "$before" != "$after" ]]; then
+    echo "[smoke] ERROR: dedup failed: '${field}' changed: ${before} -> ${after}"
+    DEDUP_FAILED=1
+  fi
+done
+if [[ "$DEDUP_FAILED" -eq 1 ]]; then
+  exit 1
+fi
+echo "[smoke] dedup test PASSED: all key storage counters unchanged after re-storing same folder"
+
 echo "[smoke] list files"
 coldkeep list
 
@@ -157,6 +175,24 @@ else
 
   echo "[smoke] stats (edge cases after)"
   coldkeep stats
+
+  echo "[smoke] dedup test (edge cases): re-storing same folder should not change key storage counters"
+  EDGE_STATS_BEFORE=$(coldkeep stats --output json)
+  coldkeep store-folder "$EDGE_CASES_DIR"
+  EDGE_STATS_AFTER=$(coldkeep stats --output json)
+  EDGE_DEDUP_FAILED=0
+  for field in total_files completed_files total_chunks completed_chunks total_logical_size_bytes live_block_bytes total_containers; do
+    before=$(echo "$EDGE_STATS_BEFORE" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
+    after=$(echo "$EDGE_STATS_AFTER" | grep -oP "\"${field}\":[[:space:]]*\K[0-9]+")
+    if [[ "$before" != "$after" ]]; then
+      echo "[smoke] ERROR: dedup (edge cases) failed: '${field}' changed: ${before} -> ${after}"
+      EDGE_DEDUP_FAILED=1
+    fi
+  done
+  if [[ "$EDGE_DEDUP_FAILED" -eq 1 ]]; then
+    exit 1
+  fi
+  echo "[smoke] dedup test (edge cases) PASSED: all key storage counters unchanged after re-storing same folder"
 
   echo "[smoke] list edge case files"
   coldkeep list
