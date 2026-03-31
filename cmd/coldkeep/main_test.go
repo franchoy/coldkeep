@@ -278,3 +278,21 @@ func TestValidateNonNegativeIntegerFlagUsesLastValue(t *testing.T) {
 		t.Fatal("expected invalid final limit value to fail validation")
 	}
 }
+
+func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
+	err := validateNonNegativeIntegerFlag(parsedCommandLine{
+		method: "search",
+		flags: map[string][]string{
+			"limit": {"10001"},
+		},
+	}, "limit")
+	if err == nil {
+		t.Fatal("expected error for limit above maximum")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if !strings.Contains(err.Error(), "must be <= 10000") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

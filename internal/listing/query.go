@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-const maxPaginationLimit int64 = 10000
+const MaxPaginationLimit int64 = 10000
 
 func parseNonNegativeIntArg(flagName, value string) (int64, error) {
 	parsedValue, err := strconv.ParseInt(value, 10, 64)
@@ -31,8 +31,8 @@ func parsePaginationArgs(args []string) (*int64, *int64, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			if parsedValue > maxPaginationLimit {
-				return nil, nil, fmt.Errorf("invalid --limit value %q: must be <= %d", args[i], maxPaginationLimit)
+			if parsedValue > MaxPaginationLimit {
+				return nil, nil, fmt.Errorf("invalid --limit value %q: must be <= %d", args[i], MaxPaginationLimit)
 			}
 			value := parsedValue
 			limit = &value

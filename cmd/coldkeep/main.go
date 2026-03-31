@@ -1166,6 +1166,9 @@ func validateNonNegativeIntegerFlag(parsed parsedCommandLine, name string) error
 	if err != nil || parsedValue < 0 {
 		return usageErrorf("invalid --%s value %q: must be a non-negative integer", name, value)
 	}
+	if name == "limit" && parsedValue > listing.MaxPaginationLimit {
+		return usageErrorf("invalid --%s value %q: must be <= %d", name, value, listing.MaxPaginationLimit)
+	}
 
 	return nil
 }
