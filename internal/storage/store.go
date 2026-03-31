@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -407,7 +408,13 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	completed := false
 	defer func() {
 		if !completed {
-			_, _ = sgctx.DB.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID)
+			if _, execErr := sgctx.DB.Exec(
+				`UPDATE logical_file SET status = $1 WHERE id = $2`,
+				filestate.LogicalFileAborted,
+				fileID,
+			); execErr != nil {
+				log.Printf("event=store_cleanup action=mark_aborted file_id=%d error=%v", fileID, execErr)
+			}
 		}
 	}()
 
