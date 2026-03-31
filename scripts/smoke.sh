@@ -125,13 +125,15 @@ echo "[smoke] dedup test PASSED: all key storage counters unchanged after re-sto
 echo "[smoke] list files"
 coldkeep list
 
+LIST_OUTPUT=$(coldkeep list --output json)
+
 # Capture first ID before the restore loop (needed for the remove test below)
-FIRST_ID=$(coldkeep list --output json | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
+FIRST_ID=$(echo "$LIST_OUTPUT" | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
 
 echo "[smoke] restore-all: restoring every stored file and verifying byte-perfect fidelity"
 rm -rf ./_smoke_out
 RESTORE_ALL_FAILED=0
-while IFS=$'\t' read -r file_id file_name; do
+while IFS=$'\t' read -r file_id file_name expected_hash; do
   restore_dir="./_smoke_out/${file_id}"
   mkdir -p "$restore_dir"
   if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
@@ -145,20 +147,19 @@ while IFS=$'\t' read -r file_id file_name; do
     RESTORE_ALL_FAILED=1
     continue
   fi
-  original=$(find "$COLDKEEP_SAMPLES_DIR" -name "${file_name}" -type f 2>/dev/null | head -1)
-  if [[ -z "$original" ]]; then
-    echo "[smoke] WARNING: original not found for '${file_name}' (id=${file_id}), skipping hash check"
+  if [[ -z "$expected_hash" || "$expected_hash" == "null" ]]; then
+    echo "[smoke] ERROR: list output missing file_hash for id=${file_id} name=${file_name}"
+    RESTORE_ALL_FAILED=1
     continue
   fi
-  orig_hash=$(sha256sum "$original" | awk '{print $1}')
   rest_hash=$(sha256sum "$restored" | awk '{print $1}')
-  if [[ "$orig_hash" != "$rest_hash" ]]; then
-    echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${orig_hash} got=${rest_hash}"
+  if [[ "$expected_hash" != "$rest_hash" ]]; then
+    echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
     RESTORE_ALL_FAILED=1
   else
     echo "[smoke]   ok: id=${file_id} ${file_name}"
   fi
-done < <(coldkeep list --output json | jq -r '.files[] | [(.id | tostring), .name] | @tsv')
+done < <(echo "$LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
 if [[ "$RESTORE_ALL_FAILED" -eq 1 ]]; then
   exit 1
 fi
@@ -230,13 +231,15 @@ else
   echo "[smoke] list edge case files"
   coldkeep list
 
+  EDGE_LIST_OUTPUT=$(coldkeep list --output json)
+
   # Capture first ID before the restore loop (needed for the remove test below)
-  FIRST_EDGE_ID=$(coldkeep list --output json | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
+  FIRST_EDGE_ID=$(echo "$EDGE_LIST_OUTPUT" | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
 
   echo "[smoke] restore-all (edge cases): restoring every stored file and verifying byte-perfect fidelity"
   rm -rf ./_smoke_out
   EDGE_RESTORE_ALL_FAILED=0
-  while IFS=$'\t' read -r file_id file_name; do
+  while IFS=$'\t' read -r file_id file_name expected_hash; do
     restore_dir="./_smoke_out/${file_id}"
     mkdir -p "$restore_dir"
     if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
@@ -250,20 +253,19 @@ else
       EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
-    original=$(find "$EDGE_CASES_DIR" -name "${file_name}" -type f 2>/dev/null | head -1)
-    if [[ -z "$original" ]]; then
-      echo "[smoke] WARNING: original not found for '${file_name}' (id=${file_id}), skipping hash check"
+    if [[ -z "$expected_hash" || "$expected_hash" == "null" ]]; then
+      echo "[smoke] ERROR: list output missing file_hash for id=${file_id} name=${file_name}"
+      EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
-    orig_hash=$(sha256sum "$original" | awk '{print $1}')
     rest_hash=$(sha256sum "$restored" | awk '{print $1}')
-    if [[ "$orig_hash" != "$rest_hash" ]]; then
-      echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${orig_hash} got=${rest_hash}"
+    if [[ "$expected_hash" != "$rest_hash" ]]; then
+      echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
       EDGE_RESTORE_ALL_FAILED=1
     else
       echo "[smoke]   ok: id=${file_id} ${file_name}"
     fi
-  done < <(coldkeep list --output json | jq -r '.files[] | [(.id | tostring), .name] | @tsv')
+  done < <(echo "$EDGE_LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
   if [[ "$EDGE_RESTORE_ALL_FAILED" -eq 1 ]]; then
     exit 1
   fi

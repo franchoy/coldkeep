@@ -4039,12 +4039,11 @@ func TestSamplesEdgeCasesFolderEndToEnd(t *testing.T) {
 // against the original file found in the source tree.
 //
 // This is stricter than runFixtureFolderEndToEnd in two ways:
-//  1. It resolves original_name back to a file path in the source tree and
-//     diffs the raw bytes — catching any systematic encode/decode bug that
-//     would leave the DB hash consistent but the content wrong.
-//  2. It counts every stored logical file (including content-identical
-//     duplicates that were deduplicated), verifying that the total stored
-//     count equals the number of unique-hash files in the fixture.
+//  1. It maps each restored logical file back to a representative fixture file
+//     by SHA-256 and diffs the raw bytes, avoiding basename collisions while
+//     still catching systematic encode/decode bugs.
+//  2. It counts every unique content hash in the fixture and verifies that the
+//     completed logical_file row count matches that deduplicated total.
 func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 	t.Helper()
 	requireDB(t)
@@ -4067,14 +4066,17 @@ func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 	inputDir := filepath.Join(tmp, "input")
 	copyDirTree(t, fixturePath, inputDir)
 
-	// Build a name -> path index for the input tree so we can look up originals
-	// by original_name (which stores only the basename).
-	nameToPath := make(map[string]string)
+	expectedHashCounts := collectFileHashesByCount(t, inputDir)
+	expectedUniqueCount := len(expectedHashCounts)
+	hashToPath := make(map[string]string, expectedUniqueCount)
 	if walkErr := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, e error) error {
 		if e != nil || d.IsDir() {
 			return e
 		}
-		nameToPath[d.Name()] = path
+		hash := sha256File(t, path)
+		if _, exists := hashToPath[hash]; !exists {
+			hashToPath[hash] = path
+		}
 		return nil
 	}); walkErr != nil {
 		t.Fatalf("walk input dir: %v", walkErr)
@@ -4101,6 +4103,7 @@ func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 	defer rows.Close()
 
 	restoredCount := 0
+	seenHashes := make(map[string]bool, expectedUniqueCount)
 	for rows.Next() {
 		var id int64
 		var origName, storedHash string
@@ -4121,10 +4124,19 @@ func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 				id, origName, storedHash, gotHash)
 		}
 
-		// Verify restored bytes match the original source file.
-		srcPath, found := nameToPath[origName]
+		if _, found := expectedHashCounts[storedHash]; !found {
+			t.Errorf("unexpected stored hash for id=%d name=%s: %s", id, origName, storedHash)
+			continue
+		}
+		if seenHashes[storedHash] {
+			t.Errorf("duplicate logical_file row for hash %s (id=%d name=%s)", storedHash, id, origName)
+			continue
+		}
+
+		// Verify restored bytes match a representative source file for this hash.
+		srcPath, found := hashToPath[storedHash]
 		if !found {
-			t.Errorf("original source not found for id=%d name=%s", id, origName)
+			t.Errorf("original source not found for hash=%s id=%d name=%s", storedHash, id, origName)
 			continue
 		}
 		orig, readErr := os.ReadFile(srcPath)
@@ -4140,6 +4152,7 @@ func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 				id, origName, len(orig), len(restored))
 		}
 
+		seenHashes[storedHash] = true
 		restoredCount++
 	}
 	if err := rows.Err(); err != nil {
@@ -4148,6 +4161,9 @@ func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 
 	if restoredCount == 0 {
 		t.Fatalf("no files were restored for fixture %s", fixtureDir)
+	}
+	if restoredCount != expectedUniqueCount {
+		t.Fatalf("restored logical file count mismatch for fixture %s: got=%d want=%d", fixtureDir, restoredCount, expectedUniqueCount)
 	}
 }
 

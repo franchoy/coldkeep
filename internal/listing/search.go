@@ -16,7 +16,7 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 	defer func() { _ = dbconn.Close() }()
 
 	query := `
-		SELECT id, original_name, total_size, created_at
+		SELECT id, original_name, file_hash, total_size, created_at
 		FROM logical_file
 		WHERE 1=1
 	`
@@ -66,14 +66,16 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 	for rows.Next() {
 		var id int64
 		var name string
+		var fileHash string
 		var size int64
 		var created time.Time
-		if err := rows.Scan(&id, &name, &size, &created); err != nil {
+		if err := rows.Scan(&id, &name, &fileHash, &size, &created); err != nil {
 			return nil, err
 		}
 		records = append(records, FileRecord{
 			ID:        id,
 			Name:      name,
+			FileHash:  fileHash,
 			SizeBytes: size,
 			CreatedAt: created.Format("2006-01-02 15:04:05"),
 		})

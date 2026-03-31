@@ -79,6 +79,9 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job'
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_SMOKE_RESET_DB:\s*1' 'isolated smoke reset toggle'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/\.\.\.' 'integration correctness race run'
+  require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
+  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/\.\.\.' 'integration stress race run'
+  require_pattern "$WORKFLOW_FILE" '\[ "\$\{INTEGRATION_STRESS_RESULT\}" != "success" \]' 'required gate rejects skipped integration stress'
 }
 
 require_gh() {
@@ -196,7 +199,8 @@ check_remote_policy() {
   if echo "$tag_pattern" | grep -Fq "refs/tags/v"; then
     echo "[audit] ok: release tags ruleset targets refs/tags/v*"
   else
-    echo "[audit] WARN: release tags ruleset may not be constraining v* tags (found: ${tag_pattern:-<none>})" >&2
+    echo "[audit] ERROR: release tags ruleset is not constraining refs/tags/v* (found: ${tag_pattern:-<none>})" >&2
+    return 1
   fi
 
   # Verify tag ruleset also requires CI Required Gate
@@ -207,14 +211,16 @@ check_remote_policy() {
   if echo "$tags_required_checks" | grep -Fq "CI Required Gate"; then
     echo "[audit] ok: release tags ruleset requires 'CI Required Gate' status check"
   else
-    echo "[audit] WARN: release tags ruleset does not require 'CI Required Gate' (found: ${tags_required_checks:-<none>})" >&2
+    echo "[audit] ERROR: release tags ruleset does not require 'CI Required Gate' (found: ${tags_required_checks:-<none>})" >&2
+    return 1
   fi
 
   # Verify tag deletion is blocked
   if echo "$tags_detail" | jq -e '.rules[] | select(.type == "deletion")' > /dev/null 2>&1; then
     echo "[audit] ok: release tags ruleset blocks deletions"
   else
-    echo "[audit] WARN: release tags ruleset may not block tag deletions" >&2
+    echo "[audit] ERROR: release tags ruleset does not block tag deletions" >&2
+    return 1
   fi
 
   # --- Branch protection (legacy API, best-effort) ---

@@ -118,15 +118,6 @@ jobs:
 
   integration-stress:
     runs-on: ubuntu-latest
-    # Run on pushes to mainline/release branches and on version tags.
-    # Skip for pull_requests and merge_group to keep PR feedback fast.
-    if: >-
-      github.event_name == 'push' && (
-        github.ref == 'refs/heads/main' ||
-        startsWith(github.ref, 'refs/heads/release/') ||
-        startsWith(github.ref, 'refs/heads/hotfix/') ||
-        startsWith(github.ref, 'refs/tags/v')
-      )
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -242,16 +233,8 @@ jobs:
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
              [ "${INTEGRATION_CORRECTNESS_RESULT}" != "success" ] || \
+             [ "${INTEGRATION_STRESS_RESULT}" != "success" ] || \
              [ "${SMOKE_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
-            exit 1
-          fi
-
-          # integration-stress is allowed to be skipped (it only runs on push to
-          # mainline/release/hotfix and tags, not on PRs or merge_group), but must
-          # not fail when it does run.
-          if [ "${INTEGRATION_STRESS_RESULT}" != "success" ] && \
-             [ "${INTEGRATION_STRESS_RESULT}" != "skipped" ]; then
-            echo "integration-stress failed or was cancelled."
             exit 1
           fi
