@@ -21,6 +21,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -6916,6 +6917,444 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 	// Verify system integrity - especially important for finalization
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify after finalization: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestGCDryRunAccuracyMatchesRealRun verifies that GC dry-run reports exactly
+// the same target containers that a subsequent real GC run deletes.
+func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	deadName := "dry-run-dead.bin"
+	liveName := "dry-run-live.bin"
+	deadPath := filepath.Join(container.ContainersDir, deadName)
+	livePath := filepath.Join(container.ContainersDir, liveName)
+	if err := os.WriteFile(deadPath, []byte("dead-container"), 0o644); err != nil {
+		t.Fatalf("write dead container file: %v", err)
+	}
+	if err := os.WriteFile(livePath, []byte("live-container"), 0o644); err != nil {
+		t.Fatalf("write live container file: %v", err)
+	}
+
+	var deadContainerID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		deadName,
+		int64(len("dead-container")),
+		container.GetContainerMaxSize(),
+	).Scan(&deadContainerID)
+	if err != nil {
+		t.Fatalf("insert dead container row: %v", err)
+	}
+
+	var deadChunkID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id`,
+		"dry-run-dead-chunk",
+		int64(14),
+		filestate.ChunkCompleted,
+		int64(0),
+		int64(0),
+	).Scan(&deadChunkID)
+	if err != nil {
+		t.Fatalf("insert dead chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		deadChunkID,
+		"plain",
+		1,
+		int64(14),
+		int64(14),
+		[]byte{},
+		deadContainerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert dead block: %v", err)
+	}
+
+	var liveContainerID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		liveName,
+		int64(len("live-container")),
+		container.GetContainerMaxSize(),
+	).Scan(&liveContainerID)
+	if err != nil {
+		t.Fatalf("insert live container row: %v", err)
+	}
+
+	var liveChunkID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id`,
+		"dry-run-live-chunk",
+		int64(14),
+		filestate.ChunkCompleted,
+		int64(1),
+		int64(0),
+	).Scan(&liveChunkID)
+	if err != nil {
+		t.Fatalf("insert live chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		liveChunkID,
+		"plain",
+		1,
+		int64(14),
+		int64(14),
+		[]byte{},
+		liveContainerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert live block: %v", err)
+	}
+
+	dryResult, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir)
+	if err != nil {
+		t.Fatalf("gc dry-run: %v", err)
+	}
+
+	if dryResult.AffectedContainers != 1 {
+		t.Fatalf("expected dry-run affected_containers=1, got %d", dryResult.AffectedContainers)
+	}
+	if len(dryResult.ContainerFilenames) != 1 || dryResult.ContainerFilenames[0] != deadName {
+		t.Fatalf("dry-run container list mismatch: got %v", dryResult.ContainerFilenames)
+	}
+
+	if _, err := os.Stat(deadPath); err != nil {
+		t.Fatalf("dry-run must not delete dead container file: %v", err)
+	}
+	if _, err := os.Stat(livePath); err != nil {
+		t.Fatalf("dry-run must not touch live container file: %v", err)
+	}
+
+	realResult, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir)
+	if err != nil {
+		t.Fatalf("gc real run: %v", err)
+	}
+
+	if realResult.AffectedContainers != dryResult.AffectedContainers {
+		t.Fatalf("dry-run/real affected mismatch: dry=%d real=%d", dryResult.AffectedContainers, realResult.AffectedContainers)
+	}
+	if len(realResult.ContainerFilenames) != 1 || realResult.ContainerFilenames[0] != deadName {
+		t.Fatalf("real run container list mismatch: got %v", realResult.ContainerFilenames)
+	}
+
+	if _, err := os.Stat(deadPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dead container file should be deleted after real gc, stat err=%v", err)
+	}
+	if _, err := os.Stat(livePath); err != nil {
+		t.Fatalf("live container file should remain after real gc: %v", err)
+	}
+}
+
+// TestSearchListConsistencyWithFilters verifies that list and search views stay
+// consistent for completed files, including name and size filters.
+func TestSearchListConsistencyWithFilters(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	type fileDef struct {
+		name string
+		size int
+	}
+	files := []fileDef{
+		{name: "alpha-one.txt", size: 48 * 1024},
+		{name: "alpha-two.bin", size: 80 * 1024},
+		{name: "beta-only.txt", size: 64 * 1024},
+		{name: "gamma-alpha.log", size: 120 * 1024},
+	}
+
+	stored := make(map[int64]fileDef)
+	sgctx := newTestContext(dbconn)
+	for _, f := range files {
+		inPath := createTempFile(t, inputDir, f.name, f.size)
+		if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+			t.Fatalf("store %s: %v", f.name, err)
+		}
+		h := sha256File(t, inPath)
+		id := fetchFileIDByHash(t, dbconn, h)
+		stored[id] = f
+	}
+
+	listRows, err := listing.ListFilesResultWithDB(dbconn, nil)
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	if len(listRows) != len(files) {
+		t.Fatalf("list row count mismatch: want %d got %d", len(files), len(listRows))
+	}
+
+	listIDs := make(map[int64]struct{}, len(listRows))
+	for _, row := range listRows {
+		listIDs[row.ID] = struct{}{}
+	}
+
+	searchAlpha, err := listing.SearchFilesResultWithDB(dbconn, []string{"--name", "alpha"})
+	if err != nil {
+		t.Fatalf("search --name alpha: %v", err)
+	}
+	if len(searchAlpha) != 3 {
+		t.Fatalf("expected 3 alpha search rows, got %d", len(searchAlpha))
+	}
+	for _, row := range searchAlpha {
+		if _, ok := listIDs[row.ID]; !ok {
+			t.Fatalf("search row id=%d not present in list", row.ID)
+		}
+		if !strings.Contains(strings.ToLower(row.Name), "alpha") {
+			t.Fatalf("search returned unexpected name=%q", row.Name)
+		}
+	}
+
+	searchSized, err := listing.SearchFilesResultWithDB(dbconn, []string{"--min-size", "60000", "--max-size", "100000"})
+	if err != nil {
+		t.Fatalf("search by size range: %v", err)
+	}
+	if len(searchSized) != 2 {
+		t.Fatalf("expected 2 files in size range, got %d", len(searchSized))
+	}
+	for _, row := range searchSized {
+		if row.SizeBytes < 60000 || row.SizeBytes > 100000 {
+			t.Fatalf("search size filter violated for id=%d size=%d", row.ID, row.SizeBytes)
+		}
+	}
+}
+
+// TestPinCountAtomicityConcurrentRestore verifies that concurrent restores do
+// not leave stuck or negative pin_count values after unpin cleanup.
+func TestPinCountAtomicityConcurrentRestore(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	inPath := createTempFile(t, inputDir, "pin-atomicity.bin", 4*1024*1024)
+	wantHash := sha256File(t, inPath)
+	wantBytes := mustRead(t, inPath)
+
+	sgctx := newTestContext(dbconn)
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+	fileID := fetchFileIDByHash(t, dbconn, wantHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+
+	const workers = 8
+	start := make(chan struct{})
+	done := make(chan error, workers)
+
+	for i := 0; i < workers; i++ {
+		go func(idx int) {
+			<-start
+			outPath := filepath.Join(outDir, fmt.Sprintf("pin-restore-%d.bin", idx))
+			err := storage.RestoreFileWithDB(dbconn, fileID, outPath)
+			if err != nil {
+				done <- fmt.Errorf("restore worker %d: %w", idx, err)
+				return
+			}
+			got := mustRead(t, outPath)
+			if !bytes.Equal(got, wantBytes) {
+				done <- fmt.Errorf("restore worker %d content mismatch", idx)
+				return
+			}
+			done <- nil
+		}(i)
+	}
+
+	close(start)
+	for i := 0; i < workers; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var negativePins int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE pin_count < 0`).Scan(&negativePins); err != nil {
+		t.Fatalf("count negative pin_count: %v", err)
+	}
+	if negativePins != 0 {
+		t.Fatalf("found %d chunks with negative pin_count", negativePins)
+	}
+
+	var stuckPins int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE pin_count != 0`).Scan(&stuckPins); err != nil {
+		t.Fatalf("count stuck pin_count: %v", err)
+	}
+	if stuckPins != 0 {
+		t.Fatalf("found %d chunks with non-zero pin_count after concurrent restore", stuckPins)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestEndToEndGCRestoreRemoveInterleaving runs restore, remove, and GC in
+// parallel against real stored files and verifies no corruption or invalid
+// reference state remains.
+func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	shared := make([]byte, 512*1024)
+	for i := range shared {
+		shared[i] = byte((i*29 + 17) % 251)
+	}
+
+	keepTail := make([]byte, 2*1024*1024)
+	for i := range keepTail {
+		keepTail[i] = byte((i*7 + 41) % 251)
+	}
+	victimTail := make([]byte, 2*1024*1024)
+	for i := range victimTail {
+		victimTail[i] = byte((i*13 + 19) % 251)
+	}
+
+	keepBytes := append(append([]byte{}, shared...), keepTail...)
+	victimBytes := append(append([]byte{}, shared...), victimTail...)
+
+	keepPath := filepath.Join(inputDir, "interleave-keep.bin")
+	victimPath := filepath.Join(inputDir, "interleave-victim.bin")
+	if err := os.WriteFile(keepPath, keepBytes, 0o644); err != nil {
+		t.Fatalf("write keep file: %v", err)
+	}
+	if err := os.WriteFile(victimPath, victimBytes, 0o644); err != nil {
+		t.Fatalf("write victim file: %v", err)
+	}
+
+	sgctx := newTestContext(dbconn)
+	if err := storage.StoreFileWithStorageContext(sgctx, keepPath); err != nil {
+		t.Fatalf("store keep file: %v", err)
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, victimPath); err != nil {
+		t.Fatalf("store victim file: %v", err)
+	}
+
+	keepID := fetchFileIDByHash(t, dbconn, sha256File(t, keepPath))
+	victimID := fetchFileIDByHash(t, dbconn, sha256File(t, victimPath))
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "keep.restored.bin")
+
+	results := make(chan error, 3)
+	go func() {
+		results <- storage.RestoreFileWithDB(dbconn, keepID, outPath)
+	}()
+	go func() {
+		results <- storage.RemoveFileWithDB(dbconn, victimID)
+	}()
+	go func() {
+		_, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir)
+		results <- err
+	}()
+
+	for i := 0; i < 3; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("interleaving operation failed: %v", err)
+		}
+	}
+
+	got := mustRead(t, outPath)
+	if !bytes.Equal(got, keepBytes) {
+		t.Fatalf("restored keep file differs after interleaving")
+	}
+
+	var negativeRefs int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count < 0`).Scan(&negativeRefs); err != nil {
+		t.Fatalf("count negative live_ref_count: %v", err)
+	}
+	if negativeRefs != 0 {
+		t.Fatalf("found %d chunks with negative live_ref_count", negativeRefs)
+	}
+
+	var negativePins int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE pin_count < 0`).Scan(&negativePins); err != nil {
+		t.Fatalf("count negative pin_count: %v", err)
+	}
+	if negativePins != 0 {
+		t.Fatalf("found %d chunks with negative pin_count", negativePins)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after interleaving: %v", err)
 	}
 
 	assertNoProcessingRows(t, dbconn)
