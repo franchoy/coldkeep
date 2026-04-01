@@ -10,6 +10,35 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.10.0] - Unreleased
+
+Feature-branch hardening work for adversarial lifecycle interleavings,
+verification contracts, and recovery behavior clarity.
+
+### Added
+- Added integration coverage for non-strict startup recovery on suspicious
+  orphan-container conflicts (`COLDKEEP_STRICT_RECOVERY=false`)
+- Added adversarial integration coverage for restore pin + remove + GC
+  interleavings
+
+### Changed
+- Clarified verification operational contract as a recovered-state checker,
+  not a live online-consistency checker during in-flight writes
+- Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
+  explicit cost/coverage guidance
+- Documented startup recovery strictness as intentional fail-fast behavior,
+  with a non-strict override for restart-race scenarios
+- Documented contiguous offset validation as an explicit current-format
+  invariant (append-only contiguous layout per container)
+
+### Tests
+- Added integration assertions for GC/restore pinning under remove/GC/restore
+  interleavings
+- Added integration assertion that non-strict recovery continues on suspicious
+  orphan conflict states instead of aborting startup
+
+------------------------------------------------------------------------
+
 ## [0.9.0] - 2026-03-31
 
 Release hardening and delivery-gate enforcement.

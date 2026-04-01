@@ -517,6 +517,17 @@ Verification results can be exported in JSON format using `--output json`.
 
 ### Notes
 
+Verification is a recovered-state checker, not a general online consistency checker.
+Running verification while writes are in-flight can produce transient false positives.
+Operationally, run `verify` after startup recovery has completed and when ingestion
+work is idle or quiesced.
+
+Mode guidance:
+
+- `standard`: fast metadata sanity checks
+- `full`: stronger structural checks, moderate I/O
+- `deep`: strongest content proof, highest I/O and runtime cost
+
 Deep verification performs full reads of container files and may be slow,
 especially for large datasets.
 Recommended for periodic integrity audits rather than frequent execution.

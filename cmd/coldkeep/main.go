@@ -823,6 +823,9 @@ func printStatsReport(r *maintenance.StatsResult) {
 	}
 }
 
+// runVerifyCommand executes recovered-state verification. It is not intended
+// to be an online checker during active writes, where transient metadata/data
+// divergence can produce false positives.
 func runVerifyCommand(parsed parsedCommandLine) error {
 	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
 		return err

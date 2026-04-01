@@ -2776,6 +2776,47 @@ func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T)
 	}
 }
 
+func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	_ = os.Setenv("COLDKEEP_STRICT_RECOVERY", "false")
+	defer os.Unsetenv("COLDKEEP_STRICT_RECOVERY")
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	orphanFilename := "orphan_conflict_non_strict.bin"
+	orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
+	orphanBytes := []byte("orphan-file-bytes-for-non-strict")
+	if err := os.WriteFile(orphanPath, orphanBytes, 0o644); err != nil {
+		t.Fatalf("write orphan file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3)`,
+		orphanFilename,
+		int64(1),
+		int64(1),
+	); err != nil {
+		t.Fatalf("insert preexisting mismatched quarantine row: %v", err)
+	}
+
+	_, err = recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("expected non-strict recovery to continue, got: %v", err)
+	}
+}
+
 func TestVerifyStandard(t *testing.T) {
 	requireDB(t)
 
@@ -3811,6 +3852,194 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 
 	if _, err := os.Stat(containerPath); err != nil {
 		t.Fatalf("expected container file to remain on disk: %v", err)
+	}
+}
+
+// TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned exercises a
+// three-way race where restore pinning, remove, and GC overlap.
+func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containerFile := "gc-remove-restore-interleaving.bin"
+	containerPath := filepath.Join(container.ContainersDir, containerFile)
+	if err := os.WriteFile(containerPath, []byte("interleaving-container"), 0o644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	var containerID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		containerFile,
+		int64(len("interleaving-container")),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"gc-remove-restore-race-chunk",
+		int64(22),
+		filestate.ChunkCompleted,
+		int64(1),
+	).Scan(&chunkID)
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		chunkID,
+		"plain",
+		1,
+		int64(22),
+		int64(22),
+		[]byte{},
+		containerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"interleaving.txt",
+		int64(22),
+		"gc-remove-restore-race-file-hash",
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID)
+	if err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)`,
+		fileID,
+		chunkID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pinTx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin pin tx: %v", err)
+	}
+	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+		_ = pinTx.Rollback()
+		t.Fatalf("pin chunk in tx: %v", err)
+	}
+
+	removeDone := make(chan error, 1)
+	go func() {
+		removeDone <- storage.RemoveFileWithDB(dbconn, fileID)
+	}()
+
+	gcDone := make(chan error, 1)
+	go func() {
+		gcDone <- maintenance.RunGCWithContainersDir(false, container.ContainersDir)
+	}()
+
+	select {
+	case err := <-removeDone:
+		_ = pinTx.Rollback()
+		t.Fatalf("remove finished before pin tx commit; expected row-lock wait: %v", err)
+	case <-time.After(250 * time.Millisecond):
+		// Expected: remove blocks on chunk row lock held by pin tx.
+	}
+
+	select {
+	case err := <-gcDone:
+		_ = pinTx.Rollback()
+		t.Fatalf("GC finished before pin tx commit; expected row-lock wait: %v", err)
+	case <-time.After(250 * time.Millisecond):
+		// Expected: GC blocks on chunk row lock held by pin tx.
+	}
+
+	if err := pinTx.Commit(); err != nil {
+		t.Fatalf("commit pin tx: %v", err)
+	}
+
+	select {
+	case err := <-removeDone:
+		if err != nil {
+			t.Fatalf("remove after pin commit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for remove completion")
+	}
+
+	select {
+	case err := <-gcDone:
+		if err != nil {
+			t.Fatalf("gc after pin commit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for gc completion")
+	}
+
+	var containerCountAfterInterleave int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&containerCountAfterInterleave); err != nil {
+		t.Fatalf("count container rows after interleave: %v", err)
+	}
+	if containerCountAfterInterleave != 1 {
+		t.Fatalf("expected container to remain while restore pin is still active, got count=%d", containerCountAfterInterleave)
+	}
+
+	var refCountBeforeUnpin int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCountBeforeUnpin); err != nil {
+		t.Fatalf("query chunk ref_count before unpin: %v", err)
+	}
+	if refCountBeforeUnpin != 1 {
+		t.Fatalf("expected ref_count=1 before restore unpin, got %d", refCountBeforeUnpin)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 1 WHERE id = $1 AND ref_count > 0`, chunkID); err != nil {
+		t.Fatalf("unpin restore chunk: %v", err)
+	}
+
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
+		t.Fatalf("final gc after unpin: %v", err)
+	}
+
+	var containerCountAfterFinalGC int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&containerCountAfterFinalGC); err != nil {
+		t.Fatalf("count container rows after final gc: %v", err)
+	}
+	if containerCountAfterFinalGC != 0 {
+		t.Fatalf("expected container deletion after unpin + final gc, got count=%d", containerCountAfterFinalGC)
+	}
+
+	if _, err := os.Stat(containerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected container file deleted after final gc, stat err=%v", err)
 	}
 }
 

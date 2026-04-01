@@ -216,6 +216,16 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	return nil
 }
 
+// checkChunkOffsetValidity validates completed chunk placements against the
+// current storage-format invariant: blocks in each container are append-only
+// and contiguous from ContainerHdrLen with no gaps.
+//
+// Contract notes:
+//   - Intended for post-recovery verification only. During in-flight writes,
+//     transient offset divergence can exist until metadata and payload writes
+//     settle.
+//   - If a future format intentionally introduces padding/alignment gaps,
+//     this check must be updated to reflect the new on-disk contract.
 func checkChunkOffsetValidity(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
