@@ -269,6 +269,10 @@ Database operations now run with bounded connection and statement limits by defa
 - `COLDKEEP_DB_STATEMENT_TIMEOUT_MS`
 - `COLDKEEP_DB_LOCK_TIMEOUT_MS`
 - `COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS`
+- `COLDKEEP_DB_MAX_OPEN_CONNS`
+- `COLDKEEP_DB_MAX_IDLE_CONNS`
+- `COLDKEEP_DB_CONN_MAX_LIFETIME_MS`
+- `COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS`
 
 These limits are intended to keep CLI commands from hanging indefinitely on dead connections, blocked sessions, or stalled lock acquisition.
 

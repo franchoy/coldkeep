@@ -17,6 +17,10 @@ var operationTimeout = loadOperationTimeout()
 var statementTimeout = loadStatementTimeout()
 var lockTimeout = loadLockTimeout()
 var idleInTransactionTimeout = loadIdleInTransactionTimeout()
+var maxOpenConns = loadMaxOpenConns()
+var maxIdleConns = loadMaxIdleConns()
+var connMaxLifetime = loadConnMaxLifetime()
+var connMaxIdleTime = loadConnMaxIdleTime()
 
 func loadConnectTimeout() time.Duration {
 	const defaultTimeout = 5 * time.Second
@@ -48,6 +52,42 @@ func loadLockTimeout() time.Duration {
 func loadIdleInTransactionTimeout() time.Duration {
 	const defaultTimeout = 60 * time.Second
 	return loadSessionTimeout("COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS", defaultTimeout)
+}
+
+func loadMaxOpenConns() int {
+	const defaultMaxOpenConns = 25
+	value := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_MAX_OPEN_CONNS", defaultMaxOpenConns)
+	if value <= 0 {
+		return defaultMaxOpenConns
+	}
+	return int(value)
+}
+
+func loadMaxIdleConns() int {
+	const defaultMaxIdleConns = 5
+	value := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_MAX_IDLE_CONNS", defaultMaxIdleConns)
+	if value < 0 {
+		return defaultMaxIdleConns
+	}
+	return int(value)
+}
+
+func loadConnMaxLifetime() time.Duration {
+	const defaultLifetime = 30 * time.Minute
+	valueMs := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_CONN_MAX_LIFETIME_MS", int64(defaultLifetime/time.Millisecond))
+	if valueMs < 0 {
+		return defaultLifetime
+	}
+	return time.Duration(valueMs) * time.Millisecond
+}
+
+func loadConnMaxIdleTime() time.Duration {
+	const defaultIdleTime = 5 * time.Minute
+	valueMs := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS", int64(defaultIdleTime/time.Millisecond))
+	if valueMs < 0 {
+		return defaultIdleTime
+	}
+	return time.Duration(valueMs) * time.Millisecond
 }
 
 func loadSessionTimeout(envVar string, defaultTimeout time.Duration) time.Duration {
@@ -100,6 +140,11 @@ func ConnectDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
+	db.SetConnMaxLifetime(connMaxLifetime)
+	db.SetConnMaxIdleTime(connMaxIdleTime)
 
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()

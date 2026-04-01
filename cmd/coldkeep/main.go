@@ -690,9 +690,14 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if len(parsed.positionals) != 0 {
 		return usageErrorf("Usage: coldkeep list [--limit <count>] [--offset <count>]")
 	}
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
 
 	if outputMode == outputModeJSON {
-		files, err := listing.ListFilesResult(listArgs(parsed))
+		files, err := listing.ListFilesResultWithDB(dbconn, listArgs(parsed))
 		if err != nil {
 			return err
 		}
@@ -709,7 +714,7 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return nil
 	}
 
-	files, err := listing.ListFilesResult(listArgs(parsed))
+	files, err := listing.ListFilesResultWithDB(dbconn, listArgs(parsed))
 	if err != nil {
 		return err
 	}
@@ -735,9 +740,14 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	if err := validateNonNegativeIntegerFlag(parsed, "offset"); err != nil {
 		return err
 	}
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
 
 	if outputMode == outputModeJSON {
-		files, err := listing.SearchFilesResult(searchArgs(parsed))
+		files, err := listing.SearchFilesResultWithDB(dbconn, searchArgs(parsed))
 		if err != nil {
 			return err
 		}
@@ -754,7 +764,7 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return nil
 	}
 
-	files, err := listing.SearchFilesResult(searchArgs(parsed))
+	files, err := listing.SearchFilesResultWithDB(dbconn, searchArgs(parsed))
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package listing
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -25,6 +26,16 @@ func ListFilesResult(args []string) ([]FileRecord, error) {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+
+	return ListFilesResultWithDB(dbconn, args)
+}
+
+// ListFilesResultWithDB returns raw records using a caller-managed DB connection.
+func ListFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error) {
+	if dbconn == nil {
+		return nil, fmt.Errorf("db connection is nil")
+	}
+
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
