@@ -299,3 +299,23 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
+	commands := []string{"store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify"}
+
+	for _, command := range commands {
+		if !shouldRunStartupRecovery(command) {
+			t.Fatalf("expected startup recovery to run for command %q", command)
+		}
+	}
+}
+
+func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
+	commands := []string{"help", "version", "init", "simulate", "-h", "--help", "-v", "--version", "unknown"}
+
+	for _, command := range commands {
+		if shouldRunStartupRecovery(command) {
+			t.Fatalf("expected startup recovery to be skipped for command %q", command)
+		}
+	}
+}

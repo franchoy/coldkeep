@@ -109,19 +109,21 @@ func runCLI(args []string) int {
 		}()
 	}
 
-	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
-	if recoveryErr != nil {
-		log.Printf("System recovery failed: %v\n", recoveryErr)
-	}
-	emitStartupRecoveryReport(startupMode, recoveryReport, recoveryErr)
-
-	if startupMode != outputModeJSON {
-		checkEnvFilePermissions()
-	}
-
 	if len(args) < 1 {
 		printHelp()
 		return exitSuccess
+	}
+
+	if shouldRunStartupRecovery(args[0]) {
+		recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+		if recoveryErr != nil {
+			log.Printf("System recovery failed: %v\n", recoveryErr)
+		}
+		emitStartupRecoveryReport(startupMode, recoveryReport, recoveryErr)
+
+		if startupMode != outputModeJSON {
+			checkEnvFilePermissions()
+		}
 	}
 
 	parsed, err := parseCommandLine(args, flagsWithValues)
@@ -336,6 +338,15 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	}
 
 	return outputModeText
+}
+
+func shouldRunStartupRecovery(command string) bool {
+	switch command {
+	case "store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify":
+		return true
+	default:
+		return false
+	}
 }
 
 func exitCodeLabel(code int) string {
