@@ -60,13 +60,18 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 		return err
 	}
 
-	//check that all chunks have correct reference counts (chunk.ref_count should match the actual number of file_chunk references)
+	//check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
 	if err = checkReferenceCounts(dbconn); err != nil {
 		return err
 	}
 
-	//check that there are no orphan chunks (chunks with ref_count > 0 but no file_chunk references)
+	//check that there are no orphan chunks (chunks with live_ref_count > 0 but no file_chunk references)
 	if err = checkOrphanChunks(dbconn); err != nil {
+		return err
+	}
+
+	//check that temporary restore pins remain on COMPLETED chunks only
+	if err = checkPinnedChunkStatus(dbconn); err != nil {
 		return err
 	}
 

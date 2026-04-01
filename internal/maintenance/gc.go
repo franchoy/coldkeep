@@ -99,7 +99,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 						FROM blocks b
 						JOIN chunk ch ON ch.id = b.chunk_id
 						WHERE b.container_id = $1
-						AND ch.ref_count > 0
+						AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
 					)
 				FROM container where id = $1
 			`, containerID).Scan(&stillEmpty)
@@ -133,14 +133,14 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			// Lock all chunk rows referenced by this container, then evaluate emptiness.
 			err = tx.QueryRowContext(ctx, `
 				WITH locked_chunks AS (
-					SELECT ch.ref_count
+					SELECT ch.live_ref_count, ch.pin_count
 					FROM blocks b
 					JOIN chunk ch ON ch.id = b.chunk_id
 					WHERE b.container_id = $1
 					FOR UPDATE
 				)
 				SELECT NOT EXISTS (
-					SELECT 1 FROM locked_chunks WHERE ref_count > 0
+					SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
 				)
 			`, containerID).Scan(&stillEmpty)
 			if err != nil {
@@ -173,7 +173,8 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			DELETE FROM chunk c
 			USING deleted_blocks db
 			WHERE c.id = db.chunk_id
-			AND c.ref_count = 0
+			AND c.live_ref_count = 0
+			AND c.pin_count = 0
 		`, containerID)
 		if err != nil {
 			_ = tx.Rollback()

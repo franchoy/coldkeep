@@ -1112,7 +1112,7 @@ func TestStoreFolderIdempotentDedup(t *testing.T) {
 			SELECT COALESCE(SUM(b.stored_size), 0)
 			FROM blocks b
 			JOIN chunk c ON c.id = b.chunk_id
-			WHERE c.ref_count > 0
+			WHERE c.live_ref_count > 0
 		`).Scan(&s.liveBlockBytes); err != nil {
 			t.Fatalf("[%s] query live_block_bytes: %v", label, err)
 		}
@@ -1202,7 +1202,7 @@ func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
 			SELECT COALESCE(SUM(b.stored_size), 0)
 			FROM blocks b
 			JOIN chunk c ON c.id = b.chunk_id
-			WHERE c.ref_count > 0
+			WHERE c.live_ref_count > 0
 		`).Scan(&s.liveBlockBytes); err != nil {
 			t.Fatalf("[%s] query live_block_bytes: %v", label, err)
 		}
@@ -1507,7 +1507,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("removeFileWithDB: %v", err)
 	}
 
-	// Run verify before GC to check for any issues with ref_counts or metadata integrity.
+	// Run verify before GC to check for any issues with live_ref_count values or metadata integrity.
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 		t.Fatalf("verify standard after GC: %v", err)
 	}
@@ -1534,13 +1534,13 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	}
 
 	// GC may delete 0 containers if remaining live chunks share the same container.
-	// What we must guarantee is that GC does not break restore and ref_counts remain valid.
+	// What we must guarantee is that GC does not break restore and live_ref_count values remain valid.
 	var negatives int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
-		t.Fatalf("check negative ref_count: %v", err)
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count < 0`).Scan(&negatives); err != nil {
+		t.Fatalf("check negative live_ref_count: %v", err)
 	}
 	if negatives != 0 {
-		t.Fatalf("found %d chunks with negative ref_count", negatives)
+		t.Fatalf("found %d chunks with negative live_ref_count", negatives)
 	}
 
 	// Ensure fileB still restores correctly
@@ -1566,13 +1566,13 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("hash mismatch after GC: want %s got %s", hashB, gotHash)
 	}
 
-	// Ensure no chunk has negative ref_count
+	// Ensure no chunk has negative live_ref_count
 	//var negatives int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
-		t.Fatalf("check negative ref_count: %v", err)
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count < 0`).Scan(&negatives); err != nil {
+		t.Fatalf("check negative live_ref_count: %v", err)
 	}
 	if negatives != 0 {
-		t.Fatalf("found chunks with negative ref_count")
+		t.Fatalf("found chunks with negative live_ref_count")
 	}
 }
 
@@ -2183,7 +2183,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		VALUES ($1, $2, $3, 0)
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
@@ -2280,7 +2280,7 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		VALUES ($1, $2, $3, 0)
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
@@ -2814,7 +2814,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
-		INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
 		VALUES ($1, $2, $3, 0, 0)
 	`, "dummy_chunk_hash", int64(128*1024), filestate.ChunkProcessing)
 	if err != nil {
@@ -3303,28 +3303,28 @@ func TestVerifyStandard(t *testing.T) {
 		}
 	})
 
-	t.Run("detects corrupted ref_count", func(t *testing.T) {
-		// Corrupt one chunk's ref_count to a wrong value
-		if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count + 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
-			t.Fatalf("corrupt ref_count: %v", err)
+	t.Run("detects corrupted live_ref_count", func(t *testing.T) {
+		// Corrupt one chunk's live_ref_count to a wrong value
+		if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = live_ref_count + 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+			t.Fatalf("corrupt live_ref_count: %v", err)
 		}
 		defer func() {
 			// Restore so other sub-tests are not affected
-			if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
-				t.Fatalf("restore ref_count: %v", err)
+			if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = live_ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+				t.Fatalf("restore live_ref_count: %v", err)
 			}
 
 		}()
 
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected the corrupted ref_count but returned nil")
+			t.Fatal("RunVerify should have detected the corrupted live_ref_count but returned nil")
 		}
 	})
 
 	t.Run("detects orphan chunk", func(t *testing.T) {
-		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
+		// Insert a chunk with live_ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
 				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0)
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
@@ -3338,6 +3338,44 @@ func TestVerifyStandard(t *testing.T) {
 
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
 			t.Fatal("RunVerify should have detected the orphan chunk but returned nil")
+		}
+	})
+
+	t.Run("detects pin_count on non-completed chunk", func(t *testing.T) {
+		if _, err := dbconn.Exec(`
+				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
+				VALUES ('invalid_pinned_processing_chunk', 1024, $1, 0, 1, 0)
+		`, filestate.ChunkProcessing); err != nil {
+			t.Fatalf("insert invalid pinned processing chunk: %v", err)
+		}
+		defer func() {
+			if _, err := dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'invalid_pinned_processing_chunk'`); err != nil {
+				t.Fatalf("delete invalid pinned processing chunk: %v", err)
+			}
+
+		}()
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected pin_count on a non-completed chunk but returned nil")
+		}
+	})
+
+	t.Run("detects pinned chunk missing block metadata", func(t *testing.T) {
+		if _, err := dbconn.Exec(`
+				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
+				VALUES ('invalid_pinned_unplaced_chunk', 1024, $1, 0, 1, 0)
+		`, filestate.ChunkCompleted); err != nil {
+			t.Fatalf("insert invalid pinned unplaced chunk: %v", err)
+		}
+		defer func() {
+			if _, err := dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'invalid_pinned_unplaced_chunk'`); err != nil {
+				t.Fatalf("delete invalid pinned unplaced chunk: %v", err)
+			}
+
+		}()
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected pinned chunk missing block metadata but returned nil")
 		}
 	})
 
@@ -3419,7 +3457,7 @@ func TestVerifyFull(t *testing.T) {
 
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
+			INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
 			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0)
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
@@ -4141,13 +4179,13 @@ func TestStoreGCRestore(t *testing.T) {
 		t.Fatalf("GC real run: %v", err)
 	}
 
-	// After GC, ref_counts must not go negative.
+	// After GC, live_ref_count values must not go negative.
 	var negatives int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE ref_count < 0`).Scan(&negatives); err != nil {
-		t.Fatalf("check ref_count: %v", err)
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count < 0`).Scan(&negatives); err != nil {
+		t.Fatalf("check live_ref_count: %v", err)
 	}
 	if negatives != 0 {
-		t.Fatalf("found %d chunks with negative ref_count after GC", negatives)
+		t.Fatalf("found %d chunks with negative live_ref_count after GC", negatives)
 	}
 
 	// Restore the keeper and verify byte-perfect fidelity.
@@ -4210,7 +4248,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 
 	var chunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"gc-restore-race-chunk",
@@ -4245,7 +4283,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin pin tx: %v", err)
 	}
-	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, chunkID); err != nil {
 		_ = pinTx.Rollback()
 		t.Fatalf("pin chunk in tx: %v", err)
 	}
@@ -4292,12 +4330,12 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 		t.Fatalf("expected block mapping to remain after pinned restore chunk, got count=%d", remainingBlocks)
 	}
 
-	var pinnedRefCount int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinnedRefCount); err != nil {
-		t.Fatalf("query chunk ref_count: %v", err)
+	var pinnedPinCount int64
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinnedPinCount); err != nil {
+		t.Fatalf("query chunk pin_count: %v", err)
 	}
-	if pinnedRefCount != 1 {
-		t.Fatalf("expected chunk ref_count=1 after pin commit, got %d", pinnedRefCount)
+	if pinnedPinCount != 1 {
+		t.Fatalf("expected chunk pin_count=1 after pin commit, got %d", pinnedPinCount)
 	}
 
 	if _, err := os.Stat(containerPath); err != nil {
@@ -4345,7 +4383,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 
 	var chunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"gc-remove-restore-race-chunk",
@@ -4403,7 +4441,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	if err != nil {
 		t.Fatalf("begin pin tx: %v", err)
 	}
-	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, chunkID); err != nil {
 		_ = pinTx.Rollback()
 		t.Fatalf("pin chunk in tx: %v", err)
 	}
@@ -4461,18 +4499,18 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		t.Fatalf("count container rows after interleave: %v", err)
 	}
 	if containerCountAfterInterleave != 1 {
-		t.Fatalf("expected container to remain while restore pin is still active, got count=%d", containerCountAfterInterleave)
+		t.Fatalf("expected container to remain while restore pin_count is still active, got count=%d", containerCountAfterInterleave)
 	}
 
-	var refCountBeforeUnpin int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCountBeforeUnpin); err != nil {
-		t.Fatalf("query chunk ref_count before unpin: %v", err)
+	var pinCountBeforeUnpin int64
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCountBeforeUnpin); err != nil {
+		t.Fatalf("query chunk pin_count before unpin: %v", err)
 	}
-	if refCountBeforeUnpin != 1 {
-		t.Fatalf("expected ref_count=1 before restore unpin, got %d", refCountBeforeUnpin)
+	if pinCountBeforeUnpin != 1 {
+		t.Fatalf("expected pin_count=1 before restore unpin, got %d", pinCountBeforeUnpin)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE chunk SET ref_count = ref_count - 1 WHERE id = $1 AND ref_count > 0`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET pin_count = pin_count - 1 WHERE id = $1 AND pin_count > 0`, chunkID); err != nil {
 		t.Fatalf("unpin restore chunk: %v", err)
 	}
 

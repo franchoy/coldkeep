@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_container_sealed_quarantine ON container(sealed, 
 
 ALTER TABLE container ADD COLUMN IF NOT EXISTS sealing BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS idx_container_sealing ON container(sealing);
-UPDATE schema_version SET version = 4 WHERE version < 4;
+UPDATE schema_version SET version = 5 WHERE version < 5;
 -- =========================
 -- Chunk table
 -- =========================
@@ -44,14 +44,16 @@ CREATE TABLE IF NOT EXISTS chunk (
   chunk_hash TEXT NOT NULL,
   size BIGINT NOT NULL CHECK (size > 0),
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
-  ref_count BIGINT NOT NULL DEFAULT 0 CHECK (ref_count >= 0),
+  live_ref_count BIGINT NOT NULL DEFAULT 0 CHECK (live_ref_count >= 0),
+  pin_count BIGINT NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
-CREATE INDEX IF NOT EXISTS idx_chunk_ref_count ON chunk(ref_count);
+CREATE INDEX IF NOT EXISTS idx_chunk_live_ref_count ON chunk(live_ref_count);
+CREATE INDEX IF NOT EXISTS idx_chunk_pin_count ON chunk(pin_count);
 CREATE INDEX IF NOT EXISTS idx_chunk_status ON chunk(status);
 
 -- =========================
@@ -146,5 +148,19 @@ CREATE TRIGGER trg_blocks_updated_at
 BEFORE UPDATE ON blocks
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
+
+-- Schema version 5: split ref_count into live_ref_count (file reachability) and pin_count (temporary restore pins)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'chunk' AND column_name = 'ref_count'
+  ) THEN
+    ALTER TABLE chunk RENAME COLUMN ref_count TO live_ref_count;
+  END IF;
+END $$;
+ALTER TABLE chunk ADD COLUMN IF NOT EXISTS pin_count BIGINT NOT NULL DEFAULT 0 CHECK (pin_count >= 0);
+CREATE INDEX IF NOT EXISTS idx_chunk_live_ref_count ON chunk(live_ref_count);
+CREATE INDEX IF NOT EXISTS idx_chunk_pin_count ON chunk(pin_count);
 
 COMMIT;

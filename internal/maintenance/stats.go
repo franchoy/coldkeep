@@ -113,8 +113,8 @@ func RunStatsResult() (*StatsResult, error) {
 
 	if err := dbconn.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(SUM(CASE WHEN ch.ref_count > 0 THEN b.stored_size ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN ch.ref_count = 0 THEN b.stored_size ELSE 0 END),0)
+			COALESCE(SUM(CASE WHEN ch.live_ref_count > 0 THEN b.stored_size ELSE 0 END),0),
+			COALESCE(SUM(CASE WHEN ch.live_ref_count = 0 THEN b.stored_size ELSE 0 END),0)
 		FROM blocks b
 		JOIN chunk ch ON ch.id = b.chunk_id
 	`).Scan(&liveBytes, &deadBytes); err != nil {
@@ -184,8 +184,8 @@ func RunStatsResult() (*StatsResult, error) {
 			c.id,
 			c.filename,
 			c.current_size,
-			COALESCE(SUM(CASE WHEN ch.ref_count > 0 THEN b.stored_size ELSE 0 END),0) AS live,
-			COALESCE(SUM(CASE WHEN ch.ref_count = 0 THEN b.stored_size ELSE 0 END),0) AS dead,
+			COALESCE(SUM(CASE WHEN ch.live_ref_count > 0 THEN b.stored_size ELSE 0 END),0) AS live,
+			COALESCE(SUM(CASE WHEN ch.live_ref_count = 0 THEN b.stored_size ELSE 0 END),0) AS dead,
 			c.quarantine
 		FROM container c
 		LEFT JOIN blocks b ON b.container_id = c.id

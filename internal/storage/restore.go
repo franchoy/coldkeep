@@ -134,7 +134,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 	for _, chunkID := range pinnedChunkIDs {
 		result, execErr := tx.ExecContext(
 			ctx,
-			`UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`,
+			`UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`,
 			chunkID,
 		)
 		if execErr != nil {
@@ -181,7 +181,7 @@ func unpinRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB, chunkIDs
 	for _, chunkID := range chunkIDs {
 		result, execErr := tx.ExecContext(
 			ctx,
-			`UPDATE chunk SET ref_count = ref_count - 1 WHERE id = $1 AND ref_count > 0`,
+			`UPDATE chunk SET pin_count = pin_count - 1 WHERE id = $1 AND pin_count > 0`,
 			chunkID,
 		)
 		if execErr != nil {
@@ -192,7 +192,7 @@ func unpinRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB, chunkIDs
 			return fmt.Errorf("rows affected when unpinning chunk %d: %w", chunkID, rowsErr)
 		}
 		if rowsAffected != 1 {
-			return fmt.Errorf("invalid ref_count transition while unpinning chunk %d", chunkID)
+			return fmt.Errorf("invalid pin_count transition while unpinning chunk %d", chunkID)
 		}
 	}
 

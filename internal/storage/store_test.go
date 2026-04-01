@@ -178,7 +178,7 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		_ = tx2.Rollback()
 		t.Fatalf("link second file/chunk: %v", err)
 	}
-	// Idempotency check: same mapping conflict should not increment ref_count again.
+	// Idempotency check: same mapping conflict should not increment live_ref_count again.
 	if err := linkFileChunk(tx2, fileB, chunkID, 0, !isNew2); err != nil {
 		_ = tx2.Rollback()
 		t.Fatalf("re-link second file/chunk: %v", err)
@@ -188,11 +188,11 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	}
 
 	var refCount int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCount); err != nil {
-		t.Fatalf("read ref_count: %v", err)
+	if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCount); err != nil {
+		t.Fatalf("read live_ref_count: %v", err)
 	}
 	if refCount != 2 {
-		t.Fatalf("expected ref_count=2 after two links, got %d", refCount)
+		t.Fatalf("expected live_ref_count=2 after two links, got %d", refCount)
 	}
 
 	var mappingCount int64
@@ -217,7 +217,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"orphan-completed-chunk",
@@ -264,7 +264,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"quarantined-completed-chunk",
@@ -516,7 +516,7 @@ func insertReusableTestChunk(t *testing.T, dbconn *sql.DB, hash string, status s
 
 	var chunkID int64
 	err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		hash,

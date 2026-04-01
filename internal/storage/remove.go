@@ -98,20 +98,20 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	}
 	result.RemovedMappings = len(chunkIDs)
 
-	// Decrement ref_count
+	// Decrement live_ref_count
 	for _, chunkID := range chunkIDs {
 		var refCount int64
 		err := tx.QueryRowContext(ctx, `
 			UPDATE chunk
-			SET ref_count = ref_count - 1
+			SET live_ref_count = live_ref_count - 1
 			WHERE id = $1
-			AND ref_count > 0
-			RETURNING ref_count
+			AND live_ref_count > 0
+			RETURNING live_ref_count
 		`, chunkID).Scan(&refCount)
 
 		if err == sql.ErrNoRows {
 			_ = tx.Rollback()
-			return RemoveFileResult{}, fmt.Errorf("invalid ref_count transition for chunk %d", chunkID)
+			return RemoveFileResult{}, fmt.Errorf("invalid live_ref_count transition for chunk %d", chunkID)
 		}
 		if err != nil {
 			_ = tx.Rollback()

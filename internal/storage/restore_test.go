@@ -47,7 +47,7 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"chunk-hash-1",
@@ -96,11 +96,11 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	}
 
 	var refCountAfterRemove int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCountAfterRemove); err != nil {
-		t.Fatalf("read ref_count after remove: %v", err)
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCountAfterRemove); err != nil {
+		t.Fatalf("read pin_count after remove: %v", err)
 	}
 	if refCountAfterRemove != 1 {
-		t.Fatalf("expected ref_count=1 after remove while pinned, got %d", refCountAfterRemove)
+		t.Fatalf("expected pin_count=1 after remove while pinned, got %d", refCountAfterRemove)
 	}
 
 	if err := unpinRestoreChunks(dbconn, pinnedChunkIDs); err != nil {
@@ -108,10 +108,10 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	}
 
 	var refCountAfterUnpin int64
-	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCountAfterUnpin); err != nil {
-		t.Fatalf("read ref_count after unpin: %v", err)
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCountAfterUnpin); err != nil {
+		t.Fatalf("read pin_count after unpin: %v", err)
 	}
 	if refCountAfterUnpin != 0 {
-		t.Fatalf("expected ref_count=0 after unpin, got %d", refCountAfterUnpin)
+		t.Fatalf("expected pin_count=0 after unpin, got %d", refCountAfterUnpin)
 	}
 }

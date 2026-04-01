@@ -602,7 +602,7 @@ Core tables:
   User-visible file entry (name, size, file_hash).
 
 - **chunk**  
-  Logical identity of a content-addressed chunk (chunk_hash, size, ref_count).
+  Logical identity of a content-addressed chunk (chunk_hash, size, live_ref_count, pin_count).
 
 - **blocks**  
   Physical placement and codec metadata for each chunk (codec, block_offset, stored_size, container_id).

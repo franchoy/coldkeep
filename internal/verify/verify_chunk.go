@@ -16,19 +16,19 @@ func checkReferenceCounts(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Check that all chunks have correct reference counts (chunk.ref_count should match the actual number of file_chunk references)
+	// Check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
 	log.Printf("Checking chunk reference counts consistency...")
 	var errorList []error
 	var errorCount int
 	rows, err := dbconn.QueryContext(ctx, `
 			SELECT chunk.id,
-				chunk.ref_count,
+				chunk.live_ref_count,
 				COUNT(file_chunk.chunk_id) AS actual
 			FROM chunk
 			LEFT JOIN file_chunk
 			ON chunk.id = file_chunk.chunk_id
 			GROUP BY chunk.id
-			HAVING chunk.ref_count != COUNT(file_chunk.chunk_id)
+			HAVING chunk.live_ref_count != COUNT(file_chunk.chunk_id)
 			`)
 	if err != nil {
 		log.Println(" ERROR ")
@@ -51,7 +51,7 @@ func checkReferenceCounts(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("inconsistent chunk reference count: chunk ID %d has ref_count=%d but actual references=%d", c.id, c.refCount, c.actual))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("inconsistent chunk reference count: chunk ID %d has live_ref_count=%d but actual references=%d", c.id, c.refCount, c.actual))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -78,14 +78,14 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Check that there are no orphan chunks (chunks with ref_count > 0 but no file_chunk references)
-	log.Printf("Checking for orphan chunks with ref_count > 0 but no file_chunk references...")
+	// Check that there are no orphan chunks (chunks with live_ref_count > 0 but no file_chunk references)
+	log.Printf("Checking for orphan chunks with live_ref_count > 0 but no file_chunk references...")
 	var errorList []error
 	var errorCount int
 	rows, err := dbconn.QueryContext(ctx, `SELECT chunk.id 
 							FROM chunk 
 							LEFT JOIN file_chunk ON chunk.id = file_chunk.chunk_id 
-							WHERE file_chunk.chunk_id IS NULL AND chunk.ref_count > 0;`)
+							WHERE file_chunk.chunk_id IS NULL AND chunk.live_ref_count > 0;`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query orphan chunks: %v", err)
@@ -101,7 +101,7 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("orphan chunk found: chunk ID %d has ref_count > 0 but no file_chunk references", id))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("orphan chunk found: chunk ID %d has live_ref_count > 0 but no file_chunk references", id))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -120,6 +120,96 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 		}
 		return fmt.Errorf("found %d errors in checkOrphanChunks checks", errorCount)
 	}
+	log.Println(" SUCCESS ")
+	return nil
+}
+
+func checkPinnedChunkStatus(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	// Restore pin_count should only exist on chunks that remain COMPLETED and
+	// still have valid location metadata.
+	log.Printf("Checking pinned chunk integrity (status + location metadata)...")
+	var errorList []error
+	var errorCount int
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT id, status, pin_count
+		FROM chunk
+		WHERE pin_count > 0 AND status != $1
+	`, filestate.ChunkCompleted)
+	if err != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query invalid pin_count state: %v", err)
+		return fmt.Errorf("failed to query invalid pin_count state: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var status string
+		var pinCount int64
+		if err := rows.Scan(&id, &status, &pinCount); err != nil {
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan invalid pin_count chunk: %w", err))
+			continue
+		}
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid chunk pin state: chunk ID %d has status=%s with pin_count=%d", id, status, pinCount))
+	}
+
+	if err := rows.Err(); err != nil {
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
+	}
+
+	_ = rows.Close()
+
+	rows, err = dbconn.QueryContext(ctx, `
+		SELECT c.id, c.pin_count, COUNT(b.chunk_id) AS block_rows
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		WHERE c.pin_count > 0
+		GROUP BY c.id, c.pin_count
+		HAVING COUNT(b.chunk_id) != 1
+	`)
+	if err != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query pinned chunks missing location metadata: %v", err)
+		return fmt.Errorf("failed to query pinned chunks missing location metadata: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var pinCount int64
+		var blockRows int64
+		if err := rows.Scan(&id, &pinCount, &blockRows); err != nil {
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan pinned chunk metadata inconsistency: %w", err))
+			continue
+		}
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid pinned chunk metadata: chunk ID %d has pin_count=%d with blocks row count=%d", id, pinCount, blockRows))
+	}
+
+	if err := rows.Err(); err != nil {
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
+	}
+
+	if len(errorList) > 0 {
+		log.Println(" ERROR ")
+		log.Printf("Found %d errors in checkPinnedChunkStatus checks:", errorCount)
+		if errorCount > utils_print.MaxErrorsToPrint {
+			log.Printf("showing only first %d:", len(errorList))
+		}
+		for _, err := range errorList {
+			log.Printf(" - %v", err)
+		}
+		return fmt.Errorf("found %d errors in checkPinnedChunkStatus checks", errorCount)
+	}
+
 	log.Println(" SUCCESS ")
 	return nil
 }

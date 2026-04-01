@@ -541,7 +541,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 	// If another goroutine inserts the same hash at the same time, we won't error.
 	insErr := tx.QueryRowContext(
 		ctx,
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
 				VALUES ($1, $2, $3, 0)
 				ON CONFLICT (chunk_hash, size) DO NOTHING
 				RETURNING id`,
@@ -795,7 +795,7 @@ func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chu
 	}
 
 	if rowsAffected > 0 && incrementRefCount {
-		if _, err := tx.ExecContext(ctx, `UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE chunk SET live_ref_count = live_ref_count + 1 WHERE id = $1`, chunkID); err != nil {
 			return err
 		}
 	}
