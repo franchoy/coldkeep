@@ -204,8 +204,9 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 		fileInfo, statErr := os.Stat(path)
 		if statErr == nil && fileInfo.Size() != currentSize {
 			if _, qErr := dbconn.ExecContext(ctx,
-				`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
+				`UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`,
 				id,
+				fileInfo.Size(),
 			); qErr != nil {
 				return fmt.Errorf("quarantine sealing container %d after size mismatch: %w", id, qErr)
 			}
@@ -389,12 +390,22 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 					return fmt.Errorf("query active container block continuity for container %d: %w", id, err)
 				}
 			}
+
+			if reason == "" {
+				hasTrailingBytes, err := hasTrailingUnreferencedBytes(ctx, dbconn, id, currentSize, filestate.ChunkCompleted)
+				if err != nil {
+					return fmt.Errorf("query active container trailing bytes for container %d: %w", id, err)
+				}
+				if hasTrailingBytes {
+					reason = "trailing_unreferenced_bytes"
+				}
+			}
 		}
 		if reason == "" {
 			continue
 		}
 
-		_, err = dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`, id)
+		_, err = dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`, id, physicalSize)
 		if err != nil {
 			return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
 		}
@@ -584,4 +595,22 @@ func detectInteriorGaps(ctx context.Context, dbconn *sql.DB, containerID int64, 
 		return "", err
 	}
 	return "", nil
+}
+
+func hasTrailingUnreferencedBytes(ctx context.Context, dbconn *sql.DB, containerID int64, currentSize int64, completedStatus string) (bool, error) {
+	var maxEnd sql.NullInt64
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT MAX(b.block_offset + b.stored_size)
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		WHERE b.container_id = $1
+		  AND c.status = $2
+	`, containerID, completedStatus).Scan(&maxEnd)
+	if err != nil {
+		return false, err
+	}
+	if !maxEnd.Valid {
+		return false, nil
+	}
+	return maxEnd.Int64 < currentSize, nil
 }

@@ -121,6 +121,10 @@ func ParseStorageContext(value string) (StorageContext, error) {
 			_ = os.Remove(tempDBFile.Name())
 			return StorageContext{}, fmt.Errorf("failed to create simulated DB: %w", err)
 		}
+		// SQLite is process-local and simulated mode performs frequent writes;
+		// a single shared connection avoids spurious "database is locked" errors.
+		sqliteDB.SetMaxOpenConns(1)
+		sqliteDB.SetMaxIdleConns(1)
 
 		if err := db.ApplySQLiteSessionPragmas(sqliteDB); err != nil {
 			_ = sqliteDB.Close()

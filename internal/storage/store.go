@@ -85,9 +85,12 @@ type optionalPreFinalizationMarker interface {
 	MarkSealingForContainer(containerID int64) error
 }
 
-func markContainerSealingWithWriter(writer payloadStatefulWriter, containerID int64) error {
-	if marker, ok := writer.(optionalPreFinalizationMarker); ok {
-		return marker.MarkSealingForContainer(containerID)
+func markContainerSealingInTx(tx *sql.Tx, containerID int64) error {
+	if tx == nil || containerID <= 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, containerID); err != nil {
+		return fmt.Errorf("mark container %d sealing in tx: %w", containerID, err)
 	}
 	return nil
 }
@@ -188,6 +191,9 @@ func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID
 	}
 	if _, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
+		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
 	}
 
 	return nil
@@ -1012,6 +1018,13 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 			if err != nil {
 				_ = tx.Rollback()
+				var brokenOpenErr *container.BrokenOpenContainerError
+				if errors.As(err, &brokenOpenErr) {
+					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID); quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d after rollback: %w", brokenOpenErr.ContainerID, quarantineErr))
+					}
+					return StoreFileResult{}, err
+				}
 				if errors.Is(err, container.ErrContainerLockContention) {
 					continue
 				}
@@ -1113,10 +1126,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				return StoreFileResult{}, err
 			}
 			if placement.Full {
-				// Commit a durable sealing marker before physically closing the file.
-				// If the process crashes between FinalizeContainer and the seal TX
-				// commit, startup recovery will detect the half-state via sealing=TRUE.
-				if err := markContainerSealingWithWriter(writer, placement.ContainerID); err != nil {
+				// Mark sealing in the current transaction, which already owns the row lock.
+				if err := markContainerSealingInTx(tx, placement.ContainerID); err != nil {
 					_ = tx.Rollback()
 					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, err
@@ -1223,6 +1234,9 @@ func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
 
 	workerCount := runtime.NumCPU()
+	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
+		workerCount = 1
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

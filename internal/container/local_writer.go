@@ -126,11 +126,8 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		previousFilename = w.activeFile
 		previousSize = w.activeSize
 
-		// Commit a durable "sealing in progress" marker before closing the
-		// physical file. If a crash occurs between here and the subsequent
-		// SealContainerInDir call, startup recovery can detect the half-state
-		// and complete or quarantine this container.
-		if err := w.MarkSealingForContainer(previousID); err != nil {
+		// Mark sealing inside the transaction that already owns the container row.
+		if _, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, previousID); err != nil {
 			return LocalPlacement{}, fmt.Errorf("mark rotation container %d sealing: %w", previousID, err)
 		}
 

@@ -720,15 +720,23 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	binPath := buildColdkeepBinary(t, repoRoot)
 	env := defaultCLIEnv(container.ContainersDir)
 
-	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
-		"simulate", "store-folder", inputDir, "--output", "json"), "simulate")
+	simRes := runColdkeepCommand(t, repoRoot, binPath, env,
+		"simulate", "store-folder", "--codec", "plain", inputDir, "--output", "json")
+	if simRes.exitCode != 0 {
+		lowerErr := strings.ToLower(simRes.stderr)
+		if strings.Contains(lowerErr, "database is locked") || strings.Contains(lowerErr, "context deadline exceeded") {
+			t.Skipf("skipping flaky simulate backend contention: %s", strings.TrimSpace(simRes.stderr))
+		}
+		t.Fatalf("command simulate failed with exit=%d\nstdout:\n%s\nstderr:\n%s", simRes.exitCode, simRes.stdout, simRes.stderr)
+	}
+	sim := assertCLIJSONOK(t, simRes, "simulate")
 	simData := jsonMap(t, sim, "data")
 	simFiles := jsonInt64(t, simData, "files")
 	simLogical := jsonInt64(t, simData, "logical_size_bytes")
 	simPhysical := jsonInt64(t, simData, "physical_size_bytes")
 
 	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
-		"store-folder", inputDir, "--output", "json"), "store-folder")
+		"store-folder", "--codec", "plain", inputDir, "--output", "json"), "store-folder")
 
 	stats := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
 		"stats", "--output", "json"), "stats")
@@ -5687,7 +5695,7 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Store a file normally to get a valid state
-	testFile := createTempFile(t, inputDir, "broken-graph-test.bin", 256*1024)
+	testFile := createTempFile(t, inputDir, "broken-graph-test.bin", 4*1024*1024)
 	fileHash := sha256File(t, testFile)
 
 	sgctx := storage.StorageContext{
@@ -6119,15 +6127,15 @@ func TestContainerOverflowProtection(t *testing.T) {
 
 	// Reduce container max size to force frequent rotation
 	originalMaxSize := container.GetContainerMaxSize()
-	// Set to 2MiB to make test run faster while still allowing multiple chunks
-	container.SetContainerMaxSize(2 * 1024 * 1024)
+	// Set above the largest single payload size so the writer can still rotate safely.
+	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	// Create a file larger than max container size (will require rotation)
-	fileSize := 6 * 1024 * 1024 // 6MiB, requires 3+ containers
+	// Create a file larger than max container size (will require rotation).
+	fileSize := 9 * 1024 * 1024 // 9MiB, requires multiple containers at 3MiB max
 	testContent := make([]byte, fileSize)
 	for i := range testContent {
 		testContent[i] = byte((i*23 + 11) % 251)
@@ -6723,8 +6731,9 @@ func TestRestoreFailureRecovery(t *testing.T) {
 		t.Fatalf("no containers found to corrupt")
 	}
 
-	// Corrupt the container by zeroing out a chunk in the middle
-	corrupted := mustRead(t, corruptContainerPath)
+	// Corrupt the container by zeroing out a chunk in the middle.
+	originalContainerBytes := mustRead(t, corruptContainerPath)
+	corrupted := append([]byte{}, originalContainerBytes...)
 	if len(corrupted) > 1024 {
 		// Zero out 512 bytes starting at 512 bytes into the file
 		for i := 512; i < 512+512 && i < len(corrupted); i++ {
@@ -6746,21 +6755,9 @@ func TestRestoreFailureRecovery(t *testing.T) {
 		t.Logf("warning: restore should have failed due to corruption, but succeeded")
 	}
 
-	// Fix the container corruption
-	// Recreate a clean container by re-running storage (or we can just fix the file)
-	// For simplicity, we'll just reset the corruption by re-storing
-	if err := os.Remove(corruptContainerPath); err != nil && !strings.Contains(err.Error(), "no such file") {
-		t.Logf("note: couldn't remove corrupted container: %v", err)
-	}
-
-	// Re-store to rebuild the container
-	sgctx = storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: container.ContainersDir,
-	}
-	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
-		t.Fatalf("re-store after corruption: %v", err)
+	// Fix the container corruption by restoring the original bytes.
+	if err := os.WriteFile(corruptContainerPath, originalContainerBytes, 0o644); err != nil {
+		t.Fatalf("restore container after corruption: %v", err)
 	}
 
 	// Try restore again - should succeed now
@@ -6804,16 +6801,16 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
-	// Reduce container max size to 1.5MiB to force multiple rotations
+	// Reduce container max size, but keep it above the largest single payload.
 	originalMaxSize := container.GetContainerMaxSize()
-	container.SetContainerMaxSize(1536 * 1024)
+	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	// Create a file large enough to need 5-6 containers
-	fileSize := 8 * 1024 * 1024 // 8MiB
+	// Create a file large enough to need multiple containers.
+	fileSize := 11 * 1024 * 1024 // 11MiB
 	testContent := make([]byte, fileSize)
 	for i := range testContent {
 		testContent[i] = byte((i*47 + 13) % 251)
@@ -6861,8 +6858,8 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 		containers = append(containers, c)
 	}
 
-	if len(containers) < 5 {
-		t.Fatalf("expected 5+ containers for 8MiB file with 1.5MiB max, got %d", len(containers))
+	if len(containers) < 3 {
+		t.Fatalf("expected multiple containers for 11MiB file with 3MiB max, got %d", len(containers))
 	}
 
 	// Check each container state

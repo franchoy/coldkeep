@@ -19,6 +19,25 @@ import (
 // ErrContainerFull is returned by Container.Append when the payload would exceed the container's max size.
 var ErrContainerFull = errors.New("container full")
 
+type BrokenOpenContainerError struct {
+	ContainerID int64
+	Err         error
+}
+
+func (e *BrokenOpenContainerError) Error() string {
+	if e == nil {
+		return "broken open container"
+	}
+	return fmt.Sprintf("open container %d: %v", e.ContainerID, e.Err)
+}
+
+func (e *BrokenOpenContainerError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // --------------------------------------------------------------------------
 // structures
 // --------------------------------------------------------------------------
@@ -213,25 +232,6 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, dbconn *sql.DB, containe
 		err = db.QueryRow(`
 			SELECT id, filename, max_size
 			FROM container
-			WHERE sealed = FALSE and quarantine = FALSE AND id <> $1
-			ORDER BY id
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		`, excludeID).Scan(&id, &filename, &maxSize)
-	} else {
-		err = db.QueryRow(`
-			SELECT id, filename, max_size
-			FROM container
-			WHERE sealed = FALSE and quarantine = FALSE
-			ORDER BY id
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		`).Scan(&id, &filename, &maxSize)
-	}
-	if excludeID > 0 {
-		err = db.QueryRow(`
-			SELECT id, filename, max_size
-			FROM container
 			WHERE sealed = FALSE AND sealing = FALSE AND quarantine = FALSE AND id <> $1
 			ORDER BY id
 			LIMIT 1
@@ -253,11 +253,7 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, dbconn *sql.DB, containe
 
 		container, err := OpenWritableContainer(fullPath, maxSize)
 		if err != nil {
-			retireErr := QuarantineContainer(dbconn, id)
-			if retireErr != nil {
-				return ActiveContainer{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d: %w", id, retireErr))
-			}
-			return ActiveContainer{}, err
+			return ActiveContainer{}, &BrokenOpenContainerError{ContainerID: id, Err: err}
 		}
 
 		return ActiveContainer{
