@@ -6221,6 +6221,63 @@ func TestGCDuringActiveStore(t *testing.T) {
 	assertNoProcessingRows(t, dbconn)
 }
 
+func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Use a reasonably large deterministic payload to exercise long deep verify/store/restore paths.
+	testContent := make([]byte, 32*1024*1024)
+	for i := range testContent {
+		testContent[i] = byte((i*19 + 11) % 251)
+	}
+	inPath := filepath.Join(inputDir, "large-timeout-guard.bin")
+	if err := os.WriteFile(inPath, testContent, 0o644); err != nil {
+		t.Fatalf("write large input: %v", err)
+	}
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store large file: %v", err)
+	}
+
+	fileHash := sha256File(t, inPath)
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "large-timeout-guard.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore large file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err != nil {
+		t.Fatalf("deep verify large dataset: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
 // TestContainerOverflowProtection verifies that the store operation rotates
 // containers before they overflow, preventing corruption and unrecoverable states.
 func TestContainerOverflowProtection(t *testing.T) {

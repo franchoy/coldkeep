@@ -12,6 +12,11 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
+var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
+	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+	return err
+}
+
 // GCResult contains structured metadata about a GC run.
 type GCResult struct {
 	DryRun             bool     `json:"dry_run"`
@@ -55,7 +60,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	defer func() {
 		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
 		defer cleanupCancel()
-		_, unlockErr := dbconn.ExecContext(cleanupCtx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+		unlockErr := gcAdvisoryUnlock(cleanupCtx, dbconn)
 		if unlockErr != nil {
 			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
 		}

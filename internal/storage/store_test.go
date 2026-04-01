@@ -73,6 +73,43 @@ func (w *syncFailWriter) RetireActiveContainer() error {
 	return w.retireErr
 }
 
+type commitAckWriter struct {
+	offset       int64
+	ackCalls     int
+	pendingClear bool
+}
+
+func (w *commitAckWriter) WriteChunk(c chunk.Info) error {
+	_ = c
+	return nil
+}
+
+func (w *commitAckWriter) FinalizeContainer() error {
+	return nil
+}
+
+func (w *commitAckWriter) ContainerCount() int {
+	return 1
+}
+
+func (w *commitAckWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {
+	offset := w.offset
+	w.offset += int64(len(payload))
+	w.pendingClear = false
+	return container.LocalPlacement{
+		ContainerID:      1,
+		Filename:         "ack_test_container.bin",
+		Offset:           offset,
+		StoredSize:       int64(len(payload)),
+		NewContainerSize: container.ContainerHdrLen + w.offset,
+	}, nil
+}
+
+func (w *commitAckWriter) AcknowledgeAppendCommitted() {
+	w.ackCalls++
+	w.pendingClear = true
+}
+
 func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	originalContainersDir := container.ContainersDir
 	container.ContainersDir = t.TempDir()
@@ -305,7 +342,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 	}
 }
 
-func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
+func TestStoreFileDoesNotUseRedundantPreCommitSync(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -337,8 +374,7 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 
-	expectedSyncErr := errors.New("forced sync failure")
-	writer := &syncFailWriter{syncErr: expectedSyncErr, db: dbconn}
+	writer := &syncFailWriter{syncErr: errors.New("unused pre-commit sync hook"), db: dbconn}
 	sgctx := StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
@@ -351,17 +387,14 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 	}
 
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
-	if err == nil {
-		t.Fatalf("expected store to fail when sync fails")
+	if err != nil {
+		t.Fatalf("store with pre-commit sync hook present should succeed: %v", err)
 	}
-	if !errors.Is(err, expectedSyncErr) {
-		t.Fatalf("expected sync failure, got: %v", err)
+	if writer.syncCalls != 0 {
+		t.Fatalf("expected no pre-commit sync calls, got %d", writer.syncCalls)
 	}
-	if writer.syncCalls == 0 {
-		t.Fatalf("expected pre-commit sync to be called at least once")
-	}
-	if writer.retireCalls == 0 {
-		t.Fatalf("expected active container retirement after sync failure")
+	if writer.retireCalls != 0 {
+		t.Fatalf("expected no container retirement on successful store, got %d", writer.retireCalls)
 	}
 
 	var abortedCount int
@@ -371,8 +404,8 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 	).Scan(&abortedCount); err != nil {
 		t.Fatalf("count aborted logical files: %v", err)
 	}
-	if abortedCount != 1 {
-		t.Fatalf("expected 1 aborted logical file after sync failure, got %d", abortedCount)
+	if abortedCount != 0 {
+		t.Fatalf("expected 0 aborted logical files after successful store, got %d", abortedCount)
 	}
 
 	var completedChunks int
@@ -382,26 +415,133 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 	).Scan(&completedChunks); err != nil {
 		t.Fatalf("count completed chunks: %v", err)
 	}
-	if completedChunks != 0 {
-		t.Fatalf("expected no completed chunks after sync failure, got %d", completedChunks)
+	if completedChunks == 0 {
+		t.Fatalf("expected completed chunks after successful store")
 	}
 
 	var blockCount int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&blockCount); err != nil {
 		t.Fatalf("count blocks: %v", err)
 	}
-	if blockCount != 0 {
-		t.Fatalf("expected no persisted block metadata after sync failure, got %d", blockCount)
+	if blockCount == 0 {
+		t.Fatalf("expected persisted block metadata after successful store")
 	}
 
 	var quarantined bool
 	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = 1`).Scan(&quarantined); err != nil {
 		t.Fatalf("query container quarantine: %v", err)
 	}
-	if !quarantined {
-		t.Fatalf("expected active container to be quarantined after sync failure")
+	if quarantined {
+		t.Fatalf("expected container to remain healthy after successful store")
 	}
 
+}
+
+func TestStoreFileSuccessfulCommitAcknowledgesWriterAppendState(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "payload.txt")
+	if err := os.WriteFile(path, []byte("acknowledge-append-after-commit"), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store should succeed: %v", err)
+	}
+	if writer.ackCalls == 0 {
+		t.Fatalf("expected AcknowledgeAppendCommitted to be called at least once")
+	}
+	if !writer.pendingClear {
+		t.Fatalf("expected writer pending rollback state to be cleared after commit acknowledgment")
+	}
+}
+
+func TestClaimChunkDoesNotReuseCompletedChunkWithMissingContainerFile(t *testing.T) {
+	originalContainersDir := container.ContainersDir
+	container.ContainersDir = t.TempDir()
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"missing-file-completed-chunk",
+		456,
+		filestate.ChunkCompleted,
+		1,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert completed chunk: %v", err)
+	}
+
+	containerID := insertReusableTestContainer(t, dbconn, "missing-file-reuse.bin", false)
+	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
+
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "missing-file-completed-chunk", 456)
+	if err != nil {
+		t.Fatalf("claim completed chunk with missing file: %v", err)
+	}
+	if claimedID != chunkID {
+		t.Fatalf("expected same chunk id, got %d vs %d", claimedID, chunkID)
+	}
+	if isNew {
+		t.Fatalf("expected existing chunk to be reclaimed, not inserted as new")
+	}
+	if claimedStatus != filestate.ChunkProcessing {
+		t.Fatalf("expected missing-file completed chunk to be reclaimed as PROCESSING, got %s", claimedStatus)
+	}
+
+	var latestStatus string
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&latestStatus); err != nil {
+		t.Fatalf("read chunk status after claim: %v", err)
+	}
+	if latestStatus != filestate.ChunkProcessing {
+		t.Fatalf("expected chunk row status PROCESSING after reclaim, got %s", latestStatus)
+	}
 }
 
 func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testing.T) {
@@ -779,6 +919,69 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 		}
 		if refCount != 0 {
 			t.Errorf("expected live_ref_count=0 for chunk %d after rebuild mark, got %d", id, refCount)
+		}
+	}
+}
+
+func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"stale-garbage.bin", 256, "stale-garbage-hash", filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	insertChunk := func(hash string) int64 {
+		t.Helper()
+		var id int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+			 VALUES ($1, 64, $2, 1) RETURNING id`,
+			hash, filestate.ChunkCompleted,
+		).Scan(&id); err != nil {
+			t.Fatalf("insert chunk %s: %v", hash, err)
+		}
+		return id
+	}
+
+	chunkValid := insertChunk("stale-garbage-valid")
+	chunkStale := insertChunk("stale-garbage-extra")
+
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkValid, 0)
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkStale, 99)
+
+	ctx := context.Background()
+	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
+		t.Fatalf("markLogicalFileForRebuildWithContext: %v", err)
+	}
+
+	var mappingCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&mappingCount); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if mappingCount != 0 {
+		t.Fatalf("expected stale file_chunk garbage to be fully removed, got %d rows", mappingCount)
+	}
+
+	for _, id := range []int64{chunkValid, chunkStale} {
+		var refCount int64
+		if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, id).Scan(&refCount); err != nil {
+			t.Fatalf("read live_ref_count for chunk %d: %v", id, err)
+		}
+		if refCount != 0 {
+			t.Fatalf("expected live_ref_count=0 for chunk %d after stale garbage cleanup, got %d", id, refCount)
 		}
 	}
 }

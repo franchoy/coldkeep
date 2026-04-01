@@ -28,10 +28,6 @@ type payloadStatefulWriter interface {
 	FinalizeContainer() error
 }
 
-type optionalActiveContainerSyncer interface {
-	SyncActiveContainer() error
-}
-
 // optionalAppendRollbacker is implemented by writers that can truncate a physical
 // container file back to its pre-append offset when the enclosing DB transaction
 // is rolled back or fails to commit.
@@ -128,13 +124,6 @@ func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, container
 		return sealer.SealContainer(tx, containerID, filename, containersDir)
 	}
 	return container.SealContainerInDir(tx, containerID, filename, containersDir)
-}
-
-func syncActiveContainerWithWriter(writer payloadStatefulWriter) error {
-	if syncer, ok := writer.(optionalActiveContainerSyncer); ok {
-		return syncer.SyncActiveContainer()
-	}
-	return nil
 }
 
 func newWriterFromPrototype(prototype container.ContainerWriter) (container.ContainerWriter, error) {
@@ -1514,16 +1503,6 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 					}
 					return StoreFileResult{}, err
 				}
-			}
-
-			// Crash-durability barrier: flush payload bytes before publishing COMPLETED metadata in DB.
-			if err := syncActiveContainerWithWriter(writer); err != nil {
-				_ = tx.Rollback()
-				retireErr := retireWriterActiveContainer(writer)
-				if retireErr != nil {
-					return StoreFileResult{}, errors.Join(err, fmt.Errorf("retire active container after sync failure: %w", retireErr))
-				}
-				return StoreFileResult{}, err
 			}
 
 			if err = tx.Commit(); err != nil {
