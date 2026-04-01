@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -65,8 +66,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	if dbconn == nil {
 		return errors.New("nil DB connection")
 	}
+	ctx, cancel := NewOperationContext(context.Background())
+	defer cancel()
 
-	if _, err := dbconn.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
+	if _, err := dbconn.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
 		return fmt.Errorf("enable sqlite foreign keys: %w", err)
 	}
 
@@ -75,7 +78,7 @@ func RunMigrations(dbconn *sql.DB) error {
 		return err
 	}
 
-	if _, err := dbconn.Exec(schemaSQL); err != nil {
+	if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply sqlite schema: %w", err)
 	}
 

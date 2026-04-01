@@ -27,6 +27,10 @@ type payloadStatefulWriter interface {
 	FinalizeContainer() error
 }
 
+type optionalActiveContainerSyncer interface {
+	SyncActiveContainer() error
+}
+
 type optionalContainerSealer interface {
 	SealContainer(tx db.DBTX, containerID int64, filename string, containersDir string) error
 }
@@ -44,6 +48,13 @@ func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, container
 		return sealer.SealContainer(tx, containerID, filename, containersDir)
 	}
 	return container.SealContainerInDir(tx, containerID, filename, containersDir)
+}
+
+func syncActiveContainerWithWriter(writer payloadStatefulWriter) error {
+	if syncer, ok := writer.(optionalActiveContainerSyncer); ok {
+		return syncer.SyncActiveContainer()
+	}
+	return nil
 }
 
 func newWriterFromPrototype(prototype container.ContainerWriter) (container.ContainerWriter, error) {
@@ -65,8 +76,14 @@ func newWriterFromPrototype(prototype container.ContainerWriter) (container.Cont
 // -----------------------------------------------------------------------------
 
 func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
+}
 
-	tx, err := dbconn.Begin()
+func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
+
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err
 	}
@@ -80,7 +97,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 	// Insert logical file (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
 
-	insErr := tx.QueryRow(
+	insErr := tx.QueryRowContext(
+		ctx,
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
@@ -95,7 +113,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 	case sql.ErrNoRows:
 		// Conflict happened: someone else already stored this file hash
 		var existingID int64
-		if err := tx.QueryRow(
+		if err := tx.QueryRowContext(
+			ctx,
 			`SELECT id, status FROM logical_file WHERE file_hash = $1 and total_size = $2`,
 			fileHash,
 			fileinfo.Size(),
@@ -110,7 +129,7 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			txclosed = true
 
 			var inconsistentChunks int
-			if err := dbconn.QueryRow(`
+			if err := dbconn.QueryRowContext(ctx, `
 				SELECT COUNT(*)
 				FROM file_chunk fc
 				JOIN chunk c ON c.id = fc.chunk_id
@@ -130,58 +149,77 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			attempt := 0
-			waitStart := time.Now()
-			for keep_waiting := true; keep_waiting; {
-				if time.Since(waitStart) >= maxClaimWaitDuration {
-					return 0, "", fmt.Errorf("timeout waiting for logical file %d to finish processing", existingID)
-				}
-
-				// Poll with bounded exponential backoff to reduce DB pressure under contention.
-				time.Sleep(claimPollingBackoff(logicalFileWaitingtime, attempt))
-				attempt++
-
-				var finalStatus string
-				if err := dbconn.QueryRow(
-					`SELECT status FROM logical_file WHERE id = $1`,
-					existingID,
-				).Scan(&finalStatus); err != nil {
-					return 0, "", err
-				}
-
-				switch finalStatus {
-				case filestate.LogicalFileCompleted:
-					return existingID, finalStatus, nil
-				case filestate.LogicalFileAborted:
-					// Previous attempt was aborted while we were waiting: we can try to store again
-					filestatus = finalStatus // Update status to break the loop and retry storing
-					keep_waiting = false
-				}
+			finalStatus, waitErr := waitForLogicalFileTerminalStatus(ctx, dbconn, existingID)
+			if waitErr != nil {
+				return 0, "", waitErr
 			}
+			if finalStatus == filestate.LogicalFileCompleted {
+				return existingID, finalStatus, nil
+			}
+			filestatus = finalStatus
 		}
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
 		if filestatus == filestate.LogicalFileAborted {
-			// Previous attempt was aborted while we were waiting: we can try to store again
-			// We can reuse the same logical_file row since it has the same file_hash
-			tx2, err := dbconn.Begin()
-			if err != nil {
-				return 0, "", err
+			for casAttempt := 0; casAttempt < 3; casAttempt++ {
+				tx2, beginErr := dbconn.BeginTx(ctx, nil)
+				if beginErr != nil {
+					return 0, "", beginErr
+				}
+				casResult, execErr := tx2.ExecContext(
+					ctx,
+					`UPDATE logical_file
+					 SET status = $1, retry_count = retry_count + 1
+					 WHERE id = $2 AND status = $3`,
+					filestate.LogicalFileProcessing,
+					existingID,
+					filestate.LogicalFileAborted,
+				)
+				if execErr != nil {
+					_ = tx2.Rollback()
+					return 0, "", execErr
+				}
+				rowsAffected, rowsErr := casResult.RowsAffected()
+				if rowsErr != nil {
+					_ = tx2.Rollback()
+					return 0, "", rowsErr
+				}
+				if commitErr := tx2.Commit(); commitErr != nil {
+					_ = tx2.Rollback()
+					return 0, "", commitErr
+				}
+
+				if rowsAffected == 1 {
+					fileID = existingID
+					filestatus = filestate.LogicalFileProcessing
+					break
+				}
+
+				var latestStatus string
+				if statusErr := dbconn.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, existingID).Scan(&latestStatus); statusErr != nil {
+					return 0, "", statusErr
+				}
+				switch latestStatus {
+				case filestate.LogicalFileCompleted:
+					return existingID, latestStatus, nil
+				case filestate.LogicalFileProcessing:
+					finalStatus, waitErr := waitForLogicalFileTerminalStatus(ctx, dbconn, existingID)
+					if waitErr != nil {
+						return 0, "", waitErr
+					}
+					if finalStatus == filestate.LogicalFileCompleted {
+						return existingID, finalStatus, nil
+					}
+				case filestate.LogicalFileAborted:
+					// Contended retry claim: loop and attempt CAS again.
+				default:
+					return 0, "", fmt.Errorf("unexpected logical_file status during claim retry: %s", latestStatus)
+				}
 			}
-			if _, err := tx2.Exec(
-				`UPDATE logical_file SET status = $1, retry_count = retry_count + 1 WHERE id = $2`,
-				filestate.LogicalFileProcessing,
-				existingID,
-			); err != nil {
-				_ = tx2.Rollback()
-				return 0, "", err
+
+			if filestatus != filestate.LogicalFileProcessing {
+				return 0, "", fmt.Errorf("could not claim aborted logical file %d after contention", existingID)
 			}
-			if err := tx2.Commit(); err != nil {
-				_ = tx2.Rollback()
-				return 0, "", err
-			}
-			fileID = existingID
-			filestatus = filestate.LogicalFileProcessing
 		}
 	case nil:
 		// We won: this file is new and we should store it
@@ -198,11 +236,17 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 	return fileID, filestatus, nil
 }
 
-func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, err error) {
+func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize)
+}
 
-	tx, err := dbconn.Begin()
+func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
+
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	txclosed := false
 	defer func() {
@@ -213,9 +257,10 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 
 	// Insert chunk (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
-	insErr := tx.QueryRow(
+	insErr := tx.QueryRowContext(
+		ctx,
 		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
-				VALUES ($1, $2, $3, 1)
+				VALUES ($1, $2, $3, 0)
 				ON CONFLICT (chunk_hash, size) DO NOTHING
 				RETURNING id`,
 		chunkHash,
@@ -227,82 +272,213 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 	case nil:
 		// We won: this chunk is new
 		chunkstatus = filestate.ChunkProcessing
+		isNew = true
 	case sql.ErrNoRows:
 		// Someone else inserted it first
-		if err := tx.QueryRow(`SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
-			return 0, "", err
+		if err := tx.QueryRowContext(ctx, `SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
+			return 0, "", false, err
 		}
 		switch chunkstatus {
 		case filestate.ChunkCompleted:
 			// Chunk already stored and ready: we can reuse it
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			return chunkID, chunkstatus, nil
+			return chunkID, chunkstatus, false, nil
 		case filestate.ChunkProcessing:
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			attempt := 0
-			waitStart := time.Now()
-			for keep_waiting := true; keep_waiting; {
-				if time.Since(waitStart) >= maxClaimWaitDuration {
-					return 0, "", fmt.Errorf("timeout waiting for chunk %d to finish processing", chunkID)
-				}
-
-				// Poll with bounded exponential backoff to reduce DB pressure under contention.
-				time.Sleep(claimPollingBackoff(chunkWaitingtime, attempt))
-				attempt++
-
-				var finalStatus string
-				if err := dbconn.QueryRow(
-					`SELECT status FROM chunk WHERE id = $1`,
-					chunkID,
-				).Scan(&finalStatus); err != nil {
-					return 0, "", err
-				}
-				switch finalStatus {
-				case filestate.ChunkCompleted:
-					return chunkID, finalStatus, nil
-				case filestate.ChunkAborted:
-					// Previous attempt was aborted while we were waiting: we can try to store again
-					chunkstatus = finalStatus // Update status to break the loop and retry storing
-					keep_waiting = false
-				}
+			finalStatus, waitErr := waitForChunkTerminalStatus(ctx, dbconn, chunkID)
+			if waitErr != nil {
+				return 0, "", false, waitErr
 			}
+			if finalStatus == filestate.ChunkCompleted {
+				return chunkID, finalStatus, false, nil
+			}
+			chunkstatus = finalStatus
 		}
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
 		if chunkstatus == filestate.ChunkAborted {
-			// Previous attempt was aborted while we were waiting: we can try to store again
-			// We can reuse the same chunk row since it has the same chunk_hash and size
-			tx2, err := dbconn.Begin()
-			if err != nil {
-				return 0, "", err
+			for casAttempt := 0; casAttempt < 3; casAttempt++ {
+				tx2, beginErr := dbconn.BeginTx(ctx, nil)
+				if beginErr != nil {
+					return 0, "", false, beginErr
+				}
+				casResult, execErr := tx2.ExecContext(
+					ctx,
+					`UPDATE chunk
+					 SET status = $1, retry_count = retry_count + 1
+					 WHERE id = $2 AND status = $3`,
+					filestate.ChunkProcessing,
+					chunkID,
+					filestate.ChunkAborted,
+				)
+				if execErr != nil {
+					_ = tx2.Rollback()
+					return 0, chunkstatus, false, execErr
+				}
+				rowsAffected, rowsErr := casResult.RowsAffected()
+				if rowsErr != nil {
+					_ = tx2.Rollback()
+					return 0, chunkstatus, false, rowsErr
+				}
+				if commitErr := tx2.Commit(); commitErr != nil {
+					_ = tx2.Rollback()
+					return 0, chunkstatus, false, commitErr
+				}
+
+				if rowsAffected == 1 {
+					chunkstatus = filestate.ChunkProcessing
+					break
+				}
+
+				var latestStatus string
+				if statusErr := dbconn.QueryRowContext(ctx, `SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&latestStatus); statusErr != nil {
+					return 0, chunkstatus, false, statusErr
+				}
+				switch latestStatus {
+				case filestate.ChunkCompleted:
+					return chunkID, latestStatus, false, nil
+				case filestate.ChunkProcessing:
+					finalStatus, waitErr := waitForChunkTerminalStatus(ctx, dbconn, chunkID)
+					if waitErr != nil {
+						return 0, "", false, waitErr
+					}
+					if finalStatus == filestate.ChunkCompleted {
+						return chunkID, finalStatus, false, nil
+					}
+				case filestate.ChunkAborted:
+					// Contended retry claim: loop and attempt CAS again.
+				default:
+					return 0, chunkstatus, false, fmt.Errorf("unexpected chunk status during claim retry: %s", latestStatus)
+				}
 			}
-			if _, err := tx2.Exec(
-				`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`,
-				filestate.ChunkProcessing,
-				chunkID,
-			); err != nil {
-				_ = tx2.Rollback()
-				return 0, chunkstatus, err
+
+			if chunkstatus != filestate.ChunkProcessing {
+				return 0, chunkstatus, false, fmt.Errorf("could not claim aborted chunk %d after contention", chunkID)
 			}
-			if err := tx2.Commit(); err != nil {
-				_ = tx2.Rollback()
-				return 0, chunkstatus, err
-			}
-			chunkstatus = filestate.ChunkProcessing
 		}
 	default:
-		return 0, "", insErr
+		return 0, "", false, insErr
 	}
 
 	if !txclosed {
 		if err := tx.Commit(); err != nil {
-			return 0, chunkstatus, err
+			return 0, chunkstatus, isNew, err
 		}
 	}
-	return chunkID, chunkstatus, nil
+	return chunkID, chunkstatus, isNew, nil
+}
+
+func waitForLogicalFileTerminalStatus(ctx context.Context, dbconn *sql.DB, fileID int64) (string, error) {
+	attempt := 0
+	waitStart := time.Now()
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if time.Since(waitStart) >= maxClaimWaitDuration {
+			return "", fmt.Errorf("timeout waiting for logical file %d to finish processing", fileID)
+		}
+
+		// Poll with bounded exponential backoff to reduce DB pressure under contention.
+		if err := sleepWithContext(ctx, claimPollingBackoff(logicalFileWaitingtime, attempt)); err != nil {
+			return "", err
+		}
+		attempt++
+
+		var finalStatus string
+		if err := dbconn.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&finalStatus); err != nil {
+			return "", err
+		}
+		switch finalStatus {
+		case filestate.LogicalFileCompleted, filestate.LogicalFileAborted:
+			return finalStatus, nil
+		}
+	}
+}
+
+func waitForChunkTerminalStatus(ctx context.Context, dbconn *sql.DB, chunkID int64) (string, error) {
+	attempt := 0
+	waitStart := time.Now()
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if time.Since(waitStart) >= maxClaimWaitDuration {
+			return "", fmt.Errorf("timeout waiting for chunk %d to finish processing", chunkID)
+		}
+
+		// Poll with bounded exponential backoff to reduce DB pressure under contention.
+		if err := sleepWithContext(ctx, claimPollingBackoff(chunkWaitingtime, attempt)); err != nil {
+			return "", err
+		}
+		attempt++
+
+		var finalStatus string
+		if err := dbconn.QueryRowContext(ctx, `SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&finalStatus); err != nil {
+			return "", err
+		}
+		switch finalStatus {
+		case filestate.ChunkCompleted, filestate.ChunkAborted:
+			return finalStatus, nil
+		}
+	}
+}
+
+func linkFileChunk(tx *sql.Tx, fileID int64, chunkID int64, chunkOrder int, incrementRefCount bool) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return linkFileChunkWithContext(ctx, tx, fileID, chunkID, chunkOrder, incrementRefCount)
+}
+
+func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chunkID int64, chunkOrder int, incrementRefCount bool) error {
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
+		fileID,
+		chunkID,
+		chunkOrder,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		var existingChunkID int64
+		err := tx.QueryRowContext(
+			ctx,
+			`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 AND chunk_order = $2`,
+			fileID,
+			chunkOrder,
+		).Scan(&existingChunkID)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("suspicious file_chunk conflict for file_id=%d chunk_order=%d: insert reported conflict but mapping is missing", fileID, chunkOrder)
+		}
+		if err != nil {
+			return err
+		}
+		if existingChunkID != chunkID {
+			return fmt.Errorf("suspicious file_chunk conflict for file_id=%d chunk_order=%d: existing chunk_id=%d attempted chunk_id=%d", fileID, chunkOrder, existingChunkID, chunkID)
+		}
+		return nil
+	}
+
+	if rowsAffected > 0 && incrementRefCount {
+		if _, err := tx.ExecContext(ctx, `UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -375,6 +551,8 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 // metadata suitable for CLI text and JSON output.
 func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
 	result.Path = path
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	transformer, err := blocks.GetBlockTransformer(codec)
 	if err != nil {
@@ -387,8 +565,6 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	blockRepo := &blocks.Repository{
 		DB: sgctx.DB,
 	}
-
-	ctx := context.Background()
 
 	file, err := os.Open(path)
 	if err != nil {
@@ -414,7 +590,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	}
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := claimLogicalFile(sgctx.DB, fileinfo, fileHash)
+	fileID, filestatus, err := claimLogicalFileWithContext(ctx, sgctx.DB, fileinfo, fileHash)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -429,7 +605,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	completed := false
 	defer func() {
 		if !completed {
-			if _, execErr := sgctx.DB.Exec(
+			cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+			defer cleanupCancel()
+			if _, execErr := sgctx.DB.ExecContext(
+				cleanupCtx,
 				`UPDATE logical_file SET status = $1 WHERE id = $2`,
 				filestate.LogicalFileAborted,
 				fileID,
@@ -454,30 +633,25 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	// not by this low-level result function.
 
 	for _, chunkData := range chunks {
+		if err := ctx.Err(); err != nil {
+			return StoreFileResult{}, err
+		}
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, err := claimChunk(sgctx.DB, chunkHash, int64(len(chunkData)))
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)))
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 
 		if chunkStatus == filestate.ChunkCompleted {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			tx, err := sgctx.DB.Begin()
+			tx, err := sgctx.DB.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
 
-			_, err = tx.Exec(
-				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-			 VALUES ($1, $2, $3)
-			 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
-				fileID,
-				claimedChunkID,
-				chunkOrder,
-			)
-			if err != nil {
+			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
 				_ = tx.Rollback()
 				return StoreFileResult{}, err
 			}
@@ -494,7 +668,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		// At this point, we have a chunk row in "PROCESSING" status for this chunk hash, either created by us or by another process.
 
 		for {
-			tx, err := sgctx.DB.Begin()
+			if err := ctx.Err(); err != nil {
+				return StoreFileResult{}, err
+			}
+			tx, err := sgctx.DB.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
@@ -523,24 +700,17 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				if getBlockErr == nil && existingBlock != nil {
 					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
 					// block metadata already exists for this chunk ID.
-					tx2, err2 := sgctx.DB.Begin()
+					tx2, err2 := sgctx.DB.BeginTx(ctx, nil)
 					if err2 != nil {
 						return StoreFileResult{}, err2
 					}
 
-					if _, err2 = tx2.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
+					if _, err2 = tx2.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
 						_ = tx2.Rollback()
 						return StoreFileResult{}, err2
 					}
 
-					if _, err2 = tx2.Exec(
-						`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-						 VALUES ($1, $2, $3)
-						 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
-						fileID,
-						claimedChunkID,
-						chunkOrder,
-					); err2 != nil {
+					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, chunkOrder, true); err2 != nil {
 						_ = tx2.Rollback()
 						return StoreFileResult{}, err2
 					}
@@ -557,7 +727,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 					return StoreFileResult{}, getBlockErr
 				}
 
-				if _, err3 := sgctx.DB.Exec(
+				if _, err3 := sgctx.DB.ExecContext(
+					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
 					filestate.ChunkAborted,
 					claimedChunkID,
@@ -568,7 +739,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			}
 
 			// Mark chunk as completed
-			if _, err := tx.Exec(
+			if _, err := tx.ExecContext(
+				ctx,
 				`UPDATE chunk SET status = $1 WHERE id = $2`,
 				filestate.ChunkCompleted,
 				claimedChunkID,
@@ -597,15 +769,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			}
 
 			// Link file ↔ chunk
-			_, err = tx.Exec(
-				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-				 VALUES ($1, $2, $3)
-				 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
-				fileID,
-				claimedChunkID,
-				chunkOrder,
-			)
-			if err != nil {
+			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
 				_ = tx.Rollback()
 				return StoreFileResult{}, err
 			}
@@ -623,6 +787,12 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				}
 			}
 
+			// Crash-durability barrier: flush payload bytes before publishing COMPLETED metadata in DB.
+			if err := syncActiveContainerWithWriter(writer); err != nil {
+				_ = tx.Rollback()
+				return StoreFileResult{}, err
+			}
+
 			if err = tx.Commit(); err != nil {
 				return StoreFileResult{}, err
 			}
@@ -633,7 +803,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	}
 
 	// After all chunks are stored and linked, mark logical file as "COMPLETED"
-	_, err = sgctx.DB.Exec(
+	_, err = sgctx.DB.ExecContext(
+		ctx,
 		`UPDATE logical_file SET status = $1 WHERE id = $2`,
 		filestate.LogicalFileCompleted,
 		fileID,
@@ -793,6 +964,27 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 	}
 
 	return nil
+}
+
+func sleepWithContext(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // --------------------------------------------------------------------------

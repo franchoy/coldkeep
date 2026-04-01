@@ -1,21 +1,26 @@
 package verify
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func checkReferenceCounts(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all chunks have correct reference counts (chunk.ref_count should match the actual number of file_chunk references)
 	log.Printf("Checking chunk reference counts consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`
+	rows, err := dbconn.QueryContext(ctx, `
 			SELECT chunk.id,
 				chunk.ref_count,
 				COUNT(file_chunk.chunk_id) AS actual
@@ -70,11 +75,14 @@ func checkReferenceCounts(dbconn *sql.DB) error {
 }
 
 func checkOrphanChunks(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that there are no orphan chunks (chunks with ref_count > 0 but no file_chunk references)
 	log.Printf("Checking for orphan chunks with ref_count > 0 but no file_chunk references...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT chunk.id 
+	rows, err := dbconn.QueryContext(ctx, `SELECT chunk.id 
 							FROM chunk 
 							LEFT JOIN file_chunk ON chunk.id = file_chunk.chunk_id 
 							WHERE file_chunk.chunk_id IS NULL AND chunk.ref_count > 0;`)
@@ -117,13 +125,16 @@ func checkOrphanChunks(dbconn *sql.DB) error {
 }
 
 func checkChunkOffsets(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all chunks have location (container_id + block_offset in blocks) consistent with their status
 	// if status = COMPLETED → blocks row exists with container_id and block_offset
 
 	log.Printf("Checking chunk offsets consistency with status...")
 	var errorList []error
 	var errorCount int
-	rows1, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, c.status
+	rows1, err := dbconn.QueryContext(ctx, `SELECT c.id, b.container_id, b.block_offset, c.status
 							FROM chunk c
 							LEFT JOIN blocks b ON b.chunk_id = c.id
 							WHERE c.status = $1
@@ -161,7 +172,7 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	_ = rows1.Close()
 
 	// if status != COMPLETED → no row should exist in blocks
-	rows2, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, c.status
+	rows2, err := dbconn.QueryContext(ctx, `SELECT c.id, b.container_id, b.block_offset, c.status
 							FROM chunk c
 							LEFT JOIN blocks b ON b.chunk_id = c.id
 							WHERE c.status != $1
@@ -206,12 +217,15 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 }
 
 func checkChunkOffsetValidity(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all chunks with status = COMPLETED have valid blocks.container_id and blocks.block_offset values
 	// and that the block_offset + stored_size does not exceed the container's current_size
 	log.Printf("Checking chunk offset validity for completed chunks...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT c.id, b.container_id, b.block_offset, b.stored_size, cont.current_size
+	rows, err := dbconn.QueryContext(ctx, `SELECT c.id, b.container_id, b.block_offset, b.stored_size, cont.current_size
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container cont ON b.container_id = cont.id

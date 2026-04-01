@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -35,11 +36,13 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		return GCResult{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	// Attempt to acquire advisory lock to ensure only one GC runs at a time
 	var locked bool
 
-	err = dbconn.QueryRow("SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
+	err = dbconn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
 	if err != nil {
 		return GCResult{}, fmt.Errorf("failed to attempt advisory lock: %w", err)
 	}
@@ -49,13 +52,15 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	}
 
 	defer func() {
-		_, err = dbconn.Exec("SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+		defer cleanupCancel()
+		_, err = dbconn.ExecContext(cleanupCtx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
 		if err != nil {
 			log.Printf("warning: failed to release advisory lock: %v\n", err)
 		}
 	}()
 
-	rows, err := dbconn.Query(`
+	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
 	`)
@@ -74,14 +79,18 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			return GCResult{}, err
 		}
 
-		tx, err := dbconn.Begin()
+		if err := ctx.Err(); err != nil {
+			return GCResult{}, err
+		}
+
+		tx, err := dbconn.BeginTx(ctx, nil)
 		if err != nil {
 			return GCResult{}, err
 		}
 
 		// Re-check inside transaction
 		var stillEmpty bool
-		err = tx.QueryRow(`
+		err = tx.QueryRowContext(ctx, `
 			SELECT 
 				COALESCE(sealed, false) AND NOT EXISTS (
 					SELECT 1
@@ -112,7 +121,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		}
 
 		// Delete location records and then chunk rows linked to this container.
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			WITH deleted_blocks AS (
 				DELETE FROM blocks
 				WHERE container_id = $1
@@ -129,7 +138,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		}
 
 		// Delete container row
-		_, err = tx.Exec(`DELETE FROM container WHERE id = $1`, containerID)
+		_, err = tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return GCResult{}, err

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -33,8 +34,10 @@ func RemoveFileWithDB(dbconn *sql.DB, fileID int64) error {
 
 func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResult, err error) {
 	result.FileID = fileID
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
-	tx, err := dbconn.Begin()
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return RemoveFileResult{}, err
 	}
@@ -46,7 +49,8 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 
 	// Check existence first
 	var exists bool
-	err = tx.QueryRow(
+	err = tx.QueryRowContext(
+		ctx,
 		"SELECT EXISTS (SELECT 1 FROM logical_file WHERE id=$1)",
 		fileID,
 	).Scan(&exists)
@@ -59,7 +63,7 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	}
 
 	// Get chunk IDs
-	rows, err := tx.Query(`
+	rows, err := tx.QueryContext(ctx, `
 		SELECT chunk_id
 		FROM file_chunk
 		WHERE logical_file_id = $1
@@ -84,7 +88,7 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	// Decrement ref_count
 	for _, chunkID := range chunkIDs {
 		var refCount int64
-		err := tx.QueryRow(`
+		err := tx.QueryRowContext(ctx, `
 			UPDATE chunk
 			SET ref_count = ref_count - 1
 			WHERE id = $1
@@ -103,14 +107,14 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	}
 
 	// Remove mappings
-	_, err = tx.Exec(`DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)
+	_, err = tx.ExecContext(ctx, `DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
 		return RemoveFileResult{}, err
 	}
 
 	// Remove logical file
-	_, err = tx.Exec(`DELETE FROM logical_file WHERE id = $1`, fileID)
+	_, err = tx.ExecContext(ctx, `DELETE FROM logical_file WHERE id = $1`, fileID)
 	if err != nil {
 		_ = tx.Rollback()
 		return RemoveFileResult{}, err

@@ -11,24 +11,28 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func printCounters(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	var containerCount, chunkCount, fileCount int
 	//list container counter to be checked
-	err := dbconn.QueryRow("SELECT COUNT(*) FROM container").Scan(&containerCount)
+	err := dbconn.QueryRowContext(ctx, "SELECT COUNT(*) FROM container").Scan(&containerCount)
 	if err != nil {
 		return fmt.Errorf("failed to query container count: %w", err)
 	}
 	//list chunk counter to be checked
-	err = dbconn.QueryRow("SELECT COUNT(*) FROM chunk").Scan(&chunkCount)
+	err = dbconn.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunk").Scan(&chunkCount)
 	if err != nil {
 		return fmt.Errorf("failed to query chunk count: %w", err)
 	}
 	//list file counter to be checked
-	err = dbconn.QueryRow("SELECT COUNT(*) FROM logical_file").Scan(&fileCount)
+	err = dbconn.QueryRowContext(ctx, "SELECT COUNT(*) FROM logical_file").Scan(&fileCount)
 	if err != nil {
 		return fmt.Errorf("failed to query logical file count: %w", err)
 	}
@@ -168,8 +172,11 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 
 	// Count all non-quarantined containers that currently hold completed chunks.
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	containerCount := 0
-	containerCountErr := dbconn.QueryRow(`
+	containerCountErr := dbconn.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM container ctr
 		WHERE ctr.quarantine = FALSE
@@ -189,7 +196,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`
+	containers, err := dbconn.QueryContext(ctx, `
 		SELECT ctr.id, ctr.filename, ctr.current_size, ctr.max_size
 		FROM container ctr
 		WHERE ctr.quarantine = FALSE
@@ -227,7 +234,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 		processContainerErr := func() (retErr error) {
 			//fetch chunks ordered by offset
-			chunks, err := dbconn.Query(`SELECT 
+			chunks, err := dbconn.QueryContext(ctx, `SELECT 
 									b.block_offset,
 									b.stored_size,
 									b.plaintext_size,
@@ -311,7 +318,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 					transformerCache[codecType] = transformer
 				}
 
-				plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+				plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
 					ChunkHash: chunkHash,
 					Descriptor: blocks.Descriptor{
 						Codec:         codecType,

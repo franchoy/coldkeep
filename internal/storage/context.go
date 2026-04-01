@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -122,7 +123,16 @@ func ParseStorageContext(value string) (StorageContext, error) {
 			return StorageContext{}, fmt.Errorf("failed to create simulated DB: %w", err)
 		}
 
-		if err := sqliteDB.Ping(); err != nil {
+		if err := db.ApplySQLiteSessionPragmas(sqliteDB); err != nil {
+			_ = sqliteDB.Close()
+			_ = os.Remove(tempDBFile.Name())
+			return StorageContext{}, fmt.Errorf("failed to configure simulated DB: %w", err)
+		}
+
+		pingCtx, cancel := db.NewOperationContext(context.Background())
+		defer cancel()
+
+		if err := sqliteDB.PingContext(pingCtx); err != nil {
 			_ = sqliteDB.Close()
 			_ = os.Remove(tempDBFile.Name())
 			return StorageContext{}, fmt.Errorf("failed to ping simulated DB: %w", err)

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,185 @@ type RestoreFileResult struct {
 	OriginalName string `json:"original_name"`
 	OutputPath   string `json:"output_path"`
 	RestoredHash string `json:"restored_hash"`
+}
+
+type restoreChunkRow struct {
+	chunkOrder          int64
+	blockOffset         int64
+	plaintextSize       int64
+	storedSize          int64
+	expectedChunkHash   string
+	chunkSize           int64
+	blocksCodec         string
+	blocksFormatVersion int
+	blocksNonce         []byte
+	blocksContainerID   int64
+	filename            string
+	chunkStatus         string
+	maxSize             int64
+	chunkID             int64
+}
+
+func pinLogicalFileRestoreChunks(dbconn *sql.DB, fileID int64) (string, string, []restoreChunkRow, []int64, error) {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return pinLogicalFileRestoreChunksWithContext(ctx, dbconn, fileID)
+}
+
+func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) (string, string, []restoreChunkRow, []int64, error) {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", nil, nil, err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var expectedFileHash string
+	var originalName string
+	err = tx.QueryRowContext(
+		ctx,
+		"SELECT original_name, file_hash FROM logical_file WHERE status = $1 AND id = $2",
+		filestate.LogicalFileCompleted,
+		fileID,
+	).Scan(&originalName, &expectedFileHash)
+	if err == sql.ErrNoRows {
+		return "", "", nil, nil, fmt.Errorf("logical file %d not found", fileID)
+	}
+	if err != nil {
+		return "", "", nil, nil, fmt.Errorf("query logical_file: %w", err)
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT
+			fc.chunk_order,
+			b.block_offset,
+			b.plaintext_size,
+			b.stored_size,
+			c.chunk_hash,
+			c.size,
+			b.codec,
+			b.format_version,
+			b.nonce,
+			b.container_id,
+			ctr.filename,
+			c.status,
+			ctr.max_size,
+			c.id
+		FROM file_chunk fc
+		JOIN chunk c ON c.id = fc.chunk_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE fc.logical_file_id = $1 AND c.status = $2
+		ORDER BY fc.chunk_order ASC
+	`, fileID, filestate.ChunkCompleted)
+	if err != nil {
+		return "", "", nil, nil, fmt.Errorf("query file chunks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	chunkRows := make([]restoreChunkRow, 0)
+	pinnedChunkIDs := make([]int64, 0)
+	for rows.Next() {
+		var row restoreChunkRow
+		if err := rows.Scan(
+			&row.chunkOrder,
+			&row.blockOffset,
+			&row.plaintextSize,
+			&row.storedSize,
+			&row.expectedChunkHash,
+			&row.chunkSize,
+			&row.blocksCodec,
+			&row.blocksFormatVersion,
+			&row.blocksNonce,
+			&row.blocksContainerID,
+			&row.filename,
+			&row.chunkStatus,
+			&row.maxSize,
+			&row.chunkID,
+		); err != nil {
+			return "", "", nil, nil, fmt.Errorf("scan chunk row: %w", err)
+		}
+		chunkRows = append(chunkRows, row)
+		pinnedChunkIDs = append(pinnedChunkIDs, row.chunkID)
+	}
+	if err := rows.Err(); err != nil {
+		return "", "", nil, nil, fmt.Errorf("iterate chunk rows: %w", err)
+	}
+
+	for _, chunkID := range pinnedChunkIDs {
+		result, execErr := tx.ExecContext(
+			ctx,
+			`UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`,
+			chunkID,
+		)
+		if execErr != nil {
+			return "", "", nil, nil, fmt.Errorf("pin chunk %d for restore: %w", chunkID, execErr)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return "", "", nil, nil, fmt.Errorf("rows affected when pinning chunk %d: %w", chunkID, rowsErr)
+		}
+		if rowsAffected != 1 {
+			return "", "", nil, nil, fmt.Errorf("chunk %d disappeared while pinning restore", chunkID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", nil, nil, err
+	}
+	tx = nil
+
+	return originalName, expectedFileHash, chunkRows, pinnedChunkIDs, nil
+}
+
+func unpinRestoreChunks(dbconn *sql.DB, chunkIDs []int64) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return unpinRestoreChunksWithContext(ctx, dbconn, chunkIDs)
+}
+
+func unpinRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB, chunkIDs []int64) error {
+	if len(chunkIDs) == 0 {
+		return nil
+	}
+
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	for _, chunkID := range chunkIDs {
+		result, execErr := tx.ExecContext(
+			ctx,
+			`UPDATE chunk SET ref_count = ref_count - 1 WHERE id = $1 AND ref_count > 0`,
+			chunkID,
+		)
+		if execErr != nil {
+			return fmt.Errorf("unpin chunk %d after restore: %w", chunkID, execErr)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return fmt.Errorf("rows affected when unpinning chunk %d: %w", chunkID, rowsErr)
+		}
+		if rowsAffected != 1 {
+			return fmt.Errorf("invalid ref_count transition while unpinning chunk %d", chunkID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	tx = nil
+
+	return nil
 }
 
 func RestoreFile(id int64, outputPath string) error {
@@ -57,61 +237,25 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 
 func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string) (result RestoreFileResult, err error) {
 	result.FileID = fileID
-	// ------------------------------------------------------------
-	// Fetch logical file metadata
-	// ------------------------------------------------------------
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
-	ctx := context.Background()
-
-	var expectedFileHash string
-	var originalName string
-
-	err = dbconn.QueryRow(
-		"SELECT original_name, file_hash FROM logical_file WHERE status = $1 AND id = $2",
-		filestate.LogicalFileCompleted,
-		fileID,
-	).Scan(&originalName, &expectedFileHash)
-
-	if err == sql.ErrNoRows {
-		return RestoreFileResult{}, fmt.Errorf("logical file %d not found", fileID)
-	}
+	originalName, expectedFileHash, chunkRows, pinnedChunkIDs, err := pinLogicalFileRestoreChunksWithContext(ctx, dbconn, fileID)
 	if err != nil {
-		return RestoreFileResult{}, fmt.Errorf("query logical_file: %w", err)
+		return RestoreFileResult{}, err
 	}
+	defer func() {
+		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+		defer cleanupCancel()
+		if unpinErr := unpinRestoreChunksWithContext(cleanupCtx, dbconn, pinnedChunkIDs); unpinErr != nil {
+			log.Printf("event=restore_cleanup action=unpin_chunks file_id=%d error=%v", fileID, unpinErr)
+			if err == nil {
+				err = unpinErr
+			}
+		}
+	}()
+
 	result.OriginalName = originalName
-	// ----------------------------------------------------------------------------------------------
-	// Fetch chunk metadata for the logical file from chunk and blocks tables, ordered by chunk_order.
-	// Only process chunks with COMPLETED status for consistency.
-	// Chunks may legitimately live in the active (unsealed) container.
-	// ----------------------------------------------------------------------------------------------
-	rows, err := dbconn.Query(`
-					SELECT
-				fc.chunk_order,
-				b.block_offset,
-				b.plaintext_size,
-				b.stored_size,
-				c.chunk_hash,
-				c.size,
-				b.codec,
-				b.format_version,
-				b.nonce,
-				b.container_id,
-				ctr.filename,
-				c.status,
-				ctr.max_size,
-				c.id
-			FROM file_chunk fc
-			JOIN chunk c ON c.id = fc.chunk_id
-			JOIN blocks b ON b.chunk_id = c.id
-			JOIN container ctr ON ctr.id = b.container_id
-			WHERE fc.logical_file_id = $1 AND c.status = $2
-			ORDER BY fc.chunk_order ASC
-	`, fileID, filestate.ChunkCompleted)
-
-	if err != nil {
-		return RestoreFileResult{}, fmt.Errorf("query file chunks: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 
 	// ------------------------------------------------------------
 	// Prepare output file
@@ -166,41 +310,25 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
 	var expectedOrder int64 = 0
-	for rows.Next() {
-
-		var chunkOrder int64
-		var blockOffset int64
-		var plaintextSize int64
-		var storedSize int64
-		var expectedChunkHash string
-		var chunksize int64
-		var blocksCodec string
-		var blocksFormatVersion int
-		var blocksNonce []byte
-		var blocksContainerID int64
-		var filename string
-		var chunkStatus string
-		var maxSize int64
-		var chunkID int64
-
-		if err := rows.Scan(&chunkOrder, &blockOffset, &plaintextSize, &storedSize, &expectedChunkHash, &chunksize, &blocksCodec, &blocksFormatVersion, &blocksNonce, &blocksContainerID, &filename, &chunkStatus, &maxSize, &chunkID); err != nil {
-			return RestoreFileResult{}, fmt.Errorf("scan chunk row: %w", err)
+	for _, chunkRow := range chunkRows {
+		if err := ctx.Err(); err != nil {
+			return RestoreFileResult{}, err
 		}
 
-		if chunkStatus != filestate.ChunkCompleted {
-			return RestoreFileResult{}, fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkOrder, fileID, chunkStatus)
+		if chunkRow.chunkStatus != filestate.ChunkCompleted {
+			return RestoreFileResult{}, fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkRow.chunkOrder, fileID, chunkRow.chunkStatus)
 		}
 
 		// Validate monotonically contiguous chunk sequence
-		if chunkOrder != expectedOrder {
+		if chunkRow.chunkOrder != expectedOrder {
 			return RestoreFileResult{}, fmt.Errorf(
 				"chunk order discontinuity for file %d: expected order %d got %d (possible missing chunk, broken file graph, or unsealed container reference)",
-				fileID, expectedOrder, chunkOrder,
+				fileID, expectedOrder, chunkRow.chunkOrder,
 			)
 		}
 		expectedOrder++
 
-		if containerfilename != filename {
+		if containerfilename != chunkRow.filename {
 			// Close previous container before opening new one
 			if filecontainer != nil {
 				if err := filecontainer.Close(); err != nil {
@@ -209,75 +337,71 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 				filecontainer = nil
 			}
 
-			containerPath := filepath.Join(containersDir, filename)
-			filecontainer, err = container.OpenReadOnlyContainer(containerPath, maxSize)
+			containerPath := filepath.Join(containersDir, chunkRow.filename)
+			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
 			if err != nil {
-				return RestoreFileResult{}, fmt.Errorf("open sealed container %q at %s: %w", filename, containerPath, err)
+				return RestoreFileResult{}, fmt.Errorf("open sealed container %q at %s: %w", chunkRow.filename, containerPath, err)
 			}
-			containerfilename = filename
+			containerfilename = chunkRow.filename
 		}
 
 		// Read block payload
-		payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
+		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
 		if err != nil {
-			return RestoreFileResult{}, fmt.Errorf("read payload from container=%s offset=%d size=%d: %w", filename, blockOffset, storedSize, err)
+			return RestoreFileResult{}, fmt.Errorf("read payload from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
 		}
 
 		// Use cached transformer to avoid repeated allocations
-		codec := blocks.Codec(blocksCodec)
+		codec := blocks.Codec(chunkRow.blocksCodec)
 		transformer, ok := transformerCache[codec]
 		if !ok {
 			var err error
 			transformer, err = blocks.GetBlockTransformer(codec)
 			if err != nil {
-				return RestoreFileResult{}, fmt.Errorf("get block transformer for codec %s: %w", blocksCodec, err)
+				return RestoreFileResult{}, fmt.Errorf("get block transformer for codec %s: %w", chunkRow.blocksCodec, err)
 			}
 			transformerCache[codec] = transformer
 		}
 
 		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-			ChunkHash: expectedChunkHash,
+			ChunkHash: chunkRow.expectedChunkHash,
 			Descriptor: blocks.Descriptor{
-				ChunkID:       chunkID,
+				ChunkID:       chunkRow.chunkID,
 				Codec:         codec,
-				FormatVersion: blocksFormatVersion,
-				PlaintextSize: plaintextSize,
-				StoredSize:    storedSize,
-				Nonce:         blocksNonce,
-				ContainerID:   blocksContainerID,
-				BlockOffset:   blockOffset,
+				FormatVersion: chunkRow.blocksFormatVersion,
+				PlaintextSize: chunkRow.plaintextSize,
+				StoredSize:    chunkRow.storedSize,
+				Nonce:         chunkRow.blocksNonce,
+				ContainerID:   chunkRow.blocksContainerID,
+				BlockOffset:   chunkRow.blockOffset,
 			},
 			Payload: payload,
 		})
 		if err != nil {
-			return RestoreFileResult{}, fmt.Errorf("decode block from chunk=%d container=%s codec=%s: %w", chunkOrder, filename, blocksCodec, err)
+			return RestoreFileResult{}, fmt.Errorf("decode block from chunk=%d container=%s codec=%s: %w", chunkRow.chunkOrder, chunkRow.filename, chunkRow.blocksCodec, err)
 		}
 
 		// Validate plaintext size
-		if int64(len(plaintext)) != plaintextSize {
-			return RestoreFileResult{}, fmt.Errorf("plaintext size mismatch: expected %d got %d", plaintextSize, len(plaintext))
+		if int64(len(plaintext)) != chunkRow.plaintextSize {
+			return RestoreFileResult{}, fmt.Errorf("plaintext size mismatch: expected %d got %d", chunkRow.plaintextSize, len(plaintext))
 		}
 
 		// Validate hashes (DB hash and on-disk record hash)
 		sum := sha256.Sum256(plaintext)
 		gotHash := hex.EncodeToString(sum[:])
-		if gotHash != expectedChunkHash {
-			return RestoreFileResult{}, fmt.Errorf("restored chunk hash mismatch: expected %s got %s", expectedChunkHash, gotHash)
+		if gotHash != chunkRow.expectedChunkHash {
+			return RestoreFileResult{}, fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunkRow.expectedChunkHash, gotHash)
 		}
 
 		// Write to output
 		if _, err := outFile.Write(plaintext); err != nil {
-			return RestoreFileResult{}, fmt.Errorf("write chunk %d to output file: %w", chunkOrder, err)
+			return RestoreFileResult{}, fmt.Errorf("write chunk %d to output file: %w", chunkRow.chunkOrder, err)
 		}
 
 		// Update file hash
 		if _, err := hasher.Write(plaintext); err != nil {
 			return RestoreFileResult{}, fmt.Errorf("hash restored data: %w", err)
 		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("iterate chunk rows: %w", err)
 	}
 
 	if expectedOrder == 0 {

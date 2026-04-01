@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -175,15 +177,16 @@ func runCLI(args []string) int {
 func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err error) {
 	if mode == outputModeJSON {
 		payload := map[string]any{
-			"event":                          "startup_recovery",
-			"status":                         "ok",
-			"aborted_logical_files":          report.AbortedLogicalFiles,
-			"aborted_chunks":                 report.AbortedChunks,
-			"quarantined_missing_containers": report.QuarantinedMissing,
-			"quarantined_orphan_containers":  report.QuarantinedOrphan,
-			"checked_container_records":      report.CheckedContainerRecord,
-			"checked_disk_files":             report.CheckedDiskFiles,
-			"skipped_dir_entries":            report.SkippedDirEntries,
+			"event":                               "startup_recovery",
+			"status":                              "ok",
+			"aborted_logical_files":               report.AbortedLogicalFiles,
+			"aborted_chunks":                      report.AbortedChunks,
+			"quarantined_missing_containers":      report.QuarantinedMissing,
+			"quarantined_corrupt_tail_containers": report.QuarantinedCorruptTail,
+			"quarantined_orphan_containers":       report.QuarantinedOrphan,
+			"checked_container_records":           report.CheckedContainerRecord,
+			"checked_disk_files":                  report.CheckedDiskFiles,
+			"skipped_dir_entries":                 report.SkippedDirEntries,
 		}
 		if err != nil {
 			payload["status"] = "error"
@@ -197,10 +200,11 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 	if err != nil {
 		fmt.Fprintf(
 			os.Stderr,
-			"RECOVERY status=error aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d message=%q\n",
+			"RECOVERY status=error aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d message=%q\n",
 			report.AbortedLogicalFiles,
 			report.AbortedChunks,
 			report.QuarantinedMissing,
+			report.QuarantinedCorruptTail,
 			report.QuarantinedOrphan,
 			report.CheckedContainerRecord,
 			report.CheckedDiskFiles,
@@ -212,10 +216,11 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 
 	fmt.Fprintf(
 		os.Stderr,
-		"RECOVERY status=ok aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d\n",
+		"RECOVERY status=ok aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d\n",
 		report.AbortedLogicalFiles,
 		report.AbortedChunks,
 		report.QuarantinedMissing,
+		report.QuarantinedCorruptTail,
 		report.QuarantinedOrphan,
 		report.CheckedContainerRecord,
 		report.CheckedDiskFiles,
@@ -949,6 +954,8 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 		Subcommand: subcommand,
 		Path:       path,
 	}
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	queries := []struct {
 		dest  interface{}
@@ -962,7 +969,7 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.ref_count > 0`, nil},
 	}
 	for _, q := range queries {
-		if err := sgctx.DB.QueryRow(q.query, q.args...).Scan(q.dest); err != nil {
+		if err := sgctx.DB.QueryRowContext(ctx, q.query, q.args...).Scan(q.dest); err != nil {
 			return fmt.Errorf("query simulate stats: %w", err)
 		}
 	}

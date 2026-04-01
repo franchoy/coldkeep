@@ -2660,6 +2660,172 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 }
 
+func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "truncated-active-tail.bin", 256*1024)
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var containerID int64
+	var filename string
+	var dbCurrentSize int64
+	var sealed bool
+	err = dbconn.QueryRow(`
+		SELECT id, filename, current_size, sealed
+		FROM container
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&containerID, &filename, &dbCurrentSize, &sealed)
+	if err != nil {
+		t.Fatalf("select active container: %v", err)
+	}
+	if sealed {
+		t.Fatalf("expected newest container to be active/unsealed")
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, filename)
+	truncatedSize := dbCurrentSize - 32
+	if truncatedSize <= 0 {
+		t.Fatalf("invalid truncation target for container size %d", dbCurrentSize)
+	}
+	if err := os.Truncate(containerPath, truncatedSize); err != nil {
+		t.Fatalf("truncate active container tail: %v", err)
+	}
+
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("system recovery: %v", err)
+	}
+	if report.QuarantinedCorruptTail < 1 {
+		t.Fatalf("expected corrupt-tail quarantine count >= 1, got %d", report.QuarantinedCorruptTail)
+	}
+
+	var quarantine bool
+	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, containerID).Scan(&quarantine)
+	if err != nil {
+		t.Fatalf("query container quarantine: %v", err)
+	}
+	if !quarantine {
+		t.Fatalf("expected truncated active container to be quarantined")
+	}
+}
+
+func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	orphanFilename := "orphan_conflict_mismatch.bin"
+	orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
+	orphanBytes := []byte("orphan-file-bytes-for-conflict-validation")
+	if err := os.WriteFile(orphanPath, orphanBytes, 0o644); err != nil {
+		t.Fatalf("write orphan file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3)`,
+		orphanFilename,
+		int64(1),
+		int64(1),
+	); err != nil {
+		t.Fatalf("insert preexisting mismatched quarantine row: %v", err)
+	}
+
+	_, err = recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err == nil {
+		t.Fatalf("expected suspicious orphan conflict error")
+	}
+	if !strings.Contains(err.Error(), "suspicious orphan container conflict") {
+		t.Fatalf("expected suspicious orphan conflict error, got: %v", err)
+	}
+}
+
+func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	orphanFilename := "orphan_conflict_duplicate_retrier.bin"
+	orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
+	orphanBytes := []byte("orphan-file-bytes-for-duplicate-retrier")
+	if err := os.WriteFile(orphanPath, orphanBytes, 0o644); err != nil {
+		t.Fatalf("write orphan file: %v", err)
+	}
+	expectedSize := int64(len(orphanBytes))
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3)`,
+		orphanFilename,
+		expectedSize,
+		expectedSize,
+	); err != nil {
+		t.Fatalf("insert preexisting matching quarantine row: %v", err)
+	}
+
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("expected duplicate retrier state to be accepted, got: %v", err)
+	}
+	if report.QuarantinedOrphan != 0 {
+		t.Fatalf("expected no new orphan quarantine rows, got %d", report.QuarantinedOrphan)
+	}
+
+	var rowCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE filename = $1`, orphanFilename).Scan(&rowCount); err != nil {
+		t.Fatalf("count container rows: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("expected exactly 1 container row after duplicate retrier handling, got %d", rowCount)
+	}
+}
+
 func TestVerifyStandard(t *testing.T) {
 	requireDB(t)
 

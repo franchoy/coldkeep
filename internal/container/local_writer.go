@@ -241,6 +241,16 @@ func (w *LocalWriter) FinalizeContainer() error {
 	return nil
 }
 
+func (w *LocalWriter) SyncActiveContainer() error {
+	if !w.hasActive || w.activeHandle == nil {
+		return nil
+	}
+	if err := w.activeHandle.Sync(); err != nil {
+		return fmt.Errorf("sync container %d: %w", w.activeID, err)
+	}
+	return nil
+}
+
 func (w *LocalWriter) ContainerCount() int {
 	return w.containers
 }

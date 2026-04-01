@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -62,10 +63,12 @@ func verifySystem(dbconn *sql.DB, containersDir string, verifyLevel verify.Verif
 }
 
 func verifyFile(dbconn *sql.DB, containersDir string, fileId int, verifyLevel verify.VerifyLevel) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	//verify that the file id exists
 	var exists bool
-	err := dbconn.QueryRow("SELECT EXISTS(SELECT 1 FROM logical_file WHERE id = $1)", fileId).Scan(&exists)
+	err := dbconn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM logical_file WHERE id = $1)", fileId).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}

@@ -1,6 +1,7 @@
 package listing
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -24,6 +25,8 @@ func ListFilesResult(args []string) ([]FileRecord, error) {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	limit, offset, err := parsePaginationArgs(args)
 	if err != nil {
@@ -39,7 +42,7 @@ func ListFilesResult(args []string) ([]FileRecord, error) {
 	params := []interface{}{filestate.LogicalFileCompleted}
 	query, params = applyPagination(query, params, 2, limit, offset)
 
-	rows, err := dbconn.Query(query, params...)
+	rows, err := dbconn.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -60,6 +61,8 @@ func RunStatsResult() (*StatsResult, error) {
 		return nil, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	r := &StatsResult{}
 
@@ -68,37 +71,37 @@ func RunStatsResult() (*StatsResult, error) {
 	var totalFileRetries, maxFileRetries, totalChunkRetries, maxChunkRetries sql.NullInt64
 	var avgFileRetries, avgChunkRetries sql.NullFloat64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
 		Scan(&r.TotalFiles, &totalLogical); err != nil {
 		return nil, fmt.Errorf("failed to query total logical files: %w", err)
 	}
 	r.TotalLogicalSizeBytes = totalLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).
 		Scan(&r.CompletedFiles, &completedLogical); err != nil {
 		return nil, fmt.Errorf("failed to query completed logical files: %w", err)
 	}
 	r.CompletedSizeBytes = completedLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).
 		Scan(&r.ProcessingFiles, &processingLogical); err != nil {
 		return nil, fmt.Errorf("failed to query processing logical files: %w", err)
 	}
 	r.ProcessingSizeBytes = processingLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileAborted).
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileAborted).
 		Scan(&r.AbortedFiles, &abortedLogical); err != nil {
 		return nil, fmt.Errorf("failed to query aborted logical files: %w", err)
 	}
 	r.AbortedSizeBytes = abortedLogical.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = FALSE`).
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = FALSE`).
 		Scan(&r.HealthyContainers, &healthySize); err != nil {
 		return nil, fmt.Errorf("failed to query healthy containers: %w", err)
 	}
 	r.HealthyContainerBytes = healthySize.Int64
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = TRUE`).
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = TRUE`).
 		Scan(&r.QuarantineContainers, &quarantineSize); err != nil {
 		return nil, fmt.Errorf("failed to query quarantined containers: %w", err)
 	}
@@ -108,7 +111,7 @@ func RunStatsResult() (*StatsResult, error) {
 	totalContainerSize = sql.NullInt64{Int64: r.HealthyContainerBytes + r.QuarantineContainerBytes, Valid: true}
 	r.TotalContainerBytes = totalContainerSize.Int64
 
-	if err := dbconn.QueryRow(`
+	if err := dbconn.QueryRowContext(ctx, `
 		SELECT
 			COALESCE(SUM(CASE WHEN ch.ref_count > 0 THEN b.stored_size ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN ch.ref_count = 0 THEN b.stored_size ELSE 0 END),0)
@@ -127,7 +130,7 @@ func RunStatsResult() (*StatsResult, error) {
 		r.FragmentationRatioPct = float64(r.DeadBlockBytes) / float64(r.HealthyContainerBytes) * 100
 	}
 
-	if err := dbconn.QueryRow(`
+	if err := dbconn.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
 		FROM logical_file
 	`).Scan(&totalFileRetries, &avgFileRetries, &maxFileRetries); err != nil {
@@ -137,7 +140,7 @@ func RunStatsResult() (*StatsResult, error) {
 	r.AvgFileRetries = avgFileRetries.Float64
 	r.MaxFileRetries = maxFileRetries.Int64
 
-	if err := dbconn.QueryRow(`
+	if err := dbconn.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(retry_count),0), COALESCE(AVG(retry_count),0), COALESCE(MAX(retry_count),0)
 		FROM chunk
 	`).Scan(&totalChunkRetries, &avgChunkRetries, &maxChunkRetries); err != nil {
@@ -148,7 +151,7 @@ func RunStatsResult() (*StatsResult, error) {
 	r.MaxChunkRetries = maxChunkRetries.Int64
 
 	// Chunk status breakdown
-	chunkRows, err := dbconn.Query(`SELECT status, COUNT(*), COALESCE(SUM(size),0) FROM chunk GROUP BY status`)
+	chunkRows, err := dbconn.QueryContext(ctx, `SELECT status, COUNT(*), COALESCE(SUM(size),0) FROM chunk GROUP BY status`)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +179,7 @@ func RunStatsResult() (*StatsResult, error) {
 	r.TotalChunks = r.CompletedChunks + r.ProcessingChunks + r.AbortedChunks
 
 	// Per-container breakdown
-	ctrRows, err := dbconn.Query(`
+	ctrRows, err := dbconn.QueryContext(ctx, `
 		SELECT
 			c.id,
 			c.filename,

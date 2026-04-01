@@ -176,8 +176,16 @@ The `simulate` command provides **accurate metadata-level estimation**:
 
 - No data is written to storage
 - Real chunking and deduplication logic is executed
+- Container packing math follows the real write path closely enough to estimate size and layout
 
 > Simulation reflects real storage behavior without side effects.
+
+Simulation is still a confidence tool, not a correctness proof for the PostgreSQL-backed runtime:
+
+- Simulated mode uses an isolated SQLite database
+- It does not exercise PostgreSQL advisory locks
+- It does not prove row-lock or lock-wait behavior under contention
+- It is not strong evidence for GC exclusivity or retry behavior under real concurrent load
 
 > These guarantees describe system behavior under controlled conditions.
 > coldkeep remains experimental and is not yet recommended for production use.
@@ -247,9 +255,22 @@ coldkeep simulate store file.txt --output json
 - Does not write container files
 - Does not persist data
 - Does not modify real storage
+- Does not validate PostgreSQL-specific locking, advisory lock, or contention semantics
 
 Simulation is designed as a **decision tool** for evaluating coldkeep before adoption,
 providing realistic estimates of storage efficiency and expected container usage.
+
+### Operational timeouts
+
+Database operations now run with bounded connection and statement limits by default. The main tuning knobs are:
+
+- `COLDKEEP_DB_CONNECT_TIMEOUT_MS`
+- `COLDKEEP_DB_OPERATION_TIMEOUT_MS`
+- `COLDKEEP_DB_STATEMENT_TIMEOUT_MS`
+- `COLDKEEP_DB_LOCK_TIMEOUT_MS`
+- `COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS`
+
+These limits are intended to keep CLI commands from hanging indefinitely on dead connections, blocked sessions, or stalled lock acquisition.
 
 ---
 

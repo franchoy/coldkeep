@@ -45,7 +45,8 @@ func TestEmitStartupRecoveryReportJSONSuccessSchema(t *testing.T) {
 		AbortedLogicalFiles:    2,
 		AbortedChunks:          3,
 		QuarantinedMissing:     4,
-		QuarantinedOrphan:      5,
+		QuarantinedCorruptTail: 5,
+		QuarantinedOrphan:      6,
 		CheckedContainerRecord: 7,
 		CheckedDiskFiles:       11,
 		SkippedDirEntries:      13,
@@ -73,7 +74,8 @@ func TestEmitStartupRecoveryReportJSONSuccessSchema(t *testing.T) {
 	assertJSONNumber(t, payload, "aborted_logical_files", 2)
 	assertJSONNumber(t, payload, "aborted_chunks", 3)
 	assertJSONNumber(t, payload, "quarantined_missing_containers", 4)
-	assertJSONNumber(t, payload, "quarantined_orphan_containers", 5)
+	assertJSONNumber(t, payload, "quarantined_corrupt_tail_containers", 5)
+	assertJSONNumber(t, payload, "quarantined_orphan_containers", 6)
 	assertJSONNumber(t, payload, "checked_container_records", 7)
 	assertJSONNumber(t, payload, "checked_disk_files", 11)
 	assertJSONNumber(t, payload, "skipped_dir_entries", 13)
@@ -105,6 +107,7 @@ func TestEmitStartupRecoveryReportJSONErrorSchema(t *testing.T) {
 	assertJSONNumber(t, payload, "aborted_logical_files", 0)
 	assertJSONNumber(t, payload, "aborted_chunks", 0)
 	assertJSONNumber(t, payload, "quarantined_missing_containers", 0)
+	assertJSONNumber(t, payload, "quarantined_corrupt_tail_containers", 0)
 	assertJSONNumber(t, payload, "quarantined_orphan_containers", 0)
 	assertJSONNumber(t, payload, "checked_container_records", 0)
 	assertJSONNumber(t, payload, "checked_disk_files", 0)
