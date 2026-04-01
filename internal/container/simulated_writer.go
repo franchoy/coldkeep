@@ -66,6 +66,10 @@ func (w *SimulatedWriter) RollbackLastAppend() error {
 	return nil
 }
 
+// AcknowledgeAppendCommitted is a no-op for SimulatedWriter: there is no physical
+// rollback state to clear after a successful DB commit.
+func (w *SimulatedWriter) AcknowledgeAppendCommitted() {}
+
 func (w *SimulatedWriter) ContainerCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()

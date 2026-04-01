@@ -339,6 +339,17 @@ func (w *LocalWriter) FinalizeContainer() error {
 	return nil
 }
 
+// AcknowledgeAppendCommitted clears the rollback bookkeeping after the enclosing
+// DB transaction has successfully committed. This completes the commit path of the
+// state machine: pendingAppend and the pre-write size/file fields are zeroed so a
+// future rollback call cannot accidentally truncate already-committed bytes.
+// Safe to call even if no append is pending (no-op).
+func (w *LocalWriter) AcknowledgeAppendCommitted() {
+	w.pendingAppend = false
+	w.prevAppendSize = 0
+	w.prevAppendFile = ""
+}
+
 // RollbackLastAppend truncates the active container file back to its pre-append
 // offset when the enclosing DB transaction was rolled back or failed to commit.
 // Safe to call even if no append is pending (no-op). After a successful rollback

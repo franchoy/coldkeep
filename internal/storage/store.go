@@ -38,6 +38,15 @@ type optionalAppendRollbacker interface {
 	RollbackLastAppend() error
 }
 
+// optionalAppendCommitAcknowledger is implemented by writers that maintain rollback
+// state after a physical append. Calling AcknowledgeAppendCommitted after a
+// successful tx.Commit() closes the commit path of the state machine, ensuring
+// that already-committed bytes can never be accidentally truncated by a subsequent
+// RollbackLastAppend call.
+type optionalAppendCommitAcknowledger interface {
+	AcknowledgeAppendCommitted()
+}
+
 type optionalFailedActiveContainerRetirer interface {
 	RetireActiveContainer() error
 }
@@ -52,6 +61,16 @@ type optionalWriterDBBinder interface {
 func rollbackWriterLastAppend(writer payloadStatefulWriter) {
 	if rb, ok := writer.(optionalAppendRollbacker); ok {
 		_ = rb.RollbackLastAppend()
+	}
+}
+
+// acknowledgeWriterAppendCommitted calls AcknowledgeAppendCommitted on the writer
+// if it supports it. Must be called immediately after every successful tx.Commit()
+// that followed an AppendPayload call, completing the commit path of the writer
+// state machine so pending rollback bookkeeping is cleared.
+func acknowledgeWriterAppendCommitted(writer payloadStatefulWriter) {
+	if ack, ok := writer.(optionalAppendCommitAcknowledger); ok {
+		ack.AcknowledgeAppendCommitted()
 	}
 }
 
@@ -1166,6 +1185,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
+			acknowledgeWriterAppendCommitted(writer)
 
 			chunkOrder++
 			break
