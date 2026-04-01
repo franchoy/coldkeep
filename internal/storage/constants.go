@@ -6,12 +6,30 @@ import (
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
-var logicalFileWaitingtime = 100 * time.Millisecond
+var logicalFileWaitingtime = loadLogicalFileWaitingTime()
 
-var chunkWaitingtime = 100 * time.Millisecond
+var chunkWaitingtime = loadChunkWaitingTime()
 
 var maxClaimPollingWait = loadMaxClaimPollingWait()
 var maxClaimWaitDuration = loadMaxClaimWaitDuration()
+
+func loadLogicalFileWaitingTime() time.Duration {
+	const defaultWait = 100 * time.Millisecond
+	valueMs := utils_env.GetenvOrDefaultInt64("COLDKEEP_LOGICAL_FILE_WAIT_MS", int64(defaultWait/time.Millisecond))
+	if valueMs <= 0 {
+		return defaultWait
+	}
+	return time.Duration(valueMs) * time.Millisecond
+}
+
+func loadChunkWaitingTime() time.Duration {
+	const defaultWait = 100 * time.Millisecond
+	valueMs := utils_env.GetenvOrDefaultInt64("COLDKEEP_CHUNK_WAIT_MS", int64(defaultWait/time.Millisecond))
+	if valueMs <= 0 {
+		return defaultWait
+	}
+	return time.Duration(valueMs) * time.Millisecond
+}
 
 func loadMaxClaimPollingWait() time.Duration {
 	const defaultPollingWait = 2 * time.Second
