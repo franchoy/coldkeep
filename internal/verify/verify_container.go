@@ -127,7 +127,10 @@ func checkContainerFile(id int, filename string, currentSize int64, containersDi
 	// indicates either an incomplete recovery or data corruption, not a
 	// normal mid-write race.
 	if actualSize != currentSize {
-		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, actualSize)
+		if actualSize > currentSize {
+			return fmt.Errorf("file size mismatch (ghost bytes): expected %d, got %d", currentSize, actualSize)
+		}
+		return fmt.Errorf("file size mismatch (truncated): expected %d, got %d", currentSize, actualSize)
 	}
 
 	return nil

@@ -369,6 +369,24 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 
 	originalPath := filepath.Join(containersDir, filename)
 
+	info, err := os.Stat(originalPath)
+	if err != nil {
+		return fmt.Errorf("stat container file before seal: %w", err)
+	}
+
+	var currentSize int64
+	if err := tx.QueryRow(`SELECT current_size FROM container WHERE id = $1`, containerID).Scan(&currentSize); err != nil {
+		return fmt.Errorf("query container current_size before seal: %w", err)
+	}
+
+	physicalSize := info.Size()
+	if physicalSize != currentSize {
+		if physicalSize > currentSize {
+			return fmt.Errorf("seal container %d: ghost bytes detected (physical=%d, db_current_size=%d)", containerID, physicalSize, currentSize)
+		}
+		return fmt.Errorf("seal container %d: truncated file detected (physical=%d, db_current_size=%d)", containerID, physicalSize, currentSize)
+	}
+
 	// Compute file hash
 	sumHex, err := utils_hash.ComputeFileHashHex(originalPath)
 	if err != nil {

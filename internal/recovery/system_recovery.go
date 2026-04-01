@@ -394,7 +394,7 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 			continue
 		}
 
-		_, err = dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
+		_, err = dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`, id)
 		if err != nil {
 			return fmt.Errorf("query update active container to quarantine due to corrupt tail: %w", err)
 		}

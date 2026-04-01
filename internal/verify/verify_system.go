@@ -376,6 +376,16 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 				appendDeepError(fmt.Errorf("row iteration failed for chunks of container %d: %w", containerID, err))
 			}
 
+			if expectedOffset < fileSize {
+				appendDeepError(fmt.Errorf(
+					"trailing unaccounted bytes in container %d (%s): expected end at %d, file size is %d",
+					containerID,
+					filename,
+					expectedOffset,
+					fileSize,
+				))
+			}
+
 			return nil
 		}()
 		if processContainerErr != nil {

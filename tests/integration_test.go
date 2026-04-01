@@ -3067,6 +3067,90 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 	}
 }
 
+func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+		t.Fatalf("mkdir containers dir: %v", err)
+	}
+
+	t.Run("ghost bytes", func(t *testing.T) {
+		filename := "seal-mismatch-ghost.bin"
+		path := filepath.Join(container.ContainersDir, filename)
+		if err := os.WriteFile(path, bytes.Repeat([]byte{'g'}, container.ContainerHdrLen+256), 0o644); err != nil {
+			t.Fatalf("write container file: %v", err)
+		}
+
+		var containerID int64
+		err := dbconn.QueryRow(`
+			INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+			VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
+			RETURNING id
+		`, filename, int64(container.ContainerHdrLen+128), container.GetContainerMaxSize()).Scan(&containerID)
+		if err != nil {
+			t.Fatalf("insert container row: %v", err)
+		}
+
+		tx, err := dbconn.Begin()
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		err = container.SealContainerInDir(tx, containerID, filename, container.ContainersDir)
+		_ = tx.Rollback()
+		if err == nil {
+			t.Fatalf("expected seal to fail for ghost-byte container")
+		}
+		if !strings.Contains(err.Error(), "ghost bytes detected") {
+			t.Fatalf("expected ghost-byte error, got: %v", err)
+		}
+	})
+
+	t.Run("truncated file", func(t *testing.T) {
+		filename := "seal-mismatch-truncated.bin"
+		path := filepath.Join(container.ContainersDir, filename)
+		if err := os.WriteFile(path, bytes.Repeat([]byte{'t'}, container.ContainerHdrLen+96), 0o644); err != nil {
+			t.Fatalf("write container file: %v", err)
+		}
+
+		var containerID int64
+		err := dbconn.QueryRow(`
+			INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+			VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
+			RETURNING id
+		`, filename, int64(container.ContainerHdrLen+160), container.GetContainerMaxSize()).Scan(&containerID)
+		if err != nil {
+			t.Fatalf("insert container row: %v", err)
+		}
+
+		tx, err := dbconn.Begin()
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		err = container.SealContainerInDir(tx, containerID, filename, container.ContainersDir)
+		_ = tx.Rollback()
+		if err == nil {
+			t.Fatalf("expected seal to fail for truncated container")
+		}
+		if !strings.Contains(err.Error(), "truncated file detected") {
+			t.Fatalf("expected truncated-file error, got: %v", err)
+		}
+	})
+}
+
 func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 	requireDB(t)
 
@@ -3835,6 +3919,80 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should detect chunk data corruption but returned nil")
+	}
+}
+
+func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_deep_trailing_bytes.bin", 512*1024)
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var containerID int64
+	var containerFilename string
+	var currentSize int64
+	err = dbconn.QueryRow(`
+		SELECT ctr.id, ctr.filename, ctr.current_size
+		FROM container ctr
+		WHERE ctr.quarantine = FALSE
+		AND EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = ctr.id
+			AND c.status = $1
+		)
+		ORDER BY ctr.id ASC
+		LIMIT 1
+	`, filestate.ChunkCompleted).Scan(&containerID, &containerFilename, &currentSize)
+	if err != nil {
+		t.Fatalf("query target container: %v", err)
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, containerFilename)
+	trail := []byte("trailing-garbage-after-last-block")
+	f, err := os.OpenFile(containerPath, os.O_RDWR|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open container file for append: %v", err)
+	}
+	if _, err := f.Write(trail); err != nil {
+		_ = f.Close()
+		t.Fatalf("append trailing bytes: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close container file: %v", err)
+	}
+
+	// Keep full verify size checks green so deep-mode tail accounting is what fails.
+	if _, err := dbconn.Exec(`UPDATE container SET current_size = $1 WHERE id = $2`, currentSize+int64(len(trail)), containerID); err != nil {
+		t.Fatalf("update container current_size for trailing-byte simulation: %v", err)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
+		t.Fatal("verify system --deep should detect trailing unaccounted bytes but returned nil")
 	}
 }
 

@@ -170,6 +170,35 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		return LocalPlacement{}, fmt.Errorf("append payload to container %d: %w", containerID, err)
 	}
 
+	// Make payload durable before it becomes visible in committed DB metadata.
+	if err := w.activeHandle.Sync(); err != nil {
+		containerID := w.activeID
+		if truncErr := w.activeHandle.Truncate(w.prevAppendSize); truncErr != nil {
+			retireErr := w.RetireActiveContainer()
+			if retireErr != nil {
+				return LocalPlacement{}, errors.Join(
+					fmt.Errorf("sync payload in container %d: %w", containerID, err),
+					fmt.Errorf("rollback append in container %d: %w", containerID, truncErr),
+					fmt.Errorf("retire active container %d after sync+rollback failure: %w", containerID, retireErr),
+				)
+			}
+			return LocalPlacement{}, errors.Join(
+				fmt.Errorf("sync payload in container %d: %w", containerID, err),
+				fmt.Errorf("rollback append in container %d: %w", containerID, truncErr),
+			)
+		}
+
+		// Truncate succeeded, but sync failed: retire this container to avoid reuse.
+		retireErr := w.RetireActiveContainer()
+		if retireErr != nil {
+			return LocalPlacement{}, errors.Join(
+				fmt.Errorf("sync payload in container %d: %w", containerID, err),
+				fmt.Errorf("retire active container %d after sync failure: %w", containerID, retireErr),
+			)
+		}
+		return LocalPlacement{}, fmt.Errorf("sync payload in container %d: %w", containerID, err)
+	}
+
 	w.pendingAppend = true
 
 	newSize := offset + int64(len(payload))
@@ -336,12 +365,29 @@ func (w *LocalWriter) RollbackLastAppend() error {
 		if truncErr != nil {
 			return fmt.Errorf("rollback append: truncate container %s to %d: %w", filename, target, truncErr)
 		}
+		if filename != "" {
+			fullPath := filepath.Join(w.dir, filename)
+			if info, statErr := os.Stat(fullPath); statErr == nil {
+				if info.Size() != target {
+					return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
+				}
+			} else if !os.IsNotExist(statErr) {
+				return fmt.Errorf("rollback append: stat container %s after truncate: %w", fullPath, statErr)
+			}
+		}
 	} else if !w.hasActive && filename != "" {
 		// FinalizeContainer was already called for a full container: the file handle is
 		// closed but the file exists on disk. Truncate by path.
 		fullPath := filepath.Join(w.dir, filename)
 		if err := os.Truncate(fullPath, target); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("rollback append: truncate closed container %s to %d: %w", fullPath, target, err)
+		}
+		if info, statErr := os.Stat(fullPath); statErr == nil {
+			if info.Size() != target {
+				return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
+			}
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("rollback append: stat closed container %s after truncate: %w", fullPath, statErr)
 		}
 	}
 	// If the active file was switched to a different name (shouldn't happen within
