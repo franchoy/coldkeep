@@ -55,9 +55,9 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	defer func() {
 		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
 		defer cleanupCancel()
-		_, err = dbconn.ExecContext(cleanupCtx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
-		if err != nil {
-			log.Printf("warning: failed to release advisory lock: %v\n", err)
+		_, unlockErr := dbconn.ExecContext(cleanupCtx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+		if unlockErr != nil {
+			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
 		}
 	}()
 
