@@ -53,6 +53,7 @@ func newWriterFromPrototype(prototype container.ContainerWriter) (container.Cont
 		return container.NewLocalWriterWithDir(w.Dir(), w.MaxSize()), nil
 	case *container.SimulatedWriter:
 		// Do NOT clone SimulatedWriter; return the original for shared, realistic container packing.
+		// Concurrency contract: SimulatedWriter is internally synchronized (mutex-protected).
 		return w, nil
 	default:
 		return nil, fmt.Errorf("unsupported writer type for cloning: %T", prototype)
@@ -131,7 +132,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			txclosed = true
 			for keep_waiting := true; keep_waiting; {
 
-				// Poll every logicalFileWaitingtime milliseconds until the other process finishes
+				// Poll every logicalFileWaitingtime until the other process finishes.
+				// TODO: replace polling with event/notify strategy when available.
 				time.Sleep(logicalFileWaitingtime)
 
 				var finalStatus string
@@ -237,7 +239,8 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 			txclosed = true
 			for keep_waiting := true; keep_waiting; {
 
-				// Poll every chunkWaitingtime milliseconds until the other process finishes
+				// Poll every chunkWaitingtime until the other process finishes.
+				// TODO: replace polling with event/notify strategy when available.
 				time.Sleep(chunkWaitingtime)
 
 				var finalStatus string

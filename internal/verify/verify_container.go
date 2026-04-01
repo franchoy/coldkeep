@@ -187,9 +187,11 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, container_hash
-				from container
-				where quarantine = false and sealed = true`)
+	rows, err := dbconn.Query(`
+		SELECT id, filename, container_hash, COUNT(*) OVER() AS total_rows
+		FROM container
+		WHERE quarantine = FALSE AND sealed = TRUE
+	`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container hashes: %v", err)
@@ -198,18 +200,18 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	defer func() { _ = rows.Close() }()
 
 	var totalRows int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE quarantine = false AND sealed = true`).Scan(&totalRows); err != nil {
-		log.Printf("Failed to query total container count: %v", err)
-		return fmt.Errorf("failed to query total container count: %w", err)
-	}
 	var containercount int
 	for rows.Next() {
 		containercount++
-		log.Printf("Checking container %d / %d", containercount, totalRows)
+		if totalRows > 0 {
+			log.Printf("Checking container %d / %d", containercount, totalRows)
+		} else {
+			log.Printf("Checking container %d", containercount)
+		}
 		var id int
 		var filename string
 		var storedHash string
-		if err := rows.Scan(&id, &filename, &storedHash); err != nil {
+		if err := rows.Scan(&id, &filename, &storedHash, &totalRows); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container hash: %w", err))
 			continue
