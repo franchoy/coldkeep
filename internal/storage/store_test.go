@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -488,6 +490,103 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestLoadReuseSemanticValidationModeFromEnv(t *testing.T) {
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "")
+	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationSuspicious {
+		t.Fatalf("expected default mode %q, got %q", reuseSemanticValidationSuspicious, got)
+	}
+
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "off")
+	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationOff {
+		t.Fatalf("expected mode %q, got %q", reuseSemanticValidationOff, got)
+	}
+
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
+	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationAlways {
+		t.Fatalf("expected mode %q, got %q", reuseSemanticValidationAlways, got)
+	}
+
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "invalid-value")
+	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationSuspicious {
+		t.Fatalf("expected invalid mode fallback %q, got %q", reuseSemanticValidationSuspicious, got)
+	}
+}
+
+func TestValidateReusableLogicalFileForStoreRunsSemanticValidation(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	content := []byte("semantic-reuse-validation-regression-payload")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "semantic-reuse.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := os.WriteFile(containerPath, content, 0644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	fileID := insertReusableTestLogicalFile(t, dbconn, int64(len(content)))
+	if _, err := dbconn.Exec(`UPDATE logical_file SET file_hash = $1 WHERE id = $2`, hash, fileID); err != nil {
+		t.Fatalf("update logical file hash: %v", err)
+	}
+
+	chunkID := insertReusableTestChunk(t, dbconn, hash, filestate.ChunkCompleted)
+	if _, err := dbconn.Exec(`UPDATE chunk SET size = $1 WHERE id = $2`, int64(len(content)), chunkID); err != nil {
+		t.Fatalf("update chunk size: %v", err)
+	}
+
+	containerID := insertReusableTestContainer(t, dbconn, containerFilename, false)
+	if _, err := dbconn.Exec(`UPDATE container SET current_size = $1 WHERE id = $2`, int64(len(content)), containerID); err != nil {
+		t.Fatalf("update container size: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		chunkID,
+		"plain",
+		1,
+		int64(len(content)),
+		int64(len(content)),
+		containerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert block row: %v", err)
+	}
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 0)
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
+	if err := validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+		t.Fatalf("semantic validation should pass for intact reusable file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("f", 64), chunkID); err != nil {
+		t.Fatalf("tamper chunk hash: %v", err)
+	}
+
+	err = validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
+	if err == nil {
+		t.Fatalf("expected semantic validation failure after chunk hash tamper")
+	}
+	if !strings.Contains(err.Error(), "semantic reuse validation failed") {
+		t.Fatalf("expected semantic validation failure message, got: %v", err)
 	}
 }
 

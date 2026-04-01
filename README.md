@@ -213,6 +213,18 @@ Guarantees hold only if:
 
 ---
 
+## ✨ What’s new in v0.10
+
+- Semantic integrity validation for logical file reuse
+- Reuse of `COMPLETED` files now optionally re-reads and rehashes every referenced chunk payload before accepting the deduplication shortcut
+- Configurable via `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default: `suspicious`)
+  - `suspicious`: deep check only when risk signals are present (file or chunk retry history, mutable container references)
+  - `always`: unconditional deep check on every reuse candidate
+- Structural reuse validation (graph checks: chunk/link/block/container presence and file existence) remains mandatory in all modes
+- Correctness of reuse without deep checks depends on recovery and verify having run; `suspicious` mode triggers automatically when there is evidence they may not have
+
+---
+
 ## ✨ What’s new in v0.8
 
 - `simulate` command for dry-run storage analysis
@@ -281,6 +293,13 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
 - `COLDKEEP_STRICT_RECOVERY` (default: `true`) — controls how startup recovery handles suspicious orphan container conflicts.
   - `true` (default): Recovery aborts with an error on any unexpected orphan container state. Recommended for production.
   - `false`: Suspicious conflicts are logged as warnings and recovery continues. Useful when benign duplicate scenarios or restart races are expected (e.g., during rolling restarts or when replaying a partially-applied recovery).
+
+### Reuse semantic validation
+
+- `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default: `suspicious`) — controls deep payload validation before reusing a `COMPLETED` logical file row.
+  - `off`: structural graph checks only (faster; correctness depends on recovery/verify having run)
+  - `suspicious`: deep check only when reuse signals elevated risk (file or chunk retry history, mutable container references)
+  - `always`: deep check for every reusable completed file (strongest integrity; higher read cost)
 
 ---
 

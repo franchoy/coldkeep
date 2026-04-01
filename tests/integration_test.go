@@ -473,6 +473,39 @@ func containerPathForRecord(record fileChunkRecord) string {
 	return filepath.Join(container.ContainersDir, filename)
 }
 
+func fetchFirstFileChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunkRecord {
+	t.Helper()
+
+	var record fileChunkRecord
+	err := dbconn.QueryRow(`
+		SELECT
+			fc.chunk_id,
+			b.container_id,
+			b.block_offset,
+			b.stored_size,
+			ctr.filename,
+			ctr.current_size
+		FROM file_chunk fc
+		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY fc.chunk_order ASC
+		LIMIT 1
+	`, fileID).Scan(
+		&record.chunkID,
+		&record.containerID,
+		&record.blockOffset,
+		&record.storedSize,
+		&record.containerFilename,
+		&record.containerCurrentSize,
+	)
+	if err != nil {
+		t.Fatalf("query first file chunk record: %v", err)
+	}
+
+	return record
+}
+
 // Helpers (small, local)
 func mustRead(t *testing.T, p string) []byte {
 	t.Helper()
@@ -5776,6 +5809,88 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 // TestReuseRefusesStructurallyBrokenCompletedChunk verifies that the store operation
 // detects and refuses to reuse a completed chunk that is missing block metadata,
 // references a quarantined container, or has a missing container file.
+func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
+	requireDB(t)
+
+	testModes := []string{"suspicious", "always"}
+	for _, mode := range testModes {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", mode)
+
+			tmp := t.TempDir()
+			container.ContainersDir = filepath.Join(tmp, "containers")
+			_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+			resetStorage(t)
+
+			dbconn, err := db.ConnectDB()
+			if err != nil {
+				t.Fatalf("connectDB: %v", err)
+			}
+			defer dbconn.Close()
+
+			applySchema(t, dbconn)
+			resetDB(t, dbconn)
+
+			inputDir := filepath.Join(tmp, "input")
+			_ = os.MkdirAll(inputDir, 0o755)
+			inPath := createTempFile(t, inputDir, "semantic-reuse-corruption.bin", 1024*1024)
+			fileHash := sha256File(t, inPath)
+
+			initialCtx := newTestContext(dbconn)
+			if err := storage.StoreFileWithStorageContext(initialCtx, inPath); err != nil {
+				t.Fatalf("initial store: %v", err)
+			}
+
+			fileID := fetchFileIDByHash(t, dbconn, fileHash)
+			record := fetchFirstFileChunkRecord(t, dbconn, fileID)
+			if record.storedSize <= 0 {
+				t.Fatalf("expected first stored block size > 0, got %d", record.storedSize)
+			}
+
+			containerPath := containerPathForRecord(record)
+			f, err := os.OpenFile(containerPath, os.O_RDWR, 0o644)
+			if err != nil {
+				t.Fatalf("open container for corruption: %v", err)
+			}
+			corruptionOffset := record.blockOffset
+			if record.storedSize > 1 {
+				corruptionOffset++
+			}
+			if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
+				_ = f.Close()
+				t.Fatalf("corrupt chunk payload byte: %v", err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatalf("close corrupted container: %v", err)
+			}
+
+			restoreCtx := newTestContext(dbconn)
+			result, err := storage.StoreFileWithStorageContextResult(restoreCtx, inPath)
+			if err != nil {
+				t.Fatalf("store after semantic corruption (mode=%s): %v", mode, err)
+			}
+			if result.AlreadyStored {
+				t.Fatalf("expected semantic reuse guard to refuse AlreadyStored shortcut in mode=%s", mode)
+			}
+			if result.FileID != fileID {
+				t.Fatalf("expected semantic corruption rebuild to reuse logical file row %d, got %d", fileID, result.FileID)
+			}
+
+			var status string
+			var retryCount int64
+			if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE id = $1`, fileID).Scan(&status, &retryCount); err != nil {
+				t.Fatalf("query logical_file status after semantic corruption rebuild: %v", err)
+			}
+			if status != filestate.LogicalFileCompleted {
+				t.Fatalf("expected logical_file status COMPLETED after rebuild, got %s", status)
+			}
+			if retryCount < 1 {
+				t.Fatalf("expected retry_count >= 1 after semantic corruption rebuild, got %d", retryCount)
+			}
+		})
+	}
+}
+
 func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 	requireDB(t)
 

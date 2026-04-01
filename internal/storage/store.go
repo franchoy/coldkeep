@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,6 +159,20 @@ type reusableLogicalFileGraphSummary struct {
 	invalidChunks     int64
 	missingBlocks     int64
 	invalidContainers int64
+}
+
+type reuseSemanticValidationMode string
+
+const (
+	reuseSemanticValidationOff        reuseSemanticValidationMode = "off"
+	reuseSemanticValidationSuspicious reuseSemanticValidationMode = "suspicious"
+	reuseSemanticValidationAlways     reuseSemanticValidationMode = "always"
+)
+
+type semanticReuseSuspicionSummary struct {
+	fileRetryCount       int64
+	chunkRetryRefs       int64
+	mutableContainerRefs int64
 }
 
 type reusableCompletedChunkSummary struct {
@@ -323,6 +338,207 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 		return fmt.Errorf("iterate reusable logical file containers %d: %w", fileID, err)
 	}
 
+	return nil
+}
+
+func loadReuseSemanticValidationModeFromEnv() reuseSemanticValidationMode {
+	modeValue := strings.ToLower(strings.TrimSpace(os.Getenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION")))
+	switch modeValue {
+	case "", string(reuseSemanticValidationSuspicious):
+		return reuseSemanticValidationSuspicious
+	case string(reuseSemanticValidationOff):
+		return reuseSemanticValidationOff
+	case string(reuseSemanticValidationAlways):
+		return reuseSemanticValidationAlways
+	default:
+		log.Printf("event=store_reuse_semantic_validation_invalid_mode value=%q fallback=%q", modeValue, reuseSemanticValidationSuspicious)
+		return reuseSemanticValidationSuspicious
+	}
+}
+
+func shouldRunSemanticReuseValidationWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, mode reuseSemanticValidationMode) (bool, string, error) {
+	switch mode {
+	case reuseSemanticValidationOff:
+		return false, "mode=off", nil
+	case reuseSemanticValidationAlways:
+		return true, "mode=always", nil
+	}
+
+	var summary semanticReuseSuspicionSummary
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			lf.retry_count,
+			COALESCE(COUNT(DISTINCT CASE WHEN c.retry_count > 0 THEN c.id END), 0) AS chunk_retry_refs,
+			COALESCE(COUNT(DISTINCT CASE WHEN ctr.sealed = FALSE OR ctr.sealing = TRUE THEN ctr.id END), 0) AS mutable_container_refs
+		FROM logical_file lf
+		LEFT JOIN file_chunk fc ON fc.logical_file_id = lf.id
+		LEFT JOIN chunk c ON c.id = fc.chunk_id
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN container ctr ON ctr.id = b.container_id
+		WHERE lf.id = $1
+		GROUP BY lf.retry_count
+	`, fileID).Scan(
+		&summary.fileRetryCount,
+		&summary.chunkRetryRefs,
+		&summary.mutableContainerRefs,
+	)
+	if err == sql.ErrNoRows {
+		return false, "", fmt.Errorf("logical file %d does not exist", fileID)
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("query semantic reuse suspicion summary for logical file %d: %w", fileID, err)
+	}
+
+	reasons := make([]string, 0, 3)
+	if summary.fileRetryCount > 0 {
+		reasons = append(reasons, fmt.Sprintf("file_retry_count=%d", summary.fileRetryCount))
+	}
+	if summary.chunkRetryRefs > 0 {
+		reasons = append(reasons, fmt.Sprintf("chunk_retry_refs=%d", summary.chunkRetryRefs))
+	}
+	if summary.mutableContainerRefs > 0 {
+		reasons = append(reasons, fmt.Sprintf("mutable_container_refs=%d", summary.mutableContainerRefs))
+	}
+
+	if len(reasons) == 0 {
+		return false, "mode=suspicious no_signals", nil
+	}
+
+	return true, "mode=suspicious " + strings.Join(reasons, ","), nil
+}
+
+func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) (err error) {
+	_, expectedFileHash, chunkRows, pinnedChunkIDs, err := pinLogicalFileRestoreChunksWithContext(ctx, dbconn, fileID)
+	if err != nil {
+		return fmt.Errorf("pin reusable logical file %d for semantic validation: %w", fileID, err)
+	}
+	defer func() {
+		if unpinErr := unpinRestoreChunksWithContext(ctx, dbconn, pinnedChunkIDs); unpinErr != nil {
+			if err == nil {
+				err = fmt.Errorf("unpin reusable logical file %d chunks after semantic validation: %w", fileID, unpinErr)
+				return
+			}
+			log.Printf("event=store_reuse_semantic_validation_unpin_failed file_id=%d error=%v", fileID, unpinErr)
+		}
+	}()
+
+	hasher := sha256.New()
+	var filecontainer *container.FileContainer
+	containerfilename := ""
+	defer func() {
+		if filecontainer != nil {
+			_ = filecontainer.Close()
+		}
+	}()
+
+	transformerCache := make(map[blocks.Codec]blocks.Transformer)
+	var expectedOrder int64
+
+	for _, chunkRow := range chunkRows {
+		if chunkRow.chunkOrder != expectedOrder {
+			return fmt.Errorf("semantic reuse chunk order discontinuity for file %d: expected %d got %d", fileID, expectedOrder, chunkRow.chunkOrder)
+		}
+		expectedOrder++
+
+		if containerfilename != chunkRow.filename {
+			if filecontainer != nil {
+				if closeErr := filecontainer.Close(); closeErr != nil {
+					return fmt.Errorf("close container %q during semantic validation: %w", containerfilename, closeErr)
+				}
+				filecontainer = nil
+			}
+
+			containerPath := filepath.Join(containersDir, chunkRow.filename)
+			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+			if err != nil {
+				return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+			}
+			containerfilename = chunkRow.filename
+		}
+
+		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
+		if err != nil {
+			return fmt.Errorf("read payload for semantic validation from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
+		}
+
+		codec := blocks.Codec(chunkRow.blocksCodec)
+		transformer, ok := transformerCache[codec]
+		if !ok {
+			transformer, err = blocks.GetBlockTransformer(codec)
+			if err != nil {
+				return fmt.Errorf("get block transformer for semantic validation codec %s: %w", chunkRow.blocksCodec, err)
+			}
+			transformerCache[codec] = transformer
+		}
+
+		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
+			ChunkHash: chunkRow.expectedChunkHash,
+			Descriptor: blocks.Descriptor{
+				ChunkID:       chunkRow.chunkID,
+				Codec:         codec,
+				FormatVersion: chunkRow.blocksFormatVersion,
+				PlaintextSize: chunkRow.plaintextSize,
+				StoredSize:    chunkRow.storedSize,
+				Nonce:         chunkRow.blocksNonce,
+				ContainerID:   chunkRow.blocksContainerID,
+				BlockOffset:   chunkRow.blockOffset,
+			},
+			Payload: payload,
+		})
+		if err != nil {
+			return fmt.Errorf("decode payload for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
+		}
+
+		if int64(len(plaintext)) != chunkRow.plaintextSize {
+			return fmt.Errorf("semantic reuse plaintext size mismatch for file %d chunk %d: expected %d got %d", fileID, chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
+		}
+
+		sum := sha256.Sum256(plaintext)
+		gotChunkHash := hex.EncodeToString(sum[:])
+		if gotChunkHash != chunkRow.expectedChunkHash {
+			return fmt.Errorf("semantic reuse chunk hash mismatch for file %d chunk %d: expected %s got %s", fileID, chunkRow.chunkID, chunkRow.expectedChunkHash, gotChunkHash)
+		}
+
+		if _, err := hasher.Write(plaintext); err != nil {
+			return fmt.Errorf("update semantic reuse file hash for file %d chunk %d: %w", fileID, chunkRow.chunkID, err)
+		}
+	}
+
+	if expectedOrder == 0 {
+		const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		if expectedFileHash != emptyFileSHA256 {
+			return fmt.Errorf("semantic reuse found no chunks for non-empty-hash file %d", fileID)
+		}
+		return nil
+	}
+
+	gotFileHash := hex.EncodeToString(hasher.Sum(nil))
+	if gotFileHash != expectedFileHash {
+		return fmt.Errorf("semantic reuse file hash mismatch for file %d: expected %s got %s", fileID, expectedFileHash, gotFileHash)
+	}
+
+	return nil
+}
+
+func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
+	if err := validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+		return err
+	}
+
+	mode := loadReuseSemanticValidationModeFromEnv()
+	runSemanticValidation, reason, err := shouldRunSemanticReuseValidationWithContext(ctx, dbconn, fileID, mode)
+	if err != nil {
+		return err
+	}
+	if !runSemanticValidation {
+		return nil
+	}
+
+	if err := validateReusableLogicalFileSemanticsWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+		return fmt.Errorf("semantic reuse validation failed (%s): %w", reason, err)
+	}
+
+	log.Printf("event=store_reuse_semantic_validation_passed file_id=%d mode=%s reason=%s", fileID, mode, reason)
 	return nil
 }
 
@@ -599,7 +815,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return fileID, filestatus, nil
 	}
 
-	reuseErr := validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
+	reuseErr := validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
 	if reuseErr == nil {
 		return fileID, filestatus, nil
 	}
@@ -617,7 +833,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return fileID, filestatus, nil
 	}
 
-	reuseErr = validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
+	reuseErr = validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
 	if reuseErr != nil {
 		return 0, "", fmt.Errorf("logical file %d remained non-reusable after retry: %w", fileID, reuseErr)
 	}
