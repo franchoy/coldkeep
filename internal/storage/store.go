@@ -130,11 +130,12 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
+			attempt := 0
 			for keep_waiting := true; keep_waiting; {
 
-				// Poll every logicalFileWaitingtime until the other process finishes.
-				// TODO: replace polling with event/notify strategy when available.
-				time.Sleep(logicalFileWaitingtime)
+				// Poll with bounded exponential backoff to reduce DB pressure under contention.
+				time.Sleep(claimPollingBackoff(logicalFileWaitingtime, attempt))
+				attempt++
 
 				var finalStatus string
 				if err := dbconn.QueryRow(
@@ -237,11 +238,12 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
+			attempt := 0
 			for keep_waiting := true; keep_waiting; {
 
-				// Poll every chunkWaitingtime until the other process finishes.
-				// TODO: replace polling with event/notify strategy when available.
-				time.Sleep(chunkWaitingtime)
+				// Poll with bounded exponential backoff to reduce DB pressure under contention.
+				time.Sleep(claimPollingBackoff(chunkWaitingtime, attempt))
+				attempt++
 
 				var finalStatus string
 				if err := dbconn.QueryRow(
