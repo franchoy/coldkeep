@@ -49,6 +49,12 @@ func (w *SimulatedWriter) FinalizeContainer() error {
 	return nil
 }
 
+// RollbackLastAppend is a no-op for SimulatedWriter: no physical bytes are written,
+// so there is nothing to truncate on a transaction rollback.
+func (w *SimulatedWriter) RollbackLastAppend() error {
+	return nil
+}
+
 func (w *SimulatedWriter) ContainerCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -49,6 +50,14 @@ type LocalWriter struct {
 	activeID     int64
 	activeFile   string
 	activeHandle Container
+
+	// pendingAppend is true when payload bytes have been physically written to the
+	// container file but the enclosing DB transaction has not yet committed.
+	// RollbackLastAppend uses prevAppendSize/prevAppendFile to truncate the file
+	// back to its pre-write offset if the transaction is rolled back or fails to commit.
+	pendingAppend  bool
+	prevAppendSize int64
+	prevAppendFile string
 }
 
 func NewLocalWriter(maxSize int64) *LocalWriter {
@@ -117,10 +126,19 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		return LocalPlacement{}, err
 	}
 
+	// Record pre-write state for rollback; pendingAppend is set to true only after
+	// the physical write succeeds so that lock-contention retries (which return before
+	// reaching this point) never corrupt prevAppend* from a previously committed write.
+	w.pendingAppend = false
+	w.prevAppendSize = w.activeSize
+	w.prevAppendFile = w.activeFile
+
 	offset, err := w.activeHandle.Append(payload)
 	if err != nil {
 		return LocalPlacement{}, fmt.Errorf("append payload to container %d: %w", w.activeID, err)
 	}
+
+	w.pendingAppend = true
 
 	newSize := offset + int64(len(payload))
 	w.activeSize = newSize
@@ -249,6 +267,42 @@ func (w *LocalWriter) FinalizeContainer() error {
 		return err
 	}
 	w.clearActive()
+	return nil
+}
+
+// RollbackLastAppend truncates the active container file back to its pre-append
+// offset when the enclosing DB transaction was rolled back or failed to commit.
+// Safe to call even if no append is pending (no-op). After a successful rollback
+// the writer's active state is reset so the next AppendPayload selects a fresh
+// open container from the database.
+func (w *LocalWriter) RollbackLastAppend() error {
+	if !w.pendingAppend {
+		return nil
+	}
+	w.pendingAppend = false
+
+	filename := w.prevAppendFile
+	target := w.prevAppendSize
+
+	if w.hasActive && w.activeHandle != nil && w.activeFile == filename {
+		// File handle is still open. Truncate via the handle, then close and reset
+		// so the next write does a fresh DB lookup (the DB row may have been rolled back).
+		truncErr := w.activeHandle.Truncate(target)
+		_ = w.activeHandle.Close()
+		w.clearActive()
+		if truncErr != nil {
+			return fmt.Errorf("rollback append: truncate container %s to %d: %w", filename, target, truncErr)
+		}
+	} else if !w.hasActive && filename != "" {
+		// FinalizeContainer was already called for a full container: the file handle is
+		// closed but the file exists on disk. Truncate by path.
+		fullPath := filepath.Join(w.dir, filename)
+		if err := os.Truncate(fullPath, target); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("rollback append: truncate closed container %s to %d: %w", fullPath, target, err)
+		}
+	}
+	// If the active file was switched to a different name (shouldn't happen within
+	// one AppendPayload call), there is nothing reliable to truncate.
 	return nil
 }
 

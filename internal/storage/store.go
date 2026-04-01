@@ -31,6 +31,22 @@ type optionalActiveContainerSyncer interface {
 	SyncActiveContainer() error
 }
 
+// optionalAppendRollbacker is implemented by writers that can truncate a physical
+// container file back to its pre-append offset when the enclosing DB transaction
+// is rolled back or fails to commit.
+type optionalAppendRollbacker interface {
+	RollbackLastAppend() error
+}
+
+// rollbackWriterLastAppend calls RollbackLastAppend on the writer if it supports it.
+// Safe to call unconditionally on any error path; if no physical write is pending the
+// implementation returns immediately without truncating.
+func rollbackWriterLastAppend(writer payloadStatefulWriter) {
+	if rb, ok := writer.(optionalAppendRollbacker); ok {
+		_ = rb.RollbackLastAppend()
+	}
+}
+
 type optionalContainerSealer interface {
 	SealContainer(tx db.DBTX, containerID int64, filename string, containersDir string) error
 }
@@ -702,28 +718,34 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 					// block metadata already exists for this chunk ID.
 					tx2, err2 := sgctx.DB.BeginTx(ctx, nil)
 					if err2 != nil {
+						rollbackWriterLastAppend(writer)
 						return StoreFileResult{}, err2
 					}
 
 					if _, err2 = tx2.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
 						_ = tx2.Rollback()
+						rollbackWriterLastAppend(writer)
 						return StoreFileResult{}, err2
 					}
 
 					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, chunkOrder, true); err2 != nil {
 						_ = tx2.Rollback()
+						rollbackWriterLastAppend(writer)
 						return StoreFileResult{}, err2
 					}
 
 					if err2 = tx2.Commit(); err2 != nil {
 						_ = tx2.Rollback()
+						rollbackWriterLastAppend(writer)
 						return StoreFileResult{}, err2
 					}
 
+					rollbackWriterLastAppend(writer)
 					chunkOrder++
 					break
 				}
 				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
+					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, getBlockErr
 				}
 
@@ -733,8 +755,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 					filestate.ChunkAborted,
 					claimedChunkID,
 				); err3 != nil {
+					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, err3
 				}
+				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
 
@@ -746,6 +770,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				claimedChunkID,
 			); err != nil {
 				_ = tx.Rollback()
+				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
 
@@ -754,10 +779,12 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				// Caller must persist final size and seal the previously active container row in DB.
 				if err := container.UpdateContainerSize(tx, placement.PreviousID, placement.PreviousSize); err != nil {
 					_ = tx.Rollback()
+					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, err
 				}
 				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
+					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, err
 				}
 			}
@@ -765,12 +792,14 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			// Always persist size for the container that received this payload.
 			if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
 				_ = tx.Rollback()
+				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
 
 			// Link file ↔ chunk
 			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
 				_ = tx.Rollback()
+				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
 
@@ -778,11 +807,13 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			if placement.Full {
 				if err := writer.FinalizeContainer(); err != nil {
 					_ = tx.Rollback()
+					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, err
 				}
 				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
 				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
+					rollbackWriterLastAppend(writer)
 					return StoreFileResult{}, err
 				}
 			}
@@ -790,10 +821,12 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			// Crash-durability barrier: flush payload bytes before publishing COMPLETED metadata in DB.
 			if err := syncActiveContainerWithWriter(writer); err != nil {
 				_ = tx.Rollback()
+				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
 
 			if err = tx.Commit(); err != nil {
+				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
 

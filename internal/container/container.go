@@ -32,6 +32,7 @@ type Container interface {
 	Append(data []byte) (offset int64, err error)
 	ReadAt(offset int64, size int64) ([]byte, error)
 	Size() int64
+	Truncate(size int64) error
 	Sync() error
 	Close() error
 }
@@ -134,6 +135,17 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 
 func (c *FileContainer) Size() int64 {
 	return c.offset
+}
+
+func (c *FileContainer) Truncate(size int64) error {
+	if c.f == nil {
+		return fmt.Errorf("container is closed")
+	}
+	if err := c.f.Truncate(size); err != nil {
+		return err
+	}
+	c.offset = size
+	return nil
 }
 
 func (c *FileContainer) Sync() error {
