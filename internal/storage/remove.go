@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // RemoveFileResult contains structured metadata about a remove operation.
@@ -47,19 +48,22 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 		}
 	}()
 
-	// Check existence first
-	var exists bool
+	// Lock the row and read status atomically to prevent races with in-flight stores.
+	var fileStatus string
 	err = tx.QueryRowContext(
 		ctx,
-		"SELECT EXISTS (SELECT 1 FROM logical_file WHERE id=$1)",
+		"SELECT status FROM logical_file WHERE id = $1 FOR UPDATE",
 		fileID,
-	).Scan(&exists)
+	).Scan(&fileStatus)
+	if err == sql.ErrNoRows {
+		return RemoveFileResult{}, fmt.Errorf("file ID %d not found", fileID)
+	}
 	if err != nil {
 		return RemoveFileResult{}, err
 	}
 
-	if !exists {
-		return RemoveFileResult{}, fmt.Errorf("file ID %d not found", fileID)
+	if fileStatus == filestate.LogicalFileProcessing {
+		return RemoveFileResult{}, fmt.Errorf("file ID %d is still PROCESSING and cannot be removed", fileID)
 	}
 
 	// Get chunk IDs
