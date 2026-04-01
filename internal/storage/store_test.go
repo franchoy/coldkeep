@@ -591,3 +591,114 @@ func writeReusableTestContainerFile(t *testing.T, containersDir string, filename
 		t.Fatalf("write reusable container file %s: %v", filename, err)
 	}
 }
+
+// TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs verifies that
+// markLogicalFileForRebuildWithContext atomically:
+//   - marks the logical file ABORTED,
+//   - removes all stale file_chunk rows, and
+//   - decrements chunk.live_ref_count for each removed mapping.
+func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Create a completed logical file.
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"rebuild_test.bin", 128, "rebuild-file-hash", filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	// Create two chunks that already have live_ref_count=1 (as set by linkFileChunk).
+	insertChunk := func(hash string) int64 {
+		t.Helper()
+		var id int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+			 VALUES ($1, 64, $2, 1) RETURNING id`,
+			hash, filestate.ChunkCompleted,
+		).Scan(&id); err != nil {
+			t.Fatalf("insert chunk %s: %v", hash, err)
+		}
+		return id
+	}
+	chunkA := insertChunk("rebuild-chunk-a")
+	chunkB := insertChunk("rebuild-chunk-b")
+
+	// Wire up file_chunk mappings (simulating what linkFileChunk already did).
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkA, 0)
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkB, 1)
+
+	// Run the function under test.
+	ctx := context.Background()
+	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
+		t.Fatalf("markLogicalFileForRebuildWithContext: %v", err)
+	}
+
+	// Logical file must be ABORTED.
+	var status string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+		t.Fatalf("read logical_file status: %v", err)
+	}
+	if status != filestate.LogicalFileAborted {
+		t.Errorf("expected logical_file status ABORTED, got %s", status)
+	}
+
+	// file_chunk rows must be gone.
+	var mappingCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&mappingCount); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if mappingCount != 0 {
+		t.Errorf("expected 0 file_chunk rows after rebuild mark, got %d", mappingCount)
+	}
+
+	// live_ref_count must have been decremented to 0 for both chunks.
+	for _, id := range []int64{chunkA, chunkB} {
+		var refCount int64
+		if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, id).Scan(&refCount); err != nil {
+			t.Fatalf("read live_ref_count for chunk %d: %v", id, err)
+		}
+		if refCount != 0 {
+			t.Errorf("expected live_ref_count=0 for chunk %d after rebuild mark, got %d", id, refCount)
+		}
+	}
+}
+
+// TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted verifies that
+// calling markLogicalFileForRebuildWithContext on a file that is already ABORTED
+// (i.e. another goroutine already marked it) succeeds without error.
+func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"idempotent_test.bin", 0, "idempotent-file-hash", filestate.LogicalFileAborted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
+		t.Fatalf("markLogicalFileForRebuildWithContext on already-ABORTED file: %v", err)
+	}
+}

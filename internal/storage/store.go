@@ -327,7 +327,20 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 }
 
 func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
-	result, err := dbconn.ExecContext(ctx,
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for logical file %d rebuild: %w", fileID, err)
+	}
+	txclosed := false
+	defer func() {
+		if !txclosed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Mark the file ABORTED only if it is still COMPLETED; bail out silently if
+	// some other goroutine already transitioned it.
+	result, err := tx.ExecContext(ctx,
 		`UPDATE logical_file SET status = $1 WHERE id = $2 AND status = $3`,
 		filestate.LogicalFileAborted,
 		fileID,
@@ -336,9 +349,72 @@ func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, f
 	if err != nil {
 		return fmt.Errorf("mark logical file %d for rebuild: %w", fileID, err)
 	}
-	if _, err := result.RowsAffected(); err != nil {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
 		return fmt.Errorf("rows affected while marking logical file %d for rebuild: %w", fileID, err)
 	}
+	if rowsAffected == 0 {
+		// Another goroutine already transitioned this row; nothing left to do.
+		txclosed = true
+		return tx.Rollback()
+	}
+
+	// Collect chunk IDs referenced by stale file_chunk mappings so we can
+	// decrement their live_ref_count before removing the mappings.
+	rows, err := tx.QueryContext(ctx,
+		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	)
+	if err != nil {
+		return fmt.Errorf("query stale file_chunk rows for logical file %d: %w", fileID, err)
+	}
+	var chunkIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan stale chunk id for logical file %d: %w", fileID, err)
+		}
+		chunkIDs = append(chunkIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close stale file_chunk cursor for logical file %d: %w", fileID, err)
+	}
+
+	// Decrement live_ref_count for every stale mapping.  We guard against
+	// going below zero (which the DB schema CHECK constraint would reject anyway)
+	// by only decrementing when live_ref_count > 0.
+	for _, chunkID := range chunkIDs {
+		var remaining int64
+		err := tx.QueryRowContext(ctx,
+			`UPDATE chunk
+			 SET live_ref_count = live_ref_count - 1
+			 WHERE id = $1 AND live_ref_count > 0
+			 RETURNING live_ref_count`,
+			chunkID,
+		).Scan(&remaining)
+		if err == sql.ErrNoRows {
+			// live_ref_count was already 0; inconsistent but non-fatal here –
+			// the mapping is being removed regardless.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("decrement live_ref_count for chunk %d (logical file %d): %w", chunkID, fileID, err)
+		}
+	}
+
+	// Remove all stale file_chunk mappings for this logical file.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	); err != nil {
+		return fmt.Errorf("delete stale file_chunk rows for logical file %d: %w", fileID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit logical file %d rebuild reset: %w", fileID, err)
+	}
+	txclosed = true
 	return nil
 }
 
