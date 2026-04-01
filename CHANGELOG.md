@@ -15,7 +15,20 @@ production stability.
 Release hardening and delivery-gate enforcement.
 
 This version focuses on making regressions materially harder to merge or tag by
-strengthening the CI path that guards storage correctness.
+strengthening the CI gate that enforces storage correctness guarantees.
+
+It also formalizes the v0.9 storage guarantees model so operators and automation
+can reason explicitly about validity, restore safety, and recovery behavior.
+
+### Added
+- Added a formal v0.9 storage guarantees definition in project documentation
+- Defined explicit validity rules for restorable logical files (`COMPLETED`
+  lifecycle and readable referenced blocks)
+- Defined restore atomicity and durability guarantees (temp write, fsync,
+  atomic rename, parent directory fsync)
+- Defined non-destructive GC guarantees and trust-boundary assumptions
+- Documented explicit v0.9 non-guarantees (format compatibility and
+  multi-node/distributed consistency are not guaranteed pre-v1)
 
 ### Changed
 - Hardened GitHub Actions CI with workflow concurrency cancellation and job timeouts
@@ -27,12 +40,17 @@ strengthening the CI path that guards storage correctness.
   aggregate `CI Required Gate`
 - Added a maintainer audit script to verify the local workflow gate and the
   expected GitHub repository protection policy
+- Clarified and tightened user-facing behavior expectations for data integrity,
+  crash recovery, concurrency, and verification semantics
 
 ### Notes
 - The repository now exposes a single aggregate status check, `CI Required Gate`,
   intended to be configured as the mandatory required check in GitHub.
 - GitHub branch protection and tag protection remain repository settings; they
   cannot be fully enforced from source files alone.
+- v0.9 guarantees are correctness-oriented and apply within the documented trust
+  boundary (database/filesystem are not externally modified and fsync semantics
+  are respected).
 
 ------------------------------------------------------------------------
 
