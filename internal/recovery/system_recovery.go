@@ -26,7 +26,6 @@ type recoveryStats struct {
 	totalDiskFilesChecked  int64
 	sealingCompleted       int64
 	sealingQuarantined     int64
-	ghostBytesTruncated    int64
 }
 
 type Report struct {
@@ -40,7 +39,6 @@ type Report struct {
 	CheckedDiskFiles       int64
 	SealingCompleted       int64
 	SealingQuarantined     int64
-	GhostBytesTruncated    int64
 }
 
 // isStrictRecovery returns true unless COLDKEEP_STRICT_RECOVERY is explicitly
@@ -110,7 +108,6 @@ func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error)
 		fmt.Sprintf("aborted_chunks=%d", stats.abortedChunks),
 		fmt.Sprintf("sealing_completed=%d", stats.sealingCompleted),
 		fmt.Sprintf("sealing_quarantined=%d", stats.sealingQuarantined),
-		fmt.Sprintf("ghost_bytes_truncated=%d", stats.ghostBytesTruncated),
 		fmt.Sprintf("quarantined_missing_containers=%d", stats.quarantinedMissing),
 		fmt.Sprintf("quarantined_corrupt_tail_containers=%d", stats.quarantinedCorruptTail),
 		fmt.Sprintf("quarantined_orphan_containers=%d", stats.quarantinedOrphan),
@@ -134,7 +131,6 @@ func buildReport(stats *recoveryStats) Report {
 		CheckedDiskFiles:       stats.totalDiskFilesChecked,
 		SealingCompleted:       stats.sealingCompleted,
 		SealingQuarantined:     stats.sealingQuarantined,
-		GhostBytesTruncated:    stats.ghostBytesTruncated,
 	}
 }
 
@@ -331,27 +327,15 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 
 		physicalSize := fileInfo.Size()
 		reason := ""
-		if currentSize > physicalSize {
+		switch {
+		case currentSize > physicalSize:
 			reason = "db_current_size_past_eof"
-		} else {
-			// Recoverable case: file has ghost bytes beyond DB current_size.
-			// This happens when a payload write reached disk but DB tx rolled back.
-			if physicalSize > currentSize {
-				if err := os.Truncate(path, currentSize); err != nil {
-					reason = "ghost_bytes_truncate_failed"
-				} else {
-					stats.ghostBytesTruncated++
-					physicalSize = currentSize
-					logRecoveryEvent(
-						"truncate_ghost_bytes",
-						fmt.Sprintf("container_id=%d", id),
-						"filename="+filename,
-						fmt.Sprintf("from=%d", fileInfo.Size()),
-						fmt.Sprintf("to=%d", currentSize),
-					)
-				}
-			}
-
+		case physicalSize > currentSize:
+			// Ghost bytes on disk: payload write reached disk but DB tx rolled back.
+			// Any size mismatch is treated as suspicious for v1.0 strict recovery.
+			reason = "physical_size_past_db_current_size"
+		default:
+			// Sizes match; check completed-block bounds.
 			var hasOutOfBoundsBlock bool
 			err = dbconn.QueryRowContext(ctx, `
 				SELECT EXISTS (
@@ -372,6 +356,14 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 			}
 			if hasOutOfBoundsBlock {
 				reason = "completed_block_past_eof"
+			}
+
+			// Check for interior gaps: first block not at header or non-contiguous offsets.
+			if reason == "" {
+				reason, err = detectInteriorGaps(ctx, dbconn, id, filestate.ChunkCompleted)
+				if err != nil {
+					return fmt.Errorf("query active container block continuity for container %d: %w", id, err)
+				}
 			}
 		}
 		if reason == "" {
@@ -519,4 +511,53 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 	logRecoveryEvent("quarantine_orphan_containers_done", fmt.Sprintf("quarantined_count=%d", stats.quarantinedOrphan))
 
 	return nil
+}
+
+// detectInteriorGaps checks that completed blocks in the given container are
+// contiguous and start immediately after the container header (offset 0 +
+// ContainerHdrLen). Two conditions are detected:
+//
+//   - "first_block_not_at_header"   – the lowest block_offset does not equal
+//     ContainerHdrLen, meaning the space between the header and the first block
+//     is either missing or the block table is corrupt.
+//   - "non_contiguous_block_offsets" – consecutive blocks (ordered by
+//     block_offset) are not back-to-back, meaning there is an interior gap.
+//
+// An empty string is returned when no gap is detected or when the container has
+// no completed blocks.
+func detectInteriorGaps(ctx context.Context, dbconn *sql.DB, containerID int64, completedStatus string) (string, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT b.block_offset, b.stored_size
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		WHERE b.container_id = $1
+		  AND c.status = $2
+		ORDER BY b.block_offset
+	`, containerID, completedStatus)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+
+	expectedOffset := int64(container.ContainerHdrLen)
+	isFirst := true
+	for rows.Next() {
+		var blockOffset, storedSize int64
+		if err := rows.Scan(&blockOffset, &storedSize); err != nil {
+			return "", err
+		}
+		if isFirst {
+			isFirst = false
+			if blockOffset != expectedOffset {
+				return "first_block_not_at_header", nil
+			}
+		} else if blockOffset != expectedOffset {
+			return "non_contiguous_block_offsets", nil
+		}
+		expectedOffset = blockOffset + storedSize
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
 }
