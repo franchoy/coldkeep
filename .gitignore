@@ -73,6 +73,8 @@ temp/
 *.swp
 *.swo
 .ci-storage/
+.tmp-bin/
+.timing/
 
 # =========================
 # smoke scripts output
