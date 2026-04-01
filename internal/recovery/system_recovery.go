@@ -183,7 +183,7 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 	}
 
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT id, filename
+		SELECT id, filename, current_size
 		FROM container
 		WHERE sealed = FALSE AND sealing = TRUE AND quarantine = FALSE
 	`)
@@ -195,11 +195,35 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 	for rows.Next() {
 		var id int64
 		var filename string
-		if err := rows.Scan(&id, &filename); err != nil {
+		var currentSize int64
+		if err := rows.Scan(&id, &filename, &currentSize); err != nil {
 			return fmt.Errorf("scan sealing container row: %w", err)
 		}
 
-		if err := container.SealContainerInDir(dbconn, id, filename, containersDir); err == nil {
+		path := filepath.Join(containersDir, filename)
+		fileInfo, statErr := os.Stat(path)
+		if statErr == nil && fileInfo.Size() != currentSize {
+			if _, qErr := dbconn.ExecContext(ctx,
+				`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
+				id,
+			); qErr != nil {
+				return fmt.Errorf("quarantine sealing container %d after size mismatch: %w", id, qErr)
+			}
+
+			stats.sealingQuarantined++
+			logRecoveryEvent(
+				"recover_sealing_container_quarantined",
+				fmt.Sprintf("container_id=%d", id),
+				"filename="+filename,
+				"reason=size_mismatch",
+				fmt.Sprintf("db_current_size=%d", currentSize),
+				fmt.Sprintf("physical_size=%d", fileInfo.Size()),
+			)
+			continue
+		}
+
+		sealErr := container.SealContainerInDir(dbconn, id, filename, containersDir)
+		if sealErr == nil {
 			stats.sealingCompleted++
 			logRecoveryEvent(
 				"recover_sealing_container_completed",
@@ -214,7 +238,7 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 			`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
 			id,
 		); qErr != nil {
-			return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, err, qErr)
+			return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, sealErr, qErr)
 		}
 
 		stats.sealingQuarantined++
@@ -223,7 +247,7 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 			fmt.Sprintf("container_id=%d", id),
 			"filename="+filename,
 			"reason=seal_failed",
-			"error="+err.Error(),
+			"error="+sealErr.Error(),
 		)
 	}
 

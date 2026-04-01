@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2958,6 +2959,111 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	}
 	if !quarantine {
 		t.Fatalf("expected truncated active container to be quarantined")
+	}
+}
+
+func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+		t.Fatalf("mkdir containers dir: %v", err)
+	}
+
+	filename := "sealing-ghost-bytes.bin"
+	containerPath := filepath.Join(container.ContainersDir, filename)
+	dbCurrentSize := int64(container.ContainerHdrLen + 128)
+	ghostBytes := []byte("ghost-bytes-left-after-rollback")
+	physicalSize := dbCurrentSize + int64(len(ghostBytes))
+
+	if err := os.WriteFile(containerPath, bytes.Repeat([]byte{'g'}, int(physicalSize)), 0o644); err != nil {
+		t.Fatalf("write sealing container file: %v", err)
+	}
+
+	var containerID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+		VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
+		RETURNING id
+	`, filename, dbCurrentSize, container.GetContainerMaxSize()).Scan(&containerID)
+	if err != nil {
+		t.Fatalf("insert sealing container: %v", err)
+	}
+
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("system recovery: %v", err)
+	}
+	if report.SealingQuarantined < 1 {
+		t.Fatalf("expected sealing container quarantine count >= 1, got %d", report.SealingQuarantined)
+	}
+	if report.SealingCompleted != 0 {
+		t.Fatalf("expected no sealing completions for ghost-byte container, got %d", report.SealingCompleted)
+	}
+
+	var sealed bool
+	var sealing bool
+	var quarantine bool
+	err = dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, containerID).Scan(&sealed, &sealing, &quarantine)
+	if err != nil {
+		t.Fatalf("query sealing container state: %v", err)
+	}
+	if sealed {
+		t.Fatalf("expected ghost-byte sealing container to remain unsealed")
+	}
+	if sealing {
+		t.Fatalf("expected recovery to clear sealing marker on quarantined container")
+	}
+	if !quarantine {
+		t.Fatalf("expected ghost-byte sealing container to be quarantined")
+	}
+
+	dryRunResult, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir)
+	if err != nil {
+		t.Fatalf("gc dry-run after recovery: %v", err)
+	}
+	if dryRunResult.AffectedContainers != 0 {
+		t.Fatalf("expected gc dry-run to skip quarantined ghost-byte container, got %d affected containers", dryRunResult.AffectedContainers)
+	}
+	if slices.Contains(dryRunResult.ContainerFilenames, filename) {
+		t.Fatalf("gc dry-run must not report quarantined ghost-byte container as collectible")
+	}
+
+	realRunResult, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir)
+	if err != nil {
+		t.Fatalf("gc real run after recovery: %v", err)
+	}
+	if realRunResult.AffectedContainers != 0 {
+		t.Fatalf("expected gc real run to skip quarantined ghost-byte container, got %d affected containers", realRunResult.AffectedContainers)
+	}
+	if slices.Contains(realRunResult.ContainerFilenames, filename) {
+		t.Fatalf("gc real run must not delete quarantined ghost-byte container")
+	}
+
+	if _, err := os.Stat(containerPath); err != nil {
+		t.Fatalf("expected quarantined ghost-byte container file to remain on disk after gc: %v", err)
+	}
+
+	var remainingRows int
+	err = dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&remainingRows)
+	if err != nil {
+		t.Fatalf("count container row after gc: %v", err)
+	}
+	if remainingRows != 1 {
+		t.Fatalf("expected quarantined ghost-byte container row to remain after gc, got %d rows", remainingRows)
 	}
 }
 

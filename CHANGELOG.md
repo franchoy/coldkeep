@@ -15,6 +15,16 @@ production stability.
 Feature-branch hardening work for adversarial lifecycle interleavings,
 verification contracts, and recovery behavior clarity.
 
+### Lifecycle Hardening
+- Hardened startup sealing recovery: containers in `sealing=TRUE` state are now
+  quarantined (not auto-sealed) when physical file size differs from DB
+  `current_size`, preventing ghost-byte containers from being promoted as healthy
+- Added integration regression for append-rollback ghost-byte state: startup
+  recovery quarantines the sealing container and GC (dry-run + real) skips it
+- Fixed SQLite compatibility in remove path tests by falling back from
+  `SELECT ... FOR UPDATE` to plain `SELECT` when the dialect does not support
+  row-lock syntax
+
 ### Added
 - Added integration coverage for non-strict startup recovery on suspicious
   orphan-container conflicts (`COLDKEEP_STRICT_RECOVERY=false`)
