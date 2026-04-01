@@ -255,8 +255,8 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 			FROM blocks b
 			JOIN chunk ch ON ch.id = b.chunk_id
 			WHERE b.container_id = container.id
-			AND ch.status != 'COMPLETED'
-		)`)
+			AND ch.status != $1
+		)`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container completeness: %v", err)

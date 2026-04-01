@@ -132,12 +132,19 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return RestoreFileResult{}, fmt.Errorf("create parent directories for %s: %w", outputPath, err)
 	}
 
-	outFile, err := os.Create(outputPath)
+	outFile, err := os.CreateTemp(filepath.Dir(outputPath), ".coldkeep-restore-*")
 	if err != nil {
-		return RestoreFileResult{}, fmt.Errorf("create output file %s: %w", outputPath, err)
+		return RestoreFileResult{}, fmt.Errorf("create temporary output file for %s: %w", outputPath, err)
 	}
+	tempOutputPath := outFile.Name()
+	cleanupTemp := true
 	defer func() {
-		_ = outFile.Close()
+		if outFile != nil {
+			_ = outFile.Close()
+		}
+		if cleanupTemp {
+			_ = os.Remove(tempOutputPath)
+		}
 	}()
 
 	hasher := sha256.New()
@@ -286,6 +293,14 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if err := outFile.Sync(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
 	}
+	if err := outFile.Close(); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("close temporary output file: %w", err)
+	}
+	outFile = nil
+	if err := os.Rename(tempOutputPath, outputPath); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
+	}
+	cleanupTemp = false
 
 	// ------------------------------------------------------------
 	// Final Integrity Validation

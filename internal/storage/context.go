@@ -35,6 +35,13 @@ func (s StorageContext) EffectiveContainerDir() string {
 func (s *StorageContext) Close() error {
 	var errs []error
 
+	if s.Writer != nil {
+		if err := s.Writer.FinalizeContainer(); err != nil {
+			errs = append(errs, fmt.Errorf("finalize container writer: %w", err))
+		}
+		s.Writer = nil
+	}
+
 	if s.DB != nil {
 		if err := s.DB.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close DB: %w", err))

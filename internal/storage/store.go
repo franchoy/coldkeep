@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -674,55 +675,92 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 
 	workerCount := runtime.NumCPU()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	fileChan := make(chan string, 256)
-	errChan := make(chan error, workerCount)
+
+	var wg sync.WaitGroup
+	var firstErr error
+	var firstErrMu sync.Mutex
+	reportErr := func(err error) {
+		if err == nil {
+			return
+		}
+		firstErrMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		firstErrMu.Unlock()
+	}
+	getFirstErr := func() error {
+		firstErrMu.Lock()
+		defer firstErrMu.Unlock()
+		return firstErr
+	}
 
 	// Workers
 	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+
 			workerWriter, err := newWriterFromPrototype(sgctx.Writer)
 			if err != nil {
-				errChan <- err
+				reportErr(err)
 				return
 			}
 
 			workerCtx := sgctx
 			workerCtx.Writer = workerWriter
 
-			for p := range fileChan {
-				if err := StoreFileWithStorageContextAndCodec(workerCtx, p, codec); err != nil {
-					errChan <- err
+			for {
+				select {
+				case <-ctx.Done():
 					return
+				case p, ok := <-fileChan:
+					if !ok {
+						return
+					}
+					if err := StoreFileWithStorageContextAndCodec(workerCtx, p, codec); err != nil {
+						reportErr(err)
+						return
+					}
 				}
 			}
-			errChan <- nil
 		}()
 	}
 
 	// Producer
 	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			reportErr(walkErr)
 			return walkErr
 		}
 
 		if !d.IsDir() {
-			fileChan <- path
+			select {
+			case <-ctx.Done():
+				if err := getFirstErr(); err != nil {
+					return err
+				}
+				return context.Canceled
+			case fileChan <- path:
+			}
 		}
 
 		return nil
 	})
 
 	close(fileChan)
+	wg.Wait()
 
+	if err := getFirstErr(); err != nil {
+		return err
+	}
 	if walkErr != nil {
 		return walkErr
-	}
-
-	// Wait workers
-	for i := 0; i < workerCount; i++ {
-		if werr := <-errChan; werr != nil {
-			return werr
-		}
 	}
 
 	return nil
