@@ -3,6 +3,7 @@ package container
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"time"
 
@@ -13,9 +14,14 @@ import (
 
 var ErrContainerLockContention = errors.New("container row lock contention")
 
-var defaultLockRetryAttempts = 3
+var defaultLockRetryAttempts = 8
 
-var defaultLockRetryWait = 25 * time.Millisecond
+// defaultLockRetryBaseWait is the base duration for the first backoff interval.
+// Subsequent intervals grow exponentially: baseWait * 2^attempt, capped at defaultLockRetryMaxWait.
+var defaultLockRetryBaseWait = 10 * time.Millisecond
+
+// defaultLockRetryMaxWait caps exponential growth to avoid unbounded sleep under sustained contention.
+var defaultLockRetryMaxWait = 500 * time.Millisecond
 
 // LocalPlacement describes where a payload was physically appended.
 type LocalPlacement struct {
@@ -107,7 +113,7 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	}
 
 	// Lock the container row that will actually receive the append payload.
-	if err := lockContainerRowNowaitWithRetry(tx, w.activeID, defaultLockRetryAttempts, defaultLockRetryWait); err != nil {
+	if err := lockContainerRowNowaitWithRetry(tx, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
 		return LocalPlacement{}, err
 	}
 
@@ -134,7 +140,7 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 
 }
 
-func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int, wait time.Duration) error {
+func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int, baseWait time.Duration) error {
 	for attempt := 0; attempt < attempts; attempt++ {
 		_, err := tx.Exec(`SELECT id FROM container WHERE id = $1 FOR UPDATE NOWAIT`, containerID)
 		if err == nil {
@@ -144,7 +150,12 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int
 			return err
 		}
 		if attempt < attempts-1 {
-			time.Sleep(wait)
+			backoff := baseWait * (1 << uint(attempt))
+			if backoff > defaultLockRetryMaxWait {
+				backoff = defaultLockRetryMaxWait
+			}
+			jitter := time.Duration(rand.Int63n(int64(baseWait)))
+			time.Sleep(backoff + jitter)
 		}
 	}
 
