@@ -916,6 +916,9 @@ class of failure until the system becomes fully trustworthy.
 - **v0.9 — Internal Hardening**  
   Improve reliability, simplify internals, and finalize implementation details.
 
+- **v0.10 — Trust Validation Phase**  
+  Validate guarantees under adversarial conditions and eliminate remaining correctness risks.
+
 - **v1.0 — Storage Engine Stable**  
   Coldkeep becomes a trustworthy storage engine for real cold backups.
 
