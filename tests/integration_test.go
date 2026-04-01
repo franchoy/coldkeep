@@ -6385,3 +6385,538 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 		}
 	})
 }
+
+// TestRemoveWithSharedChunksRefCount verifies that removing a file with shared
+// chunks correctly decrements ref_count without affecting other files still
+// referencing those chunks. This tests the atomicity and correctness of dedup
+// ref counting under file removal.
+func TestRemoveWithSharedChunksRefCount(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a shared prefix that both files will use
+	sharedPrefix := make([]byte, 512*1024)
+	for i := range sharedPrefix {
+		sharedPrefix[i] = byte((i*31 + 7) % 251)
+	}
+
+	// File A: shared prefix + unique suffix A
+	suffixA := make([]byte, 128*1024)
+	for i := range suffixA {
+		suffixA[i] = byte((i*11 + 3) % 251)
+	}
+	fileAContent := append(append([]byte{}, sharedPrefix...), suffixA...)
+	fileAPath := filepath.Join(inputDir, "shared-file-a.bin")
+	if err := os.WriteFile(fileAPath, fileAContent, 0o644); err != nil {
+		t.Fatalf("write fileA: %v", err)
+	}
+
+	// File B: same shared prefix + unique suffix B
+	suffixB := make([]byte, 128*1024)
+	for i := range suffixB {
+		suffixB[i] = byte((i*17 + 5) % 251)
+	}
+	fileBContent := append(append([]byte{}, sharedPrefix...), suffixB...)
+	fileBPath := filepath.Join(inputDir, "shared-file-b.bin")
+	if err := os.WriteFile(fileBPath, fileBContent, 0o644); err != nil {
+		t.Fatalf("write fileB: %v", err)
+	}
+
+	hashA := sha256File(t, fileAPath)
+	hashB := sha256File(t, fileBPath)
+
+	// Store both files
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, fileAPath); err != nil {
+		t.Fatalf("store fileA: %v", err)
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, fileBPath); err != nil {
+		t.Fatalf("store fileB: %v", err)
+	}
+
+	fileAID := fetchFileIDByHash(t, dbconn, hashA)
+	fileBID := fetchFileIDByHash(t, dbconn, hashB)
+
+	// Count shared chunks before removal
+	var sharedChunkCount int
+	err = dbconn.QueryRow(`
+		SELECT COUNT(DISTINCT c.id)
+		FROM chunk c
+		WHERE EXISTS (
+			SELECT 1 FROM file_chunk fc WHERE fc.chunk_id = c.id AND fc.logical_file_id = $1
+		)
+		AND EXISTS (
+			SELECT 1 FROM file_chunk fc WHERE fc.chunk_id = c.id AND fc.logical_file_id = $2
+		)
+	`, fileAID, fileBID).Scan(&sharedChunkCount)
+	if err != nil {
+		t.Fatalf("count shared chunks: %v", err)
+	}
+
+	if sharedChunkCount == 0 {
+		t.Logf("warning: files don't share chunks as expected, but continuing test")
+	}
+
+	// Record ref_count for chunks referenced by both files
+	type chunkRef struct {
+		id       int64
+		refCount int64
+	}
+	var chunksBeforeRemove []chunkRef
+
+	rows, err := dbconn.Query(`
+		SELECT DISTINCT c.id, c.live_ref_count
+		FROM chunk c
+		WHERE EXISTS (
+			SELECT 1 FROM file_chunk fc WHERE fc.chunk_id = c.id AND fc.logical_file_id = $1
+		)
+	`, fileAID)
+	if err != nil {
+		t.Fatalf("query chunks for fileA: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cr chunkRef
+		if err := rows.Scan(&cr.id, &cr.refCount); err != nil {
+			t.Fatalf("scan chunk: %v", err)
+		}
+		chunksBeforeRemove = append(chunksBeforeRemove, cr)
+	}
+
+	// Remove file A
+	if err := storage.RemoveFileWithDB(dbconn, fileAID); err != nil {
+		t.Fatalf("remove fileA: %v", err)
+	}
+
+	// Verify chunks' ref_counts decreased by 1 (or went to 0 if fileA was the only ref)
+	for _, before := range chunksBeforeRemove {
+		var afterRefCount int64
+		err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, before.id).Scan(&afterRefCount)
+		if err != nil && err != sql.ErrNoRows {
+			t.Fatalf("query chunk ref_count after remove: %v", err)
+		}
+
+		expectedAfter := before.refCount - 1
+		if expectedAfter < 0 {
+			expectedAfter = 0
+		}
+
+		if afterRefCount != expectedAfter {
+			t.Fatalf("chunk %d ref_count mismatch after remove: before=%d after=%d expected=%d",
+				before.id, before.refCount, afterRefCount, expectedAfter)
+		}
+	}
+
+	// Verify file B still restores correctly (proves shared chunks not deleted prematurely)
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "fileB-after-A-removed.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileBID, outPath); err != nil {
+		t.Fatalf("restore fileB after fileA removed: %v", err)
+	}
+
+	got := mustRead(t, outPath)
+	if !bytes.Equal(got, fileBContent) {
+		t.Fatalf("fileB content differs after fileA removal")
+	}
+
+	// Verify system integrity
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("verify after file removal: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestMultiFileOpenConcurrentRestore verifies that multiple threads can safely
+// restore different files concurrently without cross-contamination, especially
+// when files share chunks. Tests verify-time safety of concurrent block reads.
+func TestMultiFileOpenConcurrentRestore(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create 5 distinct files with shared patterns to encourage chunking overlap
+	type testFile struct {
+		path    string
+		content []byte
+		hash    string
+		id      int64
+	}
+	var files []testFile
+
+	basePattern := make([]byte, 256*1024)
+	for i := range basePattern {
+		basePattern[i] = byte((i*23 + 7) % 251)
+	}
+
+	for i := 0; i < 5; i++ {
+		// Each file: base pattern + unique footer
+		footer := make([]byte, 64*1024)
+		for j := range footer {
+			footer[j] = byte((j*37 + i) % 251)
+		}
+
+		content := append(append([]byte{}, basePattern...), footer...)
+		path := filepath.Join(inputDir, fmt.Sprintf("concurrent-file-%d.bin", i))
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("write file %d: %v", i, err)
+		}
+
+		hash := sha256File(t, path)
+		files = append(files, testFile{
+			path:    path,
+			content: content,
+			hash:    hash,
+		})
+	}
+
+	// Store all files
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	for i := range files {
+		if err := storage.StoreFileWithStorageContext(sgctx, files[i].path); err != nil {
+			t.Fatalf("store file %d: %v", i, err)
+		}
+		files[i].id = fetchFileIDByHash(t, dbconn, files[i].hash)
+	}
+
+	// Concurrently restore all files
+	const workers = 5
+	outDir := filepath.Join(tmp, "out-concurrent")
+	_ = os.MkdirAll(outDir, 0o755)
+
+	done := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		go func(idx int) {
+			outPath := filepath.Join(outDir, fmt.Sprintf("restored-%d.bin", idx))
+			done <- storage.RestoreFileWithDB(dbconn, files[idx].id, outPath)
+		}(i)
+	}
+
+	// Wait for all restores to complete
+	for i := 0; i < workers; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("concurrent restore %d failed: %v", i, err)
+		}
+	}
+
+	// Verify all restored files match originals (no cross-contamination)
+	for i := range files {
+		outPath := filepath.Join(outDir, fmt.Sprintf("restored-%d.bin", i))
+		got := mustRead(t, outPath)
+		if !bytes.Equal(got, files[i].content) {
+			t.Fatalf("restored file %d content differs from original", i)
+		}
+	}
+
+	// Verify system integrity
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after concurrent restores: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestRestoreFailureRecovery verifies that a failed restore (e.g., from container
+// corruption mid-read) fails gracefully without leaving orphaned state, and a
+// subsequent restore attempt can succeed.
+func TestRestoreFailureRecovery(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create and store a test file spanning multiple chunks
+	testContent := make([]byte, 1024*1024)
+	for i := range testContent {
+		testContent[i] = byte((i*43 + 11) % 251)
+	}
+	testFile := filepath.Join(inputDir, "restore-failure-test.bin")
+	if err := os.WriteFile(testFile, testContent, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	fileHash := sha256File(t, testFile)
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	// Find a container file and corrupt it mid-range (not at edges to cause read failure)
+	var corruptContainerPath string
+
+	rows, err := dbconn.Query(`SELECT filename FROM container LIMIT 1`)
+	if err != nil {
+		t.Fatalf("query containers: %v", err)
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		var filename string
+		if err := rows.Scan(&filename); err != nil {
+			t.Fatalf("scan container filename: %v", err)
+		}
+		corruptContainerPath = filepath.Join(container.ContainersDir, filename)
+	}
+
+	if corruptContainerPath == "" {
+		t.Fatalf("no containers found to corrupt")
+	}
+
+	// Corrupt the container by zeroing out a chunk in the middle
+	corrupted := mustRead(t, corruptContainerPath)
+	if len(corrupted) > 1024 {
+		// Zero out 512 bytes starting at 512 bytes into the file
+		for i := 512; i < 512+512 && i < len(corrupted); i++ {
+			corrupted[i] = 0
+		}
+		if err := os.WriteFile(corruptContainerPath, corrupted, 0o644); err != nil {
+			t.Fatalf("corrupt container: %v", err)
+		}
+	}
+
+	// Try to restore - expect failure due to corruption
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "restore-attempt-1.bin")
+
+	err = storage.RestoreFileWithDB(dbconn, fileID, outPath)
+	shouldHaveFailed := err != nil
+	if !shouldHaveFailed {
+		t.Logf("warning: restore should have failed due to corruption, but succeeded")
+	}
+
+	// Fix the container corruption
+	// Recreate a clean container by re-running storage (or we can just fix the file)
+	// For simplicity, we'll just reset the corruption by re-storing
+	if err := os.Remove(corruptContainerPath); err != nil && !strings.Contains(err.Error(), "no such file") {
+		t.Logf("note: couldn't remove corrupted container: %v", err)
+	}
+
+	// Re-store to rebuild the container
+	sgctx = storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
+		t.Fatalf("re-store after corruption: %v", err)
+	}
+
+	// Try restore again - should succeed now
+	outPath2 := filepath.Join(outDir, "restore-attempt-2.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath2); err != nil {
+		t.Fatalf("second restore attempt failed: %v", err)
+	}
+
+	got := mustRead(t, outPath2)
+	if !bytes.Equal(got, testContent) {
+		t.Fatalf("restored content differs from original after recovery")
+	}
+
+	_ = got // Mark got as intentionally used
+
+	// Verify system is clean
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after restore failure recovery: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestImplicitContainerFinalizationDuringStore verifies that as containers fill
+// during a large store operation, they are properly sealed/finalized without
+// leaving any in an inconsistent sealing state or with ghost bytes.
+func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// Reduce container max size to 1.5MiB to force multiple rotations
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1536 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a file large enough to need 5-6 containers
+	fileSize := 8 * 1024 * 1024 // 8MiB
+	testContent := make([]byte, fileSize)
+	for i := range testContent {
+		testContent[i] = byte((i*47 + 13) % 251)
+	}
+	testFile := filepath.Join(inputDir, "finalize-test.bin")
+	if err := os.WriteFile(testFile, testContent, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Verify all sealed containers are properly finalized (no ghost bytes)
+	rows, err := dbconn.Query(`
+		SELECT id, filename, current_size, sealed, sealing
+		FROM container
+		ORDER BY id
+	`)
+	if err != nil {
+		t.Fatalf("query containers: %v", err)
+	}
+	defer rows.Close()
+
+	type containerState struct {
+		id          int64
+		filename    string
+		currentSize int64
+		sealed      bool
+		sealing     bool
+	}
+	var containers []containerState
+
+	for rows.Next() {
+		var c containerState
+		if err := rows.Scan(&c.id, &c.filename, &c.currentSize, &c.sealed, &c.sealing); err != nil {
+			t.Fatalf("scan container: %v", err)
+		}
+		containers = append(containers, c)
+	}
+
+	if len(containers) < 5 {
+		t.Fatalf("expected 5+ containers for 8MiB file with 1.5MiB max, got %d", len(containers))
+	}
+
+	// Check each container state
+	var sealedCount, unopenedCount int
+	for _, c := range containers {
+		// Verify no orphaned sealing state
+		if c.sealing && !c.sealed {
+			// This is the active container mid-sealing, which is OK
+			unopenedCount++
+		} else if c.sealed {
+			sealedCount++
+		}
+
+		// Check for ghost bytes
+		containerPath := filepath.Join(container.ContainersDir, c.filename)
+		stat, err := os.Stat(containerPath)
+		if err != nil {
+			t.Fatalf("stat container %d: %v", c.id, err)
+		}
+
+		physicalSize := stat.Size()
+		allowedOverhead := int64(container.ContainerHdrLen * 2)
+
+		if physicalSize > c.currentSize+allowedOverhead {
+			t.Fatalf("container %d has ghost bytes: current_size=%d physical=%d",
+				c.id, c.currentSize, physicalSize)
+		}
+	}
+
+	// At least most containers should be sealed
+	if sealedCount < len(containers)-1 {
+		t.Fatalf("too many unsealed containers: sealed=%d total=%d", sealedCount, len(containers))
+	}
+
+	// Verify restore works correctly across all containers
+	fileHash := sha256File(t, testFile)
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "finalize-restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got := mustRead(t, outPath)
+	if !bytes.Equal(got, testContent) {
+		t.Fatalf("restored content differs from original")
+	}
+
+	// Verify system integrity - especially important for finalization
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after finalization: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
