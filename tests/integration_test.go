@@ -17,6 +17,7 @@ import (
 	"time"
 
 	dbschema "github.com/franchoy/coldkeep/db"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -2141,6 +2142,206 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 
 	assertNoProcessingRows(t, dbconn)
 	assertUniqueFileChunkOrders(t, dbconn)
+}
+
+func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := filepath.Join(inputDir, "chunk_rebuild_malformed_completed.txt")
+	if err := os.WriteFile(inPath, []byte("malformed completed chunk should be rebuilt"), 0o644); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	chunks, err := chunk.ChunkFile(inPath)
+	if err != nil {
+		t.Fatalf("chunk file: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected single chunk test input, got %d chunks", len(chunks))
+	}
+
+	sum := sha256.Sum256(chunks[0])
+	chunkHash := hex.EncodeToString(sum[:])
+	chunkSize := int64(len(chunks[0]))
+
+	var malformedChunkID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		VALUES ($1, $2, $3, 0)
+		RETURNING id
+	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
+	if err != nil {
+		t.Fatalf("insert malformed completed chunk: %v", err)
+	}
+
+	sgctx := newTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("store file with malformed completed chunk seed: %v", err)
+	}
+	if result.AlreadyStored {
+		t.Fatalf("expected store path (not already-stored shortcut) for malformed completed chunk rebuild")
+	}
+
+	var chunkID int64
+	var status string
+	var retryCount int
+	err = dbconn.QueryRow(`
+		SELECT id, status, retry_count
+		FROM chunk
+		WHERE chunk_hash = $1 AND size = $2
+	`, chunkHash, chunkSize).Scan(&chunkID, &status, &retryCount)
+	if err != nil {
+		t.Fatalf("query rebuilt chunk row: %v", err)
+	}
+	if chunkID != malformedChunkID {
+		t.Fatalf("expected rebuild to reclaim malformed chunk id %d, got %d", malformedChunkID, chunkID)
+	}
+	if status != filestate.ChunkCompleted {
+		t.Fatalf("expected rebuilt chunk status COMPLETED, got %s", status)
+	}
+	if retryCount < 1 {
+		t.Fatalf("expected retry_count >= 1 after malformed completed chunk reclaim, got %d", retryCount)
+	}
+
+	var blockRows int
+	err = dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE chunk_id = $1`, chunkID).Scan(&blockRows)
+	if err != nil {
+		t.Fatalf("count chunk blocks: %v", err)
+	}
+	if blockRows != 1 {
+		t.Fatalf("expected rebuilt chunk to have exactly 1 blocks row, got %d", blockRows)
+	}
+}
+
+func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := filepath.Join(inputDir, "chunk_rebuild_quarantined_container.txt")
+	if err := os.WriteFile(inPath, []byte("completed chunk in quarantined container should be rebuilt"), 0o644); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	chunks, err := chunk.ChunkFile(inPath)
+	if err != nil {
+		t.Fatalf("chunk file: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected single chunk test input, got %d chunks", len(chunks))
+	}
+
+	sum := sha256.Sum256(chunks[0])
+	chunkHash := hex.EncodeToString(sum[:])
+	chunkSize := int64(len(chunks[0]))
+
+	// Pre-seed a quarantined container with a COMPLETED chunk pointing into it.
+	var quarantinedContainerID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO container (filename, sealed, quarantine, current_size, max_size)
+		VALUES ($1, TRUE, TRUE, $2, $3)
+		RETURNING id
+	`, "quarantined_chunk_reuse.bin", int64(1024), container.GetContainerMaxSize()).Scan(&quarantinedContainerID)
+	if err != nil {
+		t.Fatalf("insert quarantined container: %v", err)
+	}
+
+	var malformedChunkID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		VALUES ($1, $2, $3, 0)
+		RETURNING id
+	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
+	if err != nil {
+		t.Fatalf("insert completed chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, malformedChunkID, "plain", 1, chunkSize, chunkSize, quarantinedContainerID, 64); err != nil {
+		t.Fatalf("insert block row pointing to quarantined container: %v", err)
+	}
+
+	sgctx := newTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("store file with completed chunk in quarantined container: %v", err)
+	}
+	if result.AlreadyStored {
+		t.Fatalf("expected store path (not already-stored shortcut) when chunk container is quarantined")
+	}
+
+	var chunkID int64
+	var chunkStatus string
+	var retryCount int
+	err = dbconn.QueryRow(`
+		SELECT id, status, retry_count
+		FROM chunk
+		WHERE chunk_hash = $1 AND size = $2
+	`, chunkHash, chunkSize).Scan(&chunkID, &chunkStatus, &retryCount)
+	if err != nil {
+		t.Fatalf("query rebuilt chunk row: %v", err)
+	}
+	if chunkID != malformedChunkID {
+		t.Fatalf("expected rebuild to reclaim chunk id %d, got %d", malformedChunkID, chunkID)
+	}
+	if chunkStatus != filestate.ChunkCompleted {
+		t.Fatalf("expected rebuilt chunk status COMPLETED, got %s", chunkStatus)
+	}
+	if retryCount < 1 {
+		t.Fatalf("expected retry_count >= 1 after reclaim, got %d", retryCount)
+	}
+
+	// The rebuilt blocks row must now point to a non-quarantined container.
+	var rebuiltContainerID int64
+	var rebuiltQuarantined bool
+	err = dbconn.QueryRow(`
+		SELECT ctr.id, ctr.quarantine
+		FROM blocks b
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE b.chunk_id = $1
+	`, chunkID).Scan(&rebuiltContainerID, &rebuiltQuarantined)
+	if err != nil {
+		t.Fatalf("query rebuilt chunk container: %v", err)
+	}
+	if rebuiltContainerID == quarantinedContainerID {
+		t.Fatalf("rebuilt chunk still points to the original quarantined container")
+	}
+	if rebuiltQuarantined {
+		t.Fatalf("rebuilt chunk points to a quarantined container")
+	}
 }
 
 func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {

@@ -126,6 +126,32 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		_ = tx1.Rollback()
 		t.Fatalf("mark chunk completed: %v", err)
 	}
+	var containerID int64
+	if err := tx1.QueryRow(
+		`INSERT INTO container (filename, sealed, quarantine, current_size, max_size)
+		 VALUES ($1, TRUE, FALSE, $2, $3)
+		 RETURNING id`,
+		"test-reuse-container.bin",
+		256,
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		_ = tx1.Rollback()
+		t.Fatalf("insert container for reusable chunk: %v", err)
+	}
+	if _, err := tx1.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		chunkID,
+		"plain",
+		1,
+		777,
+		777,
+		containerID,
+		64,
+	); err != nil {
+		_ = tx1.Rollback()
+		t.Fatalf("insert block metadata for reusable chunk: %v", err)
+	}
 	if err := tx1.Commit(); err != nil {
 		t.Fatalf("commit tx1: %v", err)
 	}
@@ -175,6 +201,95 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	}
 	if mappingCount != 2 {
 		t.Fatalf("expected 2 file_chunk mappings, got %d", mappingCount)
+	}
+}
+
+func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"orphan-completed-chunk",
+		123,
+		filestate.ChunkCompleted,
+		0,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert completed chunk: %v", err)
+	}
+
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "orphan-completed-chunk", 123)
+	if err != nil {
+		t.Fatalf("claim malformed completed chunk: %v", err)
+	}
+	if claimedID != chunkID {
+		t.Fatalf("expected same chunk id, got %d vs %d", claimedID, chunkID)
+	}
+	if isNew {
+		t.Fatalf("expected existing chunk to be reclaimed, not inserted as new")
+	}
+	if claimedStatus != filestate.ChunkProcessing {
+		t.Fatalf("expected malformed completed chunk to be reclaimed as PROCESSING, got %s", claimedStatus)
+	}
+
+	var latestStatus string
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&latestStatus); err != nil {
+		t.Fatalf("read chunk status after claim: %v", err)
+	}
+	if latestStatus != filestate.ChunkProcessing {
+		t.Fatalf("expected chunk row status PROCESSING after reclaim, got %s", latestStatus)
+	}
+}
+
+func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"quarantined-completed-chunk",
+		321,
+		filestate.ChunkCompleted,
+		1,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert completed chunk: %v", err)
+	}
+
+	containerID := insertReusableTestContainer(t, dbconn, "quarantined-reuse.bin", true)
+	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
+
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "quarantined-completed-chunk", 321)
+	if err != nil {
+		t.Fatalf("claim quarantined completed chunk: %v", err)
+	}
+	if claimedID != chunkID {
+		t.Fatalf("expected same chunk id, got %d vs %d", claimedID, chunkID)
+	}
+	if isNew {
+		t.Fatalf("expected existing chunk to be reclaimed, not inserted as new")
+	}
+	if claimedStatus != filestate.ChunkProcessing {
+		t.Fatalf("expected quarantined completed chunk to be reclaimed as PROCESSING, got %s", claimedStatus)
 	}
 }
 

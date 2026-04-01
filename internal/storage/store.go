@@ -138,6 +138,61 @@ type reusableLogicalFileGraphSummary struct {
 	invalidContainers int64
 }
 
+type reusableCompletedChunkSummary struct {
+	blockRows                int64
+	existingContainerRows    int64
+	quarantinedContainerRows int64
+}
+
+func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
+	var summary reusableCompletedChunkSummary
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(b.id) AS block_rows,
+			COUNT(ctr.id) AS existing_container_rows,
+			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
+		FROM blocks b
+		LEFT JOIN container ctr ON ctr.id = b.container_id
+		WHERE b.chunk_id = $1
+	`, chunkID).Scan(
+		&summary.blockRows,
+		&summary.existingContainerRows,
+		&summary.quarantinedContainerRows,
+	)
+	if err != nil {
+		return fmt.Errorf("query reusable completed chunk %d: %w", chunkID, err)
+	}
+
+	if summary.blockRows != 1 {
+		return fmt.Errorf("chunk %d has invalid block metadata rows: expected 1 got %d", chunkID, summary.blockRows)
+	}
+	if summary.existingContainerRows != 1 {
+		return fmt.Errorf("chunk %d has missing container metadata", chunkID)
+	}
+	if summary.quarantinedContainerRows != 0 {
+		return fmt.Errorf("chunk %d references quarantined container", chunkID)
+	}
+
+	return nil
+}
+
+func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
+	result, err := dbconn.ExecContext(ctx,
+		`UPDATE chunk SET status = $1 WHERE id = $2 AND status = $3`,
+		filestate.ChunkAborted,
+		chunkID,
+		filestate.ChunkCompleted,
+	)
+	if err != nil {
+		return fmt.Errorf("mark chunk %d for rebuild: %w", chunkID, err)
+	}
+	if _, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+
+	return nil
+}
+
 func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
 	var summary reusableLogicalFileGraphSummary
 	err := dbconn.QueryRowContext(ctx, `
@@ -507,10 +562,20 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		}
 		switch chunkstatus {
 		case filestate.ChunkCompleted:
-			// Chunk already stored and ready: we can reuse it
+			// Chunk is marked COMPLETED; verify its block/container metadata before reuse.
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			return chunkID, chunkstatus, false, nil
+
+			reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+			if reuseErr == nil {
+				return chunkID, chunkstatus, false, nil
+			}
+
+			log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+			if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+				return 0, "", false, errors.Join(reuseErr, err)
+			}
+			chunkstatus = filestate.ChunkAborted
 		case filestate.ChunkProcessing:
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
@@ -520,7 +585,17 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 				return 0, "", false, waitErr
 			}
 			if finalStatus == filestate.ChunkCompleted {
-				return chunkID, finalStatus, false, nil
+				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+				if reuseErr == nil {
+					return chunkID, finalStatus, false, nil
+				}
+
+				log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+				if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+					return 0, "", false, errors.Join(reuseErr, err)
+				}
+				chunkstatus = filestate.ChunkAborted
+				break
 			}
 			chunkstatus = finalStatus
 		}
@@ -566,14 +641,34 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 				}
 				switch latestStatus {
 				case filestate.ChunkCompleted:
-					return chunkID, latestStatus, false, nil
+					reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+					if reuseErr == nil {
+						return chunkID, latestStatus, false, nil
+					}
+
+					log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+					if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+						return 0, "", false, errors.Join(reuseErr, err)
+					}
+					chunkstatus = filestate.ChunkAborted
+					continue
 				case filestate.ChunkProcessing:
 					finalStatus, waitErr := waitForChunkTerminalStatus(ctx, dbconn, chunkID)
 					if waitErr != nil {
 						return 0, "", false, waitErr
 					}
 					if finalStatus == filestate.ChunkCompleted {
-						return chunkID, finalStatus, false, nil
+						reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+						if reuseErr == nil {
+							return chunkID, finalStatus, false, nil
+						}
+
+						log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+						if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+							return 0, "", false, errors.Join(reuseErr, err)
+						}
+						chunkstatus = filestate.ChunkAborted
+						continue
 					}
 				case filestate.ChunkAborted:
 					// Contended retry claim: loop and attempt CAS again.
