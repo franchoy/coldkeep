@@ -861,6 +861,13 @@ docker compose run --rm \
 Database configuration is read from environment variables\
 (see `docker-compose.yml` for defaults).
 
+On PostgreSQL connections, coldkeep validates that `schema_version` exists and
+is up to date (`>= 5`) during startup.
+
+- Default: schema must already be initialized (apply `db/schema_postgres.sql`).
+- Optional bootstrap: set `COLDKEEP_DB_AUTO_BOOTSTRAP=true` to auto-apply the
+  embedded PostgreSQL schema if `schema_version` is missing.
+
 Storage is written to:
 
 ./storage/
