@@ -1,6 +1,7 @@
 package container
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -44,6 +45,11 @@ type LocalWriter struct {
 	dir             string
 	maxSize         int64
 
+	// dbconn is used to commit a durable sealing marker before physical
+	// finalization (rotation and full-container paths). May be nil in tests
+	// or simulated mode — the marking step is skipped when nil.
+	dbconn *sql.DB
+
 	hasActive    bool
 	active       ActiveContainer
 	activeSize   int64
@@ -65,6 +71,14 @@ func NewLocalWriter(maxSize int64) *LocalWriter {
 }
 
 func NewLocalWriterWithDir(dir string, maxSize int64) *LocalWriter {
+	return NewLocalWriterWithDirAndDB(dir, maxSize, nil)
+}
+
+// NewLocalWriterWithDirAndDB creates a LocalWriter that commits a durable
+// sealing marker (via dbconn) before physical finalization of each container.
+// Passing a non-nil dbconn is required for the full sealing-safety guarantee;
+// passing nil is still correct but skips the pre-finalization DB marker.
+func NewLocalWriterWithDirAndDB(dir string, maxSize int64, dbconn *sql.DB) *LocalWriter {
 	if dir == "" {
 		dir = ContainersDir
 	}
@@ -77,6 +91,7 @@ func NewLocalWriterWithDir(dir string, maxSize int64) *LocalWriter {
 	return &LocalWriter{
 		dir:     dir,
 		maxSize: maxSize,
+		dbconn:  dbconn,
 	}
 }
 
@@ -110,6 +125,14 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		previousID = w.activeID
 		previousFilename = w.activeFile
 		previousSize = w.activeSize
+
+		// Commit a durable "sealing in progress" marker before closing the
+		// physical file. If a crash occurs between here and the subsequent
+		// SealContainerInDir call, startup recovery can detect the half-state
+		// and complete or quarantine this container.
+		if err := w.MarkSealingForContainer(previousID); err != nil {
+			return LocalPlacement{}, fmt.Errorf("mark rotation container %d sealing: %w", previousID, err)
+		}
 
 		if err := w.finalizePhysicalOnly(); err != nil {
 			return LocalPlacement{}, fmt.Errorf("rotate finalize active container: %w", err)
@@ -318,6 +341,21 @@ func (w *LocalWriter) SyncActiveContainer() error {
 
 func (w *LocalWriter) ContainerCount() int {
 	return w.containers
+}
+
+// MarkSealingForContainer commits sealing=TRUE for the given container ID in a
+// short independent transaction. Safe to call when dbconn is nil (no-op).
+func (w *LocalWriter) MarkSealingForContainer(containerID int64) error {
+	if w.dbconn == nil {
+		return nil
+	}
+	return MarkContainerSealing(w.dbconn, containerID)
+}
+
+// DB returns the underlying *sql.DB held by this writer (may be nil).
+// Used when cloning a writer per worker to propagate the DB connection.
+func (w *LocalWriter) DB() *sql.DB {
+	return w.dbconn
 }
 
 func (w *LocalWriter) Dir() string {

@@ -8,9 +8,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 INSERT INTO schema_version(version)
-SELECT 3
+SELECT 4
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
-
 -- =========================
 -- Container table
 -- =========================
@@ -19,6 +18,7 @@ CREATE TABLE IF NOT EXISTS container (
   id BIGSERIAL PRIMARY KEY,
   filename TEXT NOT NULL UNIQUE,
   sealed BOOLEAN NOT NULL DEFAULT FALSE,
+  sealing BOOLEAN NOT NULL DEFAULT FALSE,
   container_hash TEXT DEFAULT NULL,
   quarantine BOOLEAN NOT NULL DEFAULT FALSE,
   current_size BIGINT NOT NULL DEFAULT 0 CHECK (current_size >= 0),
@@ -28,9 +28,13 @@ CREATE TABLE IF NOT EXISTS container (
 );
 
 CREATE INDEX IF NOT EXISTS idx_container_sealed ON container(sealed);
+CREATE INDEX IF NOT EXISTS idx_container_sealing ON container(sealing);
 CREATE INDEX IF NOT EXISTS idx_container_quarantine ON container(quarantine);
 CREATE INDEX IF NOT EXISTS idx_container_sealed_quarantine ON container(sealed, quarantine);
 
+ALTER TABLE container ADD COLUMN IF NOT EXISTS sealing BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS idx_container_sealing ON container(sealing);
+UPDATE schema_version SET version = 4 WHERE version < 4;
 -- =========================
 -- Chunk table
 -- =========================

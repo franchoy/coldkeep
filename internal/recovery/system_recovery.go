@@ -24,6 +24,9 @@ type recoveryStats struct {
 	skippedDirEntries      int64
 	totalContainersChecked int64
 	totalDiskFilesChecked  int64
+	sealingCompleted       int64
+	sealingQuarantined     int64
+	ghostBytesTruncated    int64
 }
 
 type Report struct {
@@ -35,6 +38,9 @@ type Report struct {
 	SkippedDirEntries      int64
 	CheckedContainerRecord int64
 	CheckedDiskFiles       int64
+	SealingCompleted       int64
+	SealingQuarantined     int64
+	GhostBytesTruncated    int64
 }
 
 // isStrictRecovery returns true unless COLDKEEP_STRICT_RECOVERY is explicitly
@@ -81,6 +87,10 @@ func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error)
 	if err != nil {
 		return buildReport(stats), err
 	}
+	err = recoverSealingContainers(dbconn, containersDir, stats)
+	if err != nil {
+		return buildReport(stats), err
+	}
 	err = quarantineMissingContainers(dbconn, containersDir, stats)
 	if err != nil {
 		return buildReport(stats), err
@@ -98,6 +108,9 @@ func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error)
 		"summary",
 		fmt.Sprintf("aborted_logical_files=%d", stats.abortedLogicalFiles),
 		fmt.Sprintf("aborted_chunks=%d", stats.abortedChunks),
+		fmt.Sprintf("sealing_completed=%d", stats.sealingCompleted),
+		fmt.Sprintf("sealing_quarantined=%d", stats.sealingQuarantined),
+		fmt.Sprintf("ghost_bytes_truncated=%d", stats.ghostBytesTruncated),
 		fmt.Sprintf("quarantined_missing_containers=%d", stats.quarantinedMissing),
 		fmt.Sprintf("quarantined_corrupt_tail_containers=%d", stats.quarantinedCorruptTail),
 		fmt.Sprintf("quarantined_orphan_containers=%d", stats.quarantinedOrphan),
@@ -119,6 +132,9 @@ func buildReport(stats *recoveryStats) Report {
 		SkippedDirEntries:      stats.skippedDirEntries,
 		CheckedContainerRecord: stats.totalContainersChecked,
 		CheckedDiskFiles:       stats.totalDiskFilesChecked,
+		SealingCompleted:       stats.sealingCompleted,
+		SealingQuarantined:     stats.sealingQuarantined,
+		GhostBytesTruncated:    stats.ghostBytesTruncated,
 	}
 }
 
@@ -155,6 +171,75 @@ func abortProcessingChunks(dbconn *sql.DB, stats *recoveryStats) error {
 	}
 	stats.abortedChunks += affected
 	logRecoveryEvent("abort_processing_chunks_done", fmt.Sprintf("aborted_count=%d", affected))
+	return nil
+}
+
+func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	logRecoveryEvent("recover_sealing_containers_start")
+
+	// Clean up stale markers where a previous run sealed successfully but did not
+	// clear sealing (e.g., legacy code paths or manual DB edits).
+	if _, err := dbconn.ExecContext(ctx, `UPDATE container SET sealing = FALSE WHERE sealed = TRUE AND sealing = TRUE`); err != nil {
+		return fmt.Errorf("clear stale sealing markers: %w", err)
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT id, filename
+		FROM container
+		WHERE sealed = FALSE AND sealing = TRUE AND quarantine = FALSE
+	`)
+	if err != nil {
+		return fmt.Errorf("query sealing containers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var filename string
+		if err := rows.Scan(&id, &filename); err != nil {
+			return fmt.Errorf("scan sealing container row: %w", err)
+		}
+
+		if err := container.SealContainerInDir(dbconn, id, filename, containersDir); err == nil {
+			stats.sealingCompleted++
+			logRecoveryEvent(
+				"recover_sealing_container_completed",
+				fmt.Sprintf("container_id=%d", id),
+				"filename="+filename,
+			)
+			continue
+		}
+
+		// Physical file missing/unreadable: quarantine and clear sealing marker.
+		if _, qErr := dbconn.ExecContext(ctx,
+			`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
+			id,
+		); qErr != nil {
+			return fmt.Errorf("quarantine unresolved sealing container %d after seal error %v: %w", id, err, qErr)
+		}
+
+		stats.sealingQuarantined++
+		logRecoveryEvent(
+			"recover_sealing_container_quarantined",
+			fmt.Sprintf("container_id=%d", id),
+			"filename="+filename,
+			"reason=seal_failed",
+			"error="+err.Error(),
+		)
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	logRecoveryEvent(
+		"recover_sealing_containers_done",
+		fmt.Sprintf("completed=%d", stats.sealingCompleted),
+		fmt.Sprintf("quarantined=%d", stats.sealingQuarantined),
+	)
 	return nil
 }
 
@@ -249,6 +334,24 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 		if currentSize > physicalSize {
 			reason = "db_current_size_past_eof"
 		} else {
+			// Recoverable case: file has ghost bytes beyond DB current_size.
+			// This happens when a payload write reached disk but DB tx rolled back.
+			if physicalSize > currentSize {
+				if err := os.Truncate(path, currentSize); err != nil {
+					reason = "ghost_bytes_truncate_failed"
+				} else {
+					stats.ghostBytesTruncated++
+					physicalSize = currentSize
+					logRecoveryEvent(
+						"truncate_ghost_bytes",
+						fmt.Sprintf("container_id=%d", id),
+						"filename="+filename,
+						fmt.Sprintf("from=%d", fileInfo.Size()),
+						fmt.Sprintf("to=%d", currentSize),
+					)
+				}
+			}
+
 			var hasOutOfBoundsBlock bool
 			err = dbconn.QueryRowContext(ctx, `
 				SELECT EXISTS (
@@ -271,7 +374,6 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 				reason = "completed_block_past_eof"
 			}
 		}
-
 		if reason == "" {
 			continue
 		}

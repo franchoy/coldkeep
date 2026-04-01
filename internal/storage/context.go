@@ -96,12 +96,11 @@ func ParseStorageContext(value string) (StorageContext, error) {
 			return StorageContext{}, fmt.Errorf("failed to connect to local DB: %w", err)
 		}
 
-		writer := container.NewLocalWriterWithDir(container.ContainersDir, container.GetContainerMaxSize())
+		writer := container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn)
 		if writer == nil {
 			_ = dbconn.Close()
 			return StorageContext{}, fmt.Errorf("writer cannot be nil")
 		}
-
 		return StorageContext{
 			DB:           dbconn, // metadata store (required)
 			Writer:       writer,

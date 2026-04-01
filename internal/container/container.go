@@ -1,6 +1,7 @@
 package container
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -227,7 +228,25 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 			FOR UPDATE SKIP LOCKED
 		`).Scan(&id, &filename, &maxSize)
 	}
-
+	if excludeID > 0 {
+		err = db.QueryRow(`
+			SELECT id, filename, max_size
+			FROM container
+			WHERE sealed = FALSE AND sealing = FALSE AND quarantine = FALSE AND id <> $1
+			ORDER BY id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		`, excludeID).Scan(&id, &filename, &maxSize)
+	} else {
+		err = db.QueryRow(`
+			SELECT id, filename, max_size
+			FROM container
+			WHERE sealed = FALSE AND sealing = FALSE AND quarantine = FALSE
+			ORDER BY id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		`).Scan(&id, &filename, &maxSize)
+	}
 	if err == nil {
 		// Found existing open container
 		fullPath := filepath.Join(containersDir, filename)
@@ -339,10 +358,11 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 		return fmt.Errorf("compute container file hash: %w", err)
 	}
 
-	// Update DB
+	// Update DB: mark sealed and clear the sealing-in-progress flag atomically.
 	_, err = tx.Exec(`
 		UPDATE container
 		SET sealed = TRUE,
+			sealing = FALSE,
 			container_hash = $1
 		WHERE id = $2
 	`, sumHex, containerID)
@@ -354,6 +374,36 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 	return nil
 }
 
+// MarkContainerSealing commits a durable "sealing in progress" marker for the
+// container row in a short independent transaction. This must be called before
+// the physical file handle is closed (FinalizeContainer / finalizePhysicalOnly)
+// so that a crash between physical close and the subsequent SealContainerInDir
+// DB update is detectable by startup recovery. Recovery will either complete
+// the sealing or quarantine the container.
+//
+// If the marker commit fails the caller should abort the finalization: the
+// container remains fully open and can be written to again on the next attempt.
+func MarkContainerSealing(dbconn *sql.DB, containerID int64) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin sealing-marker tx for container %d: %w", containerID, err)
+	}
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE container SET sealing = TRUE WHERE id = $1`,
+		containerID,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("mark container %d sealing: %w", containerID, err)
+	}
+	if err = tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("commit sealing-marker for container %d: %w", containerID, err)
+	}
+	return nil
+}
 func CheckContainerHashFile(id int, filename, storedHash string) error {
 	return CheckContainerHashFileInDir(id, filename, storedHash, ContainersDir)
 }

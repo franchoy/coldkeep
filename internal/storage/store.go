@@ -51,6 +51,22 @@ type optionalContainerSealer interface {
 	SealContainer(tx db.DBTX, containerID int64, filename string, containersDir string) error
 }
 
+// optionalPreFinalizationMarker is implemented by writers that can commit a
+// durable "sealing in progress" marker to the DB before the physical container
+// file is closed. Calling this before FinalizeContainer allows startup recovery
+// to detect and repair containers that were physically finalized but not yet
+// logically sealed due to a crash or a failed DB transaction.
+type optionalPreFinalizationMarker interface {
+	MarkSealingForContainer(containerID int64) error
+}
+
+func markContainerSealingWithWriter(writer payloadStatefulWriter, containerID int64) error {
+	if marker, ok := writer.(optionalPreFinalizationMarker); ok {
+		return marker.MarkSealingForContainer(containerID)
+	}
+	return nil
+}
+
 // StoreFileResult contains structured metadata about a store operation.
 type StoreFileResult struct {
 	FileID        int64  `json:"file_id"`
@@ -76,8 +92,9 @@ func syncActiveContainerWithWriter(writer payloadStatefulWriter) error {
 func newWriterFromPrototype(prototype container.ContainerWriter) (container.ContainerWriter, error) {
 	switch w := prototype.(type) {
 	case *container.LocalWriter:
-		// Clone LocalWriter per worker for thread safety.
-		return container.NewLocalWriterWithDir(w.Dir(), w.MaxSize()), nil
+		// Clone LocalWriter per worker for thread safety; propagate DB connection
+		// so the per-worker writer can commit sealing markers independently.
+		return container.NewLocalWriterWithDirAndDB(w.Dir(), w.MaxSize(), w.DB()), nil
 	case *container.SimulatedWriter:
 		// Do NOT clone SimulatedWriter; return the original for shared, realistic container packing.
 		// Concurrency contract: SimulatedWriter is internally synchronized (mutex-protected).
@@ -802,9 +819,15 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				rollbackWriterLastAppend(writer)
 				return StoreFileResult{}, err
 			}
-
-			// Seal if reached max size.
 			if placement.Full {
+				// Commit a durable sealing marker before physically closing the file.
+				// If the process crashes between FinalizeContainer and the seal TX
+				// commit, startup recovery will detect the half-state via sealing=TRUE.
+				if err := markContainerSealingWithWriter(writer, placement.ContainerID); err != nil {
+					_ = tx.Rollback()
+					rollbackWriterLastAppend(writer)
+					return StoreFileResult{}, err
+				}
 				if err := writer.FinalizeContainer(); err != nil {
 					_ = tx.Rollback()
 					rollbackWriterLastAppend(writer)
