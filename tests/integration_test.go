@@ -5881,3 +5881,507 @@ func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 		t.Logf("verify after chunk breakage: expected to detect issues: %v", err)
 	}
 }
+
+// TestConcurrentRemoveAndRestore verifies that remove and restore operations racing
+// on the same file do not cause partial/corrupted data or state corruption. Either
+// restore completes with full correct content, or remove succeeds and prevents restore.
+func TestConcurrentRemoveAndRestore(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create and store a test file
+	testContent := make([]byte, 512*1024)
+	for i := range testContent {
+		testContent[i] = byte((i*37 + 13) % 251)
+	}
+	testFile := filepath.Join(inputDir, "concurrent-remove-restore.bin")
+	if err := os.WriteFile(testFile, testContent, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, sha256File(t, testFile))
+
+	// Race remove and restore
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "restored.bin")
+
+	done := make(chan error, 2)
+
+	// Start restore in goroutine
+	go func() {
+		done <- storage.RestoreFileWithDB(dbconn, fileID, outPath)
+	}()
+
+	// Start remove in goroutine (slight delay to increase race likelihood)
+	time.Sleep(1 * time.Millisecond)
+	go func() {
+		done <- storage.RemoveFileWithDB(dbconn, fileID)
+	}()
+
+	// Wait for both to complete
+	err1 := <-done
+	err2 := <-done
+
+	// Both may succeed or fail, but not in a corrupt way
+	// Check outcomes:
+	var outcomeRestoreFailed, outcomeRemoveFailed bool
+	if err1 != nil {
+		outcomeRestoreFailed = true
+	}
+	if err2 != nil {
+		outcomeRemoveFailed = true
+	}
+
+	// If restore succeeded, verify output file integrity
+	if !outcomeRestoreFailed {
+		if info, err := os.Stat(outPath); err != nil || info.Size() != int64(len(testContent)) {
+			t.Fatalf("restore output size mismatch or missing: size=%v err=%v", info.Size(), err)
+		}
+		got := mustRead(t, outPath)
+		if !bytes.Equal(got, testContent) {
+			t.Fatalf("restored content differs from original")
+		}
+	}
+
+	// If remove succeeded, verify file is actually gone
+	if !outcomeRemoveFailed {
+		var status string
+		err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status)
+		if err == nil {
+			// File entry might still exist but should be marked ABORTED
+			if status != filestate.LogicalFileAborted {
+				t.Logf("warning: removed file not marked as ABORTED, status=%s", status)
+			}
+		}
+	}
+
+	// Verify system integrity - no orphaned PROCESSING rows
+	assertNoProcessingRows(t, dbconn)
+
+	// Verify no partial/corrupted state
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("verify after concurrent remove/restore: %v", err)
+	}
+}
+
+// TestGCDuringActiveStore verifies that GC does not delete containers or chunks
+// while store is actively appending to them. GC must respect live_ref_count and
+// sealing markers to prevent data loss.
+func TestGCDuringActiveStore(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a large test file to force multiple container rotations
+	testContent := make([]byte, 8*1024*1024)
+	for i := range testContent {
+		testContent[i] = byte((i*41 + 7) % 251)
+	}
+	testFile := filepath.Join(inputDir, "large-store-file.bin")
+	if err := os.WriteFile(testFile, testContent, 0o644); err != nil {
+		t.Fatalf("write large test file: %v", err)
+	}
+
+	// Store file while GC runs concurrently
+	done := make(chan error, 2)
+	var storedContainerCount int64
+	var beforeContainers int64
+
+	// Record initial container count
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&beforeContainers); err != nil {
+		t.Fatalf("count initial containers: %v", err)
+	}
+
+	// Start store
+	go func() {
+		sgctx := storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+			ContainerDir: container.ContainersDir,
+		}
+		done <- storage.StoreFileWithStorageContext(sgctx, testFile)
+	}()
+
+	// Give store a chance to start writing
+	time.Sleep(10 * time.Millisecond)
+
+	// Start GC while store is active (non-dry-run to actually delete)
+	go func() {
+		done <- maintenance.RunGCWithContainersDir(false, container.ContainersDir)
+	}()
+
+	// Wait for both to complete
+	err1 := <-done
+	err2 := <-done
+
+	if err1 != nil {
+		t.Fatalf("store failed: %v", err1)
+	}
+	if err2 != nil {
+		t.Fatalf("gc failed: %v", err2)
+	}
+
+	// Count containers after concurrent operations
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&storedContainerCount); err != nil {
+		t.Fatalf("count containers after store+gc: %v", err)
+	}
+
+	// We should have at least as many containers as before (GC shouldn't delete live containers)
+	if storedContainerCount < beforeContainers {
+		t.Fatalf("GC deleted containers during active store: before=%d after=%d", beforeContainers, storedContainerCount)
+	}
+
+	// Verify the stored file is still retrievable and passes verification
+	fileHash := sha256File(t, testFile)
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "large-restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore after concurrent GC: %v", err)
+	}
+
+	got := mustRead(t, outPath)
+	if !bytes.Equal(got, testContent) {
+		t.Fatalf("restored content differs after concurrent GC")
+	}
+
+	// Verify system integrity
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after concurrent store+gc: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestContainerOverflowProtection verifies that the store operation rotates
+// containers before they overflow, preventing corruption and unrecoverable states.
+func TestContainerOverflowProtection(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// Reduce container max size to force frequent rotation
+	originalMaxSize := container.GetContainerMaxSize()
+	// Set to 2MiB to make test run faster while still allowing multiple chunks
+	container.SetContainerMaxSize(2 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a file larger than max container size (will require rotation)
+	fileSize := 6 * 1024 * 1024 // 6MiB, requires 3+ containers
+	testContent := make([]byte, fileSize)
+	for i := range testContent {
+		testContent[i] = byte((i*23 + 11) % 251)
+	}
+	testFile := filepath.Join(inputDir, "overflow-test.bin")
+	if err := os.WriteFile(testFile, testContent, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
+		t.Fatalf("store large file: %v", err)
+	}
+
+	// Verify no container exceeded max size
+	var containers []struct {
+		id          int64
+		filename    string
+		currentSize int64
+		maxSize     int64
+	}
+
+	rows, err := dbconn.Query(`SELECT id, filename, current_size, max_size FROM container`)
+	if err != nil {
+		t.Fatalf("query containers: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var c struct {
+			id          int64
+			filename    string
+			currentSize int64
+			maxSize     int64
+		}
+		if err := rows.Scan(&c.id, &c.filename, &c.currentSize, &c.maxSize); err != nil {
+			t.Fatalf("scan container: %v", err)
+		}
+		containers = append(containers, c)
+
+		// Check DB size doesn't exceed max
+		if c.currentSize > c.maxSize {
+			t.Fatalf("container %d exceeded max size: current=%d max=%d", c.id, c.currentSize, c.maxSize)
+		}
+
+		// Check physical file size doesn't exceed DB claimed size significantly
+		// (may be slightly larger due to header, but not much)
+		containerPath := filepath.Join(container.ContainersDir, c.filename)
+		stat, err := os.Stat(containerPath)
+		if err != nil {
+			t.Fatalf("stat container file: %v", err)
+		}
+
+		// Allow for small header but not overflow
+		if stat.Size() > c.currentSize+int64(container.ContainerHdrLen)*2 {
+			t.Fatalf("container %d file size exceeds DB current_size: file=%d db=%d", c.id, stat.Size(), c.currentSize)
+		}
+	}
+
+	if len(containers) < 2 {
+		t.Fatalf("expected multiple containers for 6MiB file, got %d", len(containers))
+	}
+
+	// Verify at least one container is sealed (rotation occurred)
+	var sealedCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedCount); err != nil {
+		t.Fatalf("count sealed containers: %v", err)
+	}
+	if sealedCount < 1 {
+		t.Fatalf("expected at least 1 sealed container after rotation, got %d", sealedCount)
+	}
+
+	// Verify file restores correctly
+	fileHash := sha256File(t, testFile)
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "overflow-restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	got := mustRead(t, outPath)
+	if !bytes.Equal(got, testContent) {
+		t.Fatalf("restored content differs from original")
+	}
+
+	// Verify system integrity
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after overflow protection test: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+}
+
+// TestBlockOffsetContinuityValidation verifies that the system detects and
+// prevents non-contiguous or overlapping block offsets within containers,
+// which could cause silent data loss or corruption during restore.
+func TestBlockOffsetContinuityValidation(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Store a normal file first
+	testContent := make([]byte, 1024*1024)
+	for i := range testContent {
+		testContent[i] = byte((i*19 + 5) % 251)
+	}
+	testFile := filepath.Join(inputDir, "offset-test.bin")
+	if err := os.WriteFile(testFile, testContent, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	sgctx := storage.StorageContext{
+		DB:     dbconn,
+		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
+	}
+	if err := storage.StoreFileWithStorageContext(sgctx, testFile); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Now corrupt block offsets in a container to create a gap
+	// Find first container and its blocks
+	var containerID int64
+	var blocks []struct {
+		id      int64
+		offset  int64
+		size    int64
+		chunkID int64
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT b.id, b.block_offset, b.stored_size, b.chunk_id
+		FROM blocks b
+		ORDER BY b.container_id, b.block_offset
+		LIMIT 10
+	`)
+	if err != nil {
+		t.Fatalf("query blocks: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var b struct {
+			id      int64
+			offset  int64
+			size    int64
+			chunkID int64
+		}
+		if err := rows.Scan(&b.id, &b.offset, &b.size, &b.chunkID); err != nil {
+			t.Fatalf("scan block: %v", err)
+		}
+		blocks = append(blocks, b)
+		if containerID == 0 {
+			// Get container from first block
+			if err := dbconn.QueryRow(`SELECT container_id FROM blocks WHERE id = $1`, b.id).Scan(&containerID); err != nil {
+				t.Fatalf("get container from block: %v", err)
+			}
+		}
+	}
+
+	if len(blocks) < 2 {
+		t.Logf("not enough blocks to corrupt offsets, skipping offset corruption test")
+		return
+	}
+
+	t.Run("gap in offsets", func(t *testing.T) {
+		// Corrupt second block to create gap: shift its offset forward by 1000 bytes
+		// This creates a hole: [0-B1_size] HOLE [B1_size+1000...]
+		if len(blocks) >= 2 {
+			newOffset := blocks[0].offset + blocks[0].size + 1000 // Create 1000-byte gap
+			_, err := dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE id = $2`, newOffset, blocks[1].id)
+			if err != nil {
+				t.Fatalf("corrupt block offset: %v", err)
+			}
+			defer func() {
+				// Restore
+				_, _ = dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE id = $2`, blocks[1].offset, blocks[1].id)
+			}()
+
+			// Verify system detects the gap
+			if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
+				t.Fatalf("expected verify to detect offset gap, but it passed")
+			} else {
+				t.Logf("verify correctly detected offset gap: %v", err)
+			}
+		}
+	})
+
+	t.Run("overlapping offsets", func(t *testing.T) {
+		// Corrupt second block to create overlap
+		if len(blocks) >= 2 {
+			// Move second block so it overlaps with first
+			newOffset := blocks[0].offset + 100 // Overlap by 100 bytes
+			_, err := dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE id = $2`, newOffset, blocks[1].id)
+			if err != nil {
+				t.Fatalf("corrupt block offset: %v", err)
+			}
+			defer func() {
+				// Restore
+				_, _ = dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE id = $2`, blocks[1].offset, blocks[1].id)
+			}()
+
+			// Verify system detects the overlap
+			if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
+				t.Fatalf("expected verify to detect offset overlap, but it passed")
+			} else {
+				t.Logf("verify correctly detected offset overlap: %v", err)
+			}
+		}
+	})
+
+	t.Run("no gaps after repair", func(t *testing.T) {
+		// After corruption tests above (which rollback), verify should pass
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+			t.Fatalf("verify should pass after offset corruption tests are restored: %v", err)
+		}
+
+		// Also verify restore still works
+		fileHash := sha256File(t, testFile)
+		fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+		outDir := filepath.Join(tmp, "out")
+		_ = os.MkdirAll(outDir, 0o755)
+		outPath := filepath.Join(outDir, "offset-restored.bin")
+
+		if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+			t.Fatalf("restore after offset tests: %v", err)
+		}
+
+		got := mustRead(t, outPath)
+		if !bytes.Equal(got, testContent) {
+			t.Fatalf("restored content differs")
+		}
+	})
+}
