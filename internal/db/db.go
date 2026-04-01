@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -96,9 +95,6 @@ func ConnectDB() (*sql.DB, error) {
 		" sslmode=" + utils_env.GetenvOrDefault("DB_SSLMODE", "disable") +
 		fmt.Sprintf(" connect_timeout=%d", max(1, int(connectTimeout/time.Second))) +
 		fmt.Sprintf(" options='%s'", buildConnectionOptions())
-	safeConnStr := strings.ReplaceAll(connStr, "password="+os.Getenv("DB_PASSWORD"), "password=***")
-
-	log.Printf("Connecting to DB with: %s", safeConnStr) // Log the connection string (without password)
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
