@@ -74,6 +74,12 @@ func (w *syncFailWriter) RetireActiveContainer() error {
 }
 
 func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
+	originalContainersDir := container.ContainersDir
+	container.ContainersDir = t.TempDir()
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -134,7 +140,7 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		 VALUES ($1, TRUE, FALSE, $2, $3)
 		 RETURNING id`,
 		"test-reuse-container.bin",
-		256,
+		841,
 		container.GetContainerMaxSize(),
 	).Scan(&containerID); err != nil {
 		_ = tx1.Rollback()
@@ -156,6 +162,10 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	}
 	if err := tx1.Commit(); err != nil {
 		t.Fatalf("commit tx1: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(container.ContainersDir, "test-reuse-container.bin"), make([]byte, 841), 0o600); err != nil {
+		t.Fatalf("create reusable container file: %v", err)
 	}
 
 	chunkID2, chunkStatus2, isNew2, err := claimChunk(dbconn, "shared-chunk-hash", 777)

@@ -181,7 +181,7 @@ type reusableCompletedChunkSummary struct {
 	quarantinedContainerRows int64
 }
 
-func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
+func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
 	err := dbconn.QueryRowContext(ctx, `
 		SELECT
@@ -208,6 +208,59 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	}
 	if summary.quarantinedContainerRows != 0 {
 		return fmt.Errorf("chunk %d references quarantined container", chunkID)
+	}
+
+	var (
+		containerID   int64
+		filename      string
+		blockOffset   int64
+		storedSize    int64
+		containerSize int64
+		maxSize       int64
+	)
+	err = dbconn.QueryRowContext(ctx, `
+		SELECT ctr.id, ctr.filename, b.block_offset, b.stored_size, ctr.current_size, ctr.max_size
+		FROM blocks b
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE b.chunk_id = $1
+	`, chunkID).Scan(
+		&containerID,
+		&filename,
+		&blockOffset,
+		&storedSize,
+		&containerSize,
+		&maxSize,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("chunk %d has missing container metadata", chunkID)
+		}
+		return fmt.Errorf("query reusable completed chunk placement %d: %w", chunkID, err)
+	}
+
+	if maxSize > 0 && containerSize > maxSize {
+		return fmt.Errorf("chunk %d references container %d with invalid size metadata: current_size=%d max_size=%d", chunkID, containerID, containerSize, maxSize)
+	}
+	if storedSize <= 0 {
+		return fmt.Errorf("chunk %d has invalid stored_size=%d", chunkID, storedSize)
+	}
+	if blockOffset < int64(container.ContainerHdrLen) {
+		return fmt.Errorf("chunk %d has invalid block_offset=%d before container header", chunkID, blockOffset)
+	}
+	if blockOffset > containerSize-storedSize {
+		return fmt.Errorf("chunk %d has out-of-bounds placement in container %d: block_offset=%d stored_size=%d container_size=%d", chunkID, containerID, blockOffset, storedSize, containerSize)
+	}
+
+	fullPath := filepath.Join(containersDir, filename)
+	info, statErr := os.Stat(fullPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return fmt.Errorf("chunk %d references missing container file %d (%s)", chunkID, containerID, fullPath)
+		}
+		return fmt.Errorf("stat container file for reusable chunk %d container %d: %w", chunkID, containerID, statErr)
+	}
+	if info.Size() < blockOffset+storedSize {
+		return fmt.Errorf("chunk %d placement exceeds physical container file bounds for container %d: block_offset=%d stored_size=%d file_size=%d", chunkID, containerID, blockOffset, storedSize, info.Size())
 	}
 
 	return nil
@@ -802,7 +855,7 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
-	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize)
+	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, container.ContainersDir)
 }
 
 func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
@@ -841,7 +894,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 	return fileID, filestatus, nil
 }
 
-func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
+func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
@@ -883,7 +936,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
 
-			reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+			reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
 			if reuseErr == nil {
 				return chunkID, chunkstatus, false, nil
 			}
@@ -902,7 +955,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 				return 0, "", false, waitErr
 			}
 			if finalStatus == filestate.ChunkCompleted {
-				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
 				if reuseErr == nil {
 					return chunkID, finalStatus, false, nil
 				}
@@ -958,7 +1011,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 				}
 				switch latestStatus {
 				case filestate.ChunkCompleted:
-					reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+					reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
 					if reuseErr == nil {
 						return chunkID, latestStatus, false, nil
 					}
@@ -975,7 +1028,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 						return 0, "", false, waitErr
 					}
 					if finalStatus == filestate.ChunkCompleted {
-						reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID)
+						reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
 						if reuseErr == nil {
 							return chunkID, finalStatus, false, nil
 						}
@@ -1278,7 +1331,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)))
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), sgctx.EffectiveContainerDir())
 		if err != nil {
 			return StoreFileResult{}, err
 		}
