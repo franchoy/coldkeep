@@ -7,6 +7,7 @@ var logicalFileWaitingtime = 100 * time.Millisecond
 var chunkWaitingtime = 100 * time.Millisecond
 
 var maxClaimPollingWait = 2 * time.Second
+var maxClaimWaitDuration = 2 * time.Minute
 
 func claimPollingBackoff(base time.Duration, attempt int) time.Duration {
 	if base <= 0 {

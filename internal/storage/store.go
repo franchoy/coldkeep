@@ -131,7 +131,11 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
 			attempt := 0
+			waitStart := time.Now()
 			for keep_waiting := true; keep_waiting; {
+				if time.Since(waitStart) >= maxClaimWaitDuration {
+					return 0, "", fmt.Errorf("timeout waiting for logical file %d to finish processing", existingID)
+				}
 
 				// Poll with bounded exponential backoff to reduce DB pressure under contention.
 				time.Sleep(claimPollingBackoff(logicalFileWaitingtime, attempt))
@@ -239,7 +243,11 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
 			attempt := 0
+			waitStart := time.Now()
 			for keep_waiting := true; keep_waiting; {
+				if time.Since(waitStart) >= maxClaimWaitDuration {
+					return 0, "", fmt.Errorf("timeout waiting for chunk %d to finish processing", chunkID)
+				}
 
 				// Poll with bounded exponential backoff to reduce DB pressure under contention.
 				time.Sleep(claimPollingBackoff(chunkWaitingtime, attempt))
