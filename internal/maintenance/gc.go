@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -88,22 +89,64 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			return GCResult{}, err
 		}
 
-		// Re-check inside transaction
 		var stillEmpty bool
-		err = tx.QueryRowContext(ctx, `
-			SELECT 
-				COALESCE(sealed, false) AND NOT EXISTS (
-					SELECT 1
+		if dryRun {
+			// Dry-run keeps a non-blocking check and reports what would be deleted.
+			err = tx.QueryRowContext(ctx, `
+				SELECT 
+					COALESCE(sealed, false) AND NOT EXISTS (
+						SELECT 1
+						FROM blocks b
+						JOIN chunk ch ON ch.id = b.chunk_id
+						WHERE b.container_id = $1
+						AND ch.ref_count > 0
+					)
+				FROM container where id = $1
+			`, containerID).Scan(&stillEmpty)
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, err
+			}
+		} else {
+			// Lock the container row first so status/metadata used for deletion is stable.
+			var isSealed bool
+			var isQuarantined bool
+			err = tx.QueryRowContext(ctx, `
+				SELECT COALESCE(sealed, false), COALESCE(quarantine, false)
+				FROM container
+				WHERE id = $1
+				FOR UPDATE
+			`, containerID).Scan(&isSealed, &isQuarantined)
+			if err == sql.ErrNoRows {
+				_ = tx.Rollback()
+				continue
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, err
+			}
+			if !isSealed || isQuarantined {
+				_ = tx.Rollback()
+				continue
+			}
+
+			// Lock all chunk rows referenced by this container, then evaluate emptiness.
+			err = tx.QueryRowContext(ctx, `
+				WITH locked_chunks AS (
+					SELECT ch.ref_count
 					FROM blocks b
 					JOIN chunk ch ON ch.id = b.chunk_id
 					WHERE b.container_id = $1
-					AND ch.ref_count > 0
+					FOR UPDATE
 				)
-			FROM container where id = $1
-		`, containerID).Scan(&stillEmpty)
-		if err != nil {
-			_ = tx.Rollback()
-			return GCResult{}, err
+				SELECT NOT EXISTS (
+					SELECT 1 FROM locked_chunks WHERE ref_count > 0
+				)
+			`, containerID).Scan(&stillEmpty)
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, err
+			}
 		}
 
 		if !stillEmpty {

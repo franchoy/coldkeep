@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -3726,6 +3727,141 @@ func TestStoreGCRestore(t *testing.T) {
 	gotHash := sha256File(t, outPath)
 	if gotHash != keeperHash {
 		t.Fatalf("hash mismatch after GC: want %s got %s", keeperHash, gotHash)
+	}
+}
+
+// TestGCRestorePinRaceContainerNotDeleted validates that GC cannot delete a
+// sealed container while a restore-style chunk pin is in-flight.
+func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containerFile := "gc-restore-race.bin"
+	containerPath := filepath.Join(container.ContainersDir, containerFile)
+	if err := os.WriteFile(containerPath, []byte("race-test-container"), 0o644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	var containerID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		containerFile,
+		int64(len("race-test-container")),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	err = dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"gc-restore-race-chunk",
+		int64(16),
+		filestate.ChunkCompleted,
+		int64(0),
+	).Scan(&chunkID)
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		chunkID,
+		"plain",
+		1,
+		int64(16),
+		int64(16),
+		[]byte{},
+		containerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	// Hold a restore-style pin transaction open while GC starts.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pinTx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin pin tx: %v", err)
+	}
+	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET ref_count = ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+		_ = pinTx.Rollback()
+		t.Fatalf("pin chunk in tx: %v", err)
+	}
+
+	gcDone := make(chan error, 1)
+	go func() {
+		gcDone <- maintenance.RunGCWithContainersDir(false, container.ContainersDir)
+	}()
+
+	select {
+	case err := <-gcDone:
+		_ = pinTx.Rollback()
+		t.Fatalf("GC finished before pin tx commit; expected it to wait on chunk lock: %v", err)
+	case <-time.After(250 * time.Millisecond):
+		// Expected: GC is blocked by the pin transaction.
+	}
+
+	if err := pinTx.Commit(); err != nil {
+		t.Fatalf("commit pin tx: %v", err)
+	}
+
+	select {
+	case err := <-gcDone:
+		if err != nil {
+			t.Fatalf("run GC: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for GC completion")
+	}
+
+	var remainingContainers int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&remainingContainers); err != nil {
+		t.Fatalf("count container rows: %v", err)
+	}
+	if remainingContainers != 1 {
+		t.Fatalf("expected container to remain after pinned restore chunk, got count=%d", remainingContainers)
+	}
+
+	var remainingBlocks int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE container_id = $1`, containerID).Scan(&remainingBlocks); err != nil {
+		t.Fatalf("count block rows: %v", err)
+	}
+	if remainingBlocks != 1 {
+		t.Fatalf("expected block mapping to remain after pinned restore chunk, got count=%d", remainingBlocks)
+	}
+
+	var pinnedRefCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinnedRefCount); err != nil {
+		t.Fatalf("query chunk ref_count: %v", err)
+	}
+	if pinnedRefCount != 1 {
+		t.Fatalf("expected chunk ref_count=1 after pin commit, got %d", pinnedRefCount)
+	}
+
+	if _, err := os.Stat(containerPath); err != nil {
+		t.Fatalf("expected container file to remain on disk: %v", err)
 	}
 }
 
