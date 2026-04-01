@@ -36,6 +36,7 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -54,9 +55,9 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 			FROM blocks b
 			JOIN chunk c ON c.id = b.chunk_id
 			WHERE b.container_id = ctr.id
-			AND c.status = 'COMPLETED'
+			AND c.status = $1
 		)
-	`)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container files: %v", err)
@@ -136,7 +137,7 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	rows, err := dbconn.Query(`SELECT c.id
 							FROM chunk c
 							JOIN blocks b ON b.chunk_id = c.id
-							WHERE c.status != 'COMPLETED';`)
+							WHERE c.status != $1;`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query chunk-container consistency: %v", err)
@@ -186,9 +187,11 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`select id, filename, container_hash
-				from container
-				where quarantine = false and sealed = true`)
+	rows, err := dbconn.Query(`
+		SELECT id, filename, container_hash, COUNT(*) OVER() AS total_rows
+		FROM container
+		WHERE quarantine = FALSE AND sealed = TRUE
+	`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container hashes: %v", err)
@@ -197,18 +200,18 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	defer func() { _ = rows.Close() }()
 
 	var totalRows int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE quarantine = false AND sealed = true`).Scan(&totalRows); err != nil {
-		log.Printf("Failed to query total container count: %v", err)
-		return fmt.Errorf("failed to query total container count: %w", err)
-	}
 	var containercount int
 	for rows.Next() {
 		containercount++
-		log.Printf("Checking container %d / %d", containercount, totalRows)
+		if totalRows > 0 {
+			log.Printf("Checking container %d / %d", containercount, totalRows)
+		} else {
+			log.Printf("Checking container %d", containercount)
+		}
 		var id int
 		var filename string
 		var storedHash string
-		if err := rows.Scan(&id, &filename, &storedHash); err != nil {
+		if err := rows.Scan(&id, &filename, &storedHash, &totalRows); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan container hash: %w", err))
 			continue
@@ -254,8 +257,8 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 			FROM blocks b
 			JOIN chunk ch ON ch.id = b.chunk_id
 			WHERE b.container_id = container.id
-			AND ch.status != 'COMPLETED'
-		)`)
+			AND ch.status != $1
+		)`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query container completeness: %v", err)
@@ -271,7 +274,7 @@ func checkContainerCompleteness(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("Sealed container with incomplete chunks found: container ID %d has incomplete chunks", containerID))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("sealed container with incomplete chunks found: container ID %d has incomplete chunks", containerID))
 	}
 
 	if err := rows.Err(); err != nil {

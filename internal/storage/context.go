@@ -32,8 +32,19 @@ func (s StorageContext) EffectiveContainerDir() string {
 // Close releases storage context resources.
 // For simulated mode, it also removes the temporary sqlite DB file.
 // Close is safe to call multiple times (idempotent).
+// Writer finalization is always attempted first; in simulated mode this is a
+// logical reset (no physical fsync/close), while local writers close handles.
+// Note: some store paths also finalize writers per file operation; this call is
+// intentionally tolerant as a defensive final ownership boundary.
 func (s *StorageContext) Close() error {
 	var errs []error
+
+	if s.Writer != nil {
+		if err := s.Writer.FinalizeContainer(); err != nil {
+			errs = append(errs, fmt.Errorf("finalize container writer: %w", err))
+		}
+		s.Writer = nil
+	}
 
 	if s.DB != nil {
 		if err := s.DB.Close(); err != nil {

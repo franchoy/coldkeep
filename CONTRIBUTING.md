@@ -135,6 +135,14 @@ If unsure, open a discussion before implementing changes.
 -   Avoid flaky timing-based tests
 -   Prefer deterministic inputs
 
+For v0.9, changes that affect storage, restore, verification, recovery, GC,
+or CLI contracts are expected to pass the full GitHub Actions pipeline:
+
+-   quality
+-   integration
+-   smoke
+-   the aggregate `CI Required Gate`
+
 If adding storage logic, include at least one restore verification test.
 
 ------------------------------------------------------------------------
@@ -153,6 +161,18 @@ Pull requests should include:
 -   Why it is needed
 -   Tradeoffs introduced
 -   Any schema impact (if applicable)
+
+Repository maintainers should protect `main`, `release/**`, and `hotfix/**`
+with required status checks and require the exact final job name
+`CI Required Gate`. That enforcement is configured in GitHub repository
+settings or rulesets, not in the source tree.
+
+To keep this auditable, use the GitHub rule names `Protect mainline branches`
+and `Protect release tags`, then verify them with:
+
+``` bash
+scripts/audit_ci_enforcement.sh --repo franchoy/coldkeep
+```
 
 Breaking changes must include migration notes.
 

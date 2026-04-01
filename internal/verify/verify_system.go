@@ -11,6 +11,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -177,9 +178,9 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			FROM blocks b
 			JOIN chunk c ON c.id = b.chunk_id
 			WHERE b.container_id = ctr.id
-			AND c.status = 'COMPLETED'
+			AND c.status = $1
 		)
-	`).Scan(&containerCount)
+	`, filestate.ChunkCompleted).Scan(&containerCount)
 	if containerCountErr != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query deep-verify container count: %v", containerCountErr)
@@ -197,9 +198,9 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			FROM blocks b
 			JOIN chunk c ON c.id = b.chunk_id
 			WHERE b.container_id = ctr.id
-			AND c.status = 'COMPLETED'
+			AND c.status = $1
 		)
-	`)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query deep-verify containers: %v", err)
@@ -237,8 +238,8 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 								FROM blocks b
 								JOIN chunk c ON c.id = b.chunk_id
 								WHERE b.container_id = $1
-								AND c.status = 'COMPLETED'
-								ORDER BY b.block_offset`, containerID)
+								AND c.status = $2
+								ORDER BY b.block_offset`, containerID, filestate.ChunkCompleted)
 			if err != nil {
 				return fmt.Errorf("failed to query chunks for container %d: %w", containerID, err)
 			}

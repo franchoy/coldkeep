@@ -15,12 +15,18 @@ coldkeep is a content-addressed storage engine for cold data.
 It splits files into content-defined chunks, deduplicates them using SHA-256,
 and stores them as encoded blocks in append-only container files with database-backed metadata.
 
-coldkeep guarantees deterministic, byte-identical restore of stored data,
+coldkeep is designed to guarantee deterministic, byte-identical restore of stored data,
 validated by end-to-end hashing and resilient across garbage collection
-and system restart/recovery.
+and system restart/recovery under defined operating conditions.
+
 
 > coldkeep is designed as a correctness-first storage engine, prioritizing
 > determinism and recoverability over performance and feature completeness.
+
+For v0.9, every change intended for mainline or release delivery is expected to
+pass the full GitHub Actions pipeline before merge or tag publication. The repo
+contains a synthetic required check named `CI Required Gate` that aggregates the
+quality, integration, and smoke jobs across both codecs.
 
 ---
 
@@ -55,6 +61,147 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
 - Simulate storage operations without writing data to disk (v0.8).
 - Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
+
+---
+
+## 🛡️ Storage Guarantees (v0.9)
+
+coldkeep is designed as a **correctness-first storage engine**.  
+This section defines the guarantees provided by the system as of **v0.9**.
+
+### Summary
+
+coldkeep v0.9 guarantees:
+
+- deterministic, byte-identical restore
+- no exposure of partially written or inconsistent data
+- non-destructive garbage collection
+- atomic restore operations
+- safe concurrent storage operations
+
+### Core validity model
+
+A logical file is considered **valid and restorable** only when:
+
+- its status is `COMPLETED`
+- all referenced chunks are `COMPLETED`
+- all referenced blocks exist and are readable
+
+Only files in this state are returned by `list` and `search` and are eligible for restore.
+
+---
+
+### Data integrity
+
+coldkeep guarantees **end-to-end data integrity**:
+
+- Every chunk is validated using SHA-256 during restore
+- The final restored file hash must match the original stored hash
+- Any mismatch causes the restore operation to fail
+
+> A restored file is either **bit-for-bit identical**, or the operation fails.
+
+---
+
+### Crash consistency
+
+coldkeep guarantees **safe recovery after crashes or interruptions**:
+
+- Writes use lifecycle states: `PROCESSING → COMPLETED → ABORTED`
+- On startup:
+  - incomplete operations are marked as `ABORTED`
+  - inconsistent containers may be quarantined
+
+> No partially written or inconsistent data is exposed as valid.
+
+---
+
+### Restore safety
+
+Restore operations are **atomic and verified**:
+
+- Data is written to a temporary file
+- The file is fsynced and closed
+- It is atomically renamed into place
+- The parent directory is fsynced for durability
+
+> A restore either produces a complete valid file, or no file at all.
+
+---
+
+### Garbage collection safety
+
+Garbage collection is **non-destructive**:
+
+- Only unreferenced chunks are removed
+- Containers are deleted only when fully unreferenced
+- Referenced data is never removed
+
+> GC cannot delete data required to restore a valid logical file.
+
+---
+
+### Concurrency model
+
+coldkeep supports **safe concurrent operations**:
+
+- Logical files and chunks are claimed via database constraints
+- Duplicate work is avoided via hash-based deduplication
+- Concurrent operations coordinate via retry and backoff
+
+> Concurrent storage operations do not corrupt data or create inconsistent state.
+
+---
+
+### Verification model
+
+coldkeep provides multiple verification levels:
+
+- `standard`: metadata integrity
+- `full`: container structure and metadata consistency
+- `deep`: full data read and hash verification
+
+Verification assumes:
+
+- all `COMPLETED` chunks are valid
+- corrupted or missing containers are quarantined
+
+> The system can detect corruption explicitly when verification is run.
+
+---
+
+### Simulation behavior
+
+The `simulate` command provides **accurate metadata-level estimation**:
+
+- No data is written to storage
+- Real chunking and deduplication logic is executed
+
+> Simulation reflects real storage behavior without side effects.
+
+> These guarantees describe system behavior under controlled conditions.
+> coldkeep remains experimental and is not yet recommended for production use.
+
+---
+
+### Non-guarantees (v0.9)
+
+coldkeep does **not** guarantee:
+
+- Backward compatibility of on-disk format
+- Stability of internal schemas before v1.0
+- Protection against manual modification of storage or database
+- Distributed or multi-node consistency
+
+---
+
+### Trust boundary
+
+Guarantees hold only if:
+
+- the database is not externally modified
+- container files are not manually altered
+- the filesystem honors write and fsync semantics
 
 ---
 
@@ -120,6 +267,7 @@ coldkeep supports structured output for automation.
 ```bash
 coldkeep stats --output json
 coldkeep list --output json
+coldkeep list --limit 50 --offset 100 --output json
 coldkeep simulate store-folder ./data --output json
 ```
 
@@ -346,23 +494,16 @@ Recommended for periodic integrity audits rather than frequent execution.
 
 ---
 
-## Deterministic restore guarantees (v0.5)
+## Deterministic restore (historical note)
 
-coldkeep guarantees deterministic restore at the logical file level (introduced in v0.5).
+Deterministic restore was introduced in v0.5 and is now part of the
+core storage guarantees defined in the Storage Guarantees section above.
 
-Current integration coverage validates:
+Integration tests validate:
 
-- deterministic stored logical files under deduplication
-- byte-identical restore outputs verified by SHA-256
-- consistent restore behavior after GC and restart/recovery
-- deterministic results across representative and edge-case datasets
-
-This guarantee applies to logical files and dataset-level workflows.
-
-Coldkeep does not yet define a first-class contract for restoring full
-directory trees with exact original layout. 
-Current support focuses on logical file reconstruction, with tests restoring
-files individually rather than reconstructing full directory structure.
+- byte-identical restore outputs
+- consistency across GC and recovery
+- deterministic behavior across datasets
 
 ---
 
@@ -518,6 +659,43 @@ Restore a file:
 docker compose run --rm app restore 1 _out.bin
 ```
 
+---
+
+## CI Gate Policy (v0.9)
+
+The repository-side workflow now enforces a single final status named `CI Required Gate`.
+That gate fails if any upstream quality, integration, or smoke job fails or is skipped.
+
+To make that gate non-bypassable for pull requests, merges, and release preparation,
+GitHub repository settings must also enforce it.
+
+Recommended GitHub ruleset / branch protection configuration:
+
+- Require pull requests before merging to `main`
+- Require status checks before merging
+- Mark `CI Required Gate` as a required status check
+- Require merge queue and keep `merge_group` enabled in the workflow
+- Apply the same required check to `release/**` and `hotfix/**`
+- Restrict direct pushes to protected branches
+- Restrict tag creation for release tags such as `v*` to trusted maintainers or automation
+
+Recommended rule names to keep policy auditing deterministic:
+
+- `Protect mainline branches`
+- `Protect release tags`
+
+Without those GitHub-side protections, no workflow file can fully prevent an
+administrator or an unrestricted direct push from bypassing CI.
+
+Maintainers can audit the current setup with:
+
+```bash
+scripts/audit_ci_enforcement.sh --local-only
+scripts/audit_ci_enforcement.sh --repo franchoy/coldkeep
+```
+
+The remote audit requires GitHub CLI authentication with repository admin access.
+
 Show stats:
 
 ``` bash
@@ -552,6 +730,7 @@ List stored files:
 
 ``` bash
 ./coldkeep list
+./coldkeep list --limit 50 --offset 100
 ```
 
 Restore a file:

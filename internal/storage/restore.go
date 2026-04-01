@@ -13,6 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 // RestoreFileResult contains structured metadata about a restore operation.
@@ -26,7 +27,7 @@ type RestoreFileResult struct {
 func RestoreFile(id int64, outputPath string) error {
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return fmt.Errorf("Failed to connect to DB: %w", err)
+		return fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
@@ -66,7 +67,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	var originalName string
 
 	err = dbconn.QueryRow(
-		"SELECT original_name, file_hash FROM logical_file WHERE status = 'COMPLETED' AND id = $1",
+		"SELECT original_name, file_hash FROM logical_file WHERE status = $1 AND id = $2",
+		filestate.LogicalFileCompleted,
 		fileID,
 	).Scan(&originalName, &expectedFileHash)
 
@@ -102,9 +104,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			JOIN chunk c ON c.id = fc.chunk_id
 			JOIN blocks b ON b.chunk_id = c.id
 			JOIN container ctr ON ctr.id = b.container_id
-			WHERE fc.logical_file_id = $1 AND c.status = 'COMPLETED'
+			WHERE fc.logical_file_id = $1 AND c.status = $2
 			ORDER BY fc.chunk_order ASC
-	`, fileID)
+	`, fileID, filestate.ChunkCompleted)
 
 	if err != nil {
 		return RestoreFileResult{}, fmt.Errorf("query file chunks: %w", err)
@@ -130,12 +132,19 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return RestoreFileResult{}, fmt.Errorf("create parent directories for %s: %w", outputPath, err)
 	}
 
-	outFile, err := os.Create(outputPath)
+	outFile, err := os.CreateTemp(filepath.Dir(outputPath), ".coldkeep-restore-*")
 	if err != nil {
-		return RestoreFileResult{}, fmt.Errorf("create output file %s: %w", outputPath, err)
+		return RestoreFileResult{}, fmt.Errorf("create temporary output file for %s: %w", outputPath, err)
 	}
+	tempOutputPath := outFile.Name()
+	cleanupTemp := true
 	defer func() {
-		_ = outFile.Close()
+		if outFile != nil {
+			_ = outFile.Close()
+		}
+		if cleanupTemp {
+			_ = os.Remove(tempOutputPath)
+		}
 	}()
 
 	hasher := sha256.New()
@@ -178,7 +187,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			return RestoreFileResult{}, fmt.Errorf("scan chunk row: %w", err)
 		}
 
-		if chunkStatus != "COMPLETED" {
+		if chunkStatus != filestate.ChunkCompleted {
 			return RestoreFileResult{}, fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkOrder, fileID, chunkStatus)
 		}
 
@@ -284,6 +293,26 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if err := outFile.Sync(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
 	}
+	if err := outFile.Close(); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("close temporary output file: %w", err)
+	}
+	outFile = nil
+	if err := os.Rename(tempOutputPath, outputPath); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
+	}
+	// Flush directory metadata so the rename is durable across crashes on stricter filesystems.
+	dir, err := os.Open(filepath.Dir(outputPath))
+	if err != nil {
+		return RestoreFileResult{}, fmt.Errorf("open output directory for fsync: %w", err)
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return RestoreFileResult{}, fmt.Errorf("fsync output directory: %w", err)
+	}
+	if err := dir.Close(); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("close output directory after fsync: %w", err)
+	}
+	cleanupTemp = false
 
 	// ------------------------------------------------------------
 	// Final Integrity Validation

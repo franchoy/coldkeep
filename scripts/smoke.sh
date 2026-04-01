@@ -16,6 +16,11 @@ cleanup() {
 
 trap cleanup EXIT
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "[smoke] ERROR: jq is required for JSON-based output parsing"
+  exit 1
+fi
+
 ensure_postgres_schema() {
   if [[ -z "${COLDKEEP_TEST_DB:-}" ]]; then
     return
@@ -88,7 +93,7 @@ ensure_postgres_schema
 reset_smoke_state
 
 echo "[smoke] stats (before)"
-coldkeep stats || true
+coldkeep stats
 
 echo "[smoke] simulate store-folder samples"
 coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$COLDKEEP_SAMPLES_DIR"
@@ -99,22 +104,74 @@ coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"
 echo "[smoke] stats (after)"
 coldkeep stats
 
+echo "[smoke] dedup test: re-storing same folder should not change key storage counters"
+STATS_BEFORE=$(coldkeep stats --output json)
+coldkeep store-folder "$COLDKEEP_SAMPLES_DIR"
+STATS_AFTER=$(coldkeep stats --output json)
+DEDUP_FAILED=0
+for field in total_files completed_files total_chunks completed_chunks total_logical_size_bytes live_block_bytes total_containers; do
+  before=$(echo "$STATS_BEFORE" | jq -r ".data.${field}")
+  after=$(echo "$STATS_AFTER" | jq -r ".data.${field}")
+  if [[ "$before" != "$after" ]]; then
+    echo "[smoke] ERROR: dedup failed: '${field}' changed: ${before} -> ${after}"
+    DEDUP_FAILED=1
+  fi
+done
+if [[ "$DEDUP_FAILED" -eq 1 ]]; then
+  exit 1
+fi
+echo "[smoke] dedup test PASSED: all key storage counters unchanged after re-storing same folder"
+
 echo "[smoke] list files"
 coldkeep list
 
-# Restore first file id if available
-FIRST_ID=$(coldkeep list | awk 'NR>2 {print $1; exit}' || true)
-if [[ -n "${FIRST_ID}" ]]; then
-  echo "[smoke] restoring first file id=${FIRST_ID}"
-  mkdir -p ./_smoke_out
-  coldkeep restore "${FIRST_ID}" ./_smoke_out/
-  echo "[smoke] re-store restored file (should dedupe)"
-  RESTORED=$(ls -1 ./_smoke_out | head -n 1)
-  coldkeep store "./_smoke_out/${RESTORED}" || true
+LIST_OUTPUT=$(coldkeep list --output json)
+
+# Capture first ID before the restore loop (needed for the remove test below)
+FIRST_ID=$(echo "$LIST_OUTPUT" | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
+
+echo "[smoke] restore-all: restoring every stored file and verifying byte-perfect fidelity"
+rm -rf ./_smoke_out
+RESTORE_ALL_FAILED=0
+while IFS=$'\t' read -r file_id file_name expected_hash; do
+  restore_dir="./_smoke_out/${file_id}"
+  mkdir -p "$restore_dir"
+  if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
+    echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
+    RESTORE_ALL_FAILED=1
+    continue
+  fi
+  restored="${restore_dir}/${file_name}"
+  if [[ ! -f "$restored" ]]; then
+    echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+    RESTORE_ALL_FAILED=1
+    continue
+  fi
+  if [[ -z "$expected_hash" || "$expected_hash" == "null" ]]; then
+    echo "[smoke] ERROR: list output missing file_hash for id=${file_id} name=${file_name}"
+    RESTORE_ALL_FAILED=1
+    continue
+  fi
+  rest_hash=$(sha256sum "$restored" | awk '{print $1}')
+  if [[ "$expected_hash" != "$rest_hash" ]]; then
+    echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
+    RESTORE_ALL_FAILED=1
+  else
+    echo "[smoke]   ok: id=${file_id} ${file_name}"
+  fi
+done < <(echo "$LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
+if [[ "$RESTORE_ALL_FAILED" -eq 1 ]]; then
+  exit 1
 fi
+echo "[smoke] restore-all PASSED: all stored files restore byte-perfectly"
 
 echo "[smoke] search test"
-coldkeep search hello || true
+SEARCH_OUTPUT=$(coldkeep search --name hello --output json)
+echo "$SEARCH_OUTPUT"
+if ! echo "$SEARCH_OUTPUT" | jq -e '(.files | length) > 0' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: search --name hello returned no matching rows"
+  exit 1
+fi
 
 echo "[smoke] remove test"
 if [[ -n "${FIRST_ID}" ]]; then
@@ -125,7 +182,116 @@ fi
 echo "[smoke] gc test"
 coldkeep gc
 
+echo "[smoke] verify system (full)"
+coldkeep verify system --full
+
 echo "[smoke] stats (after gc)"
 coldkeep stats
+
+# Edge cases test: many small files + pattern file
+echo ""
+echo "[smoke] === EDGE CASES TEST ==="
+EDGE_CASES_DIR="${PWD}/samples_edge_cases"
+if [[ ! -d "$EDGE_CASES_DIR" ]]; then
+  echo "[smoke] WARNING: samples_edge_cases directory not found at $EDGE_CASES_DIR, skipping"
+else
+  echo "[smoke] resetting for edge cases run"
+  reset_smoke_state
+
+  echo "[smoke] stats (edge cases before)"
+  coldkeep stats
+
+  echo "[smoke] simulate store-folder edge cases"
+  coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$EDGE_CASES_DIR"
+
+  echo "[smoke] store-folder edge cases"
+  coldkeep store-folder "$EDGE_CASES_DIR"
+
+  echo "[smoke] stats (edge cases after)"
+  coldkeep stats
+
+  echo "[smoke] dedup test (edge cases): re-storing same folder should not change key storage counters"
+  EDGE_STATS_BEFORE=$(coldkeep stats --output json)
+  coldkeep store-folder "$EDGE_CASES_DIR"
+  EDGE_STATS_AFTER=$(coldkeep stats --output json)
+  EDGE_DEDUP_FAILED=0
+  for field in total_files completed_files total_chunks completed_chunks total_logical_size_bytes live_block_bytes total_containers; do
+    before=$(echo "$EDGE_STATS_BEFORE" | jq -r ".data.${field}")
+    after=$(echo "$EDGE_STATS_AFTER" | jq -r ".data.${field}")
+    if [[ "$before" != "$after" ]]; then
+      echo "[smoke] ERROR: dedup (edge cases) failed: '${field}' changed: ${before} -> ${after}"
+      EDGE_DEDUP_FAILED=1
+    fi
+  done
+  if [[ "$EDGE_DEDUP_FAILED" -eq 1 ]]; then
+    exit 1
+  fi
+  echo "[smoke] dedup test (edge cases) PASSED: all key storage counters unchanged after re-storing same folder"
+
+  echo "[smoke] list edge case files"
+  coldkeep list
+
+  EDGE_LIST_OUTPUT=$(coldkeep list --output json)
+
+  # Capture first ID before the restore loop (needed for the remove test below)
+  FIRST_EDGE_ID=$(echo "$EDGE_LIST_OUTPUT" | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
+
+  echo "[smoke] restore-all (edge cases): restoring every stored file and verifying byte-perfect fidelity"
+  rm -rf ./_smoke_out
+  EDGE_RESTORE_ALL_FAILED=0
+  while IFS=$'\t' read -r file_id file_name expected_hash; do
+    restore_dir="./_smoke_out/${file_id}"
+    mkdir -p "$restore_dir"
+    if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
+      echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
+      EDGE_RESTORE_ALL_FAILED=1
+      continue
+    fi
+    restored="${restore_dir}/${file_name}"
+    if [[ ! -f "$restored" ]]; then
+      echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+      EDGE_RESTORE_ALL_FAILED=1
+      continue
+    fi
+    if [[ -z "$expected_hash" || "$expected_hash" == "null" ]]; then
+      echo "[smoke] ERROR: list output missing file_hash for id=${file_id} name=${file_name}"
+      EDGE_RESTORE_ALL_FAILED=1
+      continue
+    fi
+    rest_hash=$(sha256sum "$restored" | awk '{print $1}')
+    if [[ "$expected_hash" != "$rest_hash" ]]; then
+      echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
+      EDGE_RESTORE_ALL_FAILED=1
+    else
+      echo "[smoke]   ok: id=${file_id} ${file_name}"
+    fi
+  done < <(echo "$EDGE_LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
+  if [[ "$EDGE_RESTORE_ALL_FAILED" -eq 1 ]]; then
+    exit 1
+  fi
+  echo "[smoke] restore-all (edge cases) PASSED: all stored files restore byte-perfectly"
+
+  echo "[smoke] search edge cases (pattern.txt)"
+  SEARCH_OUTPUT=$(coldkeep search --name pattern --output json)
+  echo "$SEARCH_OUTPUT"
+  if ! echo "$SEARCH_OUTPUT" | jq -e '(.files | length) > 0' > /dev/null 2>&1; then
+    echo "[smoke] WARNING: search --name pattern did not match expected files (might be deduplicated)"
+  fi
+
+  echo "[smoke] remove edge case test"
+  if [[ -n "${FIRST_EDGE_ID}" ]]; then
+    echo "[smoke] removing first edge case file id=${FIRST_EDGE_ID}"
+    coldkeep remove "${FIRST_EDGE_ID}"
+  fi
+
+  echo "[smoke] gc test (edge cases)"
+  coldkeep gc
+
+  echo "[smoke] verify system --full (edge cases)"
+  coldkeep verify system --full
+
+  echo "[smoke] stats (edge cases after gc)"
+  coldkeep stats
+fi
 
 echo "[smoke] done"

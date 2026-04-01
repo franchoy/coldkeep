@@ -12,6 +12,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -43,7 +44,7 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("File with no chunks found: logical file ID %d has no chunks", logicalFileID))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("file with no chunks found: logical file ID %d has no chunks", logicalFileID))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -130,10 +131,10 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
 
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		return fmt.Errorf("logical file %d has invalid status: expected COMPLETED but got %s", fileId, status)
 	}
-	var hasChunks bool = false
+	hasChunks := false
 	//ensure file_chunks exists for the file
 	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = $1 order by chunk_order asc`, fileId)
 	if err != nil {
@@ -142,7 +143,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	defer func() { _ = filechunkrows.Close() }()
 
 	var chunkIdList []int
-	var previousChunkOrder int = 0
+	previousChunkOrder := 0
 	for filechunkrows.Next() {
 		hasChunks = true
 
@@ -194,7 +195,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId); err != nil {
 			return fmt.Errorf("failed to scan chunk info: %w", err)
 		}
-		if chunkStatus != "COMPLETED" {
+		if chunkStatus != filestate.ChunkCompleted {
 			return fmt.Errorf("chunk with ID %d has invalid status: expected COMPLETED but got %s", chunkid, chunkStatus)
 		}
 		if !blockId.Valid {

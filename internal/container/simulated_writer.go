@@ -40,6 +40,8 @@ func (w *SimulatedWriter) FinalizeContainer() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// Simulated mode has no physical file handle to flush/close.
+	// FinalizeContainer is a logical reset that clears active-container state.
 	w.hasActive = false
 	w.currentID = 0
 	w.currentFilename = ""

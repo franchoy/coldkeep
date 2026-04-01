@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -68,6 +71,211 @@ func TestIntegrationHarnessSmoke(t *testing.T) {
 	} else {
 		t.Log("COLDKEEP_TEST_DB is set; DB-backed integration tests can run")
 	}
+}
+
+type cliExecResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	dir := cwd
+	for i := 0; i < 8; i++ {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	t.Fatalf("could not find repo root (go.mod) from cwd %q", cwd)
+	return ""
+}
+
+func buildColdkeepBinary(t *testing.T, repoRoot string) string {
+	t.Helper()
+
+	binPath := filepath.Join(t.TempDir(), "coldkeep-test-bin")
+	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/coldkeep")
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build coldkeep binary: %v\noutput:\n%s", err, string(out))
+	}
+
+	return binPath
+}
+
+func buildCommandEnv(overrides map[string]string) []string {
+	envMap := make(map[string]string)
+	for _, kv := range os.Environ() {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		envMap[parts[0]] = parts[1]
+	}
+
+	for k, v := range overrides {
+		envMap[k] = v
+	}
+
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		env = append(env, k+"="+v)
+	}
+
+	return env
+}
+
+func runColdkeepCommand(t *testing.T, repoRoot, binPath string, env map[string]string, args ...string) cliExecResult {
+	t.Helper()
+
+	cmd := exec.Command(binPath, args...)
+	cmd.Dir = repoRoot
+	cmd.Env = buildCommandEnv(env)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		return cliExecResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: 0}
+	}
+
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return cliExecResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitErr.ExitCode()}
+	}
+
+	t.Fatalf("run coldkeep command %v: %v", args, err)
+	return cliExecResult{}
+}
+
+func tryParseLastJSONLine(output string) (map[string]any, bool) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err == nil {
+			return payload, true
+		}
+	}
+
+	return nil, false
+}
+
+func parseJSONLines(output string) []map[string]any {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	parsed := make([]map[string]any, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err == nil {
+			parsed = append(parsed, payload)
+		}
+	}
+	return parsed
+}
+
+func jsonMap(t *testing.T, payload map[string]any, key string) map[string]any {
+	t.Helper()
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("missing JSON key %q", key)
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("JSON key %q is not an object: %T", key, v)
+	}
+	return m
+}
+
+func jsonInt64(t *testing.T, payload map[string]any, key string) int64 {
+	t.Helper()
+	v, ok := payload[key]
+	if !ok {
+		t.Fatalf("missing JSON key %q", key)
+	}
+	n, ok := v.(float64)
+	if !ok {
+		t.Fatalf("JSON key %q is not numeric: %T", key, v)
+	}
+	return int64(n)
+}
+
+func assertCLIJSONOK(t *testing.T, res cliExecResult, command string) map[string]any {
+	t.Helper()
+
+	if res.exitCode != 0 {
+		t.Fatalf("command %s failed with exit=%d\nstdout:\n%s\nstderr:\n%s", command, res.exitCode, res.stdout, res.stderr)
+	}
+
+	payload, ok := tryParseLastJSONLine(res.stdout)
+	if !ok {
+		payload, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
+	}
+	if !ok {
+		t.Fatalf("command %s produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", command, res.stdout, res.stderr)
+	}
+
+	if status, _ := payload["status"].(string); status != "ok" {
+		t.Fatalf("command %s did not return status=ok: payload=%v stderr=%s", command, payload, res.stderr)
+	}
+	if got, _ := payload["command"].(string); got != command {
+		t.Fatalf("command mismatch: want %s got %q payload=%v", command, got, payload)
+	}
+
+	return payload
+}
+
+func findCLIErrorPayload(output string) (map[string]any, bool) {
+	for _, payload := range parseJSONLines(output) {
+		if _, ok := payload["error_class"]; ok {
+			return payload, true
+		}
+	}
+	return nil, false
+}
+
+func defaultCLIEnv(storageDir string) map[string]string {
+	return map[string]string{
+		"COLDKEEP_TEST_DB":     "1",
+		"COLDKEEP_CODEC":       getenvOrDefault("COLDKEEP_CODEC", "plain"),
+		"COLDKEEP_STORAGE_DIR": storageDir,
+		"DB_HOST":              getenvOrDefault("DB_HOST", "127.0.0.1"),
+		"DB_PORT":              getenvOrDefault("DB_PORT", "5432"),
+		"DB_USER":              getenvOrDefault("DB_USER", "coldkeep"),
+		"DB_PASSWORD":          os.Getenv("DB_PASSWORD"),
+		"DB_NAME":              getenvOrDefault("DB_NAME", "coldkeep"),
+		"DB_SSLMODE":           getenvOrDefault("DB_SSLMODE", "disable"),
+	}
+}
+
+func getenvOrDefault(name, fallback string) string {
+	v := os.Getenv(name)
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
 }
 
 func applySchema(t *testing.T, dbconn *sql.DB) {
@@ -218,7 +426,7 @@ func assertNoProcessingRows(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
 
 	var logicalProcessing int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'PROCESSING'`).Scan(&logicalProcessing); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).Scan(&logicalProcessing); err != nil {
 		t.Fatalf("count processing logical_file rows: %v", err)
 	}
 	if logicalProcessing != 0 {
@@ -226,7 +434,7 @@ func assertNoProcessingRows(t *testing.T, dbconn *sql.DB) {
 	}
 
 	var chunkProcessing int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'PROCESSING'`).Scan(&chunkProcessing); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkProcessing).Scan(&chunkProcessing); err != nil {
 		t.Fatalf("count processing chunk rows: %v", err)
 	}
 	if chunkProcessing != 0 {
@@ -458,6 +666,303 @@ func createSampleDataset(t *testing.T, dir string) map[string]string {
 	return paths
 }
 
+func TestCLIJSONOutputContracts(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "json_contract.bin", 256*1024)
+
+	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"simulate", "store", inPath, "--output", "json"), "simulate")
+	simData := jsonMap(t, sim, "data")
+	if got := jsonInt64(t, simData, "files"); got != 1 {
+		t.Fatalf("simulate files mismatch: want 1 got %d", got)
+	}
+
+	store := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := jsonMap(t, store, "data")
+	fileID := jsonInt64(t, storeData, "file_id")
+	if fileID <= 0 {
+		t.Fatalf("expected positive file_id, got %d", fileID)
+	}
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"stats", "--output", "json"), "stats")
+
+	list := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"list", "--output", "json"), "list")
+	files, ok := list["files"].([]any)
+	if !ok || len(files) == 0 {
+		t.Fatalf("list returned no files: payload=%v", list)
+	}
+
+	search := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"search", "--name", "json_contract", "--output", "json"), "search")
+	searchFiles, ok := search["files"].([]any)
+	if !ok || len(searchFiles) == 0 {
+		t.Fatalf("search returned no files for --name json_contract: payload=%v", search)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileID), outDir, "--output", "json"), "restore")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "file", fmt.Sprintf("%d", fileID), "--full", "--output", "json"), "verify")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", fmt.Sprintf("%d", fileID), "--output", "json"), "remove")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+}
+
+func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	inputDir := filepath.Join(tmp, "dataset")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir dataset: %v", err)
+	}
+	createSampleDataset(t, inputDir)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"simulate", "store-folder", inputDir, "--output", "json"), "simulate")
+	simData := jsonMap(t, sim, "data")
+	simFiles := jsonInt64(t, simData, "files")
+	simLogical := jsonInt64(t, simData, "logical_size_bytes")
+	simPhysical := jsonInt64(t, simData, "physical_size_bytes")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store-folder", inputDir, "--output", "json"), "store-folder")
+
+	stats := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"stats", "--output", "json"), "stats")
+	statsData := jsonMap(t, stats, "data")
+	realFiles := jsonInt64(t, statsData, "completed_files")
+	realLogical := jsonInt64(t, statsData, "completed_size_bytes")
+	realPhysical := jsonInt64(t, statsData, "live_block_bytes")
+
+	if simFiles != realFiles {
+		t.Fatalf("simulation files mismatch: simulated=%d real=%d", simFiles, realFiles)
+	}
+	if simLogical != realLogical {
+		t.Fatalf("simulation logical bytes mismatch: simulated=%d real=%d", simLogical, realLogical)
+	}
+
+	// Allow a small delta for accounting differences while still detecting large drift.
+	const maxPhysicalDeltaBytes int64 = 1024
+	delta := simPhysical - realPhysical
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > maxPhysicalDeltaBytes {
+		t.Fatalf("simulation physical bytes drift too large: simulated=%d real=%d delta=%d", simPhysical, realPhysical, delta)
+	}
+}
+
+func TestCLIJSONOutputStreamSeparation(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "stream_contract.bin", 64*1024)
+
+	res := runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json")
+	if res.exitCode != 0 {
+		t.Fatalf("store command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	stdoutJSON := parseJSONLines(res.stdout)
+	if len(stdoutJSON) == 0 {
+		t.Fatalf("expected JSON payload on stdout, got:\n%s", res.stdout)
+	}
+
+	storeJSON := stdoutJSON[len(stdoutJSON)-1]
+	if got, _ := storeJSON["command"].(string); got != "store" {
+		t.Fatalf("expected stdout command payload for store, got: %v", storeJSON)
+	}
+	if status, _ := storeJSON["status"].(string); status != "ok" {
+		t.Fatalf("expected stdout status=ok, got payload: %v", storeJSON)
+	}
+
+	if strings.Contains(res.stdout, "startup_recovery") {
+		t.Fatalf("startup recovery JSON must not be written to stdout:\n%s", res.stdout)
+	}
+
+	stderrJSON := parseJSONLines(res.stderr)
+	if len(stderrJSON) == 0 {
+		t.Fatalf("expected startup recovery JSON on stderr, got:\n%s", res.stderr)
+	}
+
+	recoverySeen := false
+	for _, payload := range stderrJSON {
+		if event, _ := payload["event"].(string); event == "startup_recovery" {
+			recoverySeen = true
+		}
+		if command, _ := payload["command"].(string); command == "store" {
+			t.Fatalf("command payload must not be written to stderr: %v", payload)
+		}
+	}
+
+	if !recoverySeen {
+		t.Fatalf("expected startup_recovery JSON event on stderr, got payloads: %v", stderrJSON)
+	}
+}
+
+func TestCLIJSONErrorContracts(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	tests := []struct {
+		name          string
+		args          []string
+		wantExitCode  int
+		wantClass     string
+		messageSubstr string
+	}{
+		{
+			name:          "usage_unknown_command",
+			args:          []string{"nope", "--output", "json"},
+			wantExitCode:  2,
+			wantClass:     "USAGE",
+			messageSubstr: "unknown command",
+		},
+		{
+			name:          "usage_invalid_file_id",
+			args:          []string{"restore", "abc", filepath.Join(tmp, "out"), "--output", "json"},
+			wantExitCode:  2,
+			wantClass:     "USAGE",
+			messageSubstr: "Invalid fileID",
+		},
+		{
+			name:          "general_store_missing_path",
+			args:          []string{"store", filepath.Join(tmp, "missing-file.bin"), "--output", "json"},
+			wantExitCode:  1,
+			wantClass:     "GENERAL",
+			messageSubstr: "no such file",
+		},
+		{
+			name:          "verify_missing_file_id",
+			args:          []string{"verify", "file", "999999", "--deep", "--output", "json"},
+			wantExitCode:  3,
+			wantClass:     "VERIFY",
+			messageSubstr: "does not exist",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runColdkeepCommand(t, repoRoot, binPath, env, tc.args...)
+
+			if res.exitCode != tc.wantExitCode {
+				t.Fatalf("exit code mismatch: want=%d got=%d\nstdout:\n%s\nstderr:\n%s", tc.wantExitCode, res.exitCode, res.stdout, res.stderr)
+			}
+
+			if strings.TrimSpace(res.stdout) != "" {
+				t.Fatalf("expected no stdout for error case, got:\n%s", res.stdout)
+			}
+
+			errPayload, ok := findCLIErrorPayload(res.stderr)
+			if !ok {
+				t.Fatalf("expected JSON error payload in stderr, got:\n%s", res.stderr)
+			}
+
+			if got, _ := errPayload["status"].(string); got != "error" {
+				t.Fatalf("status mismatch: want=error got=%q payload=%v", got, errPayload)
+			}
+			if got, _ := errPayload["error_class"].(string); got != tc.wantClass {
+				t.Fatalf("error_class mismatch: want=%s got=%q payload=%v", tc.wantClass, got, errPayload)
+			}
+			if got := jsonInt64(t, errPayload, "exit_code"); got != int64(tc.wantExitCode) {
+				t.Fatalf("exit_code mismatch in payload: want=%d got=%d payload=%v", tc.wantExitCode, got, errPayload)
+			}
+
+			message, _ := errPayload["message"].(string)
+			if !strings.Contains(strings.ToLower(message), strings.ToLower(tc.messageSubstr)) {
+				t.Fatalf("message mismatch: expected substring %q in %q", tc.messageSubstr, message)
+			}
+		})
+	}
+}
+
 // -----------------------------------------------------------------------------
 // test cases
 // -----------------------------------------------------------------------------
@@ -596,6 +1101,190 @@ func TestDedupSameFile(t *testing.T) {
 	}
 }
 
+// TestStoreFolderIdempotentDedup verifies that re-storing the same folder a
+// second time leaves all key storage counters unchanged: file-level and
+// chunk-level deduplication must absorb the entire second pass without writing
+// new logical files, new chunks, new physical blocks, or new containers.
+// This complements TestDedupSameFile (single-file) by exercising the folder
+// pipeline, concurrent workers, and shared-chunk routing.
+func TestStoreFolderIdempotentDedup(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	createSampleDataset(t, inputDir)
+
+	sgctx := newTestContext(dbconn)
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("first store-folder: %v", err)
+	}
+
+	type storageSnapshot struct {
+		completedFiles  int64
+		totalChunks     int64
+		completedChunks int64
+		liveBlockBytes  int64
+		totalContainers int64
+	}
+
+	takeSnapshot := func(label string) storageSnapshot {
+		t.Helper()
+		var s storageSnapshot
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).Scan(&s.completedFiles); err != nil {
+			t.Fatalf("[%s] query completed_files: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&s.totalChunks); err != nil {
+			t.Fatalf("[%s] query total_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkCompleted).Scan(&s.completedChunks); err != nil {
+			t.Fatalf("[%s] query completed_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`
+			SELECT COALESCE(SUM(b.stored_size), 0)
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE c.ref_count > 0
+		`).Scan(&s.liveBlockBytes); err != nil {
+			t.Fatalf("[%s] query live_block_bytes: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&s.totalContainers); err != nil {
+			t.Fatalf("[%s] query total_containers: %v", label, err)
+		}
+		return s
+	}
+
+	before := takeSnapshot("before")
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("second store-folder: %v", err)
+	}
+
+	after := takeSnapshot("after")
+
+	if before.completedFiles != after.completedFiles {
+		t.Errorf("dedup failed: completed_files changed %d -> %d", before.completedFiles, after.completedFiles)
+	}
+	if before.totalChunks != after.totalChunks {
+		t.Errorf("dedup failed: total_chunks changed %d -> %d", before.totalChunks, after.totalChunks)
+	}
+	if before.completedChunks != after.completedChunks {
+		t.Errorf("dedup failed: completed_chunks changed %d -> %d", before.completedChunks, after.completedChunks)
+	}
+	if before.liveBlockBytes != after.liveBlockBytes {
+		t.Errorf("dedup failed: live_block_bytes changed %d -> %d", before.liveBlockBytes, after.liveBlockBytes)
+	}
+	if before.totalContainers != after.totalContainers {
+		t.Errorf("dedup failed: total_containers changed %d -> %d", before.totalContainers, after.totalContainers)
+	}
+}
+
+// TestStoreFolderIdempotentDedupEdgeCases applies the same idempotent re-store
+// guarantee as TestStoreFolderIdempotentDedup but against the samples_edge_cases
+// fixture: many small files plus a repeating-pattern file. This exercises
+// deduplication under high file-count workloads and compressible-data patterns.
+func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	fixturePath := findRepoFixtureDir(t, "samples_edge_cases")
+	inputDir := filepath.Join(tmp, "input")
+	copyDirTree(t, fixturePath, inputDir)
+
+	sgctx := newTestContext(dbconn)
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("first store-folder: %v", err)
+	}
+
+	type storageSnapshot struct {
+		completedFiles  int64
+		totalChunks     int64
+		completedChunks int64
+		liveBlockBytes  int64
+		totalContainers int64
+	}
+
+	takeSnapshot := func(label string) storageSnapshot {
+		t.Helper()
+		var s storageSnapshot
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).Scan(&s.completedFiles); err != nil {
+			t.Fatalf("[%s] query completed_files: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&s.totalChunks); err != nil {
+			t.Fatalf("[%s] query total_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkCompleted).Scan(&s.completedChunks); err != nil {
+			t.Fatalf("[%s] query completed_chunks: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`
+			SELECT COALESCE(SUM(b.stored_size), 0)
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE c.ref_count > 0
+		`).Scan(&s.liveBlockBytes); err != nil {
+			t.Fatalf("[%s] query live_block_bytes: %v", label, err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&s.totalContainers); err != nil {
+			t.Fatalf("[%s] query total_containers: %v", label, err)
+		}
+		return s
+	}
+
+	before := takeSnapshot("before")
+
+	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
+		t.Fatalf("second store-folder: %v", err)
+	}
+
+	after := takeSnapshot("after")
+
+	if before.completedFiles != after.completedFiles {
+		t.Errorf("dedup failed: completed_files changed %d -> %d", before.completedFiles, after.completedFiles)
+	}
+	if before.totalChunks != after.totalChunks {
+		t.Errorf("dedup failed: total_chunks changed %d -> %d", before.totalChunks, after.totalChunks)
+	}
+	if before.completedChunks != after.completedChunks {
+		t.Errorf("dedup failed: completed_chunks changed %d -> %d", before.completedChunks, after.completedChunks)
+	}
+	if before.liveBlockBytes != after.liveBlockBytes {
+		t.Errorf("dedup failed: live_block_bytes changed %d -> %d", before.liveBlockBytes, after.liveBlockBytes)
+	}
+	if before.totalContainers != after.totalContainers {
+		t.Errorf("dedup failed: total_containers changed %d -> %d", before.totalContainers, after.totalContainers)
+	}
+}
+
 func TestStoreFolderParallelSmoke(t *testing.T) {
 	requireDB(t)
 
@@ -697,6 +1386,104 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
+}
+
+func TestStoreEdgeCasesFolder(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// Use the repository's edge case samples folder.
+	// It contains:
+	// - samples_edge_cases/pattern.txt (one file with a pattern)
+	// - samples_edge_cases/many_small/ (50 small files)
+	edgeCasesDir := findRepoFixtureDir(t, "samples_edge_cases")
+
+	// Store edge cases folder with timeout to catch deadlocks.
+	done := make(chan error, 1)
+	go func() {
+		done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), edgeCasesDir)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("storeFolder edge cases: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("storeFolder edge cases timed out (possible deadlock)")
+	}
+
+	// Query stats to validate storage succeeded.
+	stats, err := maintenance.RunStatsResult()
+	if err != nil {
+		t.Fatalf("runStatsResult: %v", err)
+	}
+
+	// Should have stored multiple files: pattern.txt + 50 files from many_small/
+	// At minimum, we should have >0 files.
+	if stats.CompletedFiles <= 0 {
+		t.Fatalf("expected >0 completed files, got %d", stats.CompletedFiles)
+	}
+
+	// Verify all stored files are retrievable.
+	rows, err := dbconn.Query(`SELECT id, file_hash, original_name FROM logical_file ORDER BY id ASC`)
+	if err != nil {
+		t.Fatalf("query logical_file: %v", err)
+	}
+	defer rows.Close()
+
+	fileCount := 0
+	restoreDir := filepath.Join(tmp, "restored_edge")
+	_ = os.MkdirAll(restoreDir, 0o755)
+
+	for rows.Next() {
+		var id int64
+		var fileHash, origName string
+		if err := rows.Scan(&id, &fileHash, &origName); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		fileCount++
+
+		// Spot-check: restore first 3 files and compare hashes.
+		if fileCount <= 3 {
+			outPath := filepath.Join(restoreDir, fmt.Sprintf("restored_%d_%s", id, filepath.Base(origName)))
+			if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+				t.Fatalf("restore id=%d: %v", id, err)
+			}
+
+			gotHash := sha256File(t, outPath)
+			if gotHash != fileHash {
+				t.Fatalf("edge case hash mismatch for id=%d want=%s got=%s", id, fileHash, gotHash)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if fileCount == 0 {
+		t.Fatalf("expected >0 files to be stored from edge cases folder, got 0")
+	}
+
+	// Run full system verification.
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify system full: %v", err)
+	}
+
+	// Ensure no processing rows stuck behind.
+	assertNoProcessingRows(t, dbconn)
 }
 
 func TestGCRemovesUnusedContainers(t *testing.T) {
@@ -1048,7 +1835,7 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&status, &retryCount); err != nil {
 		t.Fatalf("query logical_file status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected logical file status COMPLETED, got %s", status)
 	}
 	if retryCount < 0 {
@@ -1125,7 +1912,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	}
 
 	var completedFiles int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&completedFiles); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).Scan(&completedFiles); err != nil {
 		t.Fatalf("count completed logical files: %v", err)
 	}
 	if completedFiles != len(expectedUnique) {
@@ -1133,7 +1920,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	}
 
 	var nonCompleted int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status <> 'COMPLETED'`).Scan(&nonCompleted); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status <> $1`, filestate.LogicalFileCompleted).Scan(&nonCompleted); err != nil {
 		t.Fatalf("count non-completed logical files: %v", err)
 	}
 	if nonCompleted != 0 {
@@ -1310,7 +2097,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 
 	// Manually set the file status to ABORTED to simulate a failed store
 	fileID := fetchFileIDByHash(t, dbconn, fileHash)
-	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID); err != nil {
 		t.Fatalf("set status to ABORTED: %v", err)
 	}
 
@@ -1324,7 +2111,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
 		t.Fatalf("check status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected status COMPLETED, got %s", status)
 	}
 }
@@ -1362,7 +2149,7 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	}
 
 	fileID := fetchFileIDByHash(t, dbconn, fileHash)
-	if _, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE id = $1`, fileID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID); err != nil {
 		t.Fatalf("set logical file ABORTED: %v", err)
 	}
 
@@ -1401,7 +2188,7 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 logical_file row after concurrent retry, got %d", count)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected logical file status COMPLETED after concurrent retry, got %s", status)
 	}
 	assertNoProcessingRows(t, dbconn)
@@ -1454,7 +2241,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 
 	// Set the chunk status to ABORTED
-	if _, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
 		t.Fatalf("set chunk status to ABORTED: %v", err)
 	}
 
@@ -1468,7 +2255,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED, got %s", status)
 	}
 }
@@ -1531,7 +2318,7 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 		t.Fatalf("find shared chunk: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE id = $1`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
 		t.Fatalf("set chunk ABORTED: %v", err)
 	}
 
@@ -1568,7 +2355,7 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
 		t.Fatalf("query chunk status: %v", err)
 	}
-	if status != "COMPLETED" {
+	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED after concurrent retry, got %s", status)
 	}
 	assertNoProcessingRows(t, dbconn)
@@ -1780,8 +2567,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	_, err = dbconn.Exec(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
-		VALUES ($1, $2, $3, 'PROCESSING', 0)
-	`, filepath.Base(inPath), size, hash)
+		VALUES ($1, $2, $3, $4, 0)
+	`, filepath.Base(inPath), size, hash, filestate.LogicalFileProcessing)
 	if err != nil {
 		t.Fatalf("insert processing logical file: %v", err)
 	}
@@ -1799,8 +2586,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
 		INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
-		VALUES ($1, $2, 'PROCESSING', 0, 0)
-	`, "dummy_chunk_hash", int64(128*1024))
+		VALUES ($1, $2, $3, 0, 0)
+	`, "dummy_chunk_hash", int64(128*1024), filestate.ChunkProcessing)
 	if err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
 	}
@@ -1850,7 +2637,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hash).Scan(&fileStatus); err != nil {
 		t.Fatalf("check logical file status: %v", err)
 	}
-	if fileStatus != "ABORTED" {
+	if fileStatus != filestate.LogicalFileAborted {
 		t.Fatalf("expected logical file status ABORTED, got %s", fileStatus)
 	}
 
@@ -1859,7 +2646,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&chunkStatus); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
-	if chunkStatus != "ABORTED" {
+	if chunkStatus != filestate.ChunkAborted {
 		t.Fatalf("expected chunk status ABORTED, got %s", chunkStatus)
 	}
 
@@ -1931,8 +2718,8 @@ func TestVerifyStandard(t *testing.T) {
 		// Insert a chunk with ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
 				INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
-				VALUES ('orphan_chunk_hash_test', 1024, 'COMPLETED', 1, 0)
-		`); err != nil {
+				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0)
+		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
 		defer func() {
@@ -2026,8 +2813,8 @@ func TestVerifyFull(t *testing.T) {
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
 			INSERT INTO chunk (chunk_hash, size, status, ref_count, retry_count)
-			VALUES ('verify_full_bad_chunk', 1024, 'COMPLETED', 0, 0)
-		`); err != nil {
+			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0)
+		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
 		}
 		defer func() {
@@ -2378,10 +3165,10 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = 'COMPLETED'
+		WHERE c.status = $1
 		ORDER BY b.block_offset ASC
 		LIMIT 1
-	`).Scan(&blockOffset, &storedSize, &containerFilename)
+	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
 	if err != nil {
 		t.Fatalf("query first chunk: %v", err)
 	}
@@ -2441,11 +3228,11 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		SELECT b.chunk_id, b.block_offset
 		FROM blocks b
 		JOIN chunk c ON c.id = b.chunk_id
-		WHERE c.status = 'COMPLETED'
+		WHERE c.status = $1
 		ORDER BY b.container_id ASC, b.block_offset ASC
 		OFFSET 1
 		LIMIT 1
-	`).Scan(&secondChunkID, &secondBlockOffset)
+	`, filestate.ChunkCompleted).Scan(&secondChunkID, &secondBlockOffset)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			t.Skip("not enough completed chunks to validate offset continuity")
@@ -2496,10 +3283,10 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = 'COMPLETED'
+		WHERE c.status = $1
 		ORDER BY b.container_id ASC, b.block_offset ASC
 		LIMIT 2
-	`)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		t.Fatalf("query chunks for corruption: %v", err)
 	}
@@ -3019,9 +3806,9 @@ func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 	rows, err := dbconn.Query(`
 		SELECT id, file_hash
 		FROM logical_file
-		WHERE status = 'COMPLETED'
+		WHERE status = $1
 		ORDER BY id ASC
-	`)
+	`, filestate.LogicalFileCompleted)
 	if err != nil {
 		t.Fatalf("query logical_file for %s: %v", fixtureDir, err)
 	}
@@ -3246,4 +4033,152 @@ func TestSamplesFolderEndToEnd(t *testing.T) {
 
 func TestSamplesEdgeCasesFolderEndToEnd(t *testing.T) {
 	runFixtureFolderEndToEnd(t, "samples_edge_cases")
+}
+
+// runFixtureFolderRestoreAll stores every file in the given fixture directory
+// tree, then restores each logical file by name and compares it byte-for-byte
+// against the original file found in the source tree.
+//
+// This is stricter than runFixtureFolderEndToEnd in two ways:
+//  1. It maps each restored logical file back to a representative fixture file
+//     by SHA-256 and diffs the raw bytes, avoiding basename collisions while
+//     still catching systematic encode/decode bugs.
+//  2. It counts every unique content hash in the fixture and verifies that the
+//     completed logical_file row count matches that deduplicated total.
+func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
+	t.Helper()
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	fixturePath := findRepoFixtureDir(t, fixtureDir)
+	inputDir := filepath.Join(tmp, "input")
+	copyDirTree(t, fixturePath, inputDir)
+
+	expectedHashCounts := collectFileHashesByCount(t, inputDir)
+	expectedUniqueCount := len(expectedHashCounts)
+	hashToPath := make(map[string]string, expectedUniqueCount)
+	if walkErr := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, e error) error {
+		if e != nil || d.IsDir() {
+			return e
+		}
+		hash := sha256File(t, path)
+		if _, exists := hashToPath[hash]; !exists {
+			hashToPath[hash] = path
+		}
+		return nil
+	}); walkErr != nil {
+		t.Fatalf("walk input dir: %v", walkErr)
+	}
+
+	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
+		t.Fatalf("store folder %s: %v", fixtureDir, err)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT id, original_name, file_hash
+		FROM logical_file
+		WHERE status = $1
+		ORDER BY id ASC
+	`, filestate.LogicalFileCompleted)
+	if err != nil {
+		t.Fatalf("query logical_file: %v", err)
+	}
+	defer rows.Close()
+
+	restoredCount := 0
+	seenHashes := make(map[string]bool, expectedUniqueCount)
+	for rows.Next() {
+		var id int64
+		var origName, storedHash string
+		if err := rows.Scan(&id, &origName, &storedHash); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		outPath := filepath.Join(outDir, fmt.Sprintf("%d_%s", id, origName))
+		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
+			t.Errorf("restore id=%d name=%s: %v", id, origName, err)
+			continue
+		}
+
+		// Verify restored hash matches what the DB recorded.
+		gotHash := sha256File(t, outPath)
+		if gotHash != storedHash {
+			t.Errorf("restored hash mismatch for id=%d name=%s: db_hash=%s restored_hash=%s",
+				id, origName, storedHash, gotHash)
+		}
+
+		if _, found := expectedHashCounts[storedHash]; !found {
+			t.Errorf("unexpected stored hash for id=%d name=%s: %s", id, origName, storedHash)
+			continue
+		}
+		if seenHashes[storedHash] {
+			t.Errorf("duplicate logical_file row for hash %s (id=%d name=%s)", storedHash, id, origName)
+			continue
+		}
+
+		// Verify restored bytes match a representative source file for this hash.
+		srcPath, found := hashToPath[storedHash]
+		if !found {
+			t.Errorf("original source not found for hash=%s id=%d name=%s", storedHash, id, origName)
+			continue
+		}
+		orig, readErr := os.ReadFile(srcPath)
+		if readErr != nil {
+			t.Fatalf("read original %s: %v", srcPath, readErr)
+		}
+		restored, readErr := os.ReadFile(outPath)
+		if readErr != nil {
+			t.Fatalf("read restored %s: %v", outPath, readErr)
+		}
+		if !bytes.Equal(orig, restored) {
+			t.Errorf("byte mismatch for id=%d name=%s: original %d bytes, restored %d bytes",
+				id, origName, len(orig), len(restored))
+		}
+
+		seenHashes[storedHash] = true
+		restoredCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if restoredCount == 0 {
+		t.Fatalf("no files were restored for fixture %s", fixtureDir)
+	}
+	if restoredCount != expectedUniqueCount {
+		t.Fatalf("restored logical file count mismatch for fixture %s: got=%d want=%d", fixtureDir, restoredCount, expectedUniqueCount)
+	}
+}
+
+// TestSamplesFolderRestoreAll stores the samples/ fixture and restores every
+// logical file, verifying byte-perfect fidelity against the original source
+// file. Complements TestSamplesFolderEndToEnd (hash-set check) by comparing
+// each restored file directly against its original on disk.
+func TestSamplesFolderRestoreAll(t *testing.T) {
+	runFixtureFolderRestoreAll(t, "samples")
+}
+
+// TestSamplesEdgeCasesFolderRestoreAll applies the same full restore-all check
+// to samples_edge_cases/, including the multi-chunk binaries, the deeply-nested
+// leaf file, all 50 small files, and the repeating-pattern file.
+func TestSamplesEdgeCasesFolderRestoreAll(t *testing.T) {
+	runFixtureFolderRestoreAll(t, "samples_edge_cases")
 }

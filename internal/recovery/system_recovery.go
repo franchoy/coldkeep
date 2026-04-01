@@ -10,6 +10,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
 type recoveryStats struct {
@@ -55,7 +56,7 @@ func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error)
 	logRecoveryEvent("start", "containers_dir="+containersDir)
 	dbconn, err := db.ConnectDB()
 	if err != nil {
-		return buildReport(stats), fmt.Errorf("Failed to connect to DB: %w", err)
+		return buildReport(stats), fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
@@ -104,7 +105,7 @@ func buildReport(stats *recoveryStats) Report {
 
 func abortProcessingLogicalFiles(dbconn *sql.DB, stats *recoveryStats) error {
 	logRecoveryEvent("abort_processing_logical_files_start")
-	result, err := dbconn.Exec(`UPDATE logical_file SET status = 'ABORTED' WHERE status = 'PROCESSING'`)
+	result, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE status = $2`, filestate.LogicalFileAborted, filestate.LogicalFileProcessing)
 	if err != nil {
 		return fmt.Errorf("query update logical_file to ABORTED: %w", err)
 	}
@@ -119,7 +120,7 @@ func abortProcessingLogicalFiles(dbconn *sql.DB, stats *recoveryStats) error {
 
 func abortProcessingChunks(dbconn *sql.DB, stats *recoveryStats) error {
 	logRecoveryEvent("abort_processing_chunks_start")
-	result, err := dbconn.Exec(`UPDATE chunk SET status = 'ABORTED' WHERE status = 'PROCESSING'`)
+	result, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE status = $2`, filestate.ChunkAborted, filestate.ChunkProcessing)
 	if err != nil {
 		return fmt.Errorf("query update chunk to ABORTED: %w", err)
 	}
