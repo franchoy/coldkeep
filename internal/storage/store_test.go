@@ -1,10 +1,13 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -272,4 +275,204 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 		t.Fatalf("expected active container to be quarantined after sync failure")
 	}
 
+}
+
+func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testing.T) {
+	testCases := []struct {
+		name    string
+		setup   func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64)
+		wantErr string
+	}{
+		{
+			name: "missing file chunks",
+			setup: func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64) {
+				t.Helper()
+				_ = dbconn
+				_ = containersDir
+				_ = fileID
+			},
+			wantErr: "has no file_chunk rows",
+		},
+		{
+			name: "broken chunk ordering",
+			setup: func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64) {
+				t.Helper()
+				containerID := insertReusableTestContainer(t, dbconn, "broken-order.bin", false)
+				writeReusableTestContainerFile(t, containersDir, "broken-order.bin")
+				chunkA := insertReusableTestChunk(t, dbconn, "broken-order-a", filestate.ChunkCompleted)
+				chunkB := insertReusableTestChunk(t, dbconn, "broken-order-b", filestate.ChunkCompleted)
+				insertReusableTestBlock(t, dbconn, chunkA, containerID, 64)
+				insertReusableTestBlock(t, dbconn, chunkB, containerID, 128)
+				insertReusableTestFileChunk(t, dbconn, fileID, chunkA, 0)
+				insertReusableTestFileChunk(t, dbconn, fileID, chunkB, 2)
+			},
+			wantErr: "non-contiguous chunk ordering",
+		},
+		{
+			name: "missing block metadata",
+			setup: func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64) {
+				t.Helper()
+				_ = containersDir
+				chunkID := insertReusableTestChunk(t, dbconn, "missing-block", filestate.ChunkCompleted)
+				insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 0)
+			},
+			wantErr: "without block metadata",
+		},
+		{
+			name: "quarantined container",
+			setup: func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64) {
+				t.Helper()
+				containerID := insertReusableTestContainer(t, dbconn, "quarantined.bin", true)
+				writeReusableTestContainerFile(t, containersDir, "quarantined.bin")
+				chunkID := insertReusableTestChunk(t, dbconn, "quarantined-chunk", filestate.ChunkCompleted)
+				insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
+				insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 0)
+			},
+			wantErr: "missing or quarantined containers",
+		},
+		{
+			name: "missing container file on disk",
+			setup: func(t *testing.T, dbconn *sql.DB, containersDir string, fileID int64) {
+				t.Helper()
+				_ = containersDir
+				containerID := insertReusableTestContainer(t, dbconn, "missing-on-disk.bin", false)
+				chunkID := insertReusableTestChunk(t, dbconn, "missing-file-chunk", filestate.ChunkCompleted)
+				insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
+				insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 0)
+			},
+			wantErr: "references missing container file",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbconn, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("open sqlite db: %v", err)
+			}
+			dbconn.SetMaxOpenConns(1)
+			dbconn.SetMaxIdleConns(1)
+			defer func() { _ = dbconn.Close() }()
+
+			if err := db.RunMigrations(dbconn); err != nil {
+				t.Fatalf("run migrations: %v", err)
+			}
+
+			containersDir := t.TempDir()
+			fileID := insertReusableTestLogicalFile(t, dbconn, 128)
+			tc.setup(t, dbconn, containersDir, fileID)
+
+			ctx, cancel := db.NewOperationContext(context.Background())
+			defer cancel()
+
+			err = validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
+			if err == nil {
+				t.Fatalf("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func insertReusableTestLogicalFile(t *testing.T, dbconn *sql.DB, totalSize int64) int64 {
+	t.Helper()
+
+	var fileID int64
+	err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"reusable.bin",
+		totalSize,
+		fmt.Sprintf("file-hash-%d", totalSize),
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID)
+	if err != nil {
+		t.Fatalf("insert reusable logical file: %v", err)
+	}
+
+	return fileID
+}
+
+func insertReusableTestChunk(t *testing.T, dbconn *sql.DB, hash string, status string) int64 {
+	t.Helper()
+
+	var chunkID int64
+	err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		hash,
+		64,
+		status,
+		1,
+	).Scan(&chunkID)
+	if err != nil {
+		t.Fatalf("insert reusable chunk %s: %v", hash, err)
+	}
+
+	return chunkID
+}
+
+func insertReusableTestContainer(t *testing.T, dbconn *sql.DB, filename string, quarantine bool) int64 {
+	t.Helper()
+
+	var containerID int64
+	err := dbconn.QueryRow(
+		`INSERT INTO container (filename, sealed, quarantine, current_size, max_size)
+		 VALUES ($1, TRUE, $2, $3, $4)
+		 RETURNING id`,
+		filename,
+		quarantine,
+		256,
+		container.GetContainerMaxSize(),
+	).Scan(&containerID)
+	if err != nil {
+		t.Fatalf("insert reusable container %s: %v", filename, err)
+	}
+
+	return containerID
+}
+
+func insertReusableTestBlock(t *testing.T, dbconn *sql.DB, chunkID int64, containerID int64, offset int64) {
+	t.Helper()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		chunkID,
+		"plain",
+		1,
+		64,
+		64,
+		containerID,
+		offset,
+	); err != nil {
+		t.Fatalf("insert reusable block for chunk %d: %v", chunkID, err)
+	}
+}
+
+func insertReusableTestFileChunk(t *testing.T, dbconn *sql.DB, fileID int64, chunkID int64, chunkOrder int) {
+	t.Helper()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)`,
+		fileID,
+		chunkID,
+		chunkOrder,
+	); err != nil {
+		t.Fatalf("insert reusable file_chunk file=%d chunk=%d order=%d: %v", fileID, chunkID, chunkOrder, err)
+	}
+}
+
+func writeReusableTestContainerFile(t *testing.T, containersDir string, filename string) {
+	t.Helper()
+
+	path := filepath.Join(containersDir, filename)
+	if err := os.WriteFile(path, []byte("container"), 0644); err != nil {
+		t.Fatalf("write reusable container file %s: %v", filename, err)
+	}
 }

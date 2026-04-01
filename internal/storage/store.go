@@ -129,6 +129,139 @@ func newWriterFromPrototype(prototype container.ContainerWriter) (container.Cont
 	}
 }
 
+type reusableLogicalFileGraphSummary struct {
+	totalSize         int64
+	chunkRefs         int64
+	brokenChunkOrders int64
+	invalidChunks     int64
+	missingBlocks     int64
+	invalidContainers int64
+}
+
+func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
+	var summary reusableLogicalFileGraphSummary
+	err := dbconn.QueryRowContext(ctx, `
+		WITH target_file AS (
+			SELECT id, total_size
+			FROM logical_file
+			WHERE id = $1
+		),
+		ordered_chunks AS (
+			SELECT
+				fc.chunk_id,
+				fc.chunk_order,
+				ROW_NUMBER() OVER (ORDER BY fc.chunk_order) - 1 AS expected_order
+			FROM file_chunk fc
+			WHERE fc.logical_file_id = $1
+		),
+		graph_summary AS (
+			SELECT
+				COUNT(*) AS chunk_refs,
+				COALESCE(SUM(CASE WHEN oc.chunk_order <> oc.expected_order THEN 1 ELSE 0 END), 0) AS broken_chunk_orders,
+				COALESCE(SUM(CASE WHEN c.id IS NULL OR c.status <> $2 THEN 1 ELSE 0 END), 0) AS invalid_chunks,
+				COALESCE(SUM(CASE WHEN b.id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
+				COALESCE(SUM(CASE WHEN ctr.id IS NULL OR ctr.quarantine THEN 1 ELSE 0 END), 0) AS invalid_containers
+			FROM ordered_chunks oc
+			LEFT JOIN chunk c ON c.id = oc.chunk_id
+			LEFT JOIN blocks b ON b.chunk_id = oc.chunk_id
+			LEFT JOIN container ctr ON ctr.id = b.container_id
+		)
+		SELECT
+			tf.total_size,
+			gs.chunk_refs,
+			gs.broken_chunk_orders,
+			gs.invalid_chunks,
+			gs.missing_blocks,
+			gs.invalid_containers
+		FROM target_file tf
+		CROSS JOIN graph_summary gs
+	`, fileID, filestate.ChunkCompleted).Scan(
+		&summary.totalSize,
+		&summary.chunkRefs,
+		&summary.brokenChunkOrders,
+		&summary.invalidChunks,
+		&summary.missingBlocks,
+		&summary.invalidContainers,
+	)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("logical file %d does not exist", fileID)
+	}
+	if err != nil {
+		return fmt.Errorf("query reusable logical file graph %d: %w", fileID, err)
+	}
+
+	if summary.totalSize == 0 {
+		if summary.chunkRefs != 0 {
+			return fmt.Errorf("zero-byte logical file %d unexpectedly has %d file_chunk rows", fileID, summary.chunkRefs)
+		}
+		return nil
+	}
+
+	if summary.chunkRefs == 0 {
+		return fmt.Errorf("logical file %d has no file_chunk rows", fileID)
+	}
+	if summary.brokenChunkOrders > 0 {
+		return fmt.Errorf("logical file %d has non-contiguous chunk ordering", fileID)
+	}
+	if summary.invalidChunks > 0 {
+		return fmt.Errorf("logical file %d references missing or non-completed chunks", fileID)
+	}
+	if summary.missingBlocks > 0 {
+		return fmt.Errorf("logical file %d references chunks without block metadata", fileID)
+	}
+	if summary.invalidContainers > 0 {
+		return fmt.Errorf("logical file %d references missing or quarantined containers", fileID)
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT DISTINCT ctr.id, ctr.filename
+		FROM file_chunk fc
+		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE fc.logical_file_id = $1
+	`, fileID)
+	if err != nil {
+		return fmt.Errorf("query reusable logical file containers %d: %w", fileID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var containerID int64
+		var filename string
+		if err := rows.Scan(&containerID, &filename); err != nil {
+			return fmt.Errorf("scan reusable logical file container for file %d: %w", fileID, err)
+		}
+		fullPath := filepath.Join(containersDir, filename)
+		if _, err := os.Stat(fullPath); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("logical file %d references missing container file %d (%s)", fileID, containerID, fullPath)
+			}
+			return fmt.Errorf("stat container file for logical file %d container %d: %w", fileID, containerID, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate reusable logical file containers %d: %w", fileID, err)
+	}
+
+	return nil
+}
+
+func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	result, err := dbconn.ExecContext(ctx,
+		`UPDATE logical_file SET status = $1 WHERE id = $2 AND status = $3`,
+		filestate.LogicalFileAborted,
+		fileID,
+		filestate.LogicalFileCompleted,
+	)
+	if err != nil {
+		return fmt.Errorf("mark logical file %d for rebuild: %w", fileID, err)
+	}
+	if _, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("rows affected while marking logical file %d for rebuild: %w", fileID, err)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
@@ -298,6 +431,42 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize)
+}
+
+func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if filestatus != filestate.LogicalFileCompleted {
+		return fileID, filestatus, nil
+	}
+
+	reuseErr := validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
+	if reuseErr == nil {
+		return fileID, filestatus, nil
+	}
+
+	log.Printf("event=store_reuse_validation_failed file_id=%d error=%v", fileID, reuseErr)
+	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
+		return 0, "", errors.Join(reuseErr, err)
+	}
+
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
+	if err != nil {
+		return 0, "", err
+	}
+	if filestatus != filestate.LogicalFileCompleted {
+		return fileID, filestatus, nil
+	}
+
+	reuseErr = validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
+	if reuseErr != nil {
+		return 0, "", fmt.Errorf("logical file %d remained non-reusable after retry: %w", fileID, reuseErr)
+	}
+
+	return fileID, filestatus, nil
 }
 
 func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
@@ -648,14 +817,13 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	}
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := claimLogicalFileWithContext(ctx, sgctx.DB, fileinfo, fileHash)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, sgctx.EffectiveContainerDir())
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 	result.FileID = fileID
 
 	if filestatus == filestate.LogicalFileCompleted {
-		// File already stored and ready: we can reuse it
 		result.AlreadyStored = true
 		return result, nil
 	}

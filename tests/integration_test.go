@@ -2066,6 +2066,83 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	}
 }
 
+func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "rebuild_corrupt_completed.bin", 768*1024)
+	fileHash := sha256File(t, inPath)
+
+	initialCtx := newTestContext(dbconn)
+	if err := storage.StoreFileWithStorageContext(initialCtx, inPath); err != nil {
+		t.Fatalf("initial store: %v", err)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	// Simulate silent metadata corruption on a COMPLETED file graph.
+	if _, err := dbconn.Exec(`DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID); err != nil {
+		t.Fatalf("delete file_chunk rows: %v", err)
+	}
+
+	var fileChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&fileChunkCount); err != nil {
+		t.Fatalf("count file_chunk rows after corruption: %v", err)
+	}
+	if fileChunkCount != 0 {
+		t.Fatalf("expected corrupted graph to have 0 file_chunk rows, got %d", fileChunkCount)
+	}
+
+	restoreCtx := newTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextResult(restoreCtx, inPath)
+	if err != nil {
+		t.Fatalf("re-store after graph corruption: %v", err)
+	}
+	if result.AlreadyStored {
+		t.Fatalf("expected rebuild path, got AlreadyStored=true")
+	}
+	if result.FileID != fileID {
+		t.Fatalf("expected reclaim on existing logical_file row %d, got %d", fileID, result.FileID)
+	}
+
+	var status string
+	var retryCount int
+	if err := dbconn.QueryRow(`SELECT status, retry_count FROM logical_file WHERE id = $1`, fileID).Scan(&status, &retryCount); err != nil {
+		t.Fatalf("query rebuilt logical_file status: %v", err)
+	}
+	if status != filestate.LogicalFileCompleted {
+		t.Fatalf("expected rebuilt logical_file status COMPLETED, got %s", status)
+	}
+	if retryCount < 1 {
+		t.Fatalf("expected retry_count >= 1 after rebuild, got %d", retryCount)
+	}
+
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&fileChunkCount); err != nil {
+		t.Fatalf("count file_chunk rows after rebuild: %v", err)
+	}
+	if fileChunkCount == 0 {
+		t.Fatalf("expected rebuilt graph to recreate file_chunk rows")
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+}
+
 func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	requireDB(t)
 	requireStress(t)
