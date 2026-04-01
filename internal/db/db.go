@@ -32,7 +32,7 @@ func loadConnectTimeout() time.Duration {
 }
 
 func loadOperationTimeout() time.Duration {
-	const defaultTimeout = 30 * time.Second
+	const defaultTimeout = 5 * time.Minute
 	valueMs := utils_env.GetenvOrDefaultInt64("COLDKEEP_DB_OPERATION_TIMEOUT_MS", int64(defaultTimeout/time.Millisecond))
 	if valueMs <= 0 {
 		return defaultTimeout
@@ -41,7 +41,8 @@ func loadOperationTimeout() time.Duration {
 }
 
 func loadStatementTimeout() time.Duration {
-	return loadSessionTimeout("COLDKEEP_DB_STATEMENT_TIMEOUT_MS", operationTimeout)
+	const defaultStatementTimeout = 30 * time.Second
+	return loadSessionTimeout("COLDKEEP_DB_STATEMENT_TIMEOUT_MS", defaultStatementTimeout)
 }
 
 func loadLockTimeout() time.Duration {
@@ -102,6 +103,10 @@ func DefaultOperationTimeout() time.Duration {
 	return operationTimeout
 }
 
+func DefaultStatementTimeout() time.Duration {
+	return statementTimeout
+}
+
 func NewOperationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
@@ -110,7 +115,9 @@ func NewOperationContext(parent context.Context) (context.Context, context.Cance
 }
 
 func ApplySQLiteSessionPragmas(db *sql.DB) error {
-	busyTimeoutMs := DefaultOperationTimeout() / time.Millisecond
+	// Use the statement timeout (not the much larger operation timeout) so that
+	// SQLite lock contention does not wait for minutes.
+	busyTimeoutMs := DefaultStatementTimeout() / time.Millisecond
 	if busyTimeoutMs <= 0 {
 		busyTimeoutMs = 1
 	}
