@@ -2683,6 +2683,72 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	}
 }
 
+func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+		t.Fatalf("mkdir containers dir: %v", err)
+	}
+
+	var containerID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		VALUES ($1, $2, $3, FALSE, FALSE)
+		RETURNING id
+	`, "missing-active.bin", int64(container.ContainerHdrLen), container.GetContainerMaxSize()).Scan(&containerID)
+	if err != nil {
+		t.Fatalf("insert missing active container: %v", err)
+	}
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "open-failure.txt", 4096)
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: container.ContainersDir,
+	}
+
+	err = storage.StoreFileWithStorageContext(sgctx, inPath)
+	if err == nil {
+		t.Fatalf("expected store to fail when active container cannot be opened")
+	}
+
+	var quarantined bool
+	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, containerID).Scan(&quarantined)
+	if err != nil {
+		t.Fatalf("query missing active container quarantine: %v", err)
+	}
+	if !quarantined {
+		t.Fatalf("expected missing active container to be quarantined immediately")
+	}
+
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("system recovery: %v", err)
+	}
+	if report.QuarantinedMissing != 0 {
+		t.Fatalf("expected startup recovery not to need quarantining for already-retired container, got %d", report.QuarantinedMissing)
+	}
+}
+
 func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
 	requireDB(t)
 

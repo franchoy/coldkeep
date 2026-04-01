@@ -135,6 +135,10 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		}
 
 		if err := w.finalizePhysicalOnly(); err != nil {
+			retireErr := w.retireContainer(previousID)
+			if retireErr != nil {
+				return LocalPlacement{}, errors.Join(fmt.Errorf("rotate finalize active container: %w", err), fmt.Errorf("retire container %d after finalize failure: %w", previousID, retireErr))
+			}
 			return LocalPlacement{}, fmt.Errorf("rotate finalize active container: %w", err)
 		}
 		w.clearActive()
@@ -158,7 +162,12 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 
 	offset, err := w.activeHandle.Append(payload)
 	if err != nil {
-		return LocalPlacement{}, fmt.Errorf("append payload to container %d: %w", w.activeID, err)
+		containerID := w.activeID
+		retireErr := w.RetireActiveContainer()
+		if retireErr != nil {
+			return LocalPlacement{}, errors.Join(fmt.Errorf("append payload to container %d: %w", containerID, err), fmt.Errorf("retire active container %d after append failure: %w", containerID, retireErr))
+		}
+		return LocalPlacement{}, fmt.Errorf("append payload to container %d: %w", containerID, err)
 	}
 
 	w.pendingAppend = true
@@ -232,7 +241,13 @@ func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 		return fmt.Errorf("ensure container directory %s: %w", w.dir, err)
 	}
 
-	ac, err := GetOrCreateOpenContainerInDirExcluding(tx, w.dir, excludeID)
+	var ac ActiveContainer
+	var err error
+	if w.dbconn != nil {
+		ac, err = getOrCreateOpenContainerInDirExcluding(tx, w.dbconn, w.dir, excludeID)
+	} else {
+		ac, err = GetOrCreateOpenContainerInDirExcluding(tx, w.dir, excludeID)
+	}
 	if err != nil {
 		return fmt.Errorf("get or create open container in %s: %w", w.dir, err)
 	}
@@ -287,6 +302,11 @@ func (w *LocalWriter) clearActive() {
 
 func (w *LocalWriter) FinalizeContainer() error {
 	if err := w.finalizePhysicalOnly(); err != nil {
+		containerID := w.activeID
+		retireErr := w.RetireActiveContainer()
+		if retireErr != nil {
+			return errors.Join(err, fmt.Errorf("retire active container %d after finalize failure: %w", containerID, retireErr))
+		}
 		return err
 	}
 	w.clearActive()
@@ -334,7 +354,12 @@ func (w *LocalWriter) SyncActiveContainer() error {
 		return nil
 	}
 	if err := w.activeHandle.Sync(); err != nil {
-		return fmt.Errorf("sync container %d: %w", w.activeID, err)
+		containerID := w.activeID
+		retireErr := w.RetireActiveContainer()
+		if retireErr != nil {
+			return errors.Join(fmt.Errorf("sync container %d: %w", containerID, err), fmt.Errorf("retire active container %d after sync failure: %w", containerID, retireErr))
+		}
+		return fmt.Errorf("sync container %d: %w", containerID, err)
 	}
 	return nil
 }
@@ -350,6 +375,40 @@ func (w *LocalWriter) MarkSealingForContainer(containerID int64) error {
 		return nil
 	}
 	return MarkContainerSealing(w.dbconn, containerID)
+}
+
+func (w *LocalWriter) BindDB(dbconn *sql.DB) {
+	if dbconn == nil {
+		return
+	}
+	w.dbconn = dbconn
+}
+
+func (w *LocalWriter) RetireActiveContainer() error {
+	if !w.hasActive {
+		return nil
+	}
+	return w.retireContainer(w.activeID)
+}
+
+func (w *LocalWriter) retireContainer(containerID int64) error {
+	var retireErr error
+	if w.activeHandle != nil {
+		if err := w.activeHandle.Close(); err != nil {
+			retireErr = err
+		}
+	}
+	w.pendingAppend = false
+	w.prevAppendFile = ""
+	w.prevAppendSize = 0
+	w.clearActive()
+	if err := QuarantineContainer(w.dbconn, containerID); err != nil {
+		if retireErr != nil {
+			return errors.Join(retireErr, err)
+		}
+		return err
+	}
+	return retireErr
 }
 
 // DB returns the underlying *sql.DB held by this writer (may be nil).

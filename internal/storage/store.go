@@ -38,6 +38,14 @@ type optionalAppendRollbacker interface {
 	RollbackLastAppend() error
 }
 
+type optionalFailedActiveContainerRetirer interface {
+	RetireActiveContainer() error
+}
+
+type optionalWriterDBBinder interface {
+	BindDB(dbconn *sql.DB)
+}
+
 // rollbackWriterLastAppend calls RollbackLastAppend on the writer if it supports it.
 // Safe to call unconditionally on any error path; if no physical write is pending the
 // implementation returns immediately without truncating.
@@ -45,6 +53,23 @@ func rollbackWriterLastAppend(writer payloadStatefulWriter) {
 	if rb, ok := writer.(optionalAppendRollbacker); ok {
 		_ = rb.RollbackLastAppend()
 	}
+}
+
+func retireWriterActiveContainer(writer payloadStatefulWriter) error {
+	if retirer, ok := writer.(optionalFailedActiveContainerRetirer); ok {
+		return retirer.RetireActiveContainer()
+	}
+	return nil
+}
+
+func bindWriterDB(writer payloadStatefulWriter, dbconn *sql.DB) {
+	if binder, ok := writer.(optionalWriterDBBinder); ok {
+		binder.BindDB(dbconn)
+	}
+}
+
+func quarantineContainerNow(dbconn *sql.DB, containerID int64) error {
+	return container.QuarantineContainer(dbconn, containerID)
 }
 
 type optionalContainerSealer interface {
@@ -662,6 +687,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	if !ok {
 		return StoreFileResult{}, fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
 	}
+	bindWriterDB(writer, sgctx.DB)
 	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
 	// not by this low-level result function.
 
@@ -802,6 +828,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
 					rollbackWriterLastAppend(writer)
+					retireErr := quarantineContainerNow(sgctx.DB, placement.PreviousID)
+					if retireErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, retireErr))
+					}
 					return StoreFileResult{}, err
 				}
 			}
@@ -830,13 +860,20 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				}
 				if err := writer.FinalizeContainer(); err != nil {
 					_ = tx.Rollback()
-					rollbackWriterLastAppend(writer)
+					retireErr := retireWriterActiveContainer(writer)
+					if retireErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("retire active container after finalize failure: %w", retireErr))
+					}
 					return StoreFileResult{}, err
 				}
 				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
 				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
 					rollbackWriterLastAppend(writer)
+					retireErr := quarantineContainerNow(sgctx.DB, placement.ContainerID)
+					if retireErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, retireErr))
+					}
 					return StoreFileResult{}, err
 				}
 			}
@@ -844,7 +881,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			// Crash-durability barrier: flush payload bytes before publishing COMPLETED metadata in DB.
 			if err := syncActiveContainerWithWriter(writer); err != nil {
 				_ = tx.Rollback()
-				rollbackWriterLastAppend(writer)
+				retireErr := retireWriterActiveContainer(writer)
+				if retireErr != nil {
+					return StoreFileResult{}, errors.Join(err, fmt.Errorf("retire active container after sync failure: %w", retireErr))
+				}
 				return StoreFileResult{}, err
 			}
 

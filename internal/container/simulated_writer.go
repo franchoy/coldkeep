@@ -49,6 +49,17 @@ func (w *SimulatedWriter) FinalizeContainer() error {
 	return nil
 }
 
+func (w *SimulatedWriter) RetireActiveContainer() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.hasActive = false
+	w.currentID = 0
+	w.currentFilename = ""
+	w.currentSize = 0
+	return nil
+}
+
 // RollbackLastAppend is a no-op for SimulatedWriter: no physical bytes are written,
 // so there is nothing to truncate on a transaction rollback.
 func (w *SimulatedWriter) RollbackLastAppend() error {

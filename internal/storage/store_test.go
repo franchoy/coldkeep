@@ -17,9 +17,12 @@ import (
 )
 
 type syncFailWriter struct {
-	offset    int64
-	syncErr   error
-	syncCalls int
+	offset      int64
+	syncErr     error
+	syncCalls   int
+	retireErr   error
+	retireCalls int
+	db          *sql.DB
 }
 
 func (w *syncFailWriter) WriteChunk(c chunk.Info) error {
@@ -53,6 +56,16 @@ func (w *syncFailWriter) SyncActiveContainer() error {
 		return w.syncErr
 	}
 	return nil
+}
+
+func (w *syncFailWriter) RetireActiveContainer() error {
+	w.retireCalls++
+	if w.db != nil {
+		if _, err := w.db.Exec(`UPDATE container SET quarantine = TRUE WHERE id = 1`); err != nil {
+			return err
+		}
+	}
+	return w.retireErr
 }
 
 func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
@@ -195,7 +208,7 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 	}
 
 	expectedSyncErr := errors.New("forced sync failure")
-	writer := &syncFailWriter{syncErr: expectedSyncErr}
+	writer := &syncFailWriter{syncErr: expectedSyncErr, db: dbconn}
 	sgctx := StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
@@ -216,6 +229,9 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 	}
 	if writer.syncCalls == 0 {
 		t.Fatalf("expected pre-commit sync to be called at least once")
+	}
+	if writer.retireCalls == 0 {
+		t.Fatalf("expected active container retirement after sync failure")
 	}
 
 	var abortedCount int
@@ -246,6 +262,14 @@ func TestStoreFileFailsWhenActiveContainerSyncFails(t *testing.T) {
 	}
 	if blockCount != 0 {
 		t.Fatalf("expected no persisted block metadata after sync failure, got %d", blockCount)
+	}
+
+	var quarantined bool
+	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = 1`).Scan(&quarantined); err != nil {
+		t.Fatalf("query container quarantine: %v", err)
+	}
+	if !quarantined {
+		t.Fatalf("expected active container to be quarantined after sync failure")
 	}
 
 }

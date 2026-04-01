@@ -182,7 +182,7 @@ func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
 }
 
 func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveContainer, error) {
-	return getOrCreateOpenContainerInDirExcluding(db, containersDir, 0)
+	return getOrCreateOpenContainerInDirExcluding(db, nil, containersDir, 0)
 }
 
 // newContainerFilename returns a collision-resistant filename by combining the
@@ -198,7 +198,7 @@ func newContainerFilename() string {
 	return fmt.Sprintf("container_%d_%s.bin", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
 }
 
-func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
+func getOrCreateOpenContainerInDirExcluding(db db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64) (ActiveContainer, error) {
 	containersDir = containersDirOrDefault(containersDir)
 
 	var id int64
@@ -253,6 +253,10 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 
 		container, err := OpenWritableContainer(fullPath, maxSize)
 		if err != nil {
+			retireErr := QuarantineContainer(dbconn, id)
+			if retireErr != nil {
+				return ActiveContainer{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d: %w", id, retireErr))
+			}
 			return ActiveContainer{}, err
 		}
 
@@ -290,10 +294,23 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 	}
 
 	fullPath := filepath.Join(containersDir, filename)
+	retireNewContainer := func(openErr error) error {
+		retireErr := QuarantineContainer(dbconn, id)
+		removeErr := os.Remove(fullPath)
+		var errs []error
+		errs = append(errs, openErr)
+		if retireErr != nil {
+			errs = append(errs, fmt.Errorf("quarantine broken new container %d: %w", id, retireErr))
+		}
+		if removeErr != nil && !os.IsNotExist(removeErr) {
+			errs = append(errs, fmt.Errorf("remove partial container file %s: %w", fullPath, removeErr))
+		}
+		return errors.Join(errs...)
+	}
 
 	f, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 	if err != nil {
-		return ActiveContainer{}, err
+		return ActiveContainer{}, retireNewContainer(err)
 	}
 	closeOnError := true
 	defer func() {
@@ -304,22 +321,22 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 
 	// 4 Write V0 header
 	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
-		return ActiveContainer{}, err
+		return ActiveContainer{}, retireNewContainer(err)
 	}
 
 	// Ensure header is flushed
 	if err := f.Sync(); err != nil {
-		return ActiveContainer{}, err
+		return ActiveContainer{}, retireNewContainer(err)
 	}
 	//close file
 	if err = f.Close(); err != nil {
-		return ActiveContainer{}, err
+		return ActiveContainer{}, retireNewContainer(err)
 	}
 	closeOnError = false
 
 	container, err := OpenWritableContainer(fullPath, containerMaxSize)
 	if err != nil {
-		return ActiveContainer{}, err
+		return ActiveContainer{}, retireNewContainer(err)
 	}
 
 	return ActiveContainer{
@@ -331,7 +348,7 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, ex
 }
 
 func GetOrCreateOpenContainerInDirExcluding(db db.DBTX, containersDir string, excludeID int64) (ActiveContainer, error) {
-	return getOrCreateOpenContainerInDirExcluding(db, containersDir, excludeID)
+	return getOrCreateOpenContainerInDirExcluding(db, nil, containersDir, excludeID)
 }
 
 func UpdateContainerSize(tx db.DBTX, containerID int64, newSize int64) error {
@@ -384,6 +401,10 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 // If the marker commit fails the caller should abort the finalization: the
 // container remains fully open and can be written to again on the next attempt.
 func MarkContainerSealing(dbconn *sql.DB, containerID int64) error {
+	if dbconn == nil {
+		return nil
+	}
+
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -404,6 +425,33 @@ func MarkContainerSealing(dbconn *sql.DB, containerID int64) error {
 	}
 	return nil
 }
+
+func QuarantineContainer(dbconn *sql.DB, containerID int64) error {
+	if dbconn == nil || containerID <= 0 {
+		return nil
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin quarantine tx for container %d: %w", containerID, err)
+	}
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
+		containerID,
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("mark container %d quarantine: %w", containerID, err)
+	}
+	if err = tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("commit quarantine for container %d: %w", containerID, err)
+	}
+	return nil
+}
+
 func CheckContainerHashFile(id int, filename, storedHash string) error {
 	return CheckContainerHashFileInDir(id, filename, storedHash, ContainersDir)
 }
