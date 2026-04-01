@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -288,65 +289,13 @@ func applySchema(t *testing.T, dbconn *sql.DB) {
 		return
 	}
 
-	// 1) Allow explicit override (best for Docker / CI)
-	if p := os.Getenv("COLDKEEP_SCHEMA_PATH"); p != "" {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("read schema %s: %v", p, err)
-		}
-		if _, err := dbconn.Exec(string(b)); err != nil && !isDuplicateSchemaError(err) {
-			t.Fatalf("apply schema: %v", err)
-		}
-		return
+	if strings.TrimSpace(dbschema.PostgresSchema) == "" {
+		t.Fatalf("embedded postgres schema is empty")
 	}
 
-	// 2) Walk upwards from cwd to find db/schema_postgres.sql
-	cwd, err := os.Getwd()
-	if err == nil {
-		dir := cwd
-		for i := 0; i < 6; i++ { // climb up a few levels
-			candidate := filepath.Join(dir, "db", "schema_postgres.sql")
-			if _, statErr := os.Stat(candidate); statErr == nil {
-				b, err := os.ReadFile(candidate)
-				if err != nil {
-					t.Fatalf("read schema %s: %v", candidate, err)
-				}
-				if _, err := dbconn.Exec(string(b)); err != nil && !isDuplicateSchemaError(err) {
-					t.Fatalf("apply schema: %v", err)
-				}
-				return
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
+	if _, err := dbconn.Exec(dbschema.PostgresSchema); err != nil && !isDuplicateSchemaError(err) {
+		t.Fatalf("apply schema: %v", err)
 	}
-
-	// 3) Common fallbacks for containers / mounts
-	candidates := []string{
-		"../db/schema_postgres.sql",
-		"../../db/schema_postgres.sql",
-		"/repo/db/schema_postgres.sql",
-		"/work/db/schema_postgres.sql",
-		"/db/schema_postgres.sql",
-		"/app/db/schema_postgres.sql",
-	}
-	for _, p := range candidates {
-		if _, statErr := os.Stat(p); statErr == nil {
-			b, err := os.ReadFile(p)
-			if err != nil {
-				t.Fatalf("read schema %s: %v", p, err)
-			}
-			if _, err := dbconn.Exec(string(b)); err != nil && !isDuplicateSchemaError(err) {
-				t.Fatalf("apply schema: %v", err)
-			}
-			return
-		}
-	}
-
-	t.Fatalf("could not find db/schema_postgres.sql; set COLDKEEP_SCHEMA_PATH to an absolute path")
 }
 
 func isDuplicateSchemaError(err error) bool {
