@@ -10,8 +10,17 @@ var logicalFileWaitingtime = 100 * time.Millisecond
 
 var chunkWaitingtime = 100 * time.Millisecond
 
-var maxClaimPollingWait = 2 * time.Second
+var maxClaimPollingWait = loadMaxClaimPollingWait()
 var maxClaimWaitDuration = loadMaxClaimWaitDuration()
+
+func loadMaxClaimPollingWait() time.Duration {
+	const defaultPollingWait = 2 * time.Second
+	valueMs := utils_env.GetenvOrDefaultInt64("COLDKEEP_MAX_CLAIM_POLL_WAIT_MS", int64(defaultPollingWait/time.Millisecond))
+	if valueMs <= 0 {
+		return defaultPollingWait
+	}
+	return time.Duration(valueMs) * time.Millisecond
+}
 
 func loadMaxClaimWaitDuration() time.Duration {
 	const defaultWait = 2 * time.Minute
@@ -19,7 +28,11 @@ func loadMaxClaimWaitDuration() time.Duration {
 	if valueMs <= 0 {
 		return defaultWait
 	}
-	return time.Duration(valueMs) * time.Millisecond
+	wait := time.Duration(valueMs) * time.Millisecond
+	if wait < maxClaimPollingWait {
+		return maxClaimPollingWait
+	}
+	return wait
 }
 
 func claimPollingBackoff(base time.Duration, attempt int) time.Duration {
