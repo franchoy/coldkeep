@@ -12,6 +12,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 type recoveryStats struct {
@@ -34,6 +35,15 @@ type Report struct {
 	SkippedDirEntries      int64
 	CheckedContainerRecord int64
 	CheckedDiskFiles       int64
+}
+
+// isStrictRecovery returns true unless COLDKEEP_STRICT_RECOVERY is explicitly
+// set to "false". In strict mode (default) suspicious orphan container
+// conflicts abort recovery with an error. In non-strict mode they are logged
+// as warnings and recovery continues, which is safer under benign duplicate /
+// restart-race scenarios.
+func isStrictRecovery() bool {
+	return utils_env.GetenvOrDefault("COLDKEEP_STRICT_RECOVERY", "true") != "false"
 }
 
 func logRecoveryEvent(action string, fields ...string) {
@@ -348,6 +358,15 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 			name,
 		).Scan(&existingQuarantine, &existingCurrentSize, &existingMaxSize)
 		if err == sql.ErrNoRows {
+			if !isStrictRecovery() {
+				logRecoveryEvent(
+					"quarantine_orphan_container_conflict_warning",
+					"filename="+name,
+					"reason=insert_conflict_but_row_missing",
+					"strict=false",
+				)
+				continue
+			}
 			return fmt.Errorf("suspicious orphan container conflict for filename=%s: insert reported conflict but row is missing", name)
 		}
 		if err != nil {
@@ -374,6 +393,18 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 			continue
 		}
 
+		if !isStrictRecovery() {
+			logRecoveryEvent(
+				"quarantine_orphan_container_conflict_warning",
+				"filename="+name,
+				fmt.Sprintf("existing_current_size=%d", existingCurrentSize),
+				fmt.Sprintf("existing_max_size=%d", existingMaxSize),
+				fmt.Sprintf("expected_size=%d", fileSize),
+				"reason=quarantine_size_mismatch",
+				"strict=false",
+			)
+			continue
+		}
 		return fmt.Errorf(
 			"suspicious orphan container conflict for filename=%s: existing quarantine row has current_size=%d max_size=%d expected_size=%d",
 			name,

@@ -1055,6 +1055,7 @@ func printHelp() {
 	fmt.Println("  COLDKEEP_MAX_CLAIM_WAIT_MS (default: 120000)")
 	fmt.Println("  COLDKEEP_CODEC (default: aes-gcm)")
 	fmt.Println("  COLDKEEP_KEY (required for aes-gcm)")
+	fmt.Println("  COLDKEEP_STRICT_RECOVERY (default: true) — set to false to downgrade suspicious orphan container conflicts to warnings")
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")

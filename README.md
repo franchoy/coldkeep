@@ -272,6 +272,12 @@ Database operations now run with bounded connection and statement limits by defa
 
 These limits are intended to keep CLI commands from hanging indefinitely on dead connections, blocked sessions, or stalled lock acquisition.
 
+### Recovery strictness
+
+- `COLDKEEP_STRICT_RECOVERY` (default: `true`) — controls how startup recovery handles suspicious orphan container conflicts.
+  - `true` (default): Recovery aborts with an error on any unexpected orphan container state. Recommended for production.
+  - `false`: Suspicious conflicts are logged as warnings and recovery continues. Useful when benign duplicate scenarios or restart races are expected (e.g., during rolling restarts or when replaying a partially-applied recovery).
+
 ---
 
 ## CLI Output (v0.8)
