@@ -117,11 +117,11 @@ func NewOperationContext(parent context.Context) (context.Context, context.Cance
 func ApplySQLiteSessionPragmas(db *sql.DB) error {
 	// Use the statement timeout (not the much larger operation timeout) so that
 	// SQLite lock contention does not wait for minutes.
-	busyTimeoutMs := DefaultStatementTimeout() / time.Millisecond
-	if busyTimeoutMs <= 0 {
-		busyTimeoutMs = 1
+	busyTimeoutMillis := int(DefaultStatementTimeout() / time.Millisecond)
+	if busyTimeoutMillis <= 0 {
+		busyTimeoutMillis = 1
 	}
-	_, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeoutMs))
+	_, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeoutMillis))
 	return err
 }
 

@@ -92,15 +92,6 @@ type optionalContainerSealer interface {
 	SealContainer(tx db.DBTX, containerID int64, filename string, containersDir string) error
 }
 
-// optionalPreFinalizationMarker is implemented by writers that can commit a
-// durable "sealing in progress" marker to the DB before the physical container
-// file is closed. Calling this before FinalizeContainer allows startup recovery
-// to detect and repair containers that were physically finalized but not yet
-// logically sealed due to a crash or a failed DB transaction.
-type optionalPreFinalizationMarker interface {
-	MarkSealingForContainer(containerID int64) error
-}
-
 func markContainerSealingInTx(tx *sql.Tx, containerID int64) error {
 	if tx == nil || containerID <= 0 {
 		return nil
@@ -197,6 +188,9 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	}
 	if summary.quarantinedContainerRows != 0 {
 		return fmt.Errorf("chunk %d references quarantined container", chunkID)
+	}
+	if strings.TrimSpace(containersDir) == "" {
+		return nil
 	}
 
 	var (
@@ -348,6 +342,10 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	}
 	if summary.invalidContainers > 0 {
 		return fmt.Errorf("logical file %d references missing or quarantined containers", fileID)
+	}
+
+	if strings.TrimSpace(containersDir) == "" {
+		return nil
 	}
 
 	rows, err := dbconn.QueryContext(ctx, `
@@ -679,12 +677,6 @@ func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, f
 // -----------------------------------------------------------------------------
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
-
-func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
-	return claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
-}
 
 func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
 
@@ -1270,8 +1262,13 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		return StoreFileResult{}, err
 	}
 
+	validationContainerDir := sgctx.EffectiveContainerDir()
+	if sgctx.IsSimulated() {
+		validationContainerDir = ""
+	}
+
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, sgctx.EffectiveContainerDir())
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -1320,7 +1317,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), sgctx.EffectiveContainerDir())
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
