@@ -34,6 +34,8 @@ func (s StorageContext) EffectiveContainerDir() string {
 // Close is safe to call multiple times (idempotent).
 // Writer finalization is always attempted first; in simulated mode this is a
 // logical reset (no physical fsync/close), while local writers close handles.
+// Note: some store paths also finalize writers per file operation; this call is
+// intentionally tolerant as a defensive final ownership boundary.
 func (s *StorageContext) Close() error {
 	var errs []error
 

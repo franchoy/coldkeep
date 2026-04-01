@@ -356,11 +356,18 @@ func StoreFileWithStorageContextResult(sgctx StorageContext, path string) (Store
 		return StoreFileResult{}, err
 	}
 
-	return StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if sgctx.Writer != nil {
+		_ = sgctx.Writer.FinalizeContainer()
+	}
+	return result, err
 }
 
 func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, codec blocks.Codec) (err error) {
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if sgctx.Writer != nil {
+		_ = sgctx.Writer.FinalizeContainer()
+	}
 	return err
 }
 
@@ -443,9 +450,8 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	if !ok {
 		return StoreFileResult{}, fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
 	}
-	defer func() {
-		_ = writer.FinalizeContainer()
-	}()
+	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
+	// not by this low-level result function.
 
 	for _, chunkData := range chunks {
 		sum := sha256.Sum256(chunkData)
@@ -727,13 +733,23 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 
 			workerCtx := sgctx
 			workerCtx.Writer = workerWriter
+			// workerWriter is reused across files by this worker, but each file store
+			// still finalizes the active writer state by design (see StoreFile*Result).
 
 			for {
+				// Prefer cancellation over draining buffered work when shutting down.
+				if ctx.Err() != nil {
+					return
+				}
+
 				select {
 				case <-ctx.Done():
 					return
 				case p, ok := <-fileChan:
 					if !ok {
+						return
+					}
+					if ctx.Err() != nil {
 						return
 					}
 					if err := StoreFileWithStorageContextAndCodec(workerCtx, p, codec); err != nil {

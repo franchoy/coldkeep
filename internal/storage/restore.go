@@ -300,6 +300,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if err := os.Rename(tempOutputPath, outputPath); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
 	}
+	// Flush directory metadata so the rename is durable across crashes on stricter filesystems.
+	dir, err := os.Open(filepath.Dir(outputPath))
+	if err != nil {
+		return RestoreFileResult{}, fmt.Errorf("open output directory for fsync: %w", err)
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return RestoreFileResult{}, fmt.Errorf("fsync output directory: %w", err)
+	}
+	if err := dir.Close(); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("close output directory after fsync: %w", err)
+	}
 	cleanupTemp = false
 
 	// ------------------------------------------------------------

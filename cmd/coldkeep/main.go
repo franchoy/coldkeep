@@ -421,6 +421,9 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 		result, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
 	}
+	if sgctx.Writer != nil {
+		_ = sgctx.Writer.FinalizeContainer()
+	}
 	if err != nil {
 		return err
 	}
