@@ -405,41 +405,6 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 	return nil
 }
 
-// MarkContainerSealing commits a durable "sealing in progress" marker for the
-// container row in a short independent transaction. This must be called before
-// the physical file handle is closed (FinalizeContainer / finalizePhysicalOnly)
-// so that a crash between physical close and the subsequent SealContainerInDir
-// DB update is detectable by startup recovery. Recovery will either complete
-// the sealing or quarantine the container.
-//
-// If the marker commit fails the caller should abort the finalization: the
-// container remains fully open and can be written to again on the next attempt.
-func MarkContainerSealing(dbconn *sql.DB, containerID int64) error {
-	if dbconn == nil {
-		return nil
-	}
-
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
-
-	tx, err := dbconn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin sealing-marker tx for container %d: %w", containerID, err)
-	}
-	if _, err = tx.ExecContext(ctx,
-		`UPDATE container SET sealing = TRUE WHERE id = $1`,
-		containerID,
-	); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("mark container %d sealing: %w", containerID, err)
-	}
-	if err = tx.Commit(); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("commit sealing-marker for container %d: %w", containerID, err)
-	}
-	return nil
-}
-
 func QuarantineContainer(dbconn *sql.DB, containerID int64) error {
 	if dbconn == nil || containerID <= 0 {
 		return nil

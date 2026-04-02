@@ -416,15 +416,6 @@ func (w *LocalWriter) ContainerCount() int {
 	return w.containers
 }
 
-// MarkSealingForContainer commits sealing=TRUE for the given container ID in a
-// short independent transaction. Safe to call when dbconn is nil (no-op).
-func (w *LocalWriter) MarkSealingForContainer(containerID int64) error {
-	if w.dbconn == nil {
-		return nil
-	}
-	return MarkContainerSealing(w.dbconn, containerID)
-}
-
 func (w *LocalWriter) BindDB(dbconn *sql.DB) {
 	if dbconn == nil {
 		return
