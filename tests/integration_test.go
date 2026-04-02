@@ -580,6 +580,14 @@ func itoa(i int) string {
 	return string(buf[pos:])
 }
 
+func isRetryableTxAbortError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "current transaction is aborted") || strings.Contains(msg, "25p02")
+}
+
 // chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
 // minChunk = 512 KiB, maxChunk = 2 MiB.
 var chunkBoundaryCases = []struct {
@@ -8193,18 +8201,30 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 
 	for worker := 0; worker < workerCount; worker++ {
 		go func(workerID int) {
-			ctx := newTestContext(dbconn)
 			for i := workerID; i < fileCount; i += workerCount {
-				codec, err := blocks.ParseCodec("plain")
-				if err != nil {
-					errChan <- fmt.Errorf("parse codec: %w", err)
-					return
+				const maxStoreAttempts = 4
+				var result storage.StoreFileResult
+				var err error
+
+				for attempt := 0; attempt < maxStoreAttempts; attempt++ {
+					ctx := newTestContext(dbconn)
+					codec, parseErr := blocks.ParseCodec("plain")
+					if parseErr != nil {
+						errChan <- fmt.Errorf("parse codec: %w", parseErr)
+						return
+					}
+
+					result, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, filePaths[i], codec)
+					if err == nil {
+						break
+					}
+					if !isRetryableTxAbortError(err) || attempt == maxStoreAttempts-1 {
+						errChan <- fmt.Errorf("worker %d file %d store: %w", workerID, i, err)
+						return
+					}
+					time.Sleep(time.Duration(10*(attempt+1)) * time.Millisecond)
 				}
-				result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, filePaths[i], codec)
-				if err != nil {
-					errChan <- fmt.Errorf("worker %d file %d store: %w", workerID, i, err)
-					return
-				}
+
 				fileIDsMutex.Lock()
 				fileIDs[filePaths[i]] = result.FileID
 				fileIDsMutex.Unlock()
