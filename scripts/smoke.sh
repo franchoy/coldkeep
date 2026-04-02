@@ -428,44 +428,60 @@ echo "[smoke]   ok: gc dry-run predicted ${PREDICTED_AFFECTED_CONTAINERS} delete
 echo ""
 echo "[smoke] === SIMULATION METRICS VALIDATION ==="
 
-# Validate that simulate and store-folder have consistent metrics
-# Note: This requires a fresh storage directory
-if [[ -d "$EDGE_CASES_DIR" ]]; then
-  echo "[smoke] resetting for simulation validation"
-  reset_smoke_state
+# Validate simulate/store-folder against a fresh unique dataset so real deltas are exact.
+SIM_VALIDATE_DIR="./_smoke_sim_validation"
+rm -rf "$SIM_VALIDATE_DIR"
+mkdir -p "$SIM_VALIDATE_DIR"
 
-  echo "[smoke] getting simulation metrics"
-  SIM_OUTPUT=""
-  if ! SIM_OUTPUT=$(coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$EDGE_CASES_DIR" --output json 2>/dev/null); then
-    if [[ "${COLDKEEP_SMOKE_STRICT_SIMULATE:-0}" == "1" ]]; then
-      echo "[smoke] ERROR: simulation metrics command failed"
-      exit 1
-    fi
-    echo "[smoke] WARNING: simulation metrics command failed; skipping simulate-vs-real comparison"
-  else
-    SIM_FILES=$(echo "$SIM_OUTPUT" | jq -r '.data.total_files // 0' 2>/dev/null || echo "0")
-    SIM_CHUNKS=$(echo "$SIM_OUTPUT" | jq -r '.data.total_chunks // 0' 2>/dev/null || echo "0")
+dd if=/dev/urandom of="$SIM_VALIDATE_DIR/file_a.bin" bs=1M count=2 status=none
+dd if=/dev/urandom of="$SIM_VALIDATE_DIR/file_b.bin" bs=1M count=1 status=none
+
+echo "[smoke] getting simulation metrics"
+SIM_OUTPUT=""
+if ! SIM_OUTPUT=$(coldkeep simulate store-folder --codec "${COLDKEEP_CODEC:-plain}" "$SIM_VALIDATE_DIR" --output json 2>/dev/null); then
+  rm -rf "$SIM_VALIDATE_DIR"
+  if [[ "${COLDKEEP_SMOKE_STRICT_SIMULATE:-0}" == "1" ]]; then
+    echo "[smoke] ERROR: simulation metrics command failed"
+    exit 1
   fi
-  
+  echo "[smoke] WARNING: simulation metrics command failed; skipping simulate-vs-real comparison"
+else
+  SIM_PAYLOAD=$(echo "$SIM_OUTPUT" | grep -E '^\{.*\}$' | tail -n1)
+  if ! echo "$SIM_PAYLOAD" | jq -e '.status == "ok" and .command == "simulate" and .simulated == true and .data.files != null and .data.chunks != null and .data.logical_size_bytes != null and .data.physical_size_bytes != null' > /dev/null 2>&1; then
+    echo "[smoke] ERROR: simulate command returned invalid structured JSON"
+    echo "$SIM_OUTPUT"
+    rm -rf "$SIM_VALIDATE_DIR"
+    exit 1
+  fi
+
+  SIM_FILES=$(echo "$SIM_PAYLOAD" | jq -r '.data.files')
+  SIM_CHUNKS=$(echo "$SIM_PAYLOAD" | jq -r '.data.chunks')
+  SIM_LOGICAL_SIZE_BYTES=$(echo "$SIM_PAYLOAD" | jq -r '.data.logical_size_bytes')
+  SIM_PHYSICAL_SIZE_BYTES=$(echo "$SIM_PAYLOAD" | jq -r '.data.physical_size_bytes')
+
   echo "[smoke] getting real store metrics"
   STATS_BEFORE=$(coldkeep stats --output json)
-  coldkeep store-folder "$EDGE_CASES_DIR" > /dev/null
+  coldkeep store-folder "$SIM_VALIDATE_DIR" > /dev/null
   STATS_AFTER=$(coldkeep stats --output json)
-  
-  REAL_FILES=$(echo "$STATS_AFTER" | jq -r '.data.total_files')
-  REAL_CHUNKS=$(echo "$STATS_AFTER" | jq -r '.data.total_chunks')
-  
-  if [[ -n "$SIM_OUTPUT" ]]; then
-    echo "[smoke] simulation predicted: files=$SIM_FILES, chunks=$SIM_CHUNKS"
-    echo "[smoke] real store created: files=$REAL_FILES, chunks=$REAL_CHUNKS"
 
-    if [[ "$SIM_FILES" != "$REAL_FILES" || "$SIM_CHUNKS" != "$REAL_CHUNKS" ]]; then
-      echo "[smoke] WARNING: simulation metrics do not match real store (expected for deduplicated chunks)"
-    else
-      echo "[smoke]   ok: simulation metrics match real store"
-    fi
+  REAL_FILES=$(( $(echo "$STATS_AFTER" | jq -r '.data.total_files') - $(echo "$STATS_BEFORE" | jq -r '.data.total_files') ))
+  REAL_CHUNKS=$(( $(echo "$STATS_AFTER" | jq -r '.data.total_chunks') - $(echo "$STATS_BEFORE" | jq -r '.data.total_chunks') ))
+  REAL_LOGICAL_SIZE_BYTES=$(( $(echo "$STATS_AFTER" | jq -r '.data.total_logical_size_bytes') - $(echo "$STATS_BEFORE" | jq -r '.data.total_logical_size_bytes') ))
+  REAL_PHYSICAL_SIZE_BYTES=$(( $(echo "$STATS_AFTER" | jq -r '.data.live_block_bytes') - $(echo "$STATS_BEFORE" | jq -r '.data.live_block_bytes') ))
+
+  echo "[smoke] simulation predicted: files=$SIM_FILES, chunks=$SIM_CHUNKS, logical_bytes=$SIM_LOGICAL_SIZE_BYTES, physical_bytes=$SIM_PHYSICAL_SIZE_BYTES"
+  echo "[smoke] real store delta: files=$REAL_FILES, chunks=$REAL_CHUNKS, logical_bytes=$REAL_LOGICAL_SIZE_BYTES, physical_bytes=$REAL_PHYSICAL_SIZE_BYTES"
+
+  if [[ "$SIM_FILES" != "$REAL_FILES" || "$SIM_CHUNKS" != "$REAL_CHUNKS" || "$SIM_LOGICAL_SIZE_BYTES" != "$REAL_LOGICAL_SIZE_BYTES" || "$SIM_PHYSICAL_SIZE_BYTES" != "$REAL_PHYSICAL_SIZE_BYTES" ]]; then
+    echo "[smoke] ERROR: simulation metrics mismatch with real store delta"
+    rm -rf "$SIM_VALIDATE_DIR"
+    exit 1
   fi
+
+  echo "[smoke]   ok: simulation metrics match real store delta"
 fi
+
+rm -rf "$SIM_VALIDATE_DIR"
 
 echo ""
 echo "[smoke] === JSON OUTPUT VALIDATION ==="
