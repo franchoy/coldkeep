@@ -140,8 +140,8 @@ Restore operations are **atomic and verified**:
 
 Garbage collection is **non-destructive**:
 
-- Only unreferenced chunks are removed
-- Containers are deleted only when fully unreferenced
+- Only chunks with no live file references and no active restore pins are removed
+- Containers are deleted only when all their chunks are unreferenced
 - Referenced data is never removed
 
 > GC cannot delete data required to restore a valid logical file.
@@ -322,9 +322,9 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
 - Verification (`verify standard/full/deep`) assumes the system has already run recovery and reconciled in-flight state.
 - `COLDKEEP_STRICT_RECOVERY=true` is the recommended production baseline. Treat strict-mode startup failures as safety signals that require investigation.
 - `COLDKEEP_REUSE_SEMANTIC_VALIDATION` controls inline trust/cost tradeoffs on reuse:
-  - `off`: fastest, relies more on explicit verify cadence.
-  - `suspicious` (default): validates deeply only when risk signals exist.
-  - `always`: strongest inline validation, highest IO/CPU cost.
+  - `off`: graph-only structural checks (fastest; relies on explicit `verify` runs for corruption detection).
+  - `suspicious` (default): semantic checks only when risk signals are present (recommended balance).
+  - `always`: semantic checks for every reuse candidate (strongest; highest read/CPU cost).
 - `pin_count` protects restore safety by preventing GC/remove from reclaiming data while restore pins are active.
 - Use `coldkeep doctor` as the recommended one-shot health check wrapper (`recovery + verify + schema/version sanity`).
 
@@ -612,17 +612,17 @@ consistency and detect corruption across metadata and stored data.
 Verify the entire system:
 
 ```bash
-coldkeep verify system --level standard
-coldkeep verify system --level full
-coldkeep verify system --level deep
+coldkeep verify system --standard
+coldkeep verify system --full
+coldkeep verify system --deep
 ```
 
 Verify a specific file:
 
 ```bash
-coldkeep verify file <file_id> --level standard
-coldkeep verify file <file_id> --level full
-coldkeep verify file <file_id> --level deep
+coldkeep verify file <file_id> --standard
+coldkeep verify file <file_id> --full
+coldkeep verify file <file_id> --deep
 ```
 
 Verification results can be exported in JSON format using `--output json`.
