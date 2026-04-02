@@ -311,11 +311,23 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 }
 
 func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
-	commands := []string{"help", "version", "init", "simulate", "-h", "--help", "-v", "--version", "unknown"}
+	commands := []string{"help", "version", "init", "simulate", "doctor", "-h", "--help", "-v", "--version", "unknown"}
 
 	for _, command := range commands {
 		if shouldRunStartupRecovery(command) {
 			t.Fatalf("expected startup recovery to be skipped for command %q", command)
 		}
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsDoctorJSON(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"doctor", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected doctor --output json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"doctor", "--output=json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected doctor --output=json to infer json mode, got %q", mode)
 	}
 }

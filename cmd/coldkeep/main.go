@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,15 @@ type parsedCommandLine struct {
 	method      string
 	positionals []string
 	flags       map[string][]string
+}
+
+type doctorReport struct {
+	Recovery       recovery.Report `json:"recovery"`
+	VerifyLevel    string          `json:"verify_level"`
+	SchemaVersion  int64           `json:"schema_version"`
+	RecoveryStatus string          `json:"recovery_status"`
+	VerifyStatus   string          `json:"verify_status"`
+	SchemaStatus   string          `json:"schema_status"`
 }
 
 type cliError struct {
@@ -139,6 +149,8 @@ func runCLI(args []string) int {
 	switch parsed.method {
 	case "init":
 		err = initCommand()
+	case "doctor":
+		err = runDoctorCommand(parsed, outputMode)
 	case "store":
 		err = runStoreCommand(parsed, outputMode)
 	case "store-folder":
@@ -254,7 +266,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	}
 	// These commands emit their own structured JSON payload.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
 		return
 	}
 
@@ -324,6 +336,7 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 }
 
 var outputSupportedCommands = map[string]bool{
+	"doctor":       true,
 	"verify":       true,
 	"list":         true,
 	"search":       true,
@@ -891,6 +904,123 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 	}
 }
 
+func querySchemaVersion() (int64, error) {
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return 0, fmt.Errorf("connect DB for schema check: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	var version sql.NullInt64
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+		return 0, fmt.Errorf("query schema_version: %w", err)
+	}
+	if !version.Valid {
+		return 0, errors.New("schema_version table is empty")
+	}
+
+	return version.Int64, nil
+}
+
+func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 0 {
+		return usageErrorf("Usage: coldkeep doctor [--standard|--full|--deep]")
+	}
+
+	verifyLevel, err := parseVerifyLevel(parsed)
+	if err != nil {
+		return err
+	}
+
+	report := doctorReport{
+		VerifyLevel: verifyLevelToString(verifyLevel),
+	}
+
+	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	report.Recovery = recoveryReport
+	if recoveryErr != nil {
+		report.RecoveryStatus = "error"
+	} else {
+		report.RecoveryStatus = "ok"
+	}
+
+	schemaVersion, schemaErr := querySchemaVersion()
+	if schemaErr != nil {
+		report.SchemaStatus = "error"
+	} else {
+		report.SchemaVersion = schemaVersion
+		report.SchemaStatus = "ok"
+	}
+
+	verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verifyLevel)
+	if verifyErr != nil {
+		report.VerifyStatus = "error"
+	} else {
+		report.VerifyStatus = "ok"
+	}
+
+	if outputMode == outputModeJSON {
+		status := "ok"
+		message := "doctor checks passed"
+		switch {
+		case recoveryErr != nil:
+			status = "error"
+			message = fmt.Sprintf("recovery phase failed: %v", recoveryErr)
+		case schemaErr != nil:
+			status = "error"
+			message = fmt.Sprintf("schema/version check failed: %v", schemaErr)
+		case verifyErr != nil:
+			status = "error"
+			message = fmt.Sprintf("verify phase failed: %v", verifyErr)
+		}
+
+		payload := map[string]any{
+			"status":  status,
+			"command": "doctor",
+			"data":    report,
+		}
+		if status != "ok" {
+			payload["message"] = strings.TrimSpace(message)
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+	}
+
+	if outputMode == outputModeText {
+		fmt.Println("Doctor report")
+		fmt.Printf("  Recovery:       %s\n", report.RecoveryStatus)
+		fmt.Printf("  Verify level:   %s\n", report.VerifyLevel)
+		fmt.Printf("  Verify:         %s\n", report.VerifyStatus)
+		if report.SchemaStatus == "ok" {
+			fmt.Printf("  Schema version: %d\n", report.SchemaVersion)
+		} else {
+			fmt.Printf("  Schema version: %s\n", report.SchemaStatus)
+		}
+		fmt.Printf("  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
+			report.Recovery.AbortedLogicalFiles,
+			report.Recovery.AbortedChunks,
+			report.Recovery.QuarantinedMissing,
+			report.Recovery.QuarantinedCorruptTail,
+			report.Recovery.QuarantinedOrphan,
+		)
+	}
+
+	if recoveryErr != nil {
+		return fmt.Errorf("doctor recovery phase failed: %w", recoveryErr)
+	}
+	if schemaErr != nil {
+		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
+	}
+	if verifyErr != nil {
+		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
+	}
+
+	return nil
+}
+
 // SimulateReport holds the result of a dry-run simulation.
 type SimulateReport struct {
 	Subcommand        string  `json:"subcommand"`
@@ -1053,6 +1183,7 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Run recovery + system verify + schema/version sanity checks"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
@@ -1107,6 +1238,7 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")
+	fmt.Println("  coldkeep doctor --full")
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep store --codec aes-gcm myfile.bin")
 	fmt.Println("  coldkeep store-folder --codec plain ./samples")
