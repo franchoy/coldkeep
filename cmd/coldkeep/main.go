@@ -156,7 +156,7 @@ func runCLI(args []string) int {
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
-		fmt.Println("coldkeep version", version.String())
+		err = runVersionCommand(outputMode)
 	case "list":
 		err = runListCommand(parsed, outputMode)
 	case "search":
@@ -254,7 +254,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	}
 	// These commands emit their own structured JSON payload.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate":
+	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "version", "-v", "--version":
 		return
 	}
 
@@ -274,6 +274,24 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 
 	encoded, _ := json.Marshal(payload)
 	fmt.Println(string(encoded))
+}
+
+func runVersionCommand(mode cliOutputMode) error {
+	if mode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "version",
+			"data": map[string]any{
+				"version": version.String(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Println("coldkeep version", version.String())
+	return nil
 }
 
 func verifyLevelToString(level verify.VerifyLevel) string {

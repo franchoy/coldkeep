@@ -522,11 +522,14 @@ echo ""
 echo "[smoke] === VERSION COMMAND TEST ==="
 
 VERSION_OUTPUT=$(coldkeep version --output json 2>/dev/null)
-if echo "$VERSION_OUTPUT" | jq -e '.version' > /dev/null 2>&1; then
-  VERSION=$(echo "$VERSION_OUTPUT" | jq -r '.version')
+VERSION_PAYLOAD=$(echo "$VERSION_OUTPUT" | grep -E '^\{.*\}$' | tail -n1)
+if echo "$VERSION_PAYLOAD" | jq -e '.status == "ok" and .data.version' > /dev/null 2>&1; then
+  VERSION=$(echo "$VERSION_PAYLOAD" | jq -r '.data.version')
   echo "[smoke]   ok: coldkeep version: $VERSION"
 else
-  echo "[smoke] WARNING: version command did not return JSON with version field"
+  echo "[smoke] ERROR: version command did not return valid structured JSON"
+  echo "$VERSION_OUTPUT"
+  exit 1
 fi
 
 echo ""
