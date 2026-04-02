@@ -373,6 +373,8 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 
 func shouldRunStartupRecovery(command string) bool {
 	switch command {
+	// doctor runs its own recovery phase inside runDoctorCommand so it can
+	// report recovery/verify/schema in a single command-specific payload.
 	case "store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify":
 		return true
 	default:

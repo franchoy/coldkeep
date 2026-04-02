@@ -524,6 +524,8 @@ It runs the checks in this order:
 2. System verification (`standard` by default, or `full` / `deep`)
 3. Schema/version sanity query
 
+Doctor intentionally runs its own internal recovery phase and does not use the generic startup recovery event path used by commands such as `store`, `restore`, and `verify`.
+
 ### Usage
 
 ```bash
