@@ -220,6 +220,7 @@ Guarantees hold only if:
 - Configurable via `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default: `suspicious`)
   - `suspicious`: deep check only when risk signals are present (file or chunk retry history, mutable container references)
   - `always`: unconditional deep check on every reuse candidate
+- Operational note: `always` can materially increase reuse-path read/CPU cost; use it when you want maximum inline integrity checking and can absorb lower throughput.
 - Structural reuse validation (graph checks: chunk/link/block/container presence and file existence) remains mandatory in all modes
 - Correctness of reuse without deep checks depends on recovery and verify having run; `suspicious` mode triggers automatically when there is evidence they may not have
 
@@ -296,10 +297,13 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
 
 ### Reuse semantic validation
 
-- `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default: `suspicious`) — controls deep payload validation before reusing a `COMPLETED` logical file row.
-  - `off`: structural graph checks only (faster; correctness depends on recovery/verify having run)
-  - `suspicious`: deep check only when reuse signals elevated risk (file or chunk retry history, mutable container references)
-  - `always`: deep check for every reusable completed file (strongest integrity; higher read cost)
+- `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default: `suspicious`) controls whether coldkeep performs an operational semantic validation pass before reusing a `COMPLETED` logical file row.
+- Operationally, semantic validation can pin chunk rows, read/decode payload data from container files, and recompute chunk/file hashes.
+- Modes:
+  - `off`: run structural graph checks only. Fastest mode. Skips semantic payload re-validation, so corruption is more likely to be detected later by explicit `verify` runs.
+  - `suspicious` (default): run semantic validation only when risk signals are present (for example file/chunk retry history or mutable container references). This is the recommended balance for normal production throughput.
+  - `always`: run semantic validation for every completed-file reuse candidate. Strongest inline integrity gate, but highest IO/CPU cost and can noticeably increase store latency on reuse-heavy workloads.
+- If ingestion performance drops unexpectedly after enabling this feature, check whether `COLDKEEP_REUSE_SEMANTIC_VALIDATION=always` is set.
 
 ---
 
