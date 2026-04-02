@@ -68,6 +68,8 @@ type doctorReport struct {
 	SchemaStatus   string          `json:"schema_status"`
 }
 
+const doctorDefaultVerifyLevel = verify.VerifyStandard
+
 type cliError struct {
 	code int
 	msg  string
@@ -932,7 +934,7 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("Usage: coldkeep doctor [--standard|--full|--deep]")
 	}
 
-	verifyLevel, err := parseVerifyLevel(parsed)
+	verifyLevel, err := parseDoctorVerifyLevel(parsed)
 	if err != nil {
 		return err
 	}
@@ -1005,6 +1007,14 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 
 	return nil
+}
+
+func parseDoctorVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
+	if !parsed.hasFlag("standard", "full", "deep") {
+		return doctorDefaultVerifyLevel, nil
+	}
+
+	return parseVerifyLevel(parsed)
 }
 
 // SimulateReport holds the result of a dry-run simulation.
@@ -1169,7 +1179,7 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Run recovery + system verify + schema/version sanity checks"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Run recovery + system verify + schema/version sanity checks (default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},

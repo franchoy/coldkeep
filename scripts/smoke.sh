@@ -417,7 +417,7 @@ echo "[smoke] === DOCTOR COMMAND TEST (Operator Health Check) ==="
 # Test doctor as an operator-facing release gate check
 # Doctor validates recovery, schema, and verification in one pass
 
-echo "[smoke] doctor (default) - full health report"
+echo "[smoke] doctor (default) - quick health report (--standard)"
 if ! coldkeep doctor; then
   echo "[smoke] ERROR: doctor command failed"
   exit 1

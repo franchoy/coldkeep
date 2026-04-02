@@ -580,6 +580,7 @@ Doctor report
 ### Operational guidance
 
 - Run `doctor` after startup, before first ingestion in a new environment.
+- `doctor` defaults to `--standard` as a deliberate quick health check.
 - Prefer `doctor --standard` for frequent checks.
 - Use `doctor --full` for stronger structural assurance.
 - Reserve `doctor --deep` for periodic audits due to higher I/O cost.

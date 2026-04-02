@@ -826,7 +826,7 @@ func TestDoctorCommand(t *testing.T) {
 	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
-	// Test doctor default (--standard level)
+	// Test doctor default quick health check (--standard level)
 	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor")
 	if res.exitCode != 0 {
 		t.Fatalf("doctor command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)

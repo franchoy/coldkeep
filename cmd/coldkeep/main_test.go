@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -329,5 +330,33 @@ func TestInferOutputModeFromArgsSupportsDoctorJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"doctor", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected doctor --output=json to infer json mode, got %q", mode)
+	}
+}
+
+func TestParseDoctorVerifyLevelDefaultsToStandard(t *testing.T) {
+	level, err := parseDoctorVerifyLevel(parsedCommandLine{
+		method: "doctor",
+		flags:  map[string][]string{},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if level != verify.VerifyStandard {
+		t.Fatalf("expected default doctor verify level standard, got %v", level)
+	}
+}
+
+func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
+	level, err := parseDoctorVerifyLevel(parsedCommandLine{
+		method: "doctor",
+		flags: map[string][]string{
+			"full": {""},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if level != verify.VerifyFull {
+		t.Fatalf("expected explicit doctor verify level full, got %v", level)
 	}
 }
