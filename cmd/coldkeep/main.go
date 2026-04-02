@@ -1183,7 +1183,7 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health check (recovery + verify + schema sanity; default: --standard)"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "One-shot operator health wrapper (recovery + verify + schema sanity; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
@@ -1192,7 +1192,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  stats", "Show storage statistics"},
-		{"  verify [target] [fileID] [options]", "Verify stored files"},
+		{"  verify [target] [fileID] [options]", "Layered integrity verification (default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
 		{"    no options defaults to '--standard'", ""},
@@ -1220,6 +1220,16 @@ func printHelp() {
 	fmt.Println("  DB_USER")
 	fmt.Println("  DB_PASSWORD")
 	fmt.Println("  DB_NAME")
+	fmt.Println("  DB_SSLMODE (default: disable)")
+	fmt.Println("  COLDKEEP_DB_CONNECT_TIMEOUT_MS (default: 5000)")
+	fmt.Println("  COLDKEEP_DB_OPERATION_TIMEOUT_MS (default: 300000)")
+	fmt.Println("  COLDKEEP_DB_STATEMENT_TIMEOUT_MS (default: 30000)")
+	fmt.Println("  COLDKEEP_DB_LOCK_TIMEOUT_MS (default: 5000)")
+	fmt.Println("  COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS (default: 60000)")
+	fmt.Println("  COLDKEEP_DB_MAX_OPEN_CONNS (default: 25)")
+	fmt.Println("  COLDKEEP_DB_MAX_IDLE_CONNS (default: 5)")
+	fmt.Println("  COLDKEEP_DB_CONN_MAX_LIFETIME_MS (default: 1800000)")
+	fmt.Println("  COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS (default: 300000)")
 	fmt.Println("  COLDKEEP_STORAGE_DIR (default: ./storage/containers)")
 	fmt.Println("  COLDKEEP_CONTAINER_MAX_SIZE_MB (default: 64)")
 	fmt.Println("  COLDKEEP_LOGICAL_FILE_WAIT_MS (default: 100)")
@@ -1235,6 +1245,7 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
+	fmt.Println("  Startup recovery runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
 	fmt.Println()
 	fmt.Println("Operator quick check:")
 	fmt.Println("  coldkeep doctor --standard")

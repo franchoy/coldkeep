@@ -296,6 +296,18 @@ Database operations now run with bounded connection and statement limits by defa
 
 These limits are intended to keep CLI commands from hanging indefinitely on dead connections, blocked sessions, or stalled lock acquisition.
 
+Current defaults:
+
+- `COLDKEEP_DB_CONNECT_TIMEOUT_MS=5000`
+- `COLDKEEP_DB_OPERATION_TIMEOUT_MS=300000`
+- `COLDKEEP_DB_STATEMENT_TIMEOUT_MS=30000`
+- `COLDKEEP_DB_LOCK_TIMEOUT_MS=5000`
+- `COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS=60000`
+- `COLDKEEP_DB_MAX_OPEN_CONNS=25`
+- `COLDKEEP_DB_MAX_IDLE_CONNS=5`
+- `COLDKEEP_DB_CONN_MAX_LIFETIME_MS=1800000`
+- `COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS=300000`
+
 ### Recovery strictness
 
 - `COLDKEEP_STRICT_RECOVERY` (default: `true`) — controls how startup recovery handles suspicious orphan container conflicts.
@@ -318,15 +330,17 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
 
 ### Operational trust model
 
-- Startup recovery is part of normal operation, not an exceptional maintenance step.
-- Verification (`verify standard/full/deep`) assumes the system has already run recovery and reconciled in-flight state.
+- Startup recovery is the normal protective startup phase, not an exceptional maintenance step.
+  It runs automatically before storage/maintenance commands (`store`, `store-folder`, `restore`, `remove`, `gc`, `stats`, `list`, `search`, `verify`).
+- Verification (`verify standard/full/deep`) is layered integrity checking and assumes recovery has already reconciled in-flight state.
+- `doctor` is a one-shot operator health wrapper that runs recovery + verify + schema/version sanity in one command.
 - `COLDKEEP_STRICT_RECOVERY=true` is the recommended production baseline. Treat strict-mode startup failures as safety signals that require investigation.
 - `COLDKEEP_REUSE_SEMANTIC_VALIDATION` controls inline trust/cost tradeoffs on reuse:
   - `off`: graph-only structural checks (fastest; relies on explicit `verify` runs for corruption detection).
   - `suspicious` (default): semantic checks only when risk signals are present (recommended balance).
   - `always`: semantic checks for every reuse candidate (strongest; highest read/CPU cost).
 - `pin_count` protects restore safety by preventing GC/remove from reclaiming data while restore pins are active.
-- Use `coldkeep doctor` as the recommended one-shot health check wrapper (`recovery + verify + schema/version sanity`).
+- Prefer strict recovery + `doctor --standard` as the default production readiness baseline.
 
 ---
 
@@ -561,14 +575,16 @@ Doctor report
   "command": "doctor",
   "data": {
     "recovery": {
-      "aborted_logical_files": 0,
-      "aborted_chunks": 0,
-      "quarantined_missing_containers": 0,
-      "quarantined_corrupt_tail_containers": 0,
-      "quarantined_orphan_containers": 0,
-      "checked_container_records": 12,
-      "checked_disk_files": 12,
-      "skipped_dir_entries": 0
+      "AbortedLogicalFiles": 0,
+      "AbortedChunks": 0,
+      "QuarantinedMissing": 0,
+      "QuarantinedCorruptTail": 0,
+      "QuarantinedOrphan": 0,
+      "SkippedDirEntries": 0,
+      "CheckedContainerRecord": 12,
+      "CheckedDiskFiles": 12,
+      "SealingCompleted": 0,
+      "SealingQuarantined": 0
     },
     "verify_level": "standard",
     "schema_version": 5,
@@ -647,6 +663,14 @@ coldkeep verify file <file_id> --deep
 ```
 
 Verification results can be exported in JSON format using `--output json`.
+
+CLI defaults/parsing rules:
+
+- Verify defaults to `standard` when no level is provided.
+- Verify level can be passed as flags (`--standard|--full|--deep`) or as positional level tokens in canonical forms:
+  - `coldkeep verify system <standard|full|deep>`
+  - `coldkeep verify file <file_id> <standard|full|deep>`
+- Do not pass both a verify-level flag and positional level token in the same invocation.
 
 ### Notes
 

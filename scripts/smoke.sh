@@ -443,8 +443,26 @@ echo "[smoke] validating doctor JSON output contract"
 DOCTOR_JSON=$(coldkeep doctor --output json)
 DOCTOR_PAYLOAD=$(echo "$DOCTOR_JSON" | grep -E '^\{.*\}$' | tail -n1)
 
-# Doctor JSON should contain recovery status, verify status, and schema status
-if ! echo "$DOCTOR_PAYLOAD" | jq -e '.status == "ok" and .command == "doctor" and .data.recovery_status and .data.verify_status and .data.schema_status' > /dev/null 2>&1; then
+# Doctor JSON must expose nested data shape used by automation.
+if ! echo "$DOCTOR_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "doctor"
+  and .data.recovery_status
+  and .data.verify_status
+  and .data.schema_status
+  and .data.verify_level
+  and .data.recovery
+  and (.data.recovery.AbortedLogicalFiles != null)
+  and (.data.recovery.AbortedChunks != null)
+  and (.data.recovery.QuarantinedMissing != null)
+  and (.data.recovery.QuarantinedCorruptTail != null)
+  and (.data.recovery.QuarantinedOrphan != null)
+  and (.data.recovery.CheckedContainerRecord != null)
+  and (.data.recovery.CheckedDiskFiles != null)
+  and (.data.recovery.SkippedDirEntries != null)
+  and (.data.recovery.SealingCompleted != null)
+  and (.data.recovery.SealingQuarantined != null)
+' > /dev/null 2>&1; then
   echo "[smoke] ERROR: doctor JSON output missing required fields"
   echo "$DOCTOR_JSON"
   echo "Parsed payload:"
@@ -468,7 +486,25 @@ echo "[smoke] doctor --full --output json (complete operator report)"
 DOCTOR_FULL_JSON=$(coldkeep doctor --full --output json)
 DOCTOR_FULL_PAYLOAD=$(echo "$DOCTOR_FULL_JSON" | grep -E '^\{.*\}$' | tail -n1)
 
-if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '.status == "ok" and .command == "doctor" and .data.recovery_status and .data.verify_status and .data.schema_status' > /dev/null 2>&1; then
+if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "doctor"
+  and .data.recovery_status
+  and .data.verify_status
+  and .data.schema_status
+  and .data.verify_level
+  and .data.recovery
+  and (.data.recovery.AbortedLogicalFiles != null)
+  and (.data.recovery.AbortedChunks != null)
+  and (.data.recovery.QuarantinedMissing != null)
+  and (.data.recovery.QuarantinedCorruptTail != null)
+  and (.data.recovery.QuarantinedOrphan != null)
+  and (.data.recovery.CheckedContainerRecord != null)
+  and (.data.recovery.CheckedDiskFiles != null)
+  and (.data.recovery.SkippedDirEntries != null)
+  and (.data.recovery.SealingCompleted != null)
+  and (.data.recovery.SealingQuarantined != null)
+' > /dev/null 2>&1; then
   echo "[smoke] ERROR: doctor --full --output json missing required fields"
   echo "$DOCTOR_FULL_JSON"
   exit 1
@@ -817,5 +853,41 @@ if [[ "$CURRENT_CODEC" == "plain" ]] && [[ -n "${COLDKEEP_KEY:-}" ]]; then
 else
   echo "[smoke] codec variant test skipped (COLDKEEP_CODEC is not plain, or COLDKEEP_KEY is not set)"
 fi
+
+echo ""
+echo "[smoke] === V1.0 PREFLIGHT (FINAL OPERATOR GATE) ==="
+
+echo "[smoke] preflight: coldkeep doctor --standard"
+if ! coldkeep doctor --standard; then
+  echo "[smoke] ERROR: preflight doctor --standard failed"
+  exit 1
+fi
+
+echo "[smoke] preflight: coldkeep verify system --full"
+if ! coldkeep verify system --full; then
+  echo "[smoke] ERROR: preflight verify system --full failed"
+  exit 1
+fi
+
+echo "[smoke] preflight: restore one file after recovery/gc/verify path"
+PREFLIGHT_FILE_ID=$(coldkeep list --output json | jq -r '.files[0].id // empty' 2>/dev/null)
+if [[ -z "$PREFLIGHT_FILE_ID" ]]; then
+  echo "[smoke] ERROR: preflight restore skipped because no file IDs are available"
+  exit 1
+fi
+PREFLIGHT_RESTORE_DIR="./_smoke_preflight_restore"
+rm -rf "$PREFLIGHT_RESTORE_DIR"
+mkdir -p "$PREFLIGHT_RESTORE_DIR"
+if ! coldkeep restore "$PREFLIGHT_FILE_ID" "$PREFLIGHT_RESTORE_DIR/" > /dev/null; then
+  echo "[smoke] ERROR: preflight restore failed for file id=${PREFLIGHT_FILE_ID}"
+  exit 1
+fi
+if [[ -z "$(find "$PREFLIGHT_RESTORE_DIR" -type f -print -quit)" ]]; then
+  echo "[smoke] ERROR: preflight restore produced no output files"
+  exit 1
+fi
+rm -rf "$PREFLIGHT_RESTORE_DIR"
+
+echo "[smoke]   ok: v1.0 preflight checks passed"
 
 echo "[smoke] done"
