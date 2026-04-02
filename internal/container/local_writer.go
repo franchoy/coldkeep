@@ -320,8 +320,9 @@ func (w *LocalWriter) clearActive() {
 }
 
 // FinalizeContainer performs physical sync/close for the active container and clears
-// local active state. If physical finalization fails, the container is retired and
-// quarantined before returning so no future writes can reuse a potentially unsafe file.
+// local active state. If physical finalization fails, the retirement/quarantine
+// path is executed before returning so no future writes can reuse a potentially
+// unsafe file.
 func (w *LocalWriter) FinalizeContainer() error {
 	if err := w.finalizePhysicalOnly(); err != nil {
 		containerID := w.activeID
@@ -412,7 +413,7 @@ func (w *LocalWriter) BindDB(dbconn *sql.DB) {
 // RetireActiveContainer is the retirement/quarantine path used after failed
 // cleanup boundaries (for example rollback/finalize/sync cleanup failure).
 // It closes current handles, clears pending append state, and marks the DB row
-// quarantined to prevent future reuse.
+// as quarantined to prevent future reuse.
 func (w *LocalWriter) RetireActiveContainer() error {
 	if !w.hasActive {
 		return nil

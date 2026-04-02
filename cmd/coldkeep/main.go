@@ -68,7 +68,7 @@ type doctorReport struct {
 	SchemaStatus   string          `json:"schema_status"`
 }
 
-// Frozen v1.0 product contract: `doctor` is the fast health gate.
+// Frozen v1.0 product contract: doctor is the fast corrective recovery + health gate.
 // Default remains `standard`; operators can opt into `--full` / `--deep`.
 const doctorDefaultVerifyLevel = verify.VerifyStandard
 
@@ -377,8 +377,8 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 
 func shouldRunStartupRecovery(command string) bool {
 	switch command {
-	// doctor runs its own recovery phase inside runDoctorCommand so it can
-	// report recovery/verify/schema in a single command-specific payload.
+	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
+	// report corrective recovery/verify/schema in a single command-specific payload.
 	case "store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify":
 		return true
 	default:
@@ -928,8 +928,8 @@ func querySchemaVersion() (int64, error) {
 	return version.Int64, nil
 }
 
-// runDoctorCommand implements the 'doctor' corrective health command.
-// Doctor is NOT read-only: it runs recovery before verification, and may update
+// runDoctorCommand implements the doctor corrective recovery command.
+// Doctor is NOT read-only: it runs corrective recovery before verification, and may update
 // database metadata (aborting dangling PROCESSING writes, clearing stale sealing
 // markers) before any integrity check executes. Running doctor on a fresh
 // deployment or after an unclean shutdown is safe and intended.

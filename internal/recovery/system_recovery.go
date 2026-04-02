@@ -43,9 +43,9 @@ type Report struct {
 
 // isStrictRecovery returns true unless COLDKEEP_STRICT_RECOVERY is explicitly
 // set to "false". In strict mode (default) suspicious orphan container
-// conflicts abort recovery with an error. In non-strict mode they are logged
-// as warnings and recovery continues, which is safer under benign duplicate /
-// restart-race scenarios.
+// conflicts abort corrective recovery with an error. In non-strict mode they are
+// logged as warnings and corrective recovery continues, which is safer under
+// benign duplicate / restart-race scenarios.
 func isStrictRecovery() bool {
 	return utils_env.GetenvOrDefault("COLDKEEP_STRICT_RECOVERY", "true") != "false"
 }
@@ -70,9 +70,10 @@ func SystemRecoveryWithContainersDir(containersDir string) error {
 
 // SystemRecoveryReportWithContainersDir is the primary corrective recovery entry
 // point. It modifies database state: PROCESSING logical files and chunks are
-// aborted, containers with unresolvable state are quarantined. Callers (including
-// the doctor command and normal startup) must treat changed row counts in the
-// returned Report as expected, successful corrective outcomes, not as errors.
+// aborted, containers with unresolvable state enter the retirement/quarantine
+// path. Callers (including the doctor command and normal startup) must treat
+// changed row counts in the returned Report as expected, successful corrective
+// outcomes, not as errors.
 func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error) {
 	stats := &recoveryStats{}
 	logRecoveryEvent("start", "containers_dir="+containersDir)
@@ -239,7 +240,8 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 			continue
 		}
 
-		// Physical file missing/unreadable: quarantine and clear sealing marker.
+		// Physical file missing/unreadable: execute retirement/quarantine path and
+		// clear sealing marker.
 		if _, qErr := dbconn.ExecContext(ctx,
 			`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
 			id,

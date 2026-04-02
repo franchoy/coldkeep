@@ -53,7 +53,7 @@ type payloadStatefulWriter interface {
 //
 // Boundary invariants:
 //   - No successful append may remain unresolved at function boundary.
-//   - No successful append may execute both rollback and commit-ack paths.
+//   - No successful append may execute both rollback path and commit acknowledgment path.
 //   - No container that crosses a failed rollback/finalize/seal boundary may
 //     re-enter the writable pool.
 
@@ -65,7 +65,7 @@ type optionalAppendRollbacker interface {
 }
 
 // optionalAppendCommitAcknowledger is implemented by writers that maintain rollback
-// state after a physical append. Calling AcknowledgeAppendCommitted after a
+// state after an unresolved append. Calling AcknowledgeAppendCommitted after a
 // successful tx.Commit() closes the commit acknowledgment path of the state
 // machine, ensuring that already-committed bytes can never be accidentally
 // truncated by a subsequent RollbackLastAppend call.
@@ -85,7 +85,8 @@ type optionalWriterDBBinder interface {
 // Safe to call on any rollback path; if no unresolved append is pending the
 // implementation returns immediately without truncating.
 // Returns any error from the rollback operation; callers must handle rollback failures
-// as they indicate physical/logical inconsistency and must trigger container retirement.
+// as they indicate physical/logical inconsistency and must trigger container
+// retirement/quarantine.
 func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
 	if rb, ok := writer.(optionalAppendRollbacker); ok {
 		return rb.RollbackLastAppend()
@@ -112,7 +113,8 @@ func retireWriterActiveContainer(writer payloadStatefulWriter) error {
 }
 
 // rollbackWriterLastAppendWithRetire attempts to rollback the writer's last append,
-// and if that fails, tries to retire the active container to prevent further use.
+// and if that fails, executes the active-container retirement/quarantine path to
+// prevent further use.
 // Returns the rollback error, or if rollback fails, returns an error wrapping both
 // the rollback failure and any retire error. This ensures that failed rollbacks
 // (physical consistency violations) are treated as critical container failures.
@@ -1242,7 +1244,7 @@ func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chu
 // finalizeLogicalFileStorageWithContext atomically verifies that all chunks are linked
 // and marks the logical file as COMPLETED in a single transaction. This ensures that
 // if verification fails, the file remains in PROCESSING state and no partial completion
-// leaks out. If this transaction fails, recovery/cleanup will mark the file ABORTED,
+// leaks out. If this transaction fails, corrective recovery/cleanup will mark the file ABORTED,
 // maintaining semantic consistency: either all chunks are linked AND file is complete,
 // or file is in PROCESSING/ABORTED (never a state where chunks exist but file isn't marked).
 func finalizeLogicalFileStorageWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, expectedChunkCount int) error {
@@ -1690,7 +1692,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	// Atomically verify all chunks are linked and mark logical file as COMPLETED in a single transaction.
 	// This groups the final state transition into a deliberate second phase that is logically atomic:
 	// either all chunks are successfully linked AND the file is marked complete, or the file
-	// remains PROCESSING for recovery if any verification fails. This avoids the semantic gap
+	// remains PROCESSING for corrective recovery if any verification fails. This avoids the semantic gap
 	// where chunks could be fully committed but the file completion is left dangling.
 	if err := finalizeLogicalFileStorageWithContext(ctx, sgctx.DB, fileID, chunkOrder); err != nil {
 		return StoreFileResult{}, err
