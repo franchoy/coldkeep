@@ -558,8 +558,9 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.
 		t.Fatalf("write temp file: %v", err)
 	}
 
+	rollbackCause := errors.New("injected rollback truncate failure")
 	writer := &rollbackCleanupFailureWriter{
-		rollbackErr:     errors.New("injected rollback truncate failure"),
+		rollbackErr:     rollbackCause,
 		retireContainer: 1,
 		db:              dbconn,
 	}
@@ -578,8 +579,14 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.
 	if err == nil {
 		t.Fatal("expected store to fail when rollback cleanup fails")
 	}
+	if !errors.Is(err, rollbackCause) {
+		t.Fatalf("expected surfaced rollback cause in store error; got: %v", err)
+	}
 	if !strings.Contains(err.Error(), "rollback failed; retired active container as precaution") {
 		t.Fatalf("expected rollback escalation in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), rollbackCause.Error()) {
+		t.Fatalf("expected rollback error text to be visible in wrapped error, got: %v", err)
 	}
 
 	if writer.rollbackCalls == 0 {
