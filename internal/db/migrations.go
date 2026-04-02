@@ -13,8 +13,6 @@ import (
 
 const requiredPostgresSchemaVersion = 5
 
-var postgresAutoBootstrapEnabled = loadPostgresAutoBootstrapEnabled()
-
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -30,7 +28,9 @@ func loadPostgresSchema() (string, error) {
 }
 
 func loadPostgresAutoBootstrapEnabled() bool {
-	raw := strings.TrimSpace(strings.ToLower(strings.Trim(os.Getenv("COLDKEEP_DB_AUTO_BOOTSTRAP"), "\"'")))
+	raw := strings.TrimSpace(os.Getenv("COLDKEEP_DB_AUTO_BOOTSTRAP"))
+	raw = strings.Trim(raw, "\"'")
+	raw = strings.TrimSpace(strings.ToLower(raw))
 	switch raw {
 	case "1", "true", "yes", "on":
 		return true
@@ -75,7 +75,7 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 	}
 
 	if !schemaVersionTable.Valid {
-		if !postgresAutoBootstrapEnabled {
+		if !loadPostgresAutoBootstrapEnabled() {
 			return errors.New(
 				"postgres schema is not initialized (missing schema_version table); apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true",
 			)

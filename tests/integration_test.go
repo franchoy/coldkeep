@@ -3005,12 +3005,7 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 
 	// --- Subtest 2: missing schema without auto-bootstrap fails with actionable error ---
 	t.Run("missing_schema_without_auto_bootstrap", func(t *testing.T) {
-		// COLDKEEP_DB_AUTO_BOOTSTRAP is evaluated at package init; skip if it
-		// was truthy when the test binary launched so we can correctly expect failure.
-		switch strings.TrimSpace(strings.ToLower(strings.Trim(os.Getenv("COLDKEEP_DB_AUTO_BOOTSTRAP"), "\"'"))) {
-		case "1", "true", "yes", "on":
-			t.Skip("COLDKEEP_DB_AUTO_BOOTSTRAP is enabled; cannot test missing-schema failure path")
-		}
+		t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 
 		// Create an isolated, empty database with no schema applied.
 		// Requires CREATEDB or superuser privilege (always true in the Docker dev stack).
