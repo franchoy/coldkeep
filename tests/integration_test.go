@@ -14,10 +14,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	dbschema "github.com/franchoy/coldkeep/db"
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -7527,4 +7529,359 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 	}
 
 	assertNoProcessingRows(t, dbconn)
+}
+
+// TestStoreMultiChunkFileVerifiesAtomicFinalization stores a multi-chunk file
+// and verifies that the atomic finalization boundary works correctly:
+// - File is marked COMPLETED
+// - All file_chunk rows exist with contiguous chunk_order [0, 1, 2, ...]
+// - File can be restored successfully
+// - Re-store recognizes file as already stored
+func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// 3MB file will span multiple chunks via CDC (min chunk ~512KB, max ~2MB)
+	inPath := createTempFile(t, inputDir, "multi_chunk_finalize.bin", 3*1024*1024)
+	fileHash := sha256File(t, inPath)
+
+	sgctx := newTestContext(dbconn)
+
+	// Store the multi-chunk file
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse codec: %v", err)
+	}
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, codec)
+	if err != nil {
+		t.Fatalf("store multi-chunk file: %v", err)
+	}
+	fileID := result.FileID
+
+	// Verify file is marked COMPLETED
+	var status string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+		t.Fatalf("query logical_file status: %v", err)
+	}
+	if status != filestate.LogicalFileCompleted {
+		t.Fatalf("expected file status COMPLETED, got %s", status)
+	}
+
+	// Verify all file_chunk rows exist with contiguous chunk_order [0, 1, 2, ...]
+	var chunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&chunkCount); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if chunkCount < 2 {
+		t.Fatalf("expected at least 2 chunks in multi-chunk file, got %d", chunkCount)
+	}
+
+	// Verify chunk_order is contiguous starting from 0
+	var maxOrder int
+	if err := dbconn.QueryRow(`SELECT MAX(chunk_order) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&maxOrder); err != nil {
+		t.Fatalf("query max chunk_order: %v", err)
+	}
+	if maxOrder != chunkCount-1 {
+		t.Fatalf("expected chunk_order to be 0..%d, but max is %d", chunkCount-1, maxOrder)
+	}
+
+	var minOrder int
+	if err := dbconn.QueryRow(`SELECT MIN(chunk_order) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&minOrder); err != nil {
+		t.Fatalf("query min chunk_order: %v", err)
+	}
+	if minOrder != 0 {
+		t.Fatalf("expected min chunk_order to be 0, got %d", minOrder)
+	}
+
+	// Verify no gaps in chunk_order sequence
+	var gapCount int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM (
+			SELECT chunk_order FROM file_chunk WHERE logical_file_id = $1
+			EXCEPT
+			SELECT generate_series(0, $2)
+		) missing_orders
+	`, fileID, chunkCount-1).Scan(&gapCount); err != nil {
+		t.Fatalf("check for gaps in chunk_order: %v", err)
+	}
+	if gapCount != 0 {
+		t.Fatalf("expected no gaps in chunk_order sequence, found %d missing orders", gapCount)
+	}
+
+	// Verify file can be restored successfully
+	restoreDir := filepath.Join(tmp, "restore")
+	_ = os.MkdirAll(restoreDir, 0o755)
+	outPath := filepath.Join(restoreDir, "restored.bin")
+	restoreCtx := newTestContext(dbconn)
+
+	if err := storage.RestoreFileWithStorageContext(restoreCtx, fileID, outPath); err != nil {
+		t.Fatalf("restore multi-chunk file: %v", err)
+	}
+
+	restoredHash := sha256File(t, outPath)
+	if restoredHash != fileHash {
+		t.Fatalf("restored file hash mismatch: original %s, restored %s", fileHash, restoredHash)
+	}
+
+	// Re-store the same file and verify it's recognized as already stored
+	result2, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, codec)
+	if err != nil {
+		t.Fatalf("re-store multi-chunk file: %v", err)
+	}
+	if !result2.AlreadyStored {
+		t.Fatalf("expected re-store to recognize already stored file, got AlreadyStored=false")
+	}
+	if result2.FileID != fileID {
+		t.Fatalf("expected same file ID on re-store, original %d got %d", fileID, result2.FileID)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+}
+
+// TestStoreVerifiesFileChunkContiguityOnCompletion stores multiple files
+// of various sizes and explicitly verifies that each completed file has
+// perfectly contiguous chunk_order sequences, validating the atomic
+// finalization boundary verification logic.
+func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	sgctx := newTestContext(dbconn)
+
+	testCases := []struct {
+		name string
+		size int
+	}{
+		{"small", 256 * 1024},       // Single or small multi-chunk
+		{"medium", 2 * 1024 * 1024}, // Multi-chunk
+		{"large", 5 * 1024 * 1024},  // Multi-chunk
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			inPath := createTempFile(t, inputDir, "contiguity_"+tc.name+".bin", tc.size)
+
+			codec, err := blocks.ParseCodec("plain")
+			if err != nil {
+				t.Fatalf("parse codec: %v", err)
+			}
+			result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, codec)
+			if err != nil {
+				t.Fatalf("store file: %v", err)
+			}
+			fileID := result.FileID
+
+			// Query file_chunk rows and verify they form a perfect sequence [0, 1, 2, ...n-1]
+			rows, err := dbconn.Query(
+				`SELECT chunk_order FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`,
+				fileID,
+			)
+			if err != nil {
+				t.Fatalf("query file_chunk orders: %v", err)
+			}
+			defer rows.Close()
+
+			expectedOrder := 0
+			rowCount := 0
+			for rows.Next() {
+				var order int
+				if err := rows.Scan(&order); err != nil {
+					t.Fatalf("scan chunk_order: %v", err)
+				}
+
+				if order != expectedOrder {
+					t.Errorf("file %s: expected chunk_order %d, got %d (non-contiguous)", tc.name, expectedOrder, order)
+				}
+
+				expectedOrder++
+				rowCount++
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("file_chunk query error: %v", err)
+			}
+
+			if rowCount == 0 {
+				t.Errorf("file %s: found no file_chunk rows", tc.name)
+			}
+
+			// Verify file is COMPLETED
+			var status string
+			if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+				t.Fatalf("query file status: %v", err)
+			}
+			if status != filestate.LogicalFileCompleted {
+				t.Errorf("file %s: expected status COMPLETED, got %s", tc.name, status)
+			}
+		})
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+}
+
+// TestConcurrentStoreMultiChunkFilesAtomicCompletion concurrently stores
+// many large multi-chunk files and verifies that the atomic finalization
+// boundary works correctly under concurrent load. All files should complete
+// successfully with valid contiguous chunk_order sequences.
+func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Prepare 20 multi-chunk files (3-6MB each)
+	fileCount := 20
+	filePaths := make([]string, fileCount)
+	fileHashes := make([]string, fileCount)
+
+	for i := 0; i < fileCount; i++ {
+		size := 3*1024*1024 + int64(i)*512*1024 // 3MB to 12MB
+		filename := fmt.Sprintf("concurrent_multi_%d.bin", i)
+		path := createTempFile(t, inputDir, filename, int(size))
+		filePaths[i] = path
+		fileHashes[i] = sha256File(t, path)
+	}
+
+	// Store files concurrently using 5 worker goroutines
+	workerCount := 5
+	errChan := make(chan error, fileCount)
+	fileIDs := make(map[string]int64)
+	var fileIDsMutex sync.Mutex
+
+	for worker := 0; worker < workerCount; worker++ {
+		go func(workerID int) {
+			ctx := newTestContext(dbconn)
+			for i := workerID; i < fileCount; i += workerCount {
+				codec, err := blocks.ParseCodec("plain")
+				if err != nil {
+					errChan <- fmt.Errorf("parse codec: %w", err)
+					return
+				}
+				result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, filePaths[i], codec)
+				if err != nil {
+					errChan <- fmt.Errorf("worker %d file %d store: %w", workerID, i, err)
+					return
+				}
+				fileIDsMutex.Lock()
+				fileIDs[filePaths[i]] = result.FileID
+				fileIDsMutex.Unlock()
+				errChan <- nil
+			}
+		}(worker)
+	}
+
+	// Collect errors
+	for i := 0; i < fileCount; i++ {
+		if err := <-errChan; err != nil {
+			t.Fatalf("concurrent store error: %v", err)
+		}
+	}
+
+	// Verify all files stored successfully with valid chunk sequences
+	for i, path := range filePaths {
+		fileIDsMutex.Lock()
+		fileID, ok := fileIDs[path]
+		fileIDsMutex.Unlock()
+
+		if !ok {
+			t.Fatalf("file %d not found in completed fileIDs", i)
+		}
+
+		// Verify COMPLETED status
+		var status string
+		if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+			t.Fatalf("file %d status query: %v", i, err)
+		}
+		if status != filestate.LogicalFileCompleted {
+			t.Fatalf("file %d: expected status COMPLETED, got %s", i, status)
+		}
+
+		// Verify contiguous chunk_order
+		var chunkCount int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&chunkCount); err != nil {
+			t.Fatalf("file %d: count file_chunk rows: %v", i, err)
+		}
+
+		var maxOrder int
+		if err := dbconn.QueryRow(`SELECT MAX(chunk_order) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&maxOrder); err != nil {
+			t.Fatalf("file %d: query max chunk_order: %v", i, err)
+		}
+		if maxOrder != chunkCount-1 {
+			t.Fatalf("file %d: expected max chunk_order=%d, got %d", i, chunkCount-1, maxOrder)
+		}
+	}
+
+	// Verify all files can be restored
+	restoreDir := filepath.Join(tmp, "restore")
+	_ = os.MkdirAll(restoreDir, 0o755)
+
+	for i, path := range filePaths {
+		fileIDsMutex.Lock()
+		fileID := fileIDs[path]
+		fileIDsMutex.Unlock()
+
+		outPath := filepath.Join(restoreDir, fmt.Sprintf("restored_%d.bin", i))
+		ctx := newTestContext(dbconn)
+
+		if err := storage.RestoreFileWithStorageContext(ctx, fileID, outPath); err != nil {
+			t.Fatalf("restore file %d: %v", i, err)
+		}
+
+		restoredHash := sha256File(t, outPath)
+		if restoredHash != fileHashes[i] {
+			t.Fatalf("file %d: hash mismatch after restore", i)
+		}
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
 }
