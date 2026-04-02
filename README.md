@@ -560,11 +560,12 @@ coldkeep doctor --deep --output json
 ### Text output example
 
 ```text
-Doctor report
-  Recovery:       ok
-  Verify level:   full
-  Verify:         ok
-  Schema version: 5
+Doctor health report
+  Overall status:      ok
+  Verify level:        full
+  Phase 1 - Recovery:  ok
+  Phase 2 - Verify:    ok
+  Phase 3 - Schema:    ok (version=5)
   Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0
 ```
 

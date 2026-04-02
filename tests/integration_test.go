@@ -906,6 +906,21 @@ func TestDoctorCommand(t *testing.T) {
 	if res.exitCode != 0 {
 		t.Fatalf("doctor command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
 	}
+	if !strings.Contains(res.stdout, "Doctor health report") {
+		t.Fatalf("doctor text output missing heading\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "Overall status:") {
+		t.Fatalf("doctor text output missing overall status line\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "Phase 1 - Recovery:") {
+		t.Fatalf("doctor text output missing recovery phase line\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "Phase 2 - Verify:") {
+		t.Fatalf("doctor text output missing verify phase line\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "Phase 3 - Schema:") {
+		t.Fatalf("doctor text output missing schema phase line\nstdout:\n%s", res.stdout)
+	}
 
 	// Test doctor --standard explicitly
 	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--standard")
