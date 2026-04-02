@@ -1010,6 +1010,7 @@ func formatDoctorTextReport(report doctorReport) string {
 	if report.RecoveryStatus != "ok" || report.VerifyStatus != "ok" || report.SchemaStatus != "ok" {
 		overallStatus = "error"
 	}
+	recommendedNextStep := doctorRecommendedNextStep(report, overallStatus)
 
 	var b strings.Builder
 	b.WriteString("Doctor health report\n")
@@ -1029,8 +1030,21 @@ func formatDoctorTextReport(report doctorReport) string {
 		report.Recovery.QuarantinedCorruptTail,
 		report.Recovery.QuarantinedOrphan,
 	))
+	b.WriteString(fmt.Sprintf("  Recommended next step: %s\n", recommendedNextStep))
 
 	return b.String()
+}
+
+func doctorRecommendedNextStep(report doctorReport, overallStatus string) string {
+	if overallStatus != "ok" {
+		return "inspect stderr / verify output"
+	}
+
+	if report.VerifyLevel == verifyLevelToString(verify.VerifyStandard) {
+		return "run doctor --full"
+	}
+
+	return "none"
 }
 
 func parseDoctorVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
