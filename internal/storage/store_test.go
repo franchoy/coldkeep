@@ -23,8 +23,6 @@ import (
 
 type syncFailWriter struct {
 	offset      int64
-	syncErr     error
-	syncCalls   int
 	retireErr   error
 	retireCalls int
 	db          *sql.DB
@@ -53,14 +51,6 @@ func (w *syncFailWriter) AppendPayload(_ db.DBTX, payload []byte) (container.Loc
 		StoredSize:       int64(len(payload)),
 		NewContainerSize: container.ContainerHdrLen + w.offset,
 	}, nil
-}
-
-func (w *syncFailWriter) SyncActiveContainer() error {
-	w.syncCalls++
-	if w.syncErr != nil {
-		return w.syncErr
-	}
-	return nil
 }
 
 func (w *syncFailWriter) RetireActiveContainer() error {
@@ -430,7 +420,7 @@ func TestStoreFileDoesNotUseRedundantPreCommitSync(t *testing.T) {
 		t.Fatalf("write temp file: %v", err)
 	}
 
-	writer := &syncFailWriter{syncErr: errors.New("unused pre-commit sync hook"), db: dbconn}
+	writer := &syncFailWriter{db: dbconn}
 	sgctx := StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
@@ -445,9 +435,6 @@ func TestStoreFileDoesNotUseRedundantPreCommitSync(t *testing.T) {
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
 	if err != nil {
 		t.Fatalf("store with pre-commit sync hook present should succeed: %v", err)
-	}
-	if writer.syncCalls != 0 {
-		t.Fatalf("expected no pre-commit sync calls, got %d", writer.syncCalls)
 	}
 	if writer.retireCalls != 0 {
 		t.Fatalf("expected no container retirement on successful store, got %d", writer.retireCalls)

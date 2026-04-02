@@ -414,21 +414,6 @@ func (w *LocalWriter) RollbackLastAppend() error {
 	return nil
 }
 
-func (w *LocalWriter) SyncActiveContainer() error {
-	if !w.hasActive || w.activeHandle == nil {
-		return nil
-	}
-	if err := w.activeHandle.Sync(); err != nil {
-		containerID := w.activeID
-		retireErr := w.RetireActiveContainer()
-		if retireErr != nil {
-			return errors.Join(fmt.Errorf("sync container %d: %w", containerID, err), fmt.Errorf("retire active container %d after sync failure: %w", containerID, retireErr))
-		}
-		return fmt.Errorf("sync container %d: %w", containerID, err)
-	}
-	return nil
-}
-
 func (w *LocalWriter) ContainerCount() int {
 	return w.containers
 }
