@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
@@ -17,8 +16,7 @@ type SimulatedWriter struct {
 	currentFilename string
 	currentSize     int64
 
-	containers int
-	nextSeq    int64
+	nextSeq int64
 }
 
 func NewSimulatedWriter(maxSize int64) *SimulatedWriter {
@@ -29,11 +27,6 @@ func NewSimulatedWriter(maxSize int64) *SimulatedWriter {
 	return &SimulatedWriter{
 		maxSize: maxSize,
 	}
-}
-
-func (w *SimulatedWriter) WriteChunk(c chunk.Info) error {
-	_ = c
-	return nil
 }
 
 func (w *SimulatedWriter) FinalizeContainer() error {
@@ -73,13 +66,6 @@ func (w *SimulatedWriter) RollbackLastAppend() error {
 // Canonical lifecycle contract: internal/storage/store.go
 // (Append lifecycle state machine).
 func (w *SimulatedWriter) AcknowledgeAppendCommitted() {}
-
-func (w *SimulatedWriter) ContainerCount() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	return w.containers
-}
 
 func (w *SimulatedWriter) MaxSize() int64 {
 	w.mu.Lock()
@@ -176,7 +162,6 @@ func (w *SimulatedWriter) ensureActive(tx db.DBTX) error {
 	w.currentID = id
 	w.currentFilename = filename
 	w.currentSize = ContainerHdrLen
-	w.containers++
 
 	return nil
 }

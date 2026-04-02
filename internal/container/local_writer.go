@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/lib/pq"
 )
@@ -40,10 +39,8 @@ type LocalPlacement struct {
 }
 
 type LocalWriter struct {
-	containers      int
-	lastContainerID int64
-	dir             string
-	maxSize         int64
+	dir     string
+	maxSize int64
 
 	// dbconn is used to commit a durable sealing marker before physical
 	// finalization (rotation and full-container paths). May be nil in tests
@@ -97,12 +94,6 @@ func NewLocalWriterWithDirAndDB(dir string, maxSize int64, dbconn *sql.DB) *Loca
 		maxSize: maxSize,
 		dbconn:  dbconn,
 	}
-}
-
-func (w *LocalWriter) WriteChunk(c chunk.Info) error {
-	_ = c
-	return fmt.Errorf("WriteChunk(chunk.Info) is not supported by LocalWriter; use AppendPayload(tx, payload) instead")
-
 }
 
 // AppendPayload appends already-encoded payload bytes to the active local container.
@@ -293,10 +284,6 @@ func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 	if w.activeSize < ContainerHdrLen {
 		w.activeSize = ContainerHdrLen
 	}
-	if w.activeID != w.lastContainerID {
-		w.containers++
-		w.lastContainerID = w.activeID
-	}
 
 	return nil
 
@@ -415,11 +402,6 @@ func (w *LocalWriter) RollbackLastAppend() error {
 	// one AppendPayload call), there is nothing reliable to truncate.
 	return nil
 }
-
-func (w *LocalWriter) ContainerCount() int {
-	return w.containers
-}
-
 func (w *LocalWriter) BindDB(dbconn *sql.DB) {
 	if dbconn == nil {
 		return

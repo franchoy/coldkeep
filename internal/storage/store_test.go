@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -28,17 +27,8 @@ type syncFailWriter struct {
 	db          *sql.DB
 }
 
-func (w *syncFailWriter) WriteChunk(c chunk.Info) error {
-	_ = c
-	return nil
-}
-
 func (w *syncFailWriter) FinalizeContainer() error {
 	return nil
-}
-
-func (w *syncFailWriter) ContainerCount() int {
-	return 1
 }
 
 func (w *syncFailWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {
@@ -79,17 +69,8 @@ type rollbackCleanupFailureWriter struct {
 	db              *sql.DB
 }
 
-func (w *commitAckWriter) WriteChunk(c chunk.Info) error {
-	_ = c
-	return nil
-}
-
 func (w *commitAckWriter) FinalizeContainer() error {
 	return nil
-}
-
-func (w *commitAckWriter) ContainerCount() int {
-	return 1
 }
 
 func (w *commitAckWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {
@@ -110,17 +91,8 @@ func (w *commitAckWriter) AcknowledgeAppendCommitted() {
 	w.pendingClear = true
 }
 
-func (w *rollbackCleanupFailureWriter) WriteChunk(c chunk.Info) error {
-	_ = c
-	return nil
-}
-
 func (w *rollbackCleanupFailureWriter) FinalizeContainer() error {
 	return nil
-}
-
-func (w *rollbackCleanupFailureWriter) ContainerCount() int {
-	return 1
 }
 
 func (w *rollbackCleanupFailureWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {

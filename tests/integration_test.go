@@ -606,16 +606,8 @@ func newRollbackFailingWriter(base *container.LocalWriter) *rollbackFailingWrite
 	}
 }
 
-func (w *rollbackFailingWriter) WriteChunk(c chunk.Info) error {
-	return w.base.WriteChunk(c)
-}
-
 func (w *rollbackFailingWriter) FinalizeContainer() error {
 	return w.base.FinalizeContainer()
-}
-
-func (w *rollbackFailingWriter) ContainerCount() int {
-	return w.base.ContainerCount()
 }
 
 func (w *rollbackFailingWriter) BindDB(dbconn *sql.DB) {
