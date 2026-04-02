@@ -143,7 +143,7 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	}
 
 	// Lock the container row that will actually receive the append payload.
-	if err := lockContainerRowNowaitWithRetry(tx, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
+	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
 		return LocalPlacement{}, err
 	}
 
@@ -213,9 +213,16 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 
 }
 
-func lockContainerRowNowaitWithRetry(tx db.DBTX, containerID int64, attempts int, baseWait time.Duration) error {
+func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int64, attempts int, baseWait time.Duration) error {
+	lockQuery := "SELECT id FROM container WHERE id = $1"
+	if dbconn != nil {
+		lockQuery = db.QueryWithOptionalForUpdateNowait(dbconn, lockQuery)
+	} else {
+		lockQuery += " FOR UPDATE NOWAIT"
+	}
+
 	for attempt := 0; attempt < attempts; attempt++ {
-		_, err := tx.Exec(`SELECT id FROM container WHERE id = $1 FOR UPDATE NOWAIT`, containerID)
+		_, err := tx.Exec(lockQuery, containerID)
 		if err == nil {
 			return nil
 		}

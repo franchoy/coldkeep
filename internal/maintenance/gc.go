@@ -116,12 +116,12 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			// Lock the container row first so status/metadata used for deletion is stable.
 			var isSealed bool
 			var isQuarantined bool
-			err = tx.QueryRowContext(ctx, `
+			containerLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
 				SELECT COALESCE(sealed, false), COALESCE(quarantine, false)
 				FROM container
 				WHERE id = $1
-				FOR UPDATE
-			`, containerID).Scan(&isSealed, &isQuarantined)
+			`)
+			err = tx.QueryRowContext(ctx, containerLockQuery, containerID).Scan(&isSealed, &isQuarantined)
 			if err == sql.ErrNoRows {
 				_ = tx.Rollback()
 				continue
@@ -136,18 +136,21 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			}
 
 			// Lock all chunk rows referenced by this container, then evaluate emptiness.
-			err = tx.QueryRowContext(ctx, `
+			chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
+				SELECT ch.live_ref_count, ch.pin_count
+				FROM blocks b
+				JOIN chunk ch ON ch.id = b.chunk_id
+				WHERE b.container_id = $1
+			`)
+			emptyContainerQuery := fmt.Sprintf(`
 				WITH locked_chunks AS (
-					SELECT ch.live_ref_count, ch.pin_count
-					FROM blocks b
-					JOIN chunk ch ON ch.id = b.chunk_id
-					WHERE b.container_id = $1
-					FOR UPDATE
+					%s
 				)
 				SELECT NOT EXISTS (
 					SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
 				)
-			`, containerID).Scan(&stillEmpty)
+			`, chunkLockQuery)
+			err = tx.QueryRowContext(ctx, emptyContainerQuery, containerID).Scan(&stillEmpty)
 			if err != nil {
 				_ = tx.Rollback()
 				return GCResult{}, err

@@ -53,3 +53,47 @@ func TestQueryWithOptionalForUpdateNil(t *testing.T) {
 		t.Fatalf("expected nil-db query %q, got %q", query, got)
 	}
 }
+
+func TestQueryWithOptionalForUpdateSkipLockedSQLite(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	const query = "SELECT id FROM container WHERE sealed = FALSE"
+	got := QueryWithOptionalForUpdateSkipLocked(dbconn, query)
+	if got != query {
+		t.Fatalf("expected sqlite query %q, got %q", query, got)
+	}
+}
+
+func TestQueryWithOptionalForUpdateNowaitSQLite(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	const query = "SELECT id FROM container WHERE id = $1"
+	got := QueryWithOptionalForUpdateNowait(dbconn, query)
+	if got != query {
+		t.Fatalf("expected sqlite query %q, got %q", query, got)
+	}
+}
+
+func TestQueryWithOptionalForUpdateSkipLockedNil(t *testing.T) {
+	const query = "SELECT id FROM container WHERE sealed = FALSE"
+	got := QueryWithOptionalForUpdateSkipLocked(nil, query)
+	if got != query {
+		t.Fatalf("expected nil-db query %q, got %q", query, got)
+	}
+}
+
+func TestQueryWithOptionalForUpdateNowaitNil(t *testing.T) {
+	const query = "SELECT id FROM container WHERE id = $1"
+	got := QueryWithOptionalForUpdateNowait(nil, query)
+	if got != query {
+		t.Fatalf("expected nil-db query %q, got %q", query, got)
+	}
+}

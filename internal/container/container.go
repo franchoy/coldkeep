@@ -217,7 +217,7 @@ func newContainerFilename() string {
 	return fmt.Sprintf("container_%d_%s.bin", time.Now().UnixNano(), hex.EncodeToString(rnd[:]))
 }
 
-func getOrCreateOpenContainerInDirExcluding(db db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64) (ActiveContainer, error) {
+func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containersDir string, excludeID int64) (ActiveContainer, error) {
 	containersDir = containersDirOrDefault(containersDir)
 
 	var id int64
@@ -229,23 +229,33 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, dbconn *sql.DB, containe
 	// the caller seals it in the same transaction.
 	var err error
 	if excludeID > 0 {
-		err = db.QueryRow(`
+		query := `
 			SELECT id, filename, max_size
 			FROM container
 			WHERE sealed = FALSE AND sealing = FALSE AND quarantine = FALSE AND id <> $1
 			ORDER BY id
 			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		`, excludeID).Scan(&id, &filename, &maxSize)
+		`
+		if dbconn != nil {
+			query = db.QueryWithOptionalForUpdateSkipLocked(dbconn, query)
+		} else {
+			query += " FOR UPDATE SKIP LOCKED"
+		}
+		err = tx.QueryRow(query, excludeID).Scan(&id, &filename, &maxSize)
 	} else {
-		err = db.QueryRow(`
+		query := `
 			SELECT id, filename, max_size
 			FROM container
 			WHERE sealed = FALSE AND sealing = FALSE AND quarantine = FALSE
 			ORDER BY id
 			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		`).Scan(&id, &filename, &maxSize)
+		`
+		if dbconn != nil {
+			query = db.QueryWithOptionalForUpdateSkipLocked(dbconn, query)
+		} else {
+			query += " FOR UPDATE SKIP LOCKED"
+		}
+		err = tx.QueryRow(query).Scan(&id, &filename, &maxSize)
 	}
 	if err == nil {
 		// Found existing open container
@@ -273,7 +283,7 @@ func getOrCreateOpenContainerInDirExcluding(db db.DBTX, dbconn *sql.DB, containe
 	filename = newContainerFilename()
 
 	// Insert DB row with current_size initialized to header size
-	err = db.QueryRow(`
+	err = tx.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed)
 		VALUES ($1, $2, $3, FALSE)
 		RETURNING id
