@@ -727,6 +727,140 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 
 	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
 		"gc", "--dry-run", "--output", "json"), "gc")
+
+	// Doctor command: operator-facing health check
+	doctor := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+	if _, ok := doctor["recovery_status"]; !ok {
+		t.Fatalf("doctor JSON missing recovery_status: payload=%v", doctor)
+	}
+	if _, ok := doctor["verify_status"]; !ok {
+		t.Fatalf("doctor JSON missing verify_status: payload=%v", doctor)
+	}
+	if _, ok := doctor["schema_status"]; !ok {
+		t.Fatalf("doctor JSON missing schema_status: payload=%v", doctor)
+	}
+
+	// Doctor with --full flag
+	doctorFull := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--full", "--output", "json"), "doctor")
+	if _, ok := doctorFull["recovery_status"]; !ok {
+		t.Fatalf("doctor --full JSON missing recovery_status: payload=%v", doctorFull)
+	}
+}
+
+func TestDoctorCommand(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	// Store some files first so doctor has something to report on
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_test.bin", 512*1024)
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	// Test doctor default (--standard level)
+	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	// Test doctor --standard explicitly
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--standard")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor --standard failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	// Test doctor --full
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor --full failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	// Test doctor with JSON output and validate all required status fields
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	doctorJSON, ok := tryParseLastJSONLine(res.stdout)
+	if !ok {
+		// Fallback: check stderr if stdout parsing fails
+		doctorJSON, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
+	}
+	if !ok {
+		t.Fatalf("doctor --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+
+	if status, _ := doctorJSON["status"].(string); status != "ok" {
+		t.Fatalf("doctor did not return status=ok: payload=%v", doctorJSON)
+	}
+
+	recoveryStatus, ok := doctorJSON["recovery_status"].(string)
+	if !ok || recoveryStatus == "" {
+		t.Fatalf("doctor JSON missing or invalid recovery_status: payload=%v", doctorJSON)
+	}
+
+	verifyStatus, ok := doctorJSON["verify_status"].(string)
+	if !ok || verifyStatus == "" {
+		t.Fatalf("doctor JSON missing or invalid verify_status: payload=%v", doctorJSON)
+	}
+
+	schemaStatus, ok := doctorJSON["schema_status"].(string)
+	if !ok || schemaStatus == "" {
+		t.Fatalf("doctor JSON missing or invalid schema_status: payload=%v", doctorJSON)
+	}
+
+	// Test doctor --full --output json
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor --full --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	doctorFullJSON, ok := tryParseLastJSONLine(res.stdout)
+	if !ok {
+		doctorFullJSON, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
+	}
+	if !ok {
+		t.Fatalf("doctor --full --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+
+	if status, _ := doctorFullJSON["status"].(string); status != "ok" {
+		t.Fatalf("doctor --full did not return status=ok: payload=%v", doctorFullJSON)
+	}
+
+	// Verify all status fields are present in full output
+	if _, ok := doctorFullJSON["recovery_status"]; !ok {
+		t.Fatalf("doctor --full JSON missing recovery_status: payload=%v", doctorFullJSON)
+	}
+	if _, ok := doctorFullJSON["verify_status"]; !ok {
+		t.Fatalf("doctor --full JSON missing verify_status: payload=%v", doctorFullJSON)
+	}
+	if _, ok := doctorFullJSON["schema_status"]; !ok {
+		t.Fatalf("doctor --full JSON missing schema_status: payload=%v", doctorFullJSON)
+	}
+
+	t.Logf("doctor command test passed: recovery=%q verify=%q schema=%q", recoveryStatus, verifyStatus, schemaStatus)
 }
 
 func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
