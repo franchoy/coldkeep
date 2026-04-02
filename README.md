@@ -59,6 +59,7 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Recover from interrupted operations on startup.
 - Provide storage statistics and container health information.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
+- Run a doctor self-check command that bundles recovery, verification, and schema sanity checks.
 - Simulate storage operations without writing data to disk (v0.8).
 - Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
 
@@ -319,6 +320,7 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
   - `suspicious` (default): validates deeply only when risk signals exist.
   - `always`: strongest inline validation, highest IO/CPU cost.
 - `pin_count` protects restore safety by preventing GC/remove from reclaiming data while restore pins are active.
+- Use `coldkeep doctor` as the recommended one-shot health check wrapper (`recovery + verify + schema/version sanity`).
 
 ---
 
@@ -509,6 +511,69 @@ docker compose run --rm \
 ```
 
 > Simulation does not write any data and can be safely used before storing files.
+
+---
+
+## Doctor (recommended health check)
+
+`coldkeep doctor` is a one-shot operational health check for newcomers and operators.
+It runs the checks in this order:
+
+1. Startup recovery report
+2. System verification (`standard` by default, or `full` / `deep`)
+3. Schema/version sanity query
+
+### Usage
+
+```bash
+coldkeep doctor
+coldkeep doctor --full
+coldkeep doctor --deep --output json
+```
+
+### Text output example
+
+```text
+Doctor report
+  Recovery:       ok
+  Verify level:   full
+  Verify:         ok
+  Schema version: 5
+  Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0
+```
+
+### JSON output example
+
+```json
+{
+  "status": "ok",
+  "command": "doctor",
+  "data": {
+    "recovery": {
+      "aborted_logical_files": 0,
+      "aborted_chunks": 0,
+      "quarantined_missing_containers": 0,
+      "quarantined_corrupt_tail_containers": 0,
+      "quarantined_orphan_containers": 0,
+      "checked_container_records": 12,
+      "checked_disk_files": 12,
+      "skipped_dir_entries": 0
+    },
+    "verify_level": "standard",
+    "schema_version": 5,
+    "recovery_status": "ok",
+    "verify_status": "ok",
+    "schema_status": "ok"
+  }
+}
+```
+
+### Operational guidance
+
+- Run `doctor` after startup, before first ingestion in a new environment.
+- Prefer `doctor --standard` for frequent checks.
+- Use `doctor --full` for stronger structural assurance.
+- Reserve `doctor --deep` for periodic audits due to higher I/O cost.
 
 ---
 
