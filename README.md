@@ -115,6 +115,12 @@ coldkeep guarantees **safe recovery after crashes or interruptions**:
 
 > No partially written or inconsistent data is exposed as valid.
 
+### Contributor note (append lifecycle contract)
+
+For storage-writer lifecycle semantics, use the single authoritative state machine in
+[`internal/storage/store.go`](internal/storage/store.go) (see "Append lifecycle state machine").
+Implementation comments in writer files are intentionally brief pointers to that source of truth.
+
 ---
 
 ### Restore safety

@@ -134,6 +134,13 @@ When modifying storage logic:
 -   Do not introduce non-deterministic container writes
 -   Preserve chunk ordering guarantees
 
+Canonical append lifecycle contract:
+
+-   Use the state machine comment in
+    [`internal/storage/store.go`](internal/storage/store.go) ("Append lifecycle state machine")
+    as the single source of truth for append/rollback/commit-ack/failure handling.
+    Writer implementation comments should remain pointers to this contract.
+
 If unsure, open a discussion before implementing changes.
 
 ------------------------------------------------------------------------
