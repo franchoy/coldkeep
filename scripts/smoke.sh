@@ -347,11 +347,28 @@ else
   echo "[smoke] restore-all (edge cases) PASSED: all stored files restore byte-perfectly"
 
   echo "[smoke] search edge cases (pattern.txt)"
-  SEARCH_OUTPUT=$(coldkeep search --name pattern --output json)
-  echo "$SEARCH_OUTPUT"
-  if ! echo "$SEARCH_OUTPUT" | jq -e '(.files | length) > 0' > /dev/null 2>&1; then
-    echo "[smoke] WARNING: search --name pattern did not match expected files (might be deduplicated)"
+  SEARCH_OUTPUT=$(coldkeep search --name pattern --output json 2>/dev/null | grep '^\{' | tail -n1)
+  SEARCH_STATUS=$(echo "$SEARCH_OUTPUT"       | jq -r '.status // empty')
+  SEARCH_CMD=$(echo "$SEARCH_OUTPUT"          | jq -r '.command // empty')
+  SEARCH_COUNT=$(echo "$SEARCH_OUTPUT"        | jq -r '.files | length')
+  SEARCH_MATCH=$(echo "$SEARCH_OUTPUT"        | jq -r '[.files[].name | select(test("pattern"; "i"))] | length')
+  if [[ "$SEARCH_STATUS" != "ok" ]]; then
+    echo "[smoke] FAIL: search --name pattern returned status='$SEARCH_STATUS' (expected 'ok')"
+    exit 1
   fi
+  if [[ "$SEARCH_CMD" != "search" ]]; then
+    echo "[smoke] FAIL: search --name pattern returned command='$SEARCH_CMD' (expected 'search')"
+    exit 1
+  fi
+  if [[ "$SEARCH_COUNT" -eq 0 ]]; then
+    echo "[smoke] FAIL: search --name pattern returned 0 files (expected at least pattern.txt)"
+    exit 1
+  fi
+  if [[ "$SEARCH_MATCH" -eq 0 ]]; then
+    echo "[smoke] FAIL: search --name pattern returned $SEARCH_COUNT files but none match 'pattern'"
+    exit 1
+  fi
+  echo "[smoke]   ok: search --name pattern found $SEARCH_COUNT file(s), $SEARCH_MATCH match 'pattern'"
 
   echo "[smoke] remove edge case test"
   if [[ -n "${FIRST_EDGE_ID}" ]]; then
