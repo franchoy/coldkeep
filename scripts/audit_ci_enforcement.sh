@@ -90,6 +90,8 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step'
+  require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only'
+  require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v4' 'smoke artifact upload action'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/\.\.\.' 'integration stress race run'
   require_pattern "$WORKFLOW_FILE" 'QUALITY_RESULT.*!= "success"' 'required gate rejects skipped quality job'
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_CORRECTNESS_RESULT.*!= "success"' 'required gate rejects skipped integration correctness'
@@ -112,6 +114,33 @@ require_gh() {
   fi
 }
 
+require_gh_auth() {
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "[audit] ERROR: gh CLI is installed but not authenticated" >&2
+    echo "[audit]        Authenticate first with:" >&2
+    echo "[audit]          gh auth login" >&2
+    if [[ "${EUID:-$(id -u)}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+      echo "[audit]        Note: running under sudo uses root's GitHub auth context, not ${SUDO_USER}'s." >&2
+      echo "[audit]              Prefer running the remote audit without sudo." >&2
+    fi
+    exit 2
+  fi
+}
+
+gh_api() {
+  local endpoint="$1"
+  local output
+
+  if ! output=$(gh api "$endpoint" 2>&1); then
+    echo "[audit] ERROR: GitHub API request failed for: $endpoint" >&2
+    echo "[audit]        Verify repository access and GitHub auth/token scopes." >&2
+    echo "$output" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$output"
+}
+
 resolve_repo() {
   if [[ -n "$REPO" ]]; then
     return
@@ -126,6 +155,7 @@ resolve_repo() {
 
 check_remote_policy() {
   require_gh
+  require_gh_auth
   resolve_repo
 
   if ! command -v jq >/dev/null 2>&1; then
@@ -138,7 +168,7 @@ check_remote_policy() {
   echo "[audit] checking remote protection policy for $REPO"
 
   local rulesets_json
-  rulesets_json=$(gh api "repos/$REPO/rulesets")
+  rulesets_json=$(gh_api "repos/$REPO/rulesets") || return 1
 
   if [[ "$rulesets_json" == "[]" ]]; then
     echo "[audit] ERROR: no repository rulesets found" >&2
@@ -156,7 +186,7 @@ check_remote_policy() {
   echo "[audit] ok: ruleset 'Protect mainline branches' exists (id=${mainline_id})"
 
   local mainline_detail
-  mainline_detail=$(gh api "repos/$REPO/rulesets/${mainline_id}")
+  mainline_detail=$(gh_api "repos/$REPO/rulesets/${mainline_id}") || return 1
 
   local mainline_enforcement
   mainline_enforcement=$(echo "$mainline_detail" | jq -r '.enforcement // "disabled"')
@@ -205,7 +235,7 @@ check_remote_policy() {
   echo "[audit] ok: ruleset 'Protect release tags' exists (id=${tags_id})"
 
   local tags_detail
-  tags_detail=$(gh api "repos/$REPO/rulesets/${tags_id}")
+  tags_detail=$(gh_api "repos/$REPO/rulesets/${tags_id}") || return 1
 
   local tags_enforcement
   tags_enforcement=$(echo "$tags_detail" | jq -r '.enforcement // "disabled"')
