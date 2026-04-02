@@ -660,23 +660,74 @@ fi
 
 echo ""
 echo "[smoke] === CODEC VARIANT TEST ==="
-# If not already in a specific codec mode, test both plain and aesgcm
 CURRENT_CODEC="${COLDKEEP_CODEC:-plain}"
-if [[ "$CURRENT_CODEC" == "plain" ]]; then
-  echo "[smoke] testing aesgcm codec variant"
-  reset_smoke_state
-  
-  if COLDKEEP_CODEC=aesgcm coldkeep store-folder "$COLDKEEP_SAMPLES_DIR" > /dev/null 2>&1; then
-    echo "[smoke]   ok: aesgcm store-folder succeeded"
-    
-    if COLDKEEP_CODEC=aesgcm coldkeep verify system --full > /dev/null 2>&1; then
-      echo "[smoke]   ok: aesgcm verify passed"
-    else
-      echo "[smoke] WARNING: aesgcm verify failed (may indicate codec setup issue)"
-    fi
-  else
-    echo "[smoke] NOTE: aesgcm test skipped (codec may not be configured)"
+if [[ "$CURRENT_CODEC" == "plain" ]] && [[ -n "${COLDKEEP_KEY:-}" ]]; then
+  echo "[smoke] testing aes-gcm codec variant (COLDKEEP_KEY is set)"
+
+  AES_RESTORE_DIR="./_smoke_aes_restore"
+  rm -rf "$AES_RESTORE_DIR"
+  mkdir -p "$AES_RESTORE_DIR"
+
+  # Store a known file with aes-gcm; already-stored is fine — we still get status+file_id
+  aes_store_out=$(COLDKEEP_CODEC=aes-gcm coldkeep store samples/hello.txt --output json 2>/dev/null | grep '^\{' | tail -n1)
+  aes_store_status=$(echo "$aes_store_out" | jq -r '.status // empty')
+  aes_store_cmd=$(echo "$aes_store_out"   | jq -r '.command // empty')
+  aes_file_id=$(echo "$aes_store_out"     | jq -r '.data.file_id // empty')
+
+  if [[ "$aes_store_status" != "ok" ]]; then
+    echo "[smoke] FAIL: aes-gcm store returned status='$aes_store_status' (expected 'ok')"
+    exit 1
   fi
+  if [[ "$aes_store_cmd" != "store" ]]; then
+    echo "[smoke] FAIL: aes-gcm store returned command='$aes_store_cmd' (expected 'store')"
+    exit 1
+  fi
+  if [[ -z "$aes_file_id" ]] || [[ "$aes_file_id" == "null" ]]; then
+    echo "[smoke] FAIL: aes-gcm store did not return a valid file_id"
+    exit 1
+  fi
+  echo "[smoke]   ok: aes-gcm store succeeded (file_id=$aes_file_id)"
+
+  # Verify the full system with aes-gcm
+  aes_verify_out=$(COLDKEEP_CODEC=aes-gcm coldkeep verify system --full --output json 2>/dev/null | grep '^\{' | tail -n1)
+  aes_verify_status=$(echo "$aes_verify_out" | jq -r '.status // empty')
+  aes_verify_cmd=$(echo "$aes_verify_out"    | jq -r '.command // empty')
+  aes_verify_level=$(echo "$aes_verify_out"  | jq -r '.level // empty')
+
+  if [[ "$aes_verify_status" != "ok" ]]; then
+    echo "[smoke] FAIL: aes-gcm verify returned status='$aes_verify_status' (expected 'ok')"
+    exit 1
+  fi
+  if [[ "$aes_verify_cmd" != "verify" ]]; then
+    echo "[smoke] FAIL: aes-gcm verify returned command='$aes_verify_cmd' (expected 'verify')"
+    exit 1
+  fi
+  if [[ "$aes_verify_level" != "full" ]]; then
+    echo "[smoke] FAIL: aes-gcm verify returned level='$aes_verify_level' (expected 'full')"
+    exit 1
+  fi
+  echo "[smoke]   ok: aes-gcm verify system --full passed"
+
+  # Restore with aes-gcm and assert the restored_hash matches the original file
+  aes_restore_out=$(COLDKEEP_CODEC=aes-gcm coldkeep restore "$aes_file_id" "$AES_RESTORE_DIR/" --output json 2>/dev/null | grep '^\{' | tail -n1)
+  aes_restore_status=$(echo "$aes_restore_out" | jq -r '.status // empty')
+  aes_restore_hash=$(echo "$aes_restore_out"   | jq -r '.data.restored_hash // empty')
+  expected_hello_hash=$(sha256sum samples/hello.txt | awk '{print $1}')
+
+  if [[ "$aes_restore_status" != "ok" ]]; then
+    echo "[smoke] FAIL: aes-gcm restore returned status='$aes_restore_status' (expected 'ok')"
+    exit 1
+  fi
+  if [[ "$aes_restore_hash" != "$expected_hello_hash" ]]; then
+    echo "[smoke] FAIL: aes-gcm restore hash mismatch: got '$aes_restore_hash', expected '$expected_hello_hash'"
+    exit 1
+  fi
+  echo "[smoke]   ok: aes-gcm restore hash matches original (${aes_restore_hash:0:16}…)"
+
+  rm -rf "$AES_RESTORE_DIR"
+  echo "[smoke] codec variant test PASSED (aes-gcm store/verify/restore round-trip)"
+else
+  echo "[smoke] codec variant test skipped (COLDKEEP_CODEC is not plain, or COLDKEEP_KEY is not set)"
 fi
 
 echo "[smoke] done"
