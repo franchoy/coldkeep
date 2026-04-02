@@ -35,14 +35,14 @@ type payloadStatefulWriter interface {
 //     append outcome that MUST be resolved before returning to the caller.
 //
 // Terminal resolution (exactly one path per successful append):
-//   - Commit path:
+//   - Commit acknowledgment path:
 //     If tx.Commit() succeeds, caller MUST invoke AcknowledgeAppendCommitted()
 //     exactly once when supported.
 //   - Rollback path:
 //     If tx is rolled back, or any error happens before tx.Commit() succeeds,
 //     caller MUST invoke RollbackLastAppend() when supported.
 //
-// Failure escalation rules:
+// Retirement/quarantine on failed cleanup:
 //   - If RollbackLastAppend() fails, caller MUST retire/quarantine the active
 //     container before any further writes.
 //   - If physical finalize/sync fails, caller MUST retire/quarantine the active
@@ -66,9 +66,9 @@ type optionalAppendRollbacker interface {
 
 // optionalAppendCommitAcknowledger is implemented by writers that maintain rollback
 // state after a physical append. Calling AcknowledgeAppendCommitted after a
-// successful tx.Commit() closes the commit path of the state machine, ensuring
-// that already-committed bytes can never be accidentally truncated by a subsequent
-// RollbackLastAppend call.
+// successful tx.Commit() closes the commit acknowledgment path of the state
+// machine, ensuring that already-committed bytes can never be accidentally
+// truncated by a subsequent RollbackLastAppend call.
 type optionalAppendCommitAcknowledger interface {
 	AcknowledgeAppendCommitted()
 }
@@ -82,7 +82,7 @@ type optionalWriterDBBinder interface {
 }
 
 // rollbackWriterLastAppend calls RollbackLastAppend on the writer if it supports it.
-// Safe to call unconditionally on any error path; if no physical write is pending the
+// Safe to call on any rollback path; if no unresolved append is pending the
 // implementation returns immediately without truncating.
 // Returns any error from the rollback operation; callers must handle rollback failures
 // as they indicate physical/logical inconsistency and must trigger container retirement.
@@ -95,7 +95,7 @@ func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
 
 // acknowledgeWriterAppendCommitted calls AcknowledgeAppendCommitted on the writer
 // if it supports it. Must be called immediately after every successful tx.Commit()
-// that followed an AppendPayload call, completing the commit path of the writer
+// that followed an AppendPayload call, completing the commit acknowledgment path of the writer
 // state machine so pending rollback bookkeeping is cleared before function return.
 // This call is expected exactly once per successful append transaction.
 func acknowledgeWriterAppendCommitted(writer payloadStatefulWriter) {

@@ -60,16 +60,16 @@ func (w *SimulatedWriter) RetireActiveContainer() error {
 	return nil
 }
 
-// RollbackLastAppend is a no-op for SimulatedWriter: no physical bytes are written,
-// so there is nothing to truncate on a transaction rollback.
+// RollbackLastAppend is a no-op for SimulatedWriter: no physical bytes are
+// written, so rollback path cleanup has nothing to truncate.
 // Canonical lifecycle contract: internal/storage/store.go
 // (Append lifecycle state machine).
 func (w *SimulatedWriter) RollbackLastAppend() error {
 	return nil
 }
 
-// AcknowledgeAppendCommitted is a no-op for SimulatedWriter: there is no physical
-// rollback state to clear after a successful DB commit.
+// AcknowledgeAppendCommitted is a no-op for SimulatedWriter: there is no
+// physical rollback state to clear on the commit acknowledgment path.
 // Canonical lifecycle contract: internal/storage/store.go
 // (Append lifecycle state machine).
 func (w *SimulatedWriter) AcknowledgeAppendCommitted() {}

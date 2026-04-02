@@ -589,7 +589,8 @@ func isRetryableTxAbortError(err error) bool {
 }
 
 // rollbackFailingWriter wraps LocalWriter and deterministically fails rollback
-// cleanup so tests can assert error surfacing + container retirement behavior.
+// path cleanup so tests can assert error surfacing plus retirement/quarantine
+// behavior on failed cleanup.
 type rollbackFailingWriter struct {
 	base            *container.LocalWriter
 	forcedErr       error
@@ -5992,9 +5993,10 @@ func TestSamplesEdgeCasesFolderRestoreAll(t *testing.T) {
 	runFixtureFolderRestoreAll(t, "samples_edge_cases")
 }
 
-// TestRollbackAfterAppendContamination simulates a scenario where payload append to
-// the active container succeeds and is fsynced, but the subsequent block insert or
-// DB commit fails. After restart, recovery should quarantine or truncate the
+// TestRollbackAfterAppendContamination simulates an unresolved append outcome:
+// payload append to the active container succeeds and is fsynced, but the
+// transaction never reaches the commit acknowledgment path because block insert
+// or DB commit fails. After restart, recovery should quarantine or truncate the
 // contaminated active container to prevent future stores from reusing it.
 func TestRollbackAfterAppendContamination(t *testing.T) {
 	requireDB(t)
@@ -6044,7 +6046,8 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 		t.Fatalf("query initial active container: %v", err)
 	}
 
-	// Now simulate append-then-commit-failure by:
+	// Now simulate an unresolved append that fails before the commit
+	// acknowledgment path by:
 	// 1. Creating a new logical file in PROCESSING state
 	// 2. Adding a chunk in PROCESSING state
 	// 3. Manually writing bytes to the active container file (simulating successful append+fsync)
@@ -6073,7 +6076,8 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 	}
 
 	// Update container current_size in DB to reflect the append, but leave it unsealed
-	// This simulates: fsync succeeded, but block INSERT or commit failed
+	// This simulates: fsync succeeded, but the append never reached commit
+	// acknowledgment path because block INSERT or commit failed.
 	newSize := activeCurrentSize + int64(len(ghostBytes))
 	_, err = dbconn.Exec(`
 		UPDATE container SET current_size = $1 WHERE id = $2
@@ -6090,7 +6094,8 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 		t.Fatalf("system recovery: %v", err)
 	}
 
-	// Should have quarantined or truncated the contaminated container
+	// Retirement/quarantine policy: contaminated unresolved append bytes should be
+	// quarantined or truncated.
 	// Check that the container is either truncated or quarantined
 	var isQuarantined bool
 	var dbCurrentSize int64
@@ -6101,7 +6106,8 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 		t.Fatalf("query container state after recovery: %v", err)
 	}
 
-	// Container should either be quarantined OR the file should be truncated to remove ghost bytes
+	// Container should either be quarantined OR the file should be truncated to
+	// remove unresolved append ghost bytes.
 	stat, err := os.Stat(contaminatedPath)
 	if err != nil {
 		t.Fatalf("stat container file: %v", err)
@@ -6177,8 +6183,8 @@ func TestStoreSurfacesRollbackCleanupFailureAndRetiresActiveContainer(t *testing
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	// Seed one successful store so we have a committed active container row
-	// that can be explicitly quarantined on rollback-cleanup failure.
+	// Seed one successful store so we have a committed active container row that
+	// can be explicitly retired/quarantined on rollback path cleanup failure.
 	seedPath := createTempFile(t, inputDir, "seed.bin", 128*1024)
 	seedCtx := storage.StorageContext{
 		DB:           dbconn,
