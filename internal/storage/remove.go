@@ -48,11 +48,8 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 		}
 	}()
 
-	// Lock the row when supported and read status atomically to prevent races with in-flight stores.
-	statusQuery := "SELECT status FROM logical_file WHERE id = $1"
-	if db.SupportsSelectForUpdate(dbconn) {
-		statusQuery += " FOR UPDATE"
-	}
+	// Read status atomically and lock the row when supported to prevent races with in-flight stores.
+	statusQuery := db.QueryWithOptionalForUpdate(dbconn, "SELECT status FROM logical_file WHERE id = $1")
 
 	var fileStatus string
 	err = tx.QueryRowContext(

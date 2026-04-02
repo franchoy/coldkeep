@@ -36,3 +36,11 @@ func BackendFromDB(dbconn *sql.DB) Backend {
 func SupportsSelectForUpdate(dbconn *sql.DB) bool {
 	return BackendFromDB(dbconn) == BackendPostgres
 }
+
+// QueryWithOptionalForUpdate appends FOR UPDATE only for backends that support it.
+func QueryWithOptionalForUpdate(dbconn *sql.DB, query string) string {
+	if SupportsSelectForUpdate(dbconn) {
+		return query + " FOR UPDATE"
+	}
+	return query
+}

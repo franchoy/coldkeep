@@ -31,3 +31,25 @@ func TestBackendFromDBNil(t *testing.T) {
 		t.Fatalf("expected nil DB to report no SELECT FOR UPDATE support")
 	}
 }
+
+func TestQueryWithOptionalForUpdateSQLite(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	const query = "SELECT status FROM logical_file WHERE id = $1"
+	got := QueryWithOptionalForUpdate(dbconn, query)
+	if got != query {
+		t.Fatalf("expected sqlite query %q, got %q", query, got)
+	}
+}
+
+func TestQueryWithOptionalForUpdateNil(t *testing.T) {
+	const query = "SELECT status FROM logical_file WHERE id = $1"
+	got := QueryWithOptionalForUpdate(nil, query)
+	if got != query {
+		t.Fatalf("expected nil-db query %q, got %q", query, got)
+	}
+}
