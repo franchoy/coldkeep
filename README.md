@@ -891,6 +891,59 @@ is up to date (`>= 5`) during startup.
 - Optional bootstrap: set `COLDKEEP_DB_AUTO_BOOTSTRAP=true` to auto-apply the
   embedded PostgreSQL schema if `schema_version` is missing.
 
+### First-run PostgreSQL behavior
+
+Startup uses a strict default for correctness.
+
+- If `schema_version` is missing and `COLDKEEP_DB_AUTO_BOOTSTRAP` is not set to
+  `true`, coldkeep exits with an error.
+- The error is expected on a brand-new PostgreSQL database that has not been
+  initialized yet.
+
+You can choose one of two setup modes:
+
+1. Explicit setup (default)
+
+``` bash
+psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
+./coldkeep stats
+```
+
+1. Self-bootstrap on first run
+
+``` bash
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+./coldkeep stats
+```
+
+If you hit the first-run failure, use either of the two modes above and rerun
+the command.
+
+### Troubleshooting: first run fails on PostgreSQL
+
+If startup fails with:
+
+``` text
+postgres schema is not initialized (missing schema_version table); apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true
+```
+
+it means the target PostgreSQL database is reachable, but its schema has not
+been initialized yet.
+
+Fix with one of these options:
+
+1. Explicit init (recommended default)
+
+``` bash
+psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
+```
+
+1. Enable auto-bootstrap for first run
+
+``` bash
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+```
+
 Storage is written to:
 
 ./storage/

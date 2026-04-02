@@ -74,6 +74,16 @@ Initialize the schema:
 psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
 ```
 
+For first run, you can also enable one-time bootstrap behavior instead of
+manually applying the schema:
+
+``` bash
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+```
+
+Without manual schema initialization or this env var, coldkeep will fail fast
+on startup if `schema_version` is missing.
+
 Build:
 
 ``` bash
