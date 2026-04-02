@@ -721,6 +721,22 @@ func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, f
 		}
 	}
 
+	// Mark implicated chunks as suspicious so future reuse in suspicious mode
+	// performs semantic validation rather than trusting stale completion state.
+	seenChunkIDs := make(map[int64]struct{}, len(chunkIDs))
+	for _, chunkID := range chunkIDs {
+		if _, ok := seenChunkIDs[chunkID]; ok {
+			continue
+		}
+		seenChunkIDs[chunkID] = struct{}{}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE chunk SET retry_count = retry_count + 1 WHERE id = $1`,
+			chunkID,
+		); err != nil {
+			return fmt.Errorf("mark chunk %d suspicious during logical file %d rebuild: %w", chunkID, fileID, err)
+		}
+	}
+
 	// Remove all stale file_chunk mappings for this logical file.
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM file_chunk WHERE logical_file_id = $1`,

@@ -920,6 +920,14 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 		if refCount != 0 {
 			t.Errorf("expected live_ref_count=0 for chunk %d after rebuild mark, got %d", id, refCount)
 		}
+
+		var retryCount int64
+		if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, id).Scan(&retryCount); err != nil {
+			t.Fatalf("read retry_count for chunk %d: %v", id, err)
+		}
+		if retryCount != 1 {
+			t.Errorf("expected retry_count=1 for chunk %d after rebuild mark, got %d", id, retryCount)
+		}
 	}
 }
 
@@ -983,6 +991,14 @@ func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
 		if refCount != 0 {
 			t.Fatalf("expected live_ref_count=0 for chunk %d after stale garbage cleanup, got %d", id, refCount)
 		}
+
+		var retryCount int64
+		if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, id).Scan(&retryCount); err != nil {
+			t.Fatalf("read retry_count for chunk %d: %v", id, err)
+		}
+		if retryCount != 1 {
+			t.Fatalf("expected retry_count=1 for chunk %d after stale garbage cleanup, got %d", id, retryCount)
+		}
 	}
 }
 
@@ -1012,6 +1028,60 @@ func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
 	ctx := context.Background()
 	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
 		t.Fatalf("markLogicalFileForRebuildWithContext on already-ABORTED file: %v", err)
+	}
+}
+
+func TestMarkLogicalFileForRebuildMarksEachChunkSuspiciousOnce(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"duplicate-chunk-ref.bin", 128, "duplicate-ref-hash", filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, 64, $2, 2) RETURNING id`,
+		"duplicate-ref-chunk", filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 0)
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 1)
+
+	ctx := context.Background()
+	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
+		t.Fatalf("markLogicalFileForRebuildWithContext: %v", err)
+	}
+
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCount); err != nil {
+		t.Fatalf("read live_ref_count: %v", err)
+	}
+	if refCount != 0 {
+		t.Fatalf("expected live_ref_count=0 after removing two mappings, got %d", refCount)
+	}
+
+	var retryCount int64
+	if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, chunkID).Scan(&retryCount); err != nil {
+		t.Fatalf("read retry_count: %v", err)
+	}
+	if retryCount != 1 {
+		t.Fatalf("expected retry_count=1 for duplicate chunk references, got %d", retryCount)
 	}
 }
 
