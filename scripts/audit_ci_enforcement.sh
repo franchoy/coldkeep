@@ -9,6 +9,10 @@ Verifies the repo-side CI gate invariants and, when GitHub API access is
 available, audits the repository protection settings needed to make CI
 mandatory for merges and releases.
 
+Remote audit prerequisites:
+  - gh CLI installed and authenticated (`gh auth login`)
+  - jq installed
+
 Expected GitHub-side policy names:
   - Protect mainline branches
   - Protect release tags
@@ -96,6 +100,14 @@ check_local_workflow() {
 require_gh() {
   if ! command -v gh >/dev/null 2>&1; then
     echo "[audit] ERROR: gh CLI is required for remote protection checks" >&2
+    echo "[audit]        Install it first, for example on Ubuntu:" >&2
+    echo "[audit]          sudo apt install gh" >&2
+    echo "[audit]        Then authenticate with:" >&2
+    echo "[audit]          gh auth login" >&2
+    if [[ "${EUID:-$(id -u)}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+      echo "[audit]        Note: running under sudo can bypass your user-scoped gh auth/session." >&2
+      echo "[audit]              Prefer running the remote audit without sudo." >&2
+    fi
     exit 2
   fi
 }
@@ -118,6 +130,8 @@ check_remote_policy() {
 
   if ! command -v jq >/dev/null 2>&1; then
     echo "[audit] ERROR: jq is required for remote policy inspection" >&2
+    echo "[audit]        Install it first, for example on Ubuntu:" >&2
+    echo "[audit]          sudo apt install jq" >&2
     exit 2
   fi
 
