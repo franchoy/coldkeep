@@ -791,6 +791,9 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	if _, ok := doctorData["schema_status"]; !ok {
 		t.Fatalf("doctor JSON missing schema_status: payload=%v", doctor)
 	}
+	if verifyLevel, _ := doctorData["verify_level"].(string); verifyLevel != "standard" {
+		t.Fatalf("doctor JSON verify_level mismatch: want standard got %q payload=%v", verifyLevel, doctor)
+	}
 
 	// Doctor with --full flag
 	doctorFull := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
@@ -801,6 +804,9 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	}
 	if _, ok := doctorFullData["recovery_status"]; !ok {
 		t.Fatalf("doctor --full JSON missing recovery_status: payload=%v", doctorFull)
+	}
+	if verifyLevel, _ := doctorFullData["verify_level"].(string); verifyLevel != "full" {
+		t.Fatalf("doctor --full JSON verify_level mismatch: want full got %q payload=%v", verifyLevel, doctorFull)
 	}
 }
 
@@ -891,6 +897,11 @@ func TestDoctorCommand(t *testing.T) {
 		t.Fatalf("doctor JSON missing or invalid schema_status: payload=%v", doctorJSON)
 	}
 
+	verifyLevel, ok := doctorData["verify_level"].(string)
+	if !ok || verifyLevel != "standard" {
+		t.Fatalf("doctor JSON verify_level mismatch: want standard got %q payload=%v", verifyLevel, doctorJSON)
+	}
+
 	// Test doctor --full --output json
 	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
 	if res.exitCode != 0 {
@@ -922,6 +933,9 @@ func TestDoctorCommand(t *testing.T) {
 	}
 	if _, ok := doctorFullData["schema_status"]; !ok {
 		t.Fatalf("doctor --full JSON missing schema_status: payload=%v", doctorFullJSON)
+	}
+	if verifyLevel, _ := doctorFullData["verify_level"].(string); verifyLevel != "full" {
+		t.Fatalf("doctor --full JSON verify_level mismatch: want full got %q payload=%v", verifyLevel, doctorFullJSON)
 	}
 
 	// Deliberately corrupt one stored container byte and verify doctor fails
@@ -957,7 +971,7 @@ func TestDoctorCommand(t *testing.T) {
 		t.Fatalf("doctor corrupted-state error message should mention verify phase: payload=%v", errPayload)
 	}
 
-	t.Logf("doctor command test passed: recovery=%q verify=%q schema=%q", recoveryStatus, verifyStatus, schemaStatus)
+	t.Logf("doctor command test passed: verify_level=%q recovery=%q verify=%q schema=%q", verifyLevel, recoveryStatus, verifyStatus, schemaStatus)
 }
 
 func TestDoctorJSONContractConsistency(t *testing.T) {
