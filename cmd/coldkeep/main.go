@@ -59,6 +59,16 @@ type parsedCommandLine struct {
 	flags       map[string][]string
 }
 
+// doctorReport is the stable v1.0 JSON data payload for `coldkeep doctor --output json`.
+// All fields are frozen API: do not remove or rename fields without a major version bump.
+//
+// The Recovery field intentionally includes the full recovery.Report counter set
+// (aborted_logical_files, aborted_chunks, quarantined_missing, quarantined_corrupt_tail,
+// quarantined_orphan, skipped_dir_entries, checked_container_record, checked_disk_files,
+// sealing_completed, sealing_quarantined). These counters are actionable for operators
+// and monitoring scripts: any non-zero quarantined_* or aborted_* value signals that
+// corrective action was taken and should trigger alerting or human review.
+// Including the full report here is a deliberate decision, not an oversight.
 type doctorReport struct {
 	Recovery       recovery.Report `json:"recovery"`
 	VerifyLevel    string          `json:"verify_level"`
@@ -973,10 +983,12 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		report.VerifyStatus = "ok"
 	}
 
-	// Intentional JSON contract:
-	// - Success: doctor-specific payload on stdout.
+	// Intentional JSON contract (frozen v1.0):
+	// - Success: doctor-specific payload emitted to stdout; includes phase statuses,
+	//   verify_level, schema_version, and the full recovery counter set under "recovery".
 	// - Failure: generic CLI error payload on stderr via printCLIError.
 	// Doctor does not emit partial doctor data on failure.
+	// See doctorReport for the full field list and rationale for including recovery counters.
 	if recoveryErr != nil {
 		return fmt.Errorf("doctor recovery phase failed: %w", recoveryErr)
 	}
