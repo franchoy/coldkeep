@@ -1876,7 +1876,7 @@ func sleepWithContext(ctx context.Context, wait time.Duration) error {
 // --------------------------------------------------------------------------
 // --------------------------------------------------------------------------
 
-// StoreBlock is the new version of StoreChunk that takes care of block encoding and metadata management in the blocks table
+// Store a chunk payload as one encoded block and persist its metadata.
 func storeChunkAsPlainBlockWithWriter(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -1911,7 +1911,7 @@ func storeChunkAsPlainBlockWithWriter(
 	return placement, &encoded.Descriptor, nil
 }
 
-// new store payload data into a container directly, without the chunk record wrapper
+// Store payload bytes directly in a container and return offset/size metadata.
 func StoreBlockPayload(c container.Container, payload []byte) (offset int64, newSize int64, err error) {
 	offset, err = c.Append(payload)
 	if err != nil {

@@ -97,11 +97,14 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 	return nil
 }
 
-// RunMigrations applies the schema to a DB connection.
-// Currently this is used for simulated sqlite storage contexts.
+// RunMigrations applies the embedded SQLite schema to a DB connection.
+// It is intended for simulated/local SQLite contexts only.
 func RunMigrations(dbconn *sql.DB) error {
 	if dbconn == nil {
 		return errors.New("nil DB connection")
+	}
+	if backend := BackendFromDB(dbconn); backend != BackendSQLite {
+		return fmt.Errorf("RunMigrations requires sqlite backend, got %s", backend)
 	}
 	ctx, cancel := NewOperationContext(context.Background())
 	defer cancel()
