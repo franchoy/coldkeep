@@ -361,7 +361,7 @@ func (w *LocalWriter) AcknowledgeAppendCommitted() {
 // Safe to call even if no unresolved append is pending (no-op). After a
 // successful rollback path cleanup, the writer's active state is reset so the
 // next AppendPayload selects a fresh open container from the database.
-// If rollback path cleanup itself fails, caller must retire/quarantine the
+// If rollback path cleanup itself fails, caller must trigger retirement/quarantine for the
 // active container before any further writes.
 func (w *LocalWriter) RollbackLastAppend() error {
 	if !w.pendingAppend {

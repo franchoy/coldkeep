@@ -6747,7 +6747,7 @@ func TestStoreSurfacesRollbackCleanupFailureAndRetiresActiveContainer(t *testing
 		t.Fatalf("expected append to succeed before injected failure")
 	}
 	if wrappedWriter.retireCalls == 0 {
-		t.Fatalf("expected rollback cleanup failure path to retire/quarantine active container")
+		t.Fatalf("expected rollback cleanup failure path to trigger retirement/quarantine of active container")
 	}
 
 	retiredID := wrappedWriter.lastPlacement.ContainerID
@@ -7133,7 +7133,7 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 				t.Fatalf("store after semantic corruption (mode=%s): %v", mode, err)
 			}
 			if result.AlreadyStored {
-				t.Fatalf("expected semantic reuse guard to refuse AlreadyStored shortcut in mode=%s", mode)
+				t.Fatalf("expected semantic reuse validation to refuse AlreadyStored shortcut in mode=%s", mode)
 			}
 			if result.FileID != fileID {
 				t.Fatalf("expected semantic corruption rebuild to reuse logical file row %d, got %d", fileID, result.FileID)

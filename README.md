@@ -334,7 +334,7 @@ Current defaults:
 - Production guidance: keep strict mode enabled (`COLDKEEP_STRICT_RECOVERY=true`).
 - Operational expectation: strict mode can fail startup by design when state is suspicious; treat that as a safety signal, investigate, and recover explicitly.
 
-### Reuse semantic validation
+### Semantic reuse validation
 
 - `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default: `suspicious`) controls whether coldkeep performs an operational semantic validation pass before reusing a `COMPLETED` logical file row.
 - Operationally, semantic validation can pin chunk rows, read/decode payload data from container files, and recompute chunk/file hashes.
@@ -596,7 +596,7 @@ standard pre-release and pre-ingestion readiness gate.
 
 It runs the checks in this order:
 
-1. Startup recovery (corrective — may abort dangling writes and resolve stale state)
+1. Corrective recovery phase (may abort dangling writes and resolve stale state)
 2. System verification (`standard` by default, or `full` / `deep`)
 3. Schema/version sanity query
 

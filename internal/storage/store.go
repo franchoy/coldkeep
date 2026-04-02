@@ -43,12 +43,12 @@ type payloadStatefulWriter interface {
 //     caller MUST invoke RollbackLastAppend() when supported.
 //
 // Retirement/quarantine on failed cleanup:
-//   - If RollbackLastAppend() fails, caller MUST retire/quarantine the active
+//   - If RollbackLastAppend() fails, caller MUST trigger retirement/quarantine for the active
 //     container before any further writes.
-//   - If physical finalize/sync fails, caller MUST retire/quarantine the active
+//   - If physical finalize/sync fails, caller MUST trigger retirement/quarantine for the active
 //     container before any further writes.
 //   - If DB seal/update fails after physical finalize, implementation MUST NOT
-//     permit that container to be reused; retire/quarantine (or equivalent
+//     permit that container to be reused; retirement/quarantine (or equivalent
 //     exclusion from writable selection) is required.
 //
 // Boundary invariants:

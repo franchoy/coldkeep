@@ -215,7 +215,7 @@ Recommended focused runs for v0.10 lifecycle/reuse hardening changes:
 go test ./tests -run 'TestReuseRefusesSemanticallyCorruptedCompletedFile|TestGCRestorePinRaceContainerNotDeleted|TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock|TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt' -count=1 -v
 ```
 
-If you modify startup recovery, reuse validation, verify semantics, restore
+If you modify startup recovery, semantic reuse validation, verify semantics, restore
 pinning, or GC locking behavior, include at least one targeted regression test
 for the changed contract in your PR.
 
