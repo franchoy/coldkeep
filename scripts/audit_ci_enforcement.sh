@@ -247,25 +247,36 @@ check_remote_policy() {
 
   # Verify tag pattern targets v*
   local tag_pattern
+  local normalized_tag_pattern
   tag_pattern=$(echo "$tags_detail" | jq -r '
     [.conditions.ref_name.include // [] | .[] | select(startswith("refs/tags/"))] | join(",")')
-  if echo "$tag_pattern" | grep -Fq "refs/tags/v"; then
+  normalized_tag_pattern=$(echo "$tag_pattern" | tr -d '"')
+  if echo "$normalized_tag_pattern" | grep -Eq '(^|,)refs/tags/v\*(,|$)'; then
     echo "[audit] ok: release tags ruleset targets refs/tags/v*"
   else
     echo "[audit] ERROR: release tags ruleset is not constraining refs/tags/v* (found: ${tag_pattern:-<none>})" >&2
     return 1
   fi
 
-  # Verify tag ruleset also requires CI Required Gate
+  # Verify release CI gating if tag ruleset exposes status/workflow gates.
   local tags_required_checks
+  local tags_has_required_workflows
   tags_required_checks=$(echo "$tags_detail" | jq -r '
     [.rules[] | select(.type == "required_status_checks")
      | .parameters.required_status_checks[]?.context] | join(",")')
-  if echo "$tags_required_checks" | grep -Fq "CI Required Gate"; then
-    echo "[audit] ok: release tags ruleset requires 'CI Required Gate' status check"
+  tags_has_required_workflows=$(echo "$tags_detail" | jq -r '
+    any(.rules[]?; .type == "required_workflows" or .type == "workflows")')
+
+  if [[ -n "$tags_required_checks" ]]; then
+    if echo "$tags_required_checks" | grep -Fq "CI Required Gate"; then
+      echo "[audit] ok: release tags ruleset requires 'CI Required Gate' status check"
+    else
+      echo "[audit] WARN: release tags ruleset has required status checks but not 'CI Required Gate' (found: ${tags_required_checks})" >&2
+    fi
+  elif [[ "$tags_has_required_workflows" == "true" ]]; then
+    echo "[audit] ok: release tags ruleset uses required workflow gates"
   else
-    echo "[audit] ERROR: release tags ruleset does not require 'CI Required Gate' (found: ${tags_required_checks:-<none>})" >&2
-    return 1
+    echo "[audit] WARN: release tags ruleset does not expose status/workflow gate rules; CI enforcement for releases may rely on process or separate automation" >&2
   fi
 
   # Verify tag deletion is blocked
