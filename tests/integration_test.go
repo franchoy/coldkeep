@@ -3086,6 +3086,106 @@ func TestSchemaBootstrapEnvEvaluatedDynamically(t *testing.T) {
 	}
 }
 
+// TestSchemaStartupOperatorMessagingReleaseGate is a narrow CLI-level guard
+// that freezes operator-facing startup messages for the two most common schema
+// setup/support failures.
+func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
+	requireDB(t)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	tempDBName := func(prefix string) string {
+		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+	}
+
+	t.Run("missing_schema_message", func(t *testing.T) {
+		dbName := tempDBName("coldkeep_cli_missing_schema")
+
+		adminDB := openRawPostgresDB(t, "")
+		if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
+			_ = adminDB.Close()
+			t.Skipf("CREATE DATABASE not available (%v); skipping missing-schema CLI message subtest", err)
+		}
+		_ = adminDB.Close()
+
+		t.Cleanup(func() {
+			cleanupDB := openRawPostgresDB(t, "")
+			defer func() { _ = cleanupDB.Close() }()
+			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
+		})
+
+		env := defaultCLIEnv(container.ContainersDir)
+		env["DB_NAME"] = dbName
+		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "false"
+
+		res := runColdkeepCommand(t, repoRoot, binPath, env, "stats")
+		if res.exitCode == 0 {
+			t.Fatalf("stats must fail for missing schema when auto-bootstrap disabled; stdout=%q stderr=%q", res.stdout, res.stderr)
+		}
+
+		errText := strings.TrimSpace(res.stderr)
+		for _, want := range []string{
+			"ERROR[GENERAL]:",
+			"failed to connect to DB:",
+			"postgres schema is not initialized",
+			"apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true",
+		} {
+			if !strings.Contains(errText, want) {
+				t.Errorf("expected missing-schema CLI message to contain %q, got: %q", want, errText)
+			}
+		}
+	})
+
+	t.Run("outdated_schema_version_message", func(t *testing.T) {
+		dbName := tempDBName("coldkeep_cli_old_schema")
+
+		adminDB := openRawPostgresDB(t, "")
+		if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
+			_ = adminDB.Close()
+			t.Skipf("CREATE DATABASE not available (%v); skipping old-schema CLI message subtest", err)
+		}
+		_ = adminDB.Close()
+
+		t.Cleanup(func() {
+			cleanupDB := openRawPostgresDB(t, "")
+			defer func() { _ = cleanupDB.Close() }()
+			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
+		})
+
+		testDB := openRawPostgresDB(t, dbName)
+		defer func() { _ = testDB.Close() }()
+		if strings.TrimSpace(dbschema.PostgresSchema) == "" {
+			t.Fatal("dbschema.PostgresSchema is empty")
+		}
+		if _, err := testDB.Exec(dbschema.PostgresSchema); err != nil {
+			t.Fatalf("apply schema to temp DB: %v", err)
+		}
+		if _, err := testDB.Exec(`UPDATE schema_version SET version = 1`); err != nil {
+			t.Fatalf("downgrade schema_version in temp DB: %v", err)
+		}
+
+		env := defaultCLIEnv(container.ContainersDir)
+		env["DB_NAME"] = dbName
+
+		res := runColdkeepCommand(t, repoRoot, binPath, env, "stats")
+		if res.exitCode == 0 {
+			t.Fatalf("stats must fail for outdated schema version; stdout=%q stderr=%q", res.stdout, res.stderr)
+		}
+
+		errText := strings.TrimSpace(res.stderr)
+		for _, want := range []string{
+			"ERROR[GENERAL]:",
+			"failed to connect to DB:",
+			"postgres schema version too old",
+			"apply db/schema_postgres.sql",
+		} {
+			if !strings.Contains(errText, want) {
+				t.Errorf("expected old-schema CLI message to contain %q, got: %q", want, errText)
+			}
+		}
+	})
+}
+
 func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	requireDB(t)
 
