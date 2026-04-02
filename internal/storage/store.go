@@ -30,16 +30,17 @@ type payloadStatefulWriter interface {
 
 // Append lifecycle state machine (authoritative v1.0 contract):
 //
-// Entry condition:
-//   - AppendPayload(tx, payload) success creates one unresolved append outcome.
+// Trigger:
+//   - Every successful AppendPayload(tx, payload) creates exactly one unresolved
+//     append outcome that MUST be resolved before returning to the caller.
 //
 // Terminal resolution (exactly one path per successful append):
-//   - Rollback path:
-//     If tx is rolled back, or any error happens before tx.Commit() succeeds,
-//     caller MUST invoke RollbackLastAppend() when supported.
 //   - Commit path:
 //     If tx.Commit() succeeds, caller MUST invoke AcknowledgeAppendCommitted()
 //     exactly once when supported.
+//   - Rollback path:
+//     If tx is rolled back, or any error happens before tx.Commit() succeeds,
+//     caller MUST invoke RollbackLastAppend() when supported.
 //
 // Failure escalation rules:
 //   - If RollbackLastAppend() fails, caller MUST retire/quarantine the active
@@ -47,11 +48,11 @@ type payloadStatefulWriter interface {
 //   - If physical finalize/sync fails, caller MUST retire/quarantine the active
 //     container before any further writes.
 //   - If DB seal/update fails after physical finalize, implementation MUST NOT
-//     permit that container to be reused; retire/quarantine or equivalent exclusion
-//     is required.
+//     permit that container to be reused; retire/quarantine (or equivalent
+//     exclusion from writable selection) is required.
 //
-// Safety invariants:
-//   - No successful append may remain unresolved.
+// Boundary invariants:
+//   - No successful append may remain unresolved at function boundary.
 //   - No successful append may execute both rollback and commit-ack paths.
 //   - No container that crosses a failed rollback/finalize/seal boundary may
 //     re-enter the writable pool.
@@ -95,8 +96,8 @@ func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
 // acknowledgeWriterAppendCommitted calls AcknowledgeAppendCommitted on the writer
 // if it supports it. Must be called immediately after every successful tx.Commit()
 // that followed an AppendPayload call, completing the commit path of the writer
-// state machine so pending rollback bookkeeping is cleared. This call is expected
-// exactly once per successful append transaction.
+// state machine so pending rollback bookkeeping is cleared before function return.
+// This call is expected exactly once per successful append transaction.
 func acknowledgeWriterAppendCommitted(writer payloadStatefulWriter) {
 	if ack, ok := writer.(optionalAppendCommitAcknowledger); ok {
 		ack.AcknowledgeAppendCommitted()
