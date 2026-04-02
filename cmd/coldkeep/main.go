@@ -1023,6 +1023,7 @@ func formatDoctorTextReport(report doctorReport) string {
 	} else {
 		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s\n", report.SchemaStatus))
 	}
+	b.WriteString("  Note: Recovery phase may have modified metadata\n")
 	b.WriteString(fmt.Sprintf("  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
 		report.Recovery.AbortedLogicalFiles,
 		report.Recovery.AbortedChunks,

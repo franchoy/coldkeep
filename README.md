@@ -603,7 +603,9 @@ Doctor health report
   Phase 1 - Recovery:  ok
   Phase 2 - Verify:    ok
   Phase 3 - Schema:    ok (version=5)
+  Note: Recovery phase may have modified metadata
   Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0
+  Recommended next step: none
 ```
 
 ### JSON output example
@@ -656,6 +658,7 @@ to remain stable for automation.
 - Run `doctor` after startup, before first ingestion in a new environment.
 - Treat `doctor` as the canonical operator gate command in automation/smoke/release checks.
 - Frozen v1.0 product decision: `doctor` is the fast health gate and defaults to `--standard`.
+- Frozen v1.0 text contract: doctor text mode always prints `Note: Recovery phase may have modified metadata`.
 - Prefer `doctor --standard` for frequent checks.
 - Use `doctor --full` for stronger structural assurance.
 - Reserve `doctor --deep` for periodic audits due to higher I/O cost.

@@ -914,6 +914,9 @@ func TestDoctorCommand(t *testing.T) {
 	if !strings.Contains(res.stdout, "Phase 3 - Schema:") {
 		t.Fatalf("doctor text output missing schema phase line\nstdout:\n%s", res.stdout)
 	}
+	if !strings.Contains(res.stdout, "Recovery phase may have modified metadata") {
+		t.Fatalf("doctor text output missing corrective metadata note\nstdout:\n%s", res.stdout)
+	}
 	if !strings.Contains(res.stdout, "Recommended next step:") {
 		t.Fatalf("doctor text output missing recommendation line\nstdout:\n%s", res.stdout)
 	}
