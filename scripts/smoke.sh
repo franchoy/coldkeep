@@ -416,6 +416,7 @@ echo "[smoke] === DOCTOR COMMAND TEST (Operator Health Gate) ==="
 
 # Doctor is treated as an operator-facing release gate command.
 # It must pass before this smoke run can be considered release-ready.
+# Doctor is corrective, not read-only: recovery may update metadata first.
 # Doctor validates recovery, schema, and verification in one pass.
 
 echo "[smoke] doctor (default) - quick health report (--standard)"

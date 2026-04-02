@@ -333,7 +333,7 @@ Current defaults:
 - Startup recovery is the normal protective startup phase, not an exceptional maintenance step.
   It runs automatically before storage/maintenance commands (`store`, `store-folder`, `restore`, `remove`, `gc`, `stats`, `list`, `search`, `verify`).
 - Verification (`verify standard/full/deep`) is layered integrity checking and assumes recovery has already reconciled in-flight state.
-- `doctor` is a one-shot operator health wrapper that runs recovery + verify + schema/version sanity in one command.
+- `doctor` is a one-shot corrective health wrapper that runs recovery + verify + schema/version sanity in one command, and may update metadata through recovery before verification.
 - `COLDKEEP_STRICT_RECOVERY=true` is the recommended production baseline. Treat strict-mode startup failures as safety signals that require investigation.
 - `COLDKEEP_REUSE_SEMANTIC_VALIDATION` controls inline trust/cost tradeoffs on reuse:
   - `off`: graph-only structural checks (fastest; relies on explicit `verify` runs for corruption detection).
@@ -540,6 +540,7 @@ docker compose run --rm \
 `coldkeep doctor` is a one-shot operational health check for newcomers and operators.
 Treat it as the first command to run after startup and as the standard pre-release
 and pre-ingestion readiness check.
+Doctor is a corrective health command: it may update metadata through recovery before running verification.
 It runs the checks in this order:
 
 1. Startup recovery report

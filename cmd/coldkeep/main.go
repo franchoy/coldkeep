@@ -1183,7 +1183,7 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "One-shot operator health wrapper (recovery + verify + schema sanity; default: --standard)"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Corrective health command (may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},

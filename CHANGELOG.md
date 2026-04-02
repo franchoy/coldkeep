@@ -38,6 +38,8 @@ verification contracts, and recovery behavior clarity.
   explicit cost/coverage guidance
 - Elevated `coldkeep doctor` in docs/help/smoke as the recommended
   operator-facing health-check and release-gate command
+- Documented `doctor` as a corrective health command that may update
+  metadata through recovery before running verification
 - Documented startup recovery strictness as intentional fail-fast behavior,
   with a non-strict override for restart-race scenarios
 - Documented contiguous offset validation as an explicit current-format
