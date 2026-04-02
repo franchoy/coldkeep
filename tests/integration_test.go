@@ -1361,6 +1361,101 @@ func TestDoctorMutatesStaleSealingStateAndVerifyPasses(t *testing.T) {
 		"verify", "system", "--output", "json"), "verify")
 }
 
+// TestDoctorAbortsProcessingLogicalFilesFromRecoverableState verifies that
+// doctor's recovery phase is corrective: it aborts dangling PROCESSING logical
+// file rows left by a crashed or interrupted write session, and subsequent
+// verification still passes.
+func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// Store a real file first so the DB has valid schema content and verify has
+	// something meaningful to check after recovery.
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_recovery_base.bin", 256*1024)
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	// Inject a dangling PROCESSING logical file simulating a crashed write session.
+	// Use a hash/name that will not conflict with the real stored file.
+	var danglingID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		VALUES ($1, $2, $3, $4) RETURNING id`,
+		"dangling_write.bin", 1024,
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		filestate.LogicalFileProcessing,
+	).Scan(&danglingID)
+	if err != nil {
+		t.Fatalf("inject dangling PROCESSING logical file: %v", err)
+	}
+
+	// Confirm the dangling row is PROCESSING before doctor runs.
+	var statusBefore string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, danglingID).Scan(&statusBefore); err != nil {
+		t.Fatalf("query dangling logical file before doctor: %v", err)
+	}
+	if statusBefore != filestate.LogicalFileProcessing {
+		t.Fatalf("setup failed: expected PROCESSING got %q", statusBefore)
+	}
+	_ = dbconn.Close()
+
+	// Run doctor; it must succeed (recovery aborts dangling writes, then verify passes).
+	doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	doctorPayload := assertCLIJSONOK(t, doctorRes, "doctor")
+	doctorData, ok := doctorPayload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", doctorPayload)
+	}
+
+	// Assert recovery reported at least one aborted logical file.
+	recoveryObj, ok := doctorData["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing recovery object under data: payload=%v", doctorPayload)
+	}
+	abortedLogicalFiles, _ := recoveryObj["AbortedLogicalFiles"].(float64)
+	if abortedLogicalFiles < 1 {
+		t.Fatalf("doctor recovery expected AbortedLogicalFiles >= 1, got %v: recovery=%v", abortedLogicalFiles, recoveryObj)
+	}
+
+	// Confirm the dangling row is now ABORTED in the DB.
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB after doctor: %v", err)
+	}
+	defer dbconn.Close()
+
+	var statusAfter string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, danglingID).Scan(&statusAfter); err != nil {
+		t.Fatalf("query dangling logical file after doctor: %v", err)
+	}
+	if statusAfter != filestate.LogicalFileAborted {
+		t.Fatalf("expected doctor to abort dangling PROCESSING file, got status %q", statusAfter)
+	}
+
+	// Verify the full system passes after doctor's corrective recovery.
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--output", "json"), "verify")
+}
+
 func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	requireDB(t)
 

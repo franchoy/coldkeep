@@ -68,6 +68,11 @@ func SystemRecoveryWithContainersDir(containersDir string) error {
 	return err
 }
 
+// SystemRecoveryReportWithContainersDir is the primary corrective recovery entry
+// point. It modifies database state: PROCESSING logical files and chunks are
+// aborted, containers with unresolvable state are quarantined. Callers (including
+// the doctor command and normal startup) must treat changed row counts in the
+// returned Report as expected, successful corrective outcomes, not as errors.
 func SystemRecoveryReportWithContainersDir(containersDir string) (Report, error) {
 	stats := &recoveryStats{}
 	logRecoveryEvent("start", "containers_dir="+containersDir)

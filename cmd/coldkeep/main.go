@@ -928,6 +928,11 @@ func querySchemaVersion() (int64, error) {
 	return version.Int64, nil
 }
 
+// runDoctorCommand implements the 'doctor' corrective health command.
+// Doctor is NOT read-only: it runs recovery before verification, and may update
+// database metadata (aborting dangling PROCESSING writes, clearing stale sealing
+// markers) before any integrity check executes. Running doctor on a fresh
+// deployment or after an unclean shutdown is safe and intended.
 func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
 		return err

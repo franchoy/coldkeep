@@ -328,19 +328,50 @@ Current defaults:
   - `always`: run semantic validation for every completed-file reuse candidate. Strongest inline integrity gate, but highest IO/CPU cost and can noticeably increase store latency on reuse-heavy workloads.
 - If ingestion performance drops unexpectedly after enabling this feature, check whether `COLDKEEP_REUSE_SEMANTIC_VALIDATION=always` is set.
 
-### Operational trust model
+### v1.0 trust model
 
-- Startup recovery is the normal protective startup phase, not an exceptional maintenance step.
-  It runs automatically before storage/maintenance commands (`store`, `store-folder`, `restore`, `remove`, `gc`, `stats`, `list`, `search`, `verify`).
-- Verification (`verify standard/full/deep`) is layered integrity checking and assumes recovery has already reconciled in-flight state.
-- `doctor` is a one-shot corrective health wrapper that runs recovery + verify + schema/version sanity in one command, and may update metadata through recovery before verification.
-- `COLDKEEP_STRICT_RECOVERY=true` is the recommended production baseline. Treat strict-mode startup failures as safety signals that require investigation.
-- `COLDKEEP_REUSE_SEMANTIC_VALIDATION` controls inline trust/cost tradeoffs on reuse:
-  - `off`: graph-only structural checks (fastest; relies on explicit `verify` runs for corruption detection).
-  - `suspicious` (default): semantic checks only when risk signals are present (recommended balance).
-  - `always`: semantic checks for every reuse candidate (strongest; highest read/CPU cost).
-- `pin_count` protects restore safety by preventing GC/remove from reclaiming data while restore pins are active.
-- Prefer strict recovery + `doctor --standard` as the default production readiness baseline.
+This section describes how coldkeep's subsystems compose into a coherent
+operator trust model.
+
+- **Startup recovery is part of normal safe operation.**
+  It runs automatically before every substantive command (`store`, `store-folder`,
+  `restore`, `remove`, `gc`, `stats`, `list`, `search`, `verify`) and resolves
+  in-flight write state from prior sessions. It is not an exceptional maintenance
+  step — it is the expected lifecycle entry point.
+
+- **`doctor` is the recommended operator health command and is corrective, not read-only.**
+  It runs recovery + verify + schema/version sanity in one command and may
+  update metadata (abort dangling writes, clear stale sealing markers) before
+  running verification. Use it after startup, before first ingestion in a new
+  environment, and as the standard pre-release gate.
+
+- **`verify` assumes recovered state.**
+  Verification (`verify standard/full/deep`) is layered integrity checking
+  scoped to metadata and payload consistency. It is not a live online-consistency
+  checker during in-flight writes and does not resolve incomplete write state
+  itself — recovery must have run first.
+
+- **Strict recovery is recommended in production.**
+  `COLDKEEP_STRICT_RECOVERY=true` (the default) aborts startup on suspicious
+  orphan container state. Treat strict-mode failures as intentional safety signals
+  that require investigation, not as operational noise to suppress.
+
+- **Semantic reuse validation trades performance for stronger reuse confidence.**
+  `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default `suspicious`) controls whether
+  coldkeep re-reads and re-hashes payload before accepting a completed-file reuse
+  shortcut:
+  - `off`: graph-only structural checks — fastest, relies on `verify` runs for
+    corruption detection.
+  - `suspicious` (default): semantic checks only when risk signals are present
+    (retry history, mutable container references) — recommended balance.
+  - `always`: semantic checks for every reuse candidate — strongest inline gate,
+    highest read/CPU cost.
+
+- **`pin_count` protects restore safety** by preventing GC/remove from reclaiming
+  data while a restore operation holds active pins.
+
+**Production baseline:** strict recovery (`COLDKEEP_STRICT_RECOVERY=true`) +
+`doctor --standard` as the pre-ingestion readiness gate.
 
 ---
 
@@ -537,13 +568,19 @@ docker compose run --rm \
 
 ## Doctor (recommended health check)
 
-`coldkeep doctor` is a one-shot operational health check for newcomers and operators.
-Treat it as the first command to run after startup and as the standard pre-release
-and pre-ingestion readiness check.
-Doctor is a corrective health command: it may update metadata through recovery before running verification.
+`coldkeep doctor` is the recommended operator-facing health command and a first-class
+v1.0 CLI primitive. Treat it as the first command to run after startup and as the
+standard pre-release and pre-ingestion readiness gate.
+
+> **Doctor is corrective, not read-only.** It runs recovery before running
+> verification, and may update database metadata — aborting dangling in-flight
+> writes, clearing stale sealing markers — before the verification phase executes.
+> Running doctor on a fresh deployment or after an unclean shutdown is safe and
+> intended: it resolves recoverable state and then confirms integrity.
+
 It runs the checks in this order:
 
-1. Startup recovery report
+1. Startup recovery (corrective — may abort dangling writes and resolve stale state)
 2. System verification (`standard` by default, or `full` / `deep`)
 3. Schema/version sanity query
 

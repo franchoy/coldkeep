@@ -50,7 +50,22 @@ verification contracts, and recovery behavior clarity.
 - Froze and documented `doctor --output json` failure contract: failures emit
   only generic CLI error JSON on `stderr` (no partial doctor report payload)
 
+### v1.0 Trust Model
+- Consolidated operator trust model documentation: startup recovery is the normal
+  lifecycle entry point (not exceptional maintenance), `doctor` is the recommended
+  health gate and is corrective (not read-only), `verify` assumes recovered state,
+  strict recovery is the production baseline, and semantic reuse validation trades
+  read/CPU cost for stronger inline integrity confidence
+- Made `coldkeep doctor` a named first-class v1.0 command: it is explicitly
+  corrective (may abort dangling writes and clear stale sealing markers before
+  verifying), is the recommended pre-ingestion, post-startup, and pre-release gate,
+  and its default mode (`--standard`) is a frozen v1.0 product contract
+
 ### Tests
+- Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
+  injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
+  it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
+  and subsequent verify passes
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious
