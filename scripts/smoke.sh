@@ -412,6 +412,64 @@ fi
 echo "[smoke]   ok: deep verify passed"
 
 echo ""
+echo "[smoke] === DOCTOR COMMAND TEST (Operator Health Check) ==="
+
+# Test doctor as an operator-facing release gate check
+# Doctor validates recovery, schema, and verification in one pass
+
+echo "[smoke] doctor (default) - full health report"
+if ! coldkeep doctor; then
+  echo "[smoke] ERROR: doctor command failed"
+  exit 1
+fi
+echo "[smoke]   ok: doctor default report completed"
+
+echo "[smoke] doctor --standard - metadata-only health check"
+if ! coldkeep doctor --standard; then
+  echo "[smoke] ERROR: doctor --standard failed"
+  exit 1
+fi
+echo "[smoke]   ok: doctor --standard passed"
+
+echo "[smoke] doctor --full - includes recovery and file checks"
+if ! coldkeep doctor --full; then
+  echo "[smoke] ERROR: doctor --full failed"
+  exit 1
+fi
+echo "[smoke]   ok: doctor --full passed"
+
+echo "[smoke] validating doctor JSON output contract"
+DOCTOR_JSON=$(coldkeep doctor --output json)
+DOCTOR_PAYLOAD=$(echo "$DOCTOR_JSON" | grep -E '^\{.*\}$' | tail -n1)
+
+# Doctor JSON should contain recovery status, verify status, and schema status
+if ! echo "$DOCTOR_PAYLOAD" | jq -e '.status == "ok" and .recovery_status and .verify_status and .schema_status' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: doctor JSON output missing required fields"
+  echo "$DOCTOR_JSON"
+  echo "Parsed payload:"
+  echo "$DOCTOR_PAYLOAD" | jq . 2>/dev/null || echo "Failed to parse JSON"
+  exit 1
+fi
+
+RECOVERY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.recovery_status')
+VERIFY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.verify_status')
+SCHEMA_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.schema_status')
+
+echo "[smoke]   ok: doctor JSON validated (recovery=$RECOVERY_STATUS, verify=$VERIFY_STATUS, schema=$SCHEMA_STATUS)"
+
+echo "[smoke] doctor --full --output json (complete operator report)"
+DOCTOR_FULL_JSON=$(coldkeep doctor --full --output json)
+DOCTOR_FULL_PAYLOAD=$(echo "$DOCTOR_FULL_JSON" | grep -E '^\{.*\}$' | tail -n1)
+
+if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '.status == "ok" and .recovery_status and .verify_status and .schema_status' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: doctor --full --output json missing required fields"
+  echo "$DOCTOR_FULL_JSON"
+  exit 1
+fi
+
+echo "[smoke]   ok: doctor --full --output json produced complete operator health report"
+
+echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="
 
 # Test GC dry-run prediction vs actual container deletion count.
