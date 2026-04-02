@@ -397,18 +397,33 @@ echo "[smoke]   ok: deep verify passed"
 echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="
 
-# Test GC dry-run vs real run
+# Test GC dry-run prediction vs actual container deletion count.
 echo "[smoke] running gc --dry-run to get predicted metric"
 GC_DRYRUN_OUTPUT=$(coldkeep gc --dry-run --output json 2>/dev/null)
-DRY_RUN_PREDICTIONS=$(echo "$GC_DRYRUN_OUTPUT" | jq -r '.data' 2>/dev/null || echo "{}")
+GC_DRYRUN_PAYLOAD=$(echo "$GC_DRYRUN_OUTPUT" | grep -E '^\{.*\}$' | tail -n1)
+PREDICTED_AFFECTED_CONTAINERS=$(echo "$GC_DRYRUN_PAYLOAD" | jq -r '.data.affected_containers // 0' 2>/dev/null || echo "0")
+PREDICTED_DRY_RUN=$(echo "$GC_DRYRUN_PAYLOAD" | jq -r '.data.dry_run // false' 2>/dev/null || echo "false")
+
+if [[ "$PREDICTED_DRY_RUN" != "true" ]]; then
+  echo "[smoke] ERROR: gc --dry-run did not report dry_run=true"
+  echo "$GC_DRYRUN_OUTPUT"
+  exit 1
+fi
 
 echo "[smoke] running real gc"
 STATS_BEFORE_GC=$(coldkeep stats --output json)
+BEFORE_TOTAL_CONTAINERS=$(echo "$STATS_BEFORE_GC" | jq -r '.data.total_containers')
 coldkeep gc > /dev/null
 STATS_AFTER_GC=$(coldkeep stats --output json)
+AFTER_TOTAL_CONTAINERS=$(echo "$STATS_AFTER_GC" | jq -r '.data.total_containers')
+ACTUAL_DELETED_CONTAINERS=$((BEFORE_TOTAL_CONTAINERS - AFTER_TOTAL_CONTAINERS))
 
-# For now, just verify gc processes without errors - dry-run accuracy requires detailed parsing
-echo "[smoke]   ok: gc dry-run and real-run both completed"
+if [[ "$PREDICTED_AFFECTED_CONTAINERS" != "$ACTUAL_DELETED_CONTAINERS" ]]; then
+  echo "[smoke] ERROR: gc dry-run prediction mismatch: predicted=${PREDICTED_AFFECTED_CONTAINERS} actual=${ACTUAL_DELETED_CONTAINERS}"
+  exit 1
+fi
+
+echo "[smoke]   ok: gc dry-run predicted ${PREDICTED_AFFECTED_CONTAINERS} deleted containers and real gc matched"
 
 echo ""
 echo "[smoke] === SIMULATION METRICS VALIDATION ==="
