@@ -1183,7 +1183,7 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Run recovery + system verify + schema/version sanity checks (default: --standard)"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health check (recovery + verify + schema sanity; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
@@ -1235,6 +1235,9 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
+	fmt.Println()
+	fmt.Println("Operator quick check:")
+	fmt.Println("  coldkeep doctor --standard")
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")

@@ -59,7 +59,7 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Recover from interrupted operations on startup.
 - Provide storage statistics and container health information.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
-- Run a doctor self-check command that bundles recovery, verification, and schema sanity checks.
+- Run `coldkeep doctor` as the recommended operator-facing health check that bundles recovery, verification, and schema sanity checks.
 - Simulate storage operations without writing data to disk (v0.8).
 - Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
 
@@ -524,6 +524,8 @@ docker compose run --rm \
 ## Doctor (recommended health check)
 
 `coldkeep doctor` is a one-shot operational health check for newcomers and operators.
+Treat it as the first command to run after startup and as the standard pre-release
+and pre-ingestion readiness check.
 It runs the checks in this order:
 
 1. Startup recovery report
@@ -597,6 +599,7 @@ to remain stable for automation.
 ### Operational guidance
 
 - Run `doctor` after startup, before first ingestion in a new environment.
+- Treat `doctor` as the canonical operator gate command in automation/smoke/release checks.
 - `doctor` defaults to `--standard` as a deliberate quick health check.
 - Prefer `doctor --standard` for frequent checks.
 - Use `doctor --full` for stronger structural assurance.

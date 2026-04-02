@@ -412,10 +412,11 @@ fi
 echo "[smoke]   ok: deep verify passed"
 
 echo ""
-echo "[smoke] === DOCTOR COMMAND TEST (Operator Health Check) ==="
+echo "[smoke] === DOCTOR COMMAND TEST (Operator Health Gate) ==="
 
-# Test doctor as an operator-facing release gate check
-# Doctor validates recovery, schema, and verification in one pass
+# Doctor is treated as an operator-facing release gate command.
+# It must pass before this smoke run can be considered release-ready.
+# Doctor validates recovery, schema, and verification in one pass.
 
 echo "[smoke] doctor (default) - quick health report (--standard)"
 if ! coldkeep doctor; then
@@ -454,8 +455,14 @@ fi
 RECOVERY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.recovery_status')
 VERIFY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.verify_status')
 SCHEMA_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.schema_status')
+VERIFY_LEVEL=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.verify_level')
 
-echo "[smoke]   ok: doctor JSON validated (recovery=$RECOVERY_STATUS, verify=$VERIFY_STATUS, schema=$SCHEMA_STATUS)"
+if [[ "$VERIFY_LEVEL" != "standard" ]]; then
+  echo "[smoke] ERROR: doctor --output json verify_level='$VERIFY_LEVEL' (expected 'standard')"
+  exit 1
+fi
+
+echo "[smoke]   ok: doctor JSON validated (verify_level=$VERIFY_LEVEL, recovery=$RECOVERY_STATUS, verify=$VERIFY_STATUS, schema=$SCHEMA_STATUS)"
 
 echo "[smoke] doctor --full --output json (complete operator report)"
 DOCTOR_FULL_JSON=$(coldkeep doctor --full --output json)
@@ -467,7 +474,13 @@ if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '.status == "ok" and .command == "docto
   exit 1
 fi
 
-echo "[smoke]   ok: doctor --full --output json produced complete operator health report"
+DOCTOR_FULL_VERIFY_LEVEL=$(echo "$DOCTOR_FULL_PAYLOAD" | jq -r '.data.verify_level')
+if [[ "$DOCTOR_FULL_VERIFY_LEVEL" != "full" ]]; then
+  echo "[smoke] ERROR: doctor --full --output json verify_level='$DOCTOR_FULL_VERIFY_LEVEL' (expected 'full')"
+  exit 1
+fi
+
+echo "[smoke]   ok: doctor --full --output json produced complete operator health report (verify_level=$DOCTOR_FULL_VERIFY_LEVEL)"
 
 echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="

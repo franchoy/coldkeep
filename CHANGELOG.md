@@ -36,6 +36,8 @@ verification contracts, and recovery behavior clarity.
   not a live online-consistency checker during in-flight writes
 - Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
   explicit cost/coverage guidance
+- Elevated `coldkeep doctor` in docs/help/smoke as the recommended
+  operator-facing health-check and release-gate command
 - Documented startup recovery strictness as intentional fail-fast behavior,
   with a non-strict override for restart-race scenarios
 - Documented contiguous offset validation as an explicit current-format
