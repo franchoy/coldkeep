@@ -80,6 +80,4 @@ temp/
 # =========================
 # smoke scripts output
 # =========================
-_smoke_out/
-_smoke_storage/
-_smoke_storage_probe/
+_smoke_*/
