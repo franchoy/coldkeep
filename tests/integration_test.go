@@ -1201,6 +1201,63 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONRecoveryFieldNames(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	payload := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", payload)
+	}
+	recoveryData, ok := data["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing recovery object: payload=%v", payload)
+	}
+
+	wantKeys := []string{
+		"aborted_chunks",
+		"aborted_logical_files",
+		"checked_container_record",
+		"checked_disk_files",
+		"quarantined_corrupt_tail",
+		"quarantined_missing",
+		"quarantined_orphan",
+		"sealing_completed",
+		"sealing_quarantined",
+		"skipped_dir_entries",
+	}
+
+	gotKeys := make([]string, 0, len(recoveryData))
+	for k := range recoveryData {
+		gotKeys = append(gotKeys, k)
+	}
+
+	slices.Sort(gotKeys)
+	slices.Sort(wantKeys)
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Fatalf("doctor JSON recovery keys mismatch\nwant=%v\ngot=%v\npayload=%v", wantKeys, gotKeys, payload)
+	}
+}
+
 func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
 	requireDB(t)
 
