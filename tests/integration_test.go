@@ -588,6 +588,67 @@ func isRetryableTxAbortError(err error) bool {
 	return strings.Contains(msg, "current transaction is aborted") || strings.Contains(msg, "25p02")
 }
 
+// rollbackFailingWriter wraps LocalWriter and deterministically fails rollback
+// cleanup so tests can assert error surfacing + container retirement behavior.
+type rollbackFailingWriter struct {
+	base            *container.LocalWriter
+	forcedErr       error
+	appendSucceeded bool
+	lastPlacement   container.LocalPlacement
+	retireCalls     int
+}
+
+func newRollbackFailingWriter(base *container.LocalWriter) *rollbackFailingWriter {
+	return &rollbackFailingWriter{
+		base:      base,
+		forcedErr: errors.New("injected rollback cleanup failure"),
+	}
+}
+
+func (w *rollbackFailingWriter) WriteChunk(c chunk.Info) error {
+	return w.base.WriteChunk(c)
+}
+
+func (w *rollbackFailingWriter) FinalizeContainer() error {
+	return w.base.FinalizeContainer()
+}
+
+func (w *rollbackFailingWriter) ContainerCount() int {
+	return w.base.ContainerCount()
+}
+
+func (w *rollbackFailingWriter) BindDB(dbconn *sql.DB) {
+	w.base.BindDB(dbconn)
+}
+
+func (w *rollbackFailingWriter) AppendPayload(tx db.DBTX, payload []byte) (container.LocalPlacement, error) {
+	placement, err := w.base.AppendPayload(tx, payload)
+	if err == nil {
+		w.appendSucceeded = true
+		w.lastPlacement = placement
+	}
+	return placement, err
+}
+
+func (w *rollbackFailingWriter) AcknowledgeAppendCommitted() {
+	w.base.AcknowledgeAppendCommitted()
+}
+
+func (w *rollbackFailingWriter) RollbackLastAppend() error {
+	if !w.appendSucceeded {
+		return nil
+	}
+	if w.forcedErr != nil {
+		return w.forcedErr
+	}
+	return errors.New("injected rollback cleanup failure")
+}
+
+func (w *rollbackFailingWriter) RetireActiveContainer() error {
+	w.retireCalls++
+	return w.base.RetireActiveContainer()
+}
+
 // chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
 // minChunk = 512 KiB, maxChunk = 2 MiB.
 var chunkBoundaryCases = []struct {
@@ -1142,6 +1203,84 @@ func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
 	}
 	if _, ok := errPayload["data"]; ok {
 		t.Fatalf("doctor failure error payload must not include success data field: payload=%v", errPayload)
+	}
+}
+
+func TestDoctorIntegrationSmokeContract(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_smoke_contract.bin", 512*1024)
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	// Basic doctor invocation must pass.
+	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	// Full doctor invocation must pass.
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor --full failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	// JSON contract must include key phase fields under data.
+	jsonRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	payload := assertCLIJSONOK(t, jsonRes, "doctor")
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", payload)
+	}
+	for _, k := range []string{"recovery_status", "verify_status", "schema_status", "verify_level"} {
+		if _, ok := data[k]; !ok {
+			t.Fatalf("doctor JSON missing required phase field %q: payload=%v", k, payload)
+		}
+	}
+
+	// Failure contract: deep doctor on corrupted payload must return VERIFY exit class (3).
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB for corruption step: %v", err)
+	}
+	defer dbconn.Close()
+	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
+	if res.exitCode != 3 {
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+	errPayload, ok := findCLIErrorPayload(res.stderr)
+	if !ok {
+		errPayload, ok = findCLIErrorPayload(res.stdout + "\n" + res.stderr)
+	}
+	if !ok {
+		t.Fatalf("doctor --deep corrupted-state run produced no error payload\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor --deep failure error_class mismatch: want VERIFY got %q payload=%v", got, errPayload)
 	}
 }
 
@@ -5934,6 +6073,148 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 	assertNoProcessingRows(t, dbconn)
 }
 
+func TestStoreSurfacesRollbackCleanupFailureAndRetiresActiveContainer(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Seed one successful store so we have a committed active container row
+	// that can be explicitly quarantined on rollback-cleanup failure.
+	seedPath := createTempFile(t, inputDir, "seed.bin", 128*1024)
+	seedCtx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: container.ContainersDir,
+	}
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(seedCtx, seedPath, blocks.CodecPlain); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	var activeID int64
+	var activeFilename string
+	var dbSizeBefore int64
+	if err := dbconn.QueryRow(`
+		SELECT id, filename, current_size
+		FROM container
+		WHERE sealed = FALSE AND quarantine = FALSE
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&activeID, &activeFilename, &dbSizeBefore); err != nil {
+		t.Fatalf("query active container before injected failure: %v", err)
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, activeFilename)
+	beforeStat, err := os.Stat(containerPath)
+	if err != nil {
+		t.Fatalf("stat active container before injected failure: %v", err)
+	}
+
+	// Force a post-append transactional failure at file_chunk linking time.
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_file_chunk_insert_trg ON file_chunk`); err != nil {
+		t.Fatalf("drop stale trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_file_chunk_insert()`); err != nil {
+		t.Fatalf("drop stale trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE FUNCTION ck_fail_file_chunk_insert()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'injected file_chunk insert failure';
+		END;
+		$$
+	`); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE TRIGGER ck_fail_file_chunk_insert_trg
+		BEFORE INSERT ON file_chunk
+		FOR EACH ROW
+		EXECUTE FUNCTION ck_fail_file_chunk_insert()
+	`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	defer func() {
+		_, _ = dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_file_chunk_insert_trg ON file_chunk`)
+		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_file_chunk_insert()`)
+	}()
+
+	failPath := createTempFile(t, inputDir, "rollback_fail_surface.bin", 320*1024)
+	wrappedWriter := newRollbackFailingWriter(
+		container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+	)
+	failCtx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       wrappedWriter,
+		ContainerDir: container.ContainersDir,
+	}
+
+	_, err = storage.StoreFileWithStorageContextAndCodecResult(failCtx, failPath, blocks.CodecPlain)
+	if err == nil {
+		t.Fatalf("expected store to fail due to injected file_chunk insert + rollback cleanup failure")
+	}
+
+	errText := strings.ToLower(err.Error())
+	if !strings.Contains(errText, "injected file_chunk insert failure") {
+		t.Fatalf("expected surfaced transactional failure in error, got: %v", err)
+	}
+	if !strings.Contains(errText, "rollback failed") {
+		t.Fatalf("expected surfaced rollback cleanup failure in error, got: %v", err)
+	}
+
+	if !wrappedWriter.appendSucceeded {
+		t.Fatalf("expected append to succeed before injected failure")
+	}
+	if wrappedWriter.retireCalls == 0 {
+		t.Fatalf("expected rollback cleanup failure path to retire/quarantine active container")
+	}
+
+	retiredID := wrappedWriter.lastPlacement.ContainerID
+	if retiredID <= 0 {
+		t.Fatalf("expected valid retired container id, got %d", retiredID)
+	}
+
+	var retiredQuarantined bool
+	var dbSizeAfter int64
+	if err := dbconn.QueryRow(
+		`SELECT quarantine, current_size FROM container WHERE id = $1`,
+		retiredID,
+	).Scan(&retiredQuarantined, &dbSizeAfter); err != nil {
+		t.Fatalf("query retired container state: %v", err)
+	}
+	if !retiredQuarantined {
+		t.Fatalf("expected active container %d to be quarantined after rollback cleanup failure", retiredID)
+	}
+
+	afterStat, err := os.Stat(containerPath)
+	if err != nil {
+		t.Fatalf("stat active container after injected failure: %v", err)
+	}
+	if afterStat.Size() <= beforeStat.Size() {
+		t.Fatalf("expected physical append to persist before rollback failure (size %d -> %d)", beforeStat.Size(), afterStat.Size())
+	}
+	if afterStat.Size() <= dbSizeAfter || dbSizeAfter != dbSizeBefore {
+		t.Fatalf("expected quarantined container to show physical/db mismatch after failed rollback (physical=%d db_before=%d db_after=%d)", afterStat.Size(), dbSizeBefore, dbSizeAfter)
+	}
+}
+
 // TestSealFailureAfterPhysicalFinalize simulates a scenario where a container is
 // physically finalized (rotation completed, file truncated to final size) but the
 // DB seal update fails (marked.sealing=TRUE but sealed=FALSE). The next store
@@ -8070,6 +8351,119 @@ func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
 
 	assertNoProcessingRows(t, dbconn)
 	assertUniqueFileChunkOrders(t, dbconn)
+}
+
+func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	// Fail only the final logical-file completion status transition.
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_logical_complete_trg ON logical_file`); err != nil {
+		t.Fatalf("drop stale logical_file trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_logical_complete()`); err != nil {
+		t.Fatalf("drop stale logical_file function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE FUNCTION ck_fail_logical_complete()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			IF NEW.status = 'COMPLETED' THEN
+				RAISE EXCEPTION 'injected logical completion failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$
+	`); err != nil {
+		t.Fatalf("create logical completion trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE TRIGGER ck_fail_logical_complete_trg
+		BEFORE UPDATE OF status ON logical_file
+		FOR EACH ROW
+		WHEN (NEW.status = 'COMPLETED')
+		EXECUTE FUNCTION ck_fail_logical_complete()
+	`); err != nil {
+		t.Fatalf("create logical completion trigger: %v", err)
+	}
+	defer func() {
+		_, _ = dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_logical_complete_trg ON logical_file`)
+		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_logical_complete()`)
+	}()
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "finalize-fail.bin", 3*1024*1024)
+	fileHash := sha256File(t, inPath)
+
+	ctx := newTestContext(dbconn)
+	_, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+	if err == nil {
+		t.Fatalf("expected store to fail at final logical-file completion phase")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "injected logical completion failure") {
+		t.Fatalf("expected injected finalization failure to be surfaced, got: %v", err)
+	}
+
+	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+
+	var status string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+		t.Fatalf("query failed logical_file status: %v", err)
+	}
+	if status != filestate.LogicalFileAborted {
+		t.Fatalf("expected logical_file to be ABORTED after finalization failure, got %q", status)
+	}
+
+	var linkedCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&linkedCount); err != nil {
+		t.Fatalf("count file_chunk rows for failed file: %v", err)
+	}
+	if linkedCount < 2 {
+		t.Fatalf("expected linked chunks to exist before final completion failure, got %d", linkedCount)
+	}
+
+	var minOrder, maxOrder int
+	if err := dbconn.QueryRow(`
+		SELECT COALESCE(MIN(chunk_order), -1), COALESCE(MAX(chunk_order), -1)
+		FROM file_chunk
+		WHERE logical_file_id = $1
+	`, fileID).Scan(&minOrder, &maxOrder); err != nil {
+		t.Fatalf("query chunk_order bounds: %v", err)
+	}
+	if minOrder != 0 || maxOrder != linkedCount-1 {
+		t.Fatalf("expected contiguous linked chunk orders despite finalization failure: min=%d max=%d count=%d", minOrder, maxOrder, linkedCount)
+	}
+
+	var nonCompletedRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM file_chunk fc
+		JOIN chunk c ON c.id = fc.chunk_id
+		WHERE fc.logical_file_id = $1 AND c.status <> $2
+	`, fileID, filestate.ChunkCompleted).Scan(&nonCompletedRefs); err != nil {
+		t.Fatalf("count non-completed linked chunks: %v", err)
+	}
+	if nonCompletedRefs != 0 {
+		t.Fatalf("expected linked chunks to remain COMPLETED when final logical completion fails, found %d non-completed refs", nonCompletedRefs)
+	}
+
+	assertNoProcessingRows(t, dbconn)
 }
 
 // TestStoreVerifiesFileChunkContiguityOnCompletion stores multiple files
