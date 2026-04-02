@@ -292,8 +292,12 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
 ### Recovery strictness
 
 - `COLDKEEP_STRICT_RECOVERY` (default: `true`) — controls how startup recovery handles suspicious orphan container conflicts.
-  - `true` (default): Recovery aborts with an error on any unexpected orphan container state. Recommended for production.
-  - `false`: Suspicious conflicts are logged as warnings and recovery continues. Useful when benign duplicate scenarios or restart races are expected (e.g., during rolling restarts or when replaying a partially-applied recovery).
+  - `true` (default): Recovery aborts startup with an error on suspicious orphan container state.
+    This is intentional and is the trust-first behavior.
+  - `false`: Suspicious conflicts are downgraded to warnings and recovery continues.
+    This relaxed mode is intended for messy environments and known duplicate-retrier/restart-race scenarios (for example during rolling restarts or replaying a partially-applied recovery).
+- Production guidance: keep strict mode enabled (`COLDKEEP_STRICT_RECOVERY=true`).
+- Operational expectation: strict mode can fail startup by design when state is suspicious; treat that as a safety signal, investigate, and recover explicitly.
 
 ### Reuse semantic validation
 
