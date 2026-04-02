@@ -42,6 +42,9 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      - name: Check shell script syntax
+        run: bash -n scripts/*.sh
           
       - name: Lint
         uses: golangci/golangci-lint-action@v7
