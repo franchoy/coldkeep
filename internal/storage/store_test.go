@@ -388,7 +388,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 	}
 }
 
-func TestStoreFileDoesNotUseRedundantPreCommitSync(t *testing.T) {
+func TestStoreFileUsesAppendLevelDurabilityWithoutExtraSyncHook(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -434,7 +434,7 @@ func TestStoreFileDoesNotUseRedundantPreCommitSync(t *testing.T) {
 
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
 	if err != nil {
-		t.Fatalf("store with pre-commit sync hook present should succeed: %v", err)
+		t.Fatalf("store using append-level durability contract should succeed: %v", err)
 	}
 	if writer.retireCalls != 0 {
 		t.Fatalf("expected no container retirement on successful store, got %d", writer.retireCalls)
