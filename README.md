@@ -187,6 +187,15 @@ The `simulate` command provides **accurate metadata-level estimation**:
 
 > Simulation reflects real storage behavior without side effects.
 
+Use simulated mode for:
+
+- planning
+- estimation
+- tests
+- workflow validation
+
+Do not treat simulated mode as proof of physical durability.
+
 Simulation is still a confidence tool, not a correctness proof for the PostgreSQL-backed runtime:
 
 - Simulated mode uses an isolated SQLite database
@@ -276,6 +285,9 @@ coldkeep simulate store file.txt --output json
 - Does not persist data
 - Does not modify real storage
 - Does not validate PostgreSQL-specific locking, advisory lock, or contention semantics
+
+Use simulation for planning, estimation, tests, and workflow validation only.
+It is not proof of physical durability.
 
 Simulation is designed as a **decision tool** for evaluating coldkeep before adoption,
 providing realistic estimates of storage efficiency and expected container usage.
