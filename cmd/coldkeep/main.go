@@ -992,31 +992,38 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 
 	if outputMode == outputModeText {
-		overallStatus := "ok"
-		if report.RecoveryStatus != "ok" || report.VerifyStatus != "ok" || report.SchemaStatus != "ok" {
-			overallStatus = "error"
-		}
-
-		fmt.Println("Doctor health report")
-		fmt.Printf("  Overall status:      %s\n", overallStatus)
-		fmt.Printf("  Verify level:        %s\n", report.VerifyLevel)
-		fmt.Printf("  Phase 1 - Recovery:  %s\n", report.RecoveryStatus)
-		fmt.Printf("  Phase 2 - Verify:    %s\n", report.VerifyStatus)
-		if report.SchemaStatus == "ok" {
-			fmt.Printf("  Phase 3 - Schema:    %s (version=%d)\n", report.SchemaStatus, report.SchemaVersion)
-		} else {
-			fmt.Printf("  Phase 3 - Schema:    %s\n", report.SchemaStatus)
-		}
-		fmt.Printf("  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
-			report.Recovery.AbortedLogicalFiles,
-			report.Recovery.AbortedChunks,
-			report.Recovery.QuarantinedMissing,
-			report.Recovery.QuarantinedCorruptTail,
-			report.Recovery.QuarantinedOrphan,
-		)
+		fmt.Print(formatDoctorTextReport(report))
 	}
 
 	return nil
+}
+
+func formatDoctorTextReport(report doctorReport) string {
+	overallStatus := "ok"
+	if report.RecoveryStatus != "ok" || report.VerifyStatus != "ok" || report.SchemaStatus != "ok" {
+		overallStatus = "error"
+	}
+
+	var b strings.Builder
+	b.WriteString("Doctor health report\n")
+	b.WriteString(fmt.Sprintf("  Overall status:      %s\n", overallStatus))
+	b.WriteString(fmt.Sprintf("  Verify level:        %s\n", report.VerifyLevel))
+	b.WriteString(fmt.Sprintf("  Phase 1 - Recovery:  %s\n", report.RecoveryStatus))
+	b.WriteString(fmt.Sprintf("  Phase 2 - Verify:    %s\n", report.VerifyStatus))
+	if report.SchemaStatus == "ok" {
+		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s (version=%d)\n", report.SchemaStatus, report.SchemaVersion))
+	} else {
+		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s\n", report.SchemaStatus))
+	}
+	b.WriteString(fmt.Sprintf("  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
+		report.Recovery.AbortedLogicalFiles,
+		report.Recovery.AbortedChunks,
+		report.Recovery.QuarantinedMissing,
+		report.Recovery.QuarantinedCorruptTail,
+		report.Recovery.QuarantinedOrphan,
+	))
+
+	return b.String()
 }
 
 func parseDoctorVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {

@@ -165,6 +165,66 @@ func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
 	}
 }
 
+func TestFormatDoctorTextReportGoldenHealthy(t *testing.T) {
+	report := doctorReport{
+		Recovery: recovery.Report{
+			AbortedLogicalFiles:    0,
+			AbortedChunks:          0,
+			QuarantinedMissing:     0,
+			QuarantinedCorruptTail: 0,
+			QuarantinedOrphan:      0,
+		},
+		VerifyLevel:    "full",
+		SchemaVersion:  5,
+		RecoveryStatus: "ok",
+		VerifyStatus:   "ok",
+		SchemaStatus:   "ok",
+	}
+
+	got := formatDoctorTextReport(report)
+	want := "Doctor health report\n" +
+		"  Overall status:      ok\n" +
+		"  Verify level:        full\n" +
+		"  Phase 1 - Recovery:  ok\n" +
+		"  Phase 2 - Verify:    ok\n" +
+		"  Phase 3 - Schema:    ok (version=5)\n" +
+		"  Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0\n"
+
+	if got != want {
+		t.Fatalf("doctor text output mismatch\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestFormatDoctorTextReportGoldenDegraded(t *testing.T) {
+	report := doctorReport{
+		Recovery: recovery.Report{
+			AbortedLogicalFiles:    1,
+			AbortedChunks:          2,
+			QuarantinedMissing:     3,
+			QuarantinedCorruptTail: 4,
+			QuarantinedOrphan:      5,
+		},
+		VerifyLevel:    "deep",
+		SchemaVersion:  0,
+		RecoveryStatus: "ok",
+		VerifyStatus:   "error",
+		SchemaStatus:   "error",
+	}
+
+	got := formatDoctorTextReport(report)
+	want := "Doctor health report\n" +
+		"  Overall status:      error\n" +
+		"  Verify level:        deep\n" +
+		"  Phase 1 - Recovery:  ok\n" +
+		"  Phase 2 - Verify:    error\n" +
+		"  Phase 3 - Schema:    error\n" +
+		"  Recovery summary: aborted_logical_files=1 aborted_chunks=2 quarantined_missing_containers=3 quarantined_corrupt_tail_containers=4 quarantined_orphan_containers=5\n"
+
+	if got != want {
+		t.Fatalf("doctor text output mismatch\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
 func TestClassifyExitCodeTypedUsageError(t *testing.T) {
 	err := usageErrorf("Usage: coldkeep store <filePath>")
 	if got := classifyExitCode(err); got != exitUsage {
