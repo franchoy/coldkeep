@@ -87,7 +87,7 @@ on startup if `schema_version` is missing.
 Build:
 
 ``` bash
-go build -o coldkeep ./app
+go build -o coldkeep ./cmd/coldkeep
 ```
 
 Run:
@@ -208,6 +208,16 @@ Optional focused run while working on doctor behavior:
 ``` bash
 go test ./tests -run 'TestDoctor(Command|JSONContractConsistency|FailureJSONContractAndStreams)$' -count=1 -v
 ```
+
+Recommended focused runs for v0.10 lifecycle/reuse hardening changes:
+
+``` bash
+go test ./tests -run 'TestReuseRefusesSemanticallyCorruptedCompletedFile|TestGCRestorePinRaceContainerNotDeleted|TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock|TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt' -count=1 -v
+```
+
+If you modify startup recovery, reuse validation, verify semantics, restore
+pinning, or GC locking behavior, include at least one targeted regression test
+for the changed contract in your PR.
 
 If your shell does not keep exported variables between commands, prefix each test command with the environment variables directly.
 

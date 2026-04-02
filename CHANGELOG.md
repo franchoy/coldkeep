@@ -15,7 +15,34 @@ production stability.
 Feature-branch hardening work for adversarial lifecycle interleavings,
 verification contracts, and recovery behavior clarity.
 
+### Reuse Integrity Hardening
+
+- Added semantic integrity validation for completed logical-file reuse, controlled by
+  `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default `suspicious`)
+- Hardened structural reuse acceptance: completed-file reuse now requires contiguous
+  file-chunk graph integrity, completed referenced chunks, valid block metadata,
+  non-quarantined containers, and on-disk container file presence before
+  returning `AlreadyStored=true`
+- Hardened completed-chunk reuse validation: chunk reuse now enforces block-row
+  cardinality and validates container presence/quarantine state plus
+  block offset/size bounds against container metadata and physical file size
+- Added integration regression proving semantically corrupted completed-file reuse
+  is refused and rebuild/retry paths are triggered
+
+### Atomicity & Lifecycle Safety
+
+- Added atomic logical-file completion boundary: the final transition to
+  `COMPLETED` now verifies full chunk linkage and contiguous ordering in the same
+  transaction
+- Hardened rollback error handling: rollback failures are now surfaced and
+  escalated instead of silently ignored, with failed append paths retiring or
+  quarantining unsafe containers
+- Added in-process container retirement/quarantine behavior for active/just-sealed
+  container failures so unsafe containers are withdrawn immediately, not only on
+  next startup recovery
+
 ### Lifecycle Hardening
+
 - Hardened startup sealing recovery: containers in `sealing=TRUE` state are now
   quarantined (not auto-sealed) when physical file size differs from DB
   `current_size`, preventing ghost-byte containers from being promoted as healthy
@@ -26,12 +53,16 @@ verification contracts, and recovery behavior clarity.
   row-lock syntax
 
 ### Added
+
 - Added integration coverage for non-strict startup recovery on suspicious
   orphan-container conflicts (`COLDKEEP_STRICT_RECOVERY=false`)
 - Added adversarial integration coverage for restore pin + remove + GC
   interleavings
+- Added integration regression for deep verification trailing-byte detection
+  after the last completed block payload
 
 ### Changed
+
 - Clarified verification operational contract as a recovered-state checker,
   not a live online-consistency checker during in-flight writes
 - Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
@@ -49,8 +80,22 @@ verification contracts, and recovery behavior clarity.
   invariant (append-only contiguous layout per container)
 - Froze and documented `doctor --output json` failure contract: failures emit
   only generic CLI error JSON on `stderr` (no partial doctor report payload)
+- Strengthened GC emptiness invariants and stats accounting to treat chunk
+  liveness as `live_ref_count OR pin_count`, preserving restore safety under
+  remove/GC interleavings
+
+### Verification & Recovery Semantics
+
+- Standard verification now enforces pinned-chunk integrity:
+  `pin_count > 0` chunks must remain `COMPLETED` and retain block metadata
+- Deep verification now fails when container tails contain trailing
+  unaccounted bytes beyond the last completed block
+- PostgreSQL startup schema guard now explicitly requires
+  `schema_version >= 5`; optional first-run bootstrap remains available via
+  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`
 
 ### v1.0 Trust Model
+
 - Consolidated operator trust model documentation: startup recovery is the normal
   lifecycle entry point (not exceptional maintenance), `doctor` is the recommended
   health gate and is corrective (not read-only), `verify` assumes recovered state,
@@ -62,6 +107,7 @@ verification contracts, and recovery behavior clarity.
   and its default mode (`--standard`) is a frozen v1.0 product contract
 
 ### Tests
+
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
@@ -72,6 +118,8 @@ verification contracts, and recovery behavior clarity.
   orphan conflict states instead of aborting startup
 - Added command-layer test that pins doctor JSON failure behavior to generic
   CLI error payload shape (no `command`/`data` fields)
+- Added integration coverage for atomic logical-file completion and contiguous
+  file_chunk ordering under both single-file and concurrent multi-chunk ingestion
 
 ------------------------------------------------------------------------
 

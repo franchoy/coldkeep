@@ -231,14 +231,18 @@ Guarantees hold only if:
 
 ## ✨ What’s new in v0.10
 
-- Semantic integrity validation for logical file reuse
-- Reuse of `COMPLETED` files now optionally re-reads and rehashes every referenced chunk payload before accepting the deduplication shortcut
-- Configurable via `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default: `suspicious`)
-  - `suspicious`: deep check only when risk signals are present (file or chunk retry history, mutable container references)
-  - `always`: unconditional deep check on every reuse candidate
-- Operational note: `always` can materially increase reuse-path read/CPU cost; use it when you want maximum inline integrity checking and can absorb lower throughput.
-- Structural reuse validation (graph checks: chunk/link/block/container presence and file existence) remains mandatory in all modes
-- Correctness of reuse without deep checks depends on recovery and verify having run; `suspicious` mode triggers automatically when there is evidence they may not have
+- Reuse integrity hardening for `COMPLETED` logical files:
+  - semantic validation mode via `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default: `suspicious`)
+  - `suspicious`: semantic re-read/re-hash only when risk signals are present (for example retry history or mutable container references)
+  - `always`: semantic re-read/re-hash for every reuse candidate (strongest inline gate, highest read/CPU cost)
+  - structural graph validation remains mandatory in all modes (contiguous file-chunk links, completed chunks, valid block/container references, on-disk container presence)
+- Startup sealing recovery hardening: containers left in `sealing=TRUE` are quarantined (not auto-sealed) when physical size and DB `current_size` diverge, preventing ghost-byte promotion as healthy
+- Restore safety hardening under interleavings:
+  - GC/delete liveness checks consistently honor `live_ref_count OR pin_count`
+  - restore pinning behavior is covered by adversarial integration tests for restore/remove/GC races
+- Deep verification hardening: deep verify now fails on trailing unaccounted bytes after the last completed block payload in a container
+- Verification contract clarity: verification remains a recovered-state checker (run after recovery; not an online in-flight-write consistency checker)
+- Completion-boundary hardening: logical-file completion verifies chunk linkage and contiguous ordering at the completion boundary before exposing the file as `COMPLETED`
 
 ---
 
