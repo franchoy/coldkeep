@@ -61,6 +61,9 @@ type LocalWriter struct {
 	// container file but the enclosing DB transaction has not yet committed.
 	// RollbackLastAppend uses prevAppendSize/prevAppendFile to truncate the file
 	// back to its pre-write offset if the transaction is rolled back or fails to commit.
+	// Invariant: after AppendPayload succeeds, caller must eventually resolve this
+	// pending state via exactly one terminal path: RollbackLastAppend (rollback path)
+	// or AcknowledgeAppendCommitted (commit path).
 	pendingAppend  bool
 	prevAppendSize int64
 	prevAppendFile string
@@ -104,6 +107,9 @@ func (w *LocalWriter) WriteChunk(c chunk.Info) error {
 // AppendPayload appends already-encoded payload bytes to the active local container.
 // DB lifecycle decisions (size update/seal/chunk linking) remain outside this writer.
 // If there is no active container (including after FinalizeContainer), this method lazily opens one.
+// Contract: after successful return, caller must later call either
+// RollbackLastAppend() if commit does not succeed, or AcknowledgeAppendCommitted()
+// exactly once after a successful commit.
 func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement, error) {
 	if len(payload) == 0 {
 		return LocalPlacement{}, fmt.Errorf("payload is empty")
@@ -326,6 +332,9 @@ func (w *LocalWriter) clearActive() {
 
 }
 
+// FinalizeContainer performs physical sync/close for the active container and clears
+// local active state. If physical finalization fails, the container is retired and
+// quarantined before returning so no future writes can reuse a potentially unsafe file.
 func (w *LocalWriter) FinalizeContainer() error {
 	if err := w.finalizePhysicalOnly(); err != nil {
 		containerID := w.activeID
@@ -343,7 +352,8 @@ func (w *LocalWriter) FinalizeContainer() error {
 // DB transaction has successfully committed. This completes the commit path of the
 // state machine: pendingAppend and the pre-write size/file fields are zeroed so a
 // future rollback call cannot accidentally truncate already-committed bytes.
-// Safe to call even if no append is pending (no-op).
+// Must be called exactly once after each successful commit that followed an
+// AppendPayload success. Safe to call when no append is pending (no-op).
 func (w *LocalWriter) AcknowledgeAppendCommitted() {
 	w.pendingAppend = false
 	w.prevAppendSize = 0
@@ -355,6 +365,7 @@ func (w *LocalWriter) AcknowledgeAppendCommitted() {
 // Safe to call even if no append is pending (no-op). After a successful rollback
 // the writer's active state is reset so the next AppendPayload selects a fresh
 // open container from the database.
+// If rollback itself fails, caller must retire/quarantine the active container.
 func (w *LocalWriter) RollbackLastAppend() error {
 	if !w.pendingAppend {
 		return nil
@@ -438,6 +449,8 @@ func (w *LocalWriter) BindDB(dbconn *sql.DB) {
 	w.dbconn = dbconn
 }
 
+// RetireActiveContainer closes current handles, clears pending append state, and
+// marks the DB row quarantined to prevent future reuse.
 func (w *LocalWriter) RetireActiveContainer() error {
 	if !w.hasActive {
 		return nil

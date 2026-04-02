@@ -28,6 +28,38 @@ type payloadStatefulWriter interface {
 	FinalizeContainer() error
 }
 
+// Append lifecycle contract (v1.0):
+//
+// 1. Append phase
+//   - AppendPayload(tx, payload) performs a physical append coupled to the caller's
+//     DB transaction boundary.
+//   - If AppendPayload succeeds, the caller now owns an unresolved append outcome.
+//
+// 2. Resolve phase (exactly one terminal path per successful append)
+//   - Rollback path:
+//     If the enclosing transaction is rolled back, or any error occurs before
+//     tx.Commit() succeeds, caller must invoke RollbackLastAppend() when supported.
+//   - Commit path:
+//     If tx.Commit() succeeds, caller must invoke AcknowledgeAppendCommitted()
+//     exactly once when supported.
+//
+// 3. Failure hardening
+//   - If rollback/truncate fails, caller must retire/quarantine the active
+//     container before any further writes.
+//   - If finalize/sync fails for an active container, caller must retire/
+//     quarantine that container before continuing.
+//
+// 4. Rotation/finalization
+//   - FinalizeContainer closes/syncs the physical file handle.
+//   - A DB sealing marker and final SealContainer update complete logical sealing;
+//     if sealing cannot complete safely, container must be quarantined.
+//
+// Invariants:
+//   - After AppendPayload success: rollback OR commit-ack is required.
+//   - After tx.Commit success for a transaction that appended bytes:
+//     AcknowledgeAppendCommitted must be called exactly once.
+//   - After failed rollback/finalize/sync: retire/quarantine is required.
+
 // optionalAppendRollbacker is implemented by writers that can truncate a physical
 // container file back to its pre-append offset when the enclosing DB transaction
 // is rolled back or fails to commit.
@@ -56,7 +88,7 @@ type optionalWriterDBBinder interface {
 // Safe to call unconditionally on any error path; if no physical write is pending the
 // implementation returns immediately without truncating.
 // Returns any error from the rollback operation; callers must handle rollback failures
-// as they indicate physical/logical inconsistency and may warrant container retirement.
+// as they indicate physical/logical inconsistency and must trigger container retirement.
 func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
 	if rb, ok := writer.(optionalAppendRollbacker); ok {
 		return rb.RollbackLastAppend()
@@ -67,7 +99,8 @@ func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
 // acknowledgeWriterAppendCommitted calls AcknowledgeAppendCommitted on the writer
 // if it supports it. Must be called immediately after every successful tx.Commit()
 // that followed an AppendPayload call, completing the commit path of the writer
-// state machine so pending rollback bookkeeping is cleared.
+// state machine so pending rollback bookkeeping is cleared. This call is expected
+// exactly once per successful append transaction.
 func acknowledgeWriterAppendCommitted(writer payloadStatefulWriter) {
 	if ack, ok := writer.(optionalAppendCommitAcknowledger); ok {
 		ack.AcknowledgeAppendCommitted()
