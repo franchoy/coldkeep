@@ -966,6 +966,10 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		report.VerifyStatus = "ok"
 	}
 
+	// Intentional JSON contract:
+	// - Success: doctor-specific payload on stdout.
+	// - Failure: generic CLI error payload on stderr via printCLIError.
+	// Doctor does not emit partial doctor data on failure.
 	if recoveryErr != nil {
 		return fmt.Errorf("doctor recovery phase failed: %w", recoveryErr)
 	}

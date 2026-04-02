@@ -40,12 +40,16 @@ verification contracts, and recovery behavior clarity.
   with a non-strict override for restart-race scenarios
 - Documented contiguous offset validation as an explicit current-format
   invariant (append-only contiguous layout per container)
+- Froze and documented `doctor --output json` failure contract: failures emit
+  only generic CLI error JSON on `stderr` (no partial doctor report payload)
 
 ### Tests
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious
   orphan conflict states instead of aborting startup
+- Added command-layer test that pins doctor JSON failure behavior to generic
+  CLI error payload shape (no `command`/`data` fields)
 
 ------------------------------------------------------------------------
 

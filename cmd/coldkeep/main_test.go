@@ -133,6 +133,38 @@ func assertJSONNumber(t *testing.T, payload map[string]any, key string, expected
 	}
 }
 
+func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
+	err := verifyError(errors.New("doctor verify phase failed: chunk mismatch"))
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, ok := payload["status"].(string); !ok || got != "error" {
+		t.Fatalf("status mismatch: got=%v", payload["status"])
+	}
+	if got, ok := payload["error_class"].(string); !ok || got != "VERIFY" {
+		t.Fatalf("error_class mismatch: got=%v", payload["error_class"])
+	}
+	if got, ok := payload["message"].(string); !ok || !strings.Contains(got, "doctor verify phase failed") {
+		t.Fatalf("message mismatch: got=%v", payload["message"])
+	}
+	if _, exists := payload["command"]; exists {
+		t.Fatalf("unexpected command field in doctor failure payload: %v", payload["command"])
+	}
+	if _, exists := payload["data"]; exists {
+		t.Fatalf("unexpected data field in doctor failure payload: %v", payload["data"])
+	}
+}
+
 func TestClassifyExitCodeTypedUsageError(t *testing.T) {
 	err := usageErrorf("Usage: coldkeep store <filePath>")
 	if got := classifyExitCode(err); got != exitUsage {

@@ -577,6 +577,23 @@ Doctor report
 }
 ```
 
+### JSON failure contract (frozen)
+
+For `doctor --output json`, failure handling is intentionally delegated to the
+generic CLI error path.
+
+- On failure, doctor emits exactly one generic error JSON payload on `stderr`
+  and exits non-zero.
+- Doctor does not emit a doctor-shaped `command=data` success payload on
+  failure.
+- Doctor does not emit partial phase data (`recovery`, `verify`,
+  `schema_version`) on failure.
+- Failure phase detail is conveyed only in the generic `message` field
+  (for example: `doctor verify phase failed: ...`).
+
+This contract is covered by integration and command-layer tests and is intended
+to remain stable for automation.
+
 ### Operational guidance
 
 - Run `doctor` after startup, before first ingestion in a new environment.
