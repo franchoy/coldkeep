@@ -535,8 +535,61 @@ if [[ -n "$SAMPLE_FILE_ID" && "$SAMPLE_FILE_ID" != "null" ]]; then
 fi
 
 echo ""
-echo "[smoke] === CODEC VARIANT TEST ==="
+echo "[smoke] === LARGE FILE HANDLING TEST ==="
 
+# Generate 100MB test file at runtime (fast, deterministic, no git bloat)
+TEST_LARGE_FILE="./_smoke_test_large_100mb.txt"
+echo "[smoke] generating 100MB test file (repetitive pattern)..."
+yes "Test data line for chunking validation: Lorem ipsum dolor sit amet, consectetur adipiscing elit. " \
+  | head -c 100M > "$TEST_LARGE_FILE" 2>/dev/null
+
+echo "[smoke] storing large file (tests chunking and container rotation)"
+if ! LARGE_STORE_OUTPUT=$(coldkeep store "$TEST_LARGE_FILE" --output json 2>&1); then
+  echo "[smoke] ERROR: failed to store large file"
+  rm -f "$TEST_LARGE_FILE"
+  exit 1
+fi
+
+LARGE_ID=$(echo "$LARGE_STORE_OUTPUT" | jq -r '.file_id' 2>/dev/null)
+if [[ -z "$LARGE_ID" || "$LARGE_ID" == "null" ]]; then
+  echo "[smoke] ERROR: store command did not return valid file_id"
+  rm -f "$TEST_LARGE_FILE"
+  exit 1
+fi
+
+echo "[smoke] large file stored with id=${LARGE_ID}, restoring and verifying integrity..."
+LARGE_RESTORE_DIR="./_smoke_large_restored"
+mkdir -p "$LARGE_RESTORE_DIR"
+
+if ! coldkeep restore "$LARGE_ID" "$LARGE_RESTORE_DIR/" > /dev/null 2>&1; then
+  echo "[smoke] ERROR: restore command failed for large file id=${LARGE_ID}"
+  rm -rf "$TEST_LARGE_FILE" "$LARGE_RESTORE_DIR"
+  exit 1
+fi
+
+RESTORED_LARGE=$(find "$LARGE_RESTORE_DIR" -type f -print -quit)
+if [[ -z "$RESTORED_LARGE" ]]; then
+  echo "[smoke] ERROR: restore produced no output file for large file id=${LARGE_ID}"
+  rm -rf "$TEST_LARGE_FILE" "$LARGE_RESTORE_DIR"
+  exit 1
+fi
+
+ORIG_HASH=$(sha256sum "$TEST_LARGE_FILE" | awk '{print $1}')
+REST_HASH=$(sha256sum "$RESTORED_LARGE" | awk '{print $1}')
+
+if [[ "$ORIG_HASH" == "$REST_HASH" ]]; then
+  echo "[smoke]   ok: 100MB file restore is byte-perfect (hash: ${ORIG_HASH:0:16}...)"
+else
+  echo "[smoke] ERROR: 100MB file hash mismatch: want=${ORIG_HASH} got=${REST_HASH}"
+  rm -rf "$TEST_LARGE_FILE" "$LARGE_RESTORE_DIR"
+  exit 1
+fi
+
+echo "[smoke] large file handling test PASSED"
+rm -rf "$TEST_LARGE_FILE" "$LARGE_RESTORE_DIR"
+
+echo ""
+echo "[smoke] === CODEC VARIANT TEST ==="
 # If not already in a specific codec mode, test both plain and aesgcm
 CURRENT_CODEC="${COLDKEEP_CODEC:-plain}"
 if [[ "$CURRENT_CODEC" == "plain" ]]; then
