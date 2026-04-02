@@ -2821,6 +2821,140 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 	assertUniqueFileChunkOrders(t, dbconn)
 }
 
+// openRawPostgresDB opens a raw PostgreSQL connection WITHOUT calling
+// EnsurePostgresSchema or any other startup guards. Pass an empty dbName to use
+// the env-configured database. The caller is responsible for closing the returned
+// connection.
+func openRawPostgresDB(t *testing.T, dbName string) *sql.DB {
+	t.Helper()
+	if dbName == "" {
+		dbName = getenvOrDefault("DB_NAME", "coldkeep")
+	}
+	connStr := "host=" + getenvOrDefault("DB_HOST", "127.0.0.1") +
+		" port=" + getenvOrDefault("DB_PORT", "5432") +
+		" user=" + getenvOrDefault("DB_USER", "coldkeep") +
+		" password=" + os.Getenv("DB_PASSWORD") +
+		" dbname=" + dbName +
+		" sslmode=" + getenvOrDefault("DB_SSLMODE", "disable") +
+		" connect_timeout=5"
+	rawDB, err := sql.Open("postgres", connStr)
+	if err != nil {
+		t.Fatalf("open raw postgres DB (%s): %v", dbName, err)
+	}
+	if err := rawDB.Ping(); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("ping raw postgres DB (%s): %v", dbName, err)
+	}
+	return rawDB
+}
+
+// TestSchemaBootstrapVersionReleaseGate is a focused release-gate test that
+// freezes startup/operator behavior for the two highest-friction schema failure
+// modes:
+//
+//   - missing schema_version table with auto-bootstrap disabled
+//   - schema version below the required minimum
+//
+// Each subtest verifies the expected error classification and actionable message
+// so operator and tooling integrations receive stable, testable signal.
+func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
+	requireDB(t)
+
+	// --- Subtest 1: old schema version is rejected with actionable message ---
+	t.Run("old_schema_version_rejected", func(t *testing.T) {
+		// Connect raw; bypass EnsurePostgresSchema so we can manipulate schema_version.
+		mainDB := openRawPostgresDB(t, "")
+		defer func() { _ = mainDB.Close() }()
+
+		// Save the current live schema version.
+		var savedVersion int
+		if err := mainDB.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&savedVersion); err != nil {
+			t.Fatalf("read schema_version: %v", err)
+		}
+
+		// Register cleanup BEFORE mutating — guarantees restoration even on panic.
+		t.Cleanup(func() {
+			restoreDB := openRawPostgresDB(t, "")
+			defer func() { _ = restoreDB.Close() }()
+			if _, err := restoreDB.Exec(`UPDATE schema_version SET version = $1`, savedVersion); err != nil {
+				t.Errorf("CRITICAL: restore schema_version to %d failed: %v", savedVersion, err)
+			}
+		})
+
+		// Downgrade schema_version to 1 (auto-commits outside a transaction).
+		if _, err := mainDB.Exec(`UPDATE schema_version SET version = 1`); err != nil {
+			t.Fatalf("downgrade schema_version: %v", err)
+		}
+
+		// A fresh connection sees the committed downgrade.
+		testDB := openRawPostgresDB(t, "")
+		defer func() { _ = testDB.Close() }()
+
+		err := db.EnsurePostgresSchema(testDB)
+		if err == nil {
+			t.Fatal("EnsurePostgresSchema must fail for old schema version, got nil")
+		}
+
+		// Verify failure classification and actionable operator message.
+		errMsg := err.Error()
+		for _, want := range []string{
+			"postgres schema version too old",
+			"have 1",
+			"apply db/schema_postgres.sql",
+		} {
+			if !strings.Contains(errMsg, want) {
+				t.Errorf("expected %q in error message, got: %q", want, errMsg)
+			}
+		}
+	})
+
+	// --- Subtest 2: missing schema without auto-bootstrap fails with actionable error ---
+	t.Run("missing_schema_without_auto_bootstrap", func(t *testing.T) {
+		// COLDKEEP_DB_AUTO_BOOTSTRAP is evaluated at package init; skip if it
+		// was truthy when the test binary launched so we can correctly expect failure.
+		switch strings.TrimSpace(strings.ToLower(strings.Trim(os.Getenv("COLDKEEP_DB_AUTO_BOOTSTRAP"), "\"'"))) {
+		case "1", "true", "yes", "on":
+			t.Skip("COLDKEEP_DB_AUTO_BOOTSTRAP is enabled; cannot test missing-schema failure path")
+		}
+
+		// Create an isolated, empty database with no schema applied.
+		// Requires CREATEDB or superuser privilege (always true in the Docker dev stack).
+		adminDB := openRawPostgresDB(t, "")
+		tempDBName := fmt.Sprintf("coldkeep_sgate_%d", time.Now().UnixNano())
+		_, createErr := adminDB.Exec("CREATE DATABASE " + tempDBName)
+		_ = adminDB.Close()
+		if createErr != nil {
+			t.Skipf("CREATE DATABASE not available (%v); skipping missing-schema subtest", createErr)
+		}
+
+		t.Cleanup(func() {
+			cleanupDB := openRawPostgresDB(t, "")
+			defer func() { _ = cleanupDB.Close() }()
+			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + tempDBName)
+		})
+
+		// Connect to the fresh, schema-less database.
+		emptyDB := openRawPostgresDB(t, tempDBName)
+		defer func() { _ = emptyDB.Close() }()
+
+		err := db.EnsurePostgresSchema(emptyDB)
+		if err == nil {
+			t.Fatal("EnsurePostgresSchema must fail when schema_version table is missing and auto-bootstrap is disabled, got nil")
+		}
+
+		// Verify failure classification and actionable operator message.
+		errMsg := err.Error()
+		for _, want := range []string{
+			"postgres schema is not initialized",
+			"COLDKEEP_DB_AUTO_BOOTSTRAP",
+		} {
+			if !strings.Contains(errMsg, want) {
+				t.Errorf("expected %q in error message, got: %q", want, errMsg)
+			}
+		}
+	})
+}
+
 func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	requireDB(t)
 
