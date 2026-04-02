@@ -962,31 +962,25 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		report.VerifyStatus = "ok"
 	}
 
-	if outputMode == outputModeJSON {
-		status := "ok"
-		message := "doctor checks passed"
-		switch {
-		case recoveryErr != nil:
-			status = "error"
-			message = fmt.Sprintf("recovery phase failed: %v", recoveryErr)
-		case schemaErr != nil:
-			status = "error"
-			message = fmt.Sprintf("schema/version check failed: %v", schemaErr)
-		case verifyErr != nil:
-			status = "error"
-			message = fmt.Sprintf("verify phase failed: %v", verifyErr)
-		}
+	if recoveryErr != nil {
+		return fmt.Errorf("doctor recovery phase failed: %w", recoveryErr)
+	}
+	if schemaErr != nil {
+		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
+	}
+	if verifyErr != nil {
+		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
+	}
 
+	if outputMode == outputModeJSON {
 		payload := map[string]any{
-			"status":  status,
+			"status":  "ok",
 			"command": "doctor",
 			"data":    report,
 		}
-		if status != "ok" {
-			payload["message"] = strings.TrimSpace(message)
-		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
+		return nil
 	}
 
 	if outputMode == outputModeText {
@@ -1006,16 +1000,6 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			report.Recovery.QuarantinedCorruptTail,
 			report.Recovery.QuarantinedOrphan,
 		)
-	}
-
-	if recoveryErr != nil {
-		return fmt.Errorf("doctor recovery phase failed: %w", recoveryErr)
-	}
-	if schemaErr != nil {
-		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
-	}
-	if verifyErr != nil {
-		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
 	}
 
 	return nil

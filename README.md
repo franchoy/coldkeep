@@ -347,6 +347,7 @@ coldkeep simulate store-folder ./data --output json
 - JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
 - CLI exit codes are now consistent and machine-friendly
 - Errors are classified into usage, verification, and runtime categories
+- In `--output json` mode, each command invocation emits exactly one canonical JSON payload: success payloads go to stdout, and error payloads go to stderr with a non-zero exit code.
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
 
 ---
