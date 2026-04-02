@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -49,21 +48,18 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 		}
 	}()
 
-	// Lock the row and read status atomically to prevent races with in-flight stores.
+	// Lock the row when supported and read status atomically to prevent races with in-flight stores.
+	statusQuery := "SELECT status FROM logical_file WHERE id = $1"
+	if db.SupportsSelectForUpdate(dbconn) {
+		statusQuery += " FOR UPDATE"
+	}
+
 	var fileStatus string
 	err = tx.QueryRowContext(
 		ctx,
-		"SELECT status FROM logical_file WHERE id = $1 FOR UPDATE",
+		statusQuery,
 		fileID,
 	).Scan(&fileStatus)
-	if err != nil && strings.Contains(err.Error(), `near "FOR": syntax error`) {
-		// SQLite does not support FOR UPDATE; retry without explicit row lock.
-		err = tx.QueryRowContext(
-			ctx,
-			"SELECT status FROM logical_file WHERE id = $1",
-			fileID,
-		).Scan(&fileStatus)
-	}
 	if err == sql.ErrNoRows {
 		return RemoveFileResult{}, fmt.Errorf("file ID %d not found", fileID)
 	}
