@@ -1154,6 +1154,63 @@ func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chu
 	return nil
 }
 
+// finalizeLogicalFileStorageWithContext atomically verifies that all chunks are linked
+// and marks the logical file as COMPLETED in a single transaction. This ensures that
+// if verification fails, the file remains in PROCESSING state and no partial completion
+// leaks out. If this transaction fails, recovery/cleanup will mark the file ABORTED,
+// maintaining semantic consistency: either all chunks are linked AND file is complete,
+// or file is in PROCESSING/ABORTED (never a state where chunks exist but file isn't marked).
+func finalizeLogicalFileStorageWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, expectedChunkCount int) error {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin finalize transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Verify all chunks are linked (chunk_order must be 0..expectedChunkCount-1 contiguous).
+	// If any are missing, this transaction fails and file stays PROCESSING for later recovery.
+	var linkedCount int
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	).Scan(&linkedCount); err != nil {
+		return fmt.Errorf("count file chunks: %w", err)
+	}
+	if linkedCount != expectedChunkCount {
+		return fmt.Errorf("finalize: file %d has %d linked chunks, expected %d (incomplete store or race)", fileID, linkedCount, expectedChunkCount)
+	}
+
+	// Verify chunk_order contiguity (0, 1, 2,... n-1 with no gaps).
+	var maxOrder int
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(MAX(chunk_order), -1) FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	).Scan(&maxOrder); err != nil {
+		return fmt.Errorf("check chunk_order max: %w", err)
+	}
+	if maxOrder != expectedChunkCount-1 {
+		return fmt.Errorf("finalize: file %d chunk_order max is %d, expected %d (non-contiguous linking)", fileID, maxOrder, expectedChunkCount-1)
+	}
+
+	// All verification passed; mark file complete in the same transaction.
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE logical_file SET status = $1 WHERE id = $2`,
+		filestate.LogicalFileCompleted,
+		fileID,
+	); err != nil {
+		return fmt.Errorf("update logical_file to COMPLETED: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit finalize transaction: %w", err)
+	}
+
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // HIGH-LEVEL FILE AND FOLDER STORAGE FUNCTIONS
 // -----------------------------------------------------------------------------
@@ -1513,14 +1570,12 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		}
 	}
 
-	// After all chunks are stored and linked, mark logical file as "COMPLETED"
-	_, err = sgctx.DB.ExecContext(
-		ctx,
-		`UPDATE logical_file SET status = $1 WHERE id = $2`,
-		filestate.LogicalFileCompleted,
-		fileID,
-	)
-	if err != nil {
+	// Atomically verify all chunks are linked and mark logical file as COMPLETED in a single transaction.
+	// This groups the final state transition into a deliberate second phase that is logically atomic:
+	// either all chunks are successfully linked AND the file is marked complete, or the file
+	// remains PROCESSING for recovery if any verification fails. This avoids the semantic gap
+	// where chunks could be fully committed but the file completion is left dangling.
+	if err := finalizeLogicalFileStorageWithContext(ctx, sgctx.DB, fileID, chunkOrder); err != nil {
 		return StoreFileResult{}, err
 	}
 	// Mark the operation as completed to avoid aborting it in the deferred function

@@ -1014,3 +1014,116 @@ func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
 		t.Fatalf("markLogicalFileForRebuildWithContext on already-ABORTED file: %v", err)
 	}
 }
+
+// TestFinalizeLogicalFileStorageAtomicBoundary verifies that the finalization
+// transaction atomically verifies all chunks are linked and marks the file complete.
+// This guards against the race where chunks are committed but file completion fails.
+func TestFinalizeLogicalFileStorageAtomicBoundary(t *testing.T) {
+	testCases := []struct {
+		name               string
+		linkedChunkCount   int
+		expectedChunkCount int
+		shouldSucceed      bool
+		wantErrSubstr      string
+	}{
+		{
+			name:               "all chunks linked",
+			linkedChunkCount:   3,
+			expectedChunkCount: 3,
+			shouldSucceed:      true,
+		},
+		{
+			name:               "missing chunks (fewer linked)",
+			linkedChunkCount:   2,
+			expectedChunkCount: 3,
+			shouldSucceed:      false,
+			wantErrSubstr:      "has 2 linked chunks, expected 3",
+		},
+		{
+			name:               "extra chunks (more linked)",
+			linkedChunkCount:   4,
+			expectedChunkCount: 3,
+			shouldSucceed:      false,
+			wantErrSubstr:      "has 4 linked chunks, expected 3",
+		},
+		{
+			name:               "non-contiguous ordering",
+			linkedChunkCount:   3,
+			expectedChunkCount: 3,
+			shouldSucceed:      false,
+			wantErrSubstr:      "chunk_order max is",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbconn, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("open sqlite db: %v", err)
+			}
+			defer func() { _ = dbconn.Close() }()
+
+			if err := db.RunMigrations(dbconn); err != nil {
+				t.Fatalf("run migrations: %v", err)
+			}
+
+			var fileID int64
+			if err := dbconn.QueryRow(
+				`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+				 VALUES ($1, $2, $3, $4) RETURNING id`,
+				"finalize_test.bin", 1024, "finalize-test-hash", filestate.LogicalFileProcessing,
+			).Scan(&fileID); err != nil {
+				t.Fatalf("insert logical_file: %v", err)
+			}
+
+			// Insert chunks
+			for i := 0; i < tc.linkedChunkCount; i++ {
+				chunkID := insertReusableTestChunk(t, dbconn, fmt.Sprintf("finalize-chunk-%d", i), filestate.ChunkCompleted)
+
+				chunkOrder := i
+				// For the non-contiguous ordering test, skip order 1
+				if tc.name == "non-contiguous ordering" && i == 1 {
+					chunkOrder = 5 // Gap in sequence
+				}
+
+				insertReusableTestFileChunk(t, dbconn, fileID, chunkID, chunkOrder)
+			}
+
+			ctx, cancel := db.NewOperationContext(context.Background())
+			defer cancel()
+
+			err = finalizeLogicalFileStorageWithContext(ctx, dbconn, fileID, tc.expectedChunkCount)
+
+			if tc.shouldSucceed {
+				if err != nil {
+					t.Fatalf("expected finalize to succeed, got error: %v", err)
+				}
+
+				// Verify file is marked COMPLETED
+				var status string
+				if err := dbconn.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+					t.Fatalf("read logical_file status: %v", err)
+				}
+				if status != filestate.LogicalFileCompleted {
+					t.Fatalf("expected status COMPLETED, got %s", status)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected finalize to fail, but succeeded")
+				}
+				if tc.wantErrSubstr != "" && !strings.Contains(err.Error(), tc.wantErrSubstr) {
+					t.Fatalf("expected error containing %q, got: %v", tc.wantErrSubstr, err)
+				}
+
+				// Verify file is still PROCESSING (transaction rolled back)
+				var status string
+				if err := dbconn.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+					t.Fatalf("read logical_file status: %v", err)
+				}
+				if status != filestate.LogicalFileProcessing {
+					t.Fatalf("expected file to remain PROCESSING after failed finalize, got %s", status)
+				}
+			}
+		})
+	}
+}
