@@ -216,6 +216,7 @@ jobs:
           DB_SSLMODE: disable
           COLDKEEP_STORAGE_DIR: ${{ github.workspace }}/.ci-storage/${{ matrix.codec }}
           COLDKEEP_SMOKE_RESET_DB: 1
+          COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE: 1
         run: PATH="$PWD:$PATH" bash scripts/smoke.sh
 
       - name: Upload smoke artifacts on failure
