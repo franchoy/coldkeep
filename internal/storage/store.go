@@ -644,7 +644,7 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 	return nil
 }
 
-func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+func markLogicalFileForRebuildWithPolicyWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, markChunksSuspicious bool) error {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx for logical file %d rebuild: %w", fileID, err)
@@ -721,19 +721,21 @@ func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, f
 		}
 	}
 
-	// Mark implicated chunks as suspicious so future reuse in suspicious mode
-	// performs semantic validation rather than trusting stale completion state.
-	seenChunkIDs := make(map[int64]struct{}, len(chunkIDs))
-	for _, chunkID := range chunkIDs {
-		if _, ok := seenChunkIDs[chunkID]; ok {
-			continue
-		}
-		seenChunkIDs[chunkID] = struct{}{}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE chunk SET retry_count = retry_count + 1 WHERE id = $1`,
-			chunkID,
-		); err != nil {
-			return fmt.Errorf("mark chunk %d suspicious during logical file %d rebuild: %w", chunkID, fileID, err)
+	if markChunksSuspicious {
+		// Mark implicated chunks as suspicious so future reuse in suspicious mode
+		// performs semantic validation rather than trusting stale completion state.
+		seenChunkIDs := make(map[int64]struct{}, len(chunkIDs))
+		for _, chunkID := range chunkIDs {
+			if _, ok := seenChunkIDs[chunkID]; ok {
+				continue
+			}
+			seenChunkIDs[chunkID] = struct{}{}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE chunk SET retry_count = retry_count + 1 WHERE id = $1`,
+				chunkID,
+			); err != nil {
+				return fmt.Errorf("mark chunk %d suspicious during logical file %d rebuild: %w", chunkID, fileID, err)
+			}
 		}
 	}
 
@@ -750,6 +752,14 @@ func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, f
 	}
 	txclosed = true
 	return nil
+}
+
+func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	return markLogicalFileForRebuildWithPolicyWithContext(ctx, dbconn, fileID, false)
+}
+
+func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	return markLogicalFileForRebuildWithPolicyWithContext(ctx, dbconn, fileID, true)
 }
 
 // -----------------------------------------------------------------------------
@@ -933,7 +943,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 	}
 
 	log.Printf("event=store_reuse_validation_failed file_id=%d error=%v", fileID, reuseErr)
-	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
+	if err := markLogicalFileForReuseValidationFailureWithContext(ctx, dbconn, fileID); err != nil {
 		return 0, "", errors.Join(reuseErr, err)
 	}
 

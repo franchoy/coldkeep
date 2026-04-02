@@ -925,8 +925,8 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 		if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, id).Scan(&retryCount); err != nil {
 			t.Fatalf("read retry_count for chunk %d: %v", id, err)
 		}
-		if retryCount != 1 {
-			t.Errorf("expected retry_count=1 for chunk %d after rebuild mark, got %d", id, retryCount)
+		if retryCount != 0 {
+			t.Errorf("expected retry_count=0 for chunk %d during generic rebuild cleanup, got %d", id, retryCount)
 		}
 	}
 }
@@ -996,8 +996,8 @@ func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
 		if err := dbconn.QueryRow(`SELECT retry_count FROM chunk WHERE id = $1`, id).Scan(&retryCount); err != nil {
 			t.Fatalf("read retry_count for chunk %d: %v", id, err)
 		}
-		if retryCount != 1 {
-			t.Fatalf("expected retry_count=1 for chunk %d after stale garbage cleanup, got %d", id, retryCount)
+		if retryCount != 0 {
+			t.Fatalf("expected retry_count=0 for chunk %d during stale garbage cleanup, got %d", id, retryCount)
 		}
 	}
 }
@@ -1031,7 +1031,7 @@ func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
 	}
 }
 
-func TestMarkLogicalFileForRebuildMarksEachChunkSuspiciousOnce(t *testing.T) {
+func TestMarkLogicalFileForReuseValidationFailureMarksEachChunkSuspiciousOnce(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -1064,8 +1064,8 @@ func TestMarkLogicalFileForRebuildMarksEachChunkSuspiciousOnce(t *testing.T) {
 	insertReusableTestFileChunk(t, dbconn, fileID, chunkID, 1)
 
 	ctx := context.Background()
-	if err := markLogicalFileForRebuildWithContext(ctx, dbconn, fileID); err != nil {
-		t.Fatalf("markLogicalFileForRebuildWithContext: %v", err)
+	if err := markLogicalFileForReuseValidationFailureWithContext(ctx, dbconn, fileID); err != nil {
+		t.Fatalf("markLogicalFileForReuseValidationFailureWithContext: %v", err)
 	}
 
 	var refCount int64
