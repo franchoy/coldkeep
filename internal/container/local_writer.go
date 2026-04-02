@@ -59,6 +59,8 @@ type LocalWriter struct {
 
 	// pendingAppend is true when payload bytes have been physically written to the
 	// container file but the enclosing DB transaction has not yet committed.
+	// Canonical append lifecycle state machine contract:
+	// internal/storage/store.go (Append lifecycle state machine).
 	// RollbackLastAppend uses prevAppendSize/prevAppendFile to truncate the file
 	// back to its pre-write offset if the transaction is rolled back or fails to commit.
 	// Invariant: after AppendPayload succeeds, caller must eventually resolve this
@@ -107,6 +109,8 @@ func (w *LocalWriter) WriteChunk(c chunk.Info) error {
 // AppendPayload appends already-encoded payload bytes to the active local container.
 // DB lifecycle decisions (size update/seal/chunk linking) remain outside this writer.
 // If there is no active container (including after FinalizeContainer), this method lazily opens one.
+// Canonical append lifecycle state machine contract:
+// internal/storage/store.go (Append lifecycle state machine).
 // Contract: after successful return, caller must later call either
 // RollbackLastAppend() if commit does not succeed, or AcknowledgeAppendCommitted()
 // exactly once after a successful commit.
