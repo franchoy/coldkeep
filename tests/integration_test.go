@@ -917,7 +917,7 @@ func TestDoctorCommand(t *testing.T) {
 	}
 
 	// Deliberately corrupt one stored container byte and verify doctor fails
-	// in the verify phase when run at --full.
+	// in the verify phase when run at --deep.
 	dbconn, err = db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB for doctor corruption step: %v", err)
@@ -926,9 +926,9 @@ func TestDoctorCommand(t *testing.T) {
 
 	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
 	if res.exitCode != 3 {
-		t.Fatalf("doctor --full on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
 	}
 
 	errPayload, ok := findCLIErrorPayload(res.stderr)
@@ -1020,9 +1020,9 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 
 	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
 	if res.exitCode != 3 {
-		t.Fatalf("doctor --full on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
 	}
 
 	if errPayload, hasErr := findCLIErrorPayload(res.stdout); hasErr {
@@ -1041,6 +1041,85 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 	}
 	if msg, _ := errPayload["message"].(string); !strings.Contains(msg, "doctor verify phase failed") {
 		t.Fatalf("doctor failure message should mention verify phase: payload=%v", errPayload)
+	}
+}
+
+func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_failure_contract.bin", 512*1024)
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB for corruption step: %v", err)
+	}
+	defer dbconn.Close()
+
+	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+
+	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
+	if res.exitCode != 3 {
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	if payload, ok := tryParseLastJSONLine(res.stdout); ok {
+		t.Fatalf("doctor failure should not emit JSON on stdout: payload=%v stdout=%s", payload, res.stdout)
+	}
+	if payload, ok := findCLIErrorPayload(res.stdout); ok {
+		t.Fatalf("doctor failure should not emit error JSON on stdout: payload=%v stdout=%s", payload, res.stdout)
+	}
+
+	errPayload, ok := findCLIErrorPayload(res.stderr)
+	if !ok {
+		t.Fatalf("doctor failure JSON must be emitted on stderr\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+
+	status, _ := errPayload["status"].(string)
+	if status != "error" {
+		t.Fatalf("doctor failure status mismatch: want error got %q payload=%v", status, errPayload)
+	}
+	errorClass, _ := errPayload["error_class"].(string)
+	if errorClass != "VERIFY" {
+		t.Fatalf("doctor failure error class mismatch: want VERIFY got %q payload=%v", errorClass, errPayload)
+	}
+	exitCode, _ := errPayload["exit_code"].(float64)
+	if int(exitCode) != 3 {
+		t.Fatalf("doctor failure exit_code mismatch: want 3 got %v payload=%v", exitCode, errPayload)
+	}
+	message, _ := errPayload["message"].(string)
+	if !strings.Contains(message, "doctor verify phase failed") {
+		t.Fatalf("doctor failure message should mention verify phase: payload=%v", errPayload)
+	}
+
+	if _, ok := errPayload["command"]; ok {
+		t.Fatalf("doctor failure error payload must not include success command field: payload=%v", errPayload)
+	}
+	if _, ok := errPayload["data"]; ok {
+		t.Fatalf("doctor failure error payload must not include success data field: payload=%v", errPayload)
 	}
 }
 
