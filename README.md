@@ -618,7 +618,7 @@ to remain stable for automation.
 
 - Run `doctor` after startup, before first ingestion in a new environment.
 - Treat `doctor` as the canonical operator gate command in automation/smoke/release checks.
-- `doctor` defaults to `--standard` as a deliberate quick health check.
+- Frozen v1.0 product decision: `doctor` is the fast health gate and defaults to `--standard`.
 - Prefer `doctor --standard` for frequent checks.
 - Use `doctor --full` for stronger structural assurance.
 - Reserve `doctor --deep` for periodic audits due to higher I/O cost.

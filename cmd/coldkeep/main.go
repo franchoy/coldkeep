@@ -68,6 +68,8 @@ type doctorReport struct {
 	SchemaStatus   string          `json:"schema_status"`
 }
 
+// Frozen v1.0 product contract: `doctor` is the fast health gate.
+// Default remains `standard`; operators can opt into `--full` / `--deep`.
 const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 type cliError struct {

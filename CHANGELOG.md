@@ -38,6 +38,9 @@ verification contracts, and recovery behavior clarity.
   explicit cost/coverage guidance
 - Elevated `coldkeep doctor` in docs/help/smoke as the recommended
   operator-facing health-check and release-gate command
+- Froze `doctor` default mode as a v1.0 product contract: no-flag `doctor`
+  remains the fast `standard` health gate; `--full` and `--deep` are explicit
+  stronger/slow-path escalations
 - Documented `doctor` as a corrective health command that may update
   metadata through recovery before running verification
 - Documented startup recovery strictness as intentional fail-fast behavior,
