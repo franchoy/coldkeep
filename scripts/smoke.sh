@@ -443,7 +443,7 @@ DOCTOR_JSON=$(coldkeep doctor --output json)
 DOCTOR_PAYLOAD=$(echo "$DOCTOR_JSON" | grep -E '^\{.*\}$' | tail -n1)
 
 # Doctor JSON should contain recovery status, verify status, and schema status
-if ! echo "$DOCTOR_PAYLOAD" | jq -e '.status == "ok" and .recovery_status and .verify_status and .schema_status' > /dev/null 2>&1; then
+if ! echo "$DOCTOR_PAYLOAD" | jq -e '.status == "ok" and .command == "doctor" and .data.recovery_status and .data.verify_status and .data.schema_status' > /dev/null 2>&1; then
   echo "[smoke] ERROR: doctor JSON output missing required fields"
   echo "$DOCTOR_JSON"
   echo "Parsed payload:"
@@ -451,9 +451,9 @@ if ! echo "$DOCTOR_PAYLOAD" | jq -e '.status == "ok" and .recovery_status and .v
   exit 1
 fi
 
-RECOVERY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.recovery_status')
-VERIFY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.verify_status')
-SCHEMA_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.schema_status')
+RECOVERY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.recovery_status')
+VERIFY_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.verify_status')
+SCHEMA_STATUS=$(echo "$DOCTOR_PAYLOAD" | jq -r '.data.schema_status')
 
 echo "[smoke]   ok: doctor JSON validated (recovery=$RECOVERY_STATUS, verify=$VERIFY_STATUS, schema=$SCHEMA_STATUS)"
 
@@ -461,7 +461,7 @@ echo "[smoke] doctor --full --output json (complete operator report)"
 DOCTOR_FULL_JSON=$(coldkeep doctor --full --output json)
 DOCTOR_FULL_PAYLOAD=$(echo "$DOCTOR_FULL_JSON" | grep -E '^\{.*\}$' | tail -n1)
 
-if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '.status == "ok" and .recovery_status and .verify_status and .schema_status' > /dev/null 2>&1; then
+if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '.status == "ok" and .command == "doctor" and .data.recovery_status and .data.verify_status and .data.schema_status' > /dev/null 2>&1; then
   echo "[smoke] ERROR: doctor --full --output json missing required fields"
   echo "$DOCTOR_FULL_JSON"
   exit 1
