@@ -660,6 +660,42 @@ Integration tests validate:
 - consistency across GC and recovery
 - deterministic behavior across datasets
 
+### Local test flow for newcomers
+
+For a reproducible local run that mirrors DB-backed integration expectations:
+
+1. Start Postgres:
+
+```bash
+docker compose up -d postgres
+```
+
+1. Set environment variables:
+
+```bash
+export COLDKEEP_TEST_DB=1
+export COLDKEEP_CODEC=plain
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+```
+
+1. Run correctness tier first:
+
+```bash
+go test ./tests -short -count=1 -v -timeout 20m
+```
+
+1. Run full integration and then full repository tests:
+
+```bash
+go test ./tests -count=1 -v -timeout 20m
+go test ./... -count=1 -timeout 25m
+```
+
 ---
 
 ## Container lifecycle and restore boundaries

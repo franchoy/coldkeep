@@ -162,6 +162,55 @@ or CLI contracts are expected to pass the full GitHub Actions pipeline:
 
 If adding storage logic, include at least one restore verification test.
 
+### Quick Start: Local Test Runs For New Contributors
+
+Use this sequence to run tests with the same DB-backed setup used by integration checks.
+
+1. Start Postgres:
+
+``` bash
+docker compose up -d postgres
+```
+
+1. Export integration environment once in your shell:
+
+``` bash
+export COLDKEEP_TEST_DB=1
+export COLDKEEP_CODEC=plain
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+```
+
+1. Run correctness tier first (fast signal, stress tests skipped):
+
+``` bash
+go test ./tests -short -count=1 -v -timeout 20m
+```
+
+1. Run full integration suite (includes stress-tier coverage):
+
+``` bash
+go test ./tests -count=1 -v -timeout 20m
+```
+
+1. Run full repository suite before opening a PR:
+
+``` bash
+go test ./... -count=1 -timeout 25m
+```
+
+Optional focused run while working on doctor behavior:
+
+``` bash
+go test ./tests -run 'TestDoctor(Command|JSONContractConsistency|FailureJSONContractAndStreams)$' -count=1 -v
+```
+
+If your shell does not keep exported variables between commands, prefix each test command with the environment variables directly.
+
 ------------------------------------------------------------------------
 
 ## Submitting Changes
