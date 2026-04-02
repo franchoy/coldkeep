@@ -3045,6 +3045,41 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 	})
 }
 
+func TestSchemaBootstrapEnvEvaluatedDynamically(t *testing.T) {
+	requireDB(t)
+
+	adminDB := openRawPostgresDB(t, "")
+	tempDBName := fmt.Sprintf("coldkeep_dyn_bootstrap_%d", time.Now().UnixNano())
+	_, createErr := adminDB.Exec("CREATE DATABASE " + tempDBName)
+	_ = adminDB.Close()
+	if createErr != nil {
+		t.Skipf("CREATE DATABASE not available (%v); skipping dynamic bootstrap env test", createErr)
+	}
+
+	t.Cleanup(func() {
+		cleanupDB := openRawPostgresDB(t, "")
+		defer func() { _ = cleanupDB.Close() }()
+		_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + tempDBName)
+	})
+
+	emptyDB := openRawPostgresDB(t, tempDBName)
+	defer func() { _ = emptyDB.Close() }()
+
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
+	err := db.EnsurePostgresSchema(emptyDB)
+	if err == nil {
+		t.Fatal("EnsurePostgresSchema must fail when schema is missing and COLDKEEP_DB_AUTO_BOOTSTRAP=false")
+	}
+	if !strings.Contains(err.Error(), "postgres schema is not initialized") {
+		t.Fatalf("expected missing-schema error, got: %v", err)
+	}
+
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+	if err := db.EnsurePostgresSchema(emptyDB); err != nil {
+		t.Fatalf("EnsurePostgresSchema must bootstrap successfully when COLDKEEP_DB_AUTO_BOOTSTRAP=true: %v", err)
+	}
+}
+
 func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	requireDB(t)
 
