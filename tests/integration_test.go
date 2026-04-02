@@ -1299,6 +1299,75 @@ func TestDoctorIntegrationSmokeContract(t *testing.T) {
 	}
 }
 
+func TestDoctorMutatesStaleSealingStateAndVerifyPasses(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_recovery_mutation.bin", 512*1024)
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB for stale state mutation: %v", err)
+	}
+	defer dbconn.Close()
+
+	var containerID int64
+	if err := dbconn.QueryRow(`SELECT id FROM container ORDER BY id DESC LIMIT 1`).Scan(&containerID); err != nil {
+		t.Fatalf("query latest container id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE container SET sealed = TRUE, sealing = TRUE WHERE id = $1`, containerID); err != nil {
+		t.Fatalf("inject stale sealing state: %v", err)
+	}
+
+	var isSealed, isSealing bool
+	if err := dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, containerID).Scan(&isSealed, &isSealing); err != nil {
+		t.Fatalf("query stale sealing state: %v", err)
+	}
+	if !isSealed || !isSealing {
+		t.Fatalf("setup failed: expected sealed=true and sealing=true, got sealed=%v sealing=%v", isSealed, isSealing)
+	}
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+
+	if err := dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, containerID).Scan(&isSealed, &isSealing); err != nil {
+		t.Fatalf("query sealing state after doctor: %v", err)
+	}
+	if !isSealed {
+		t.Fatalf("expected doctor to preserve sealed=true on recovered container")
+	}
+	if isSealing {
+		t.Fatalf("expected doctor to clear stale sealing marker")
+	}
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--output", "json"), "verify")
+}
+
 func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	requireDB(t)
 
