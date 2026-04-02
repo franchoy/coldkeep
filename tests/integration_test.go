@@ -731,20 +731,28 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	// Doctor command: operator-facing health check
 	doctor := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--output", "json"), "doctor")
-	if _, ok := doctor["recovery_status"]; !ok {
+	doctorData, ok := doctor["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", doctor)
+	}
+	if _, ok := doctorData["recovery_status"]; !ok {
 		t.Fatalf("doctor JSON missing recovery_status: payload=%v", doctor)
 	}
-	if _, ok := doctor["verify_status"]; !ok {
+	if _, ok := doctorData["verify_status"]; !ok {
 		t.Fatalf("doctor JSON missing verify_status: payload=%v", doctor)
 	}
-	if _, ok := doctor["schema_status"]; !ok {
+	if _, ok := doctorData["schema_status"]; !ok {
 		t.Fatalf("doctor JSON missing schema_status: payload=%v", doctor)
 	}
 
 	// Doctor with --full flag
 	doctorFull := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--full", "--output", "json"), "doctor")
-	if _, ok := doctorFull["recovery_status"]; !ok {
+	doctorFullData, ok := doctorFull["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor --full JSON missing data object: payload=%v", doctorFull)
+	}
+	if _, ok := doctorFullData["recovery_status"]; !ok {
 		t.Fatalf("doctor --full JSON missing recovery_status: payload=%v", doctorFull)
 	}
 }
@@ -816,17 +824,22 @@ func TestDoctorCommand(t *testing.T) {
 		t.Fatalf("doctor did not return status=ok: payload=%v", doctorJSON)
 	}
 
-	recoveryStatus, ok := doctorJSON["recovery_status"].(string)
+	doctorData, ok := doctorJSON["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", doctorJSON)
+	}
+
+	recoveryStatus, ok := doctorData["recovery_status"].(string)
 	if !ok || recoveryStatus == "" {
 		t.Fatalf("doctor JSON missing or invalid recovery_status: payload=%v", doctorJSON)
 	}
 
-	verifyStatus, ok := doctorJSON["verify_status"].(string)
+	verifyStatus, ok := doctorData["verify_status"].(string)
 	if !ok || verifyStatus == "" {
 		t.Fatalf("doctor JSON missing or invalid verify_status: payload=%v", doctorJSON)
 	}
 
-	schemaStatus, ok := doctorJSON["schema_status"].(string)
+	schemaStatus, ok := doctorData["schema_status"].(string)
 	if !ok || schemaStatus == "" {
 		t.Fatalf("doctor JSON missing or invalid schema_status: payload=%v", doctorJSON)
 	}
@@ -848,16 +861,84 @@ func TestDoctorCommand(t *testing.T) {
 	if status, _ := doctorFullJSON["status"].(string); status != "ok" {
 		t.Fatalf("doctor --full did not return status=ok: payload=%v", doctorFullJSON)
 	}
+	doctorFullData, ok := doctorFullJSON["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor --full JSON missing data object: payload=%v", doctorFullJSON)
+	}
 
 	// Verify all status fields are present in full output
-	if _, ok := doctorFullJSON["recovery_status"]; !ok {
+	if _, ok := doctorFullData["recovery_status"]; !ok {
 		t.Fatalf("doctor --full JSON missing recovery_status: payload=%v", doctorFullJSON)
 	}
-	if _, ok := doctorFullJSON["verify_status"]; !ok {
+	if _, ok := doctorFullData["verify_status"]; !ok {
 		t.Fatalf("doctor --full JSON missing verify_status: payload=%v", doctorFullJSON)
 	}
-	if _, ok := doctorFullJSON["schema_status"]; !ok {
+	if _, ok := doctorFullData["schema_status"]; !ok {
 		t.Fatalf("doctor --full JSON missing schema_status: payload=%v", doctorFullJSON)
+	}
+
+	// Deliberately corrupt one stored container byte and verify doctor fails
+	// in the verify phase when run at --full.
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB for doctor corruption step: %v", err)
+	}
+	defer dbconn.Close()
+
+	var blockOffset int64
+	var storedSize int64
+	var containerFilename string
+	err = dbconn.QueryRow(`
+		SELECT b.block_offset, b.stored_size, ctr.filename
+		FROM chunk c
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE c.status = $1
+		ORDER BY c.id ASC
+		LIMIT 1
+	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
+	if err != nil {
+		t.Fatalf("query first completed chunk for doctor corruption: %v", err)
+	}
+
+	containerPath := filepath.Join(container.ContainersDir, containerFilename)
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file for doctor corruption: %v", err)
+	}
+	corruptionOffset := blockOffset
+	if storedSize > 10 {
+		corruptionOffset += 10
+	}
+	if _, err := f.WriteAt([]byte{0xAC}, corruptionOffset); err != nil {
+		_ = f.Close()
+		t.Fatalf("write doctor corruption byte: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close container file after doctor corruption: %v", err)
+	}
+
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
+	if res.exitCode != 3 {
+		t.Fatalf("doctor --full on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	errPayload, ok := findCLIErrorPayload(res.stderr)
+	if !ok {
+		errPayload, ok = findCLIErrorPayload(res.stdout + "\n" + res.stderr)
+	}
+	if !ok {
+		t.Fatalf("doctor --full on corrupted state produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+
+	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor corrupted-state error class mismatch: want VERIFY got %q payload=%v", got, errPayload)
+	}
+	if got, _ := errPayload["exit_code"].(float64); int(got) != 3 {
+		t.Fatalf("doctor corrupted-state exit_code mismatch: want 3 got %v payload=%v", got, errPayload)
+	}
+	if msg, _ := errPayload["message"].(string); !strings.Contains(msg, "doctor verify phase failed") {
+		t.Fatalf("doctor corrupted-state error message should mention verify phase: payload=%v", errPayload)
 	}
 
 	t.Logf("doctor command test passed: recovery=%q verify=%q schema=%q", recoveryStatus, verifyStatus, schemaStatus)
