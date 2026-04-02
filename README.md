@@ -194,7 +194,7 @@ Use simulated mode for:
 - tests
 - workflow validation
 
-Do not treat simulated mode as proof of physical durability.
+Simulated mode is intended for planning, estimation, tests, and workflow validation — not as proof of real durability.
 
 Simulation is still a confidence tool, not a correctness proof for the PostgreSQL-backed runtime:
 
