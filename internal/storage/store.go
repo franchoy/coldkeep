@@ -28,37 +28,33 @@ type payloadStatefulWriter interface {
 	FinalizeContainer() error
 }
 
-// Append lifecycle contract (v1.0):
+// Append lifecycle state machine (authoritative v1.0 contract):
 //
-// 1. Append phase
-//   - AppendPayload(tx, payload) performs a physical append coupled to the caller's
-//     DB transaction boundary.
-//   - If AppendPayload succeeds, the caller now owns an unresolved append outcome.
+// Entry condition:
+//   - AppendPayload(tx, payload) success creates one unresolved append outcome.
 //
-// 2. Resolve phase (exactly one terminal path per successful append)
+// Terminal resolution (exactly one path per successful append):
 //   - Rollback path:
-//     If the enclosing transaction is rolled back, or any error occurs before
-//     tx.Commit() succeeds, caller must invoke RollbackLastAppend() when supported.
+//     If tx is rolled back, or any error happens before tx.Commit() succeeds,
+//     caller MUST invoke RollbackLastAppend() when supported.
 //   - Commit path:
-//     If tx.Commit() succeeds, caller must invoke AcknowledgeAppendCommitted()
+//     If tx.Commit() succeeds, caller MUST invoke AcknowledgeAppendCommitted()
 //     exactly once when supported.
 //
-// 3. Failure hardening
-//   - If rollback/truncate fails, caller must retire/quarantine the active
+// Failure escalation rules:
+//   - If RollbackLastAppend() fails, caller MUST retire/quarantine the active
 //     container before any further writes.
-//   - If finalize/sync fails for an active container, caller must retire/
-//     quarantine that container before continuing.
+//   - If physical finalize/sync fails, caller MUST retire/quarantine the active
+//     container before any further writes.
+//   - If DB seal/update fails after physical finalize, implementation MUST NOT
+//     permit that container to be reused; retire/quarantine or equivalent exclusion
+//     is required.
 //
-// 4. Rotation/finalization
-//   - FinalizeContainer closes/syncs the physical file handle.
-//   - A DB sealing marker and final SealContainer update complete logical sealing;
-//     if sealing cannot complete safely, container must be quarantined.
-//
-// Invariants:
-//   - After AppendPayload success: rollback OR commit-ack is required.
-//   - After tx.Commit success for a transaction that appended bytes:
-//     AcknowledgeAppendCommitted must be called exactly once.
-//   - After failed rollback/finalize/sync: retire/quarantine is required.
+// Safety invariants:
+//   - No successful append may remain unresolved.
+//   - No successful append may execute both rollback and commit-ack paths.
+//   - No container that crosses a failed rollback/finalize/seal boundary may
+//     re-enter the writable pool.
 
 // optionalAppendRollbacker is implemented by writers that can truncate a physical
 // container file back to its pre-append offset when the enclosing DB transaction
