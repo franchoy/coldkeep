@@ -856,6 +856,115 @@ else
 fi
 
 echo ""
+echo "[smoke] === SCHEMA STARTUP MESSAGE GATE ==="
+
+# Disabled by default; enable to freeze operator-facing startup/setup messages.
+# Enable with: COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1
+: "${COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE:=0}"
+
+if [[ "${COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE}" == "1" ]]; then
+  if ! command -v psql >/dev/null 2>&1; then
+    echo "[smoke] ERROR: schema startup message gate requires psql"
+    exit 1
+  fi
+
+  SCHEMA_GATE_HOST="${DB_HOST:-127.0.0.1}"
+  SCHEMA_GATE_PORT="${DB_PORT:-5432}"
+  SCHEMA_GATE_USER="${DB_USER:-coldkeep}"
+  SCHEMA_GATE_BASE_DB="${DB_NAME:-coldkeep}"
+  SCHEMA_GATE_SCHEMA_PATH="${COLDKEEP_SCHEMA_PATH:-db/schema_postgres.sql}"
+
+  if [[ ! -f "${SCHEMA_GATE_SCHEMA_PATH}" ]]; then
+    echo "[smoke] ERROR: schema file not found for schema gate: ${SCHEMA_GATE_SCHEMA_PATH}"
+    exit 1
+  fi
+
+  SCHEMA_GATE_SUFFIX="$(date +%s%N)"
+  MISSING_SCHEMA_DB="coldkeep_smoke_missing_${SCHEMA_GATE_SUFFIX}"
+  OLD_SCHEMA_DB="coldkeep_smoke_old_${SCHEMA_GATE_SUFFIX}"
+
+  cleanup_schema_gate_dbs() {
+    PGPASSWORD="${DB_PASSWORD:-}" psql \
+      -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${SCHEMA_GATE_BASE_DB}" \
+      -c "DROP DATABASE IF EXISTS ${MISSING_SCHEMA_DB};" >/dev/null 2>&1 || true
+    PGPASSWORD="${DB_PASSWORD:-}" psql \
+      -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${SCHEMA_GATE_BASE_DB}" \
+      -c "DROP DATABASE IF EXISTS ${OLD_SCHEMA_DB};" >/dev/null 2>&1 || true
+  }
+
+  cleanup_schema_gate_dbs
+
+  echo "[smoke] schema gate: missing-schema startup message"
+  PGPASSWORD="${DB_PASSWORD:-}" psql \
+    -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${SCHEMA_GATE_BASE_DB}" \
+    -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE ${MISSING_SCHEMA_DB};" >/dev/null
+
+  if MISSING_MSG=$(COLDKEEP_DB_AUTO_BOOTSTRAP=false DB_NAME="${MISSING_SCHEMA_DB}" coldkeep stats 2>&1); then
+    echo "[smoke] ERROR: expected missing-schema startup failure, but command succeeded"
+    cleanup_schema_gate_dbs
+    exit 1
+  fi
+
+  for want in \
+    "ERROR[GENERAL]:" \
+    "failed to connect to DB:" \
+    "postgres schema is not initialized" \
+    "apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true"
+  do
+    if [[ "$MISSING_MSG" != *"$want"* ]]; then
+      echo "[smoke] ERROR: missing-schema message does not contain: $want"
+      echo "$MISSING_MSG"
+      cleanup_schema_gate_dbs
+      exit 1
+    fi
+  done
+  echo "[smoke]   ok: missing-schema startup message is actionable"
+
+  echo "[smoke] schema gate: outdated-schema startup message"
+  PGPASSWORD="${DB_PASSWORD:-}" psql \
+    -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${SCHEMA_GATE_BASE_DB}" \
+    -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE ${OLD_SCHEMA_DB};" >/dev/null
+
+  PGPASSWORD="${DB_PASSWORD:-}" psql \
+    -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${OLD_SCHEMA_DB}" \
+    -v ON_ERROR_STOP=1 \
+    -f "${SCHEMA_GATE_SCHEMA_PATH}" >/dev/null
+
+  PGPASSWORD="${DB_PASSWORD:-}" psql \
+    -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${OLD_SCHEMA_DB}" \
+    -v ON_ERROR_STOP=1 \
+    -c "UPDATE schema_version SET version = 1;" >/dev/null
+
+  if OLD_MSG=$(DB_NAME="${OLD_SCHEMA_DB}" coldkeep stats 2>&1); then
+    echo "[smoke] ERROR: expected outdated-schema startup failure, but command succeeded"
+    cleanup_schema_gate_dbs
+    exit 1
+  fi
+
+  for want in \
+    "ERROR[GENERAL]:" \
+    "failed to connect to DB:" \
+    "postgres schema version too old" \
+    "apply db/schema_postgres.sql"
+  do
+    if [[ "$OLD_MSG" != *"$want"* ]]; then
+      echo "[smoke] ERROR: outdated-schema message does not contain: $want"
+      echo "$OLD_MSG"
+      cleanup_schema_gate_dbs
+      exit 1
+    fi
+  done
+  echo "[smoke]   ok: outdated-schema startup message is actionable"
+
+  cleanup_schema_gate_dbs
+  echo "[smoke] schema startup message gate PASSED"
+else
+  echo "[smoke] schema startup message gate skipped (set COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1 to enable)"
+fi
+
+echo ""
 echo "[smoke] === V1.0 PREFLIGHT (FINAL OPERATOR GATE) ==="
 
 echo "[smoke] preflight: coldkeep doctor --standard"
