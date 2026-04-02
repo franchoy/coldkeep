@@ -1919,20 +1919,3 @@ func StoreBlockPayload(c container.Container, payload []byte) (offset int64, new
 
 	return offset, offset + int64(len(payload)), nil
 }
-
-func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer, containersDir string) error {
-	// sync active container to disk
-	if err := activecontainer.Container.Sync(); err != nil {
-		return err
-	}
-	// close active container file
-	if err := activecontainer.Container.Close(); err != nil {
-		return err
-	}
-	// seal active container in DB
-	if err := container.SealContainerInDir(tx, activecontainer.ID, activecontainer.Filename, containersDir); err != nil {
-		return err
-	}
-
-	return nil
-}
