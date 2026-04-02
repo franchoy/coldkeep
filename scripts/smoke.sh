@@ -453,16 +453,16 @@ if ! echo "$DOCTOR_PAYLOAD" | jq -e '
   and .data.schema_status
   and .data.verify_level
   and .data.recovery
-  and (.data.recovery.AbortedLogicalFiles != null)
-  and (.data.recovery.AbortedChunks != null)
-  and (.data.recovery.QuarantinedMissing != null)
-  and (.data.recovery.QuarantinedCorruptTail != null)
-  and (.data.recovery.QuarantinedOrphan != null)
-  and (.data.recovery.CheckedContainerRecord != null)
-  and (.data.recovery.CheckedDiskFiles != null)
-  and (.data.recovery.SkippedDirEntries != null)
-  and (.data.recovery.SealingCompleted != null)
-  and (.data.recovery.SealingQuarantined != null)
+  and (.data.recovery.aborted_logical_files != null)
+  and (.data.recovery.aborted_chunks != null)
+  and (.data.recovery.quarantined_missing != null)
+  and (.data.recovery.quarantined_corrupt_tail != null)
+  and (.data.recovery.quarantined_orphan != null)
+  and (.data.recovery.checked_container_record != null)
+  and (.data.recovery.checked_disk_files != null)
+  and (.data.recovery.skipped_dir_entries != null)
+  and (.data.recovery.sealing_completed != null)
+  and (.data.recovery.sealing_quarantined != null)
 ' > /dev/null 2>&1; then
   echo "[smoke] ERROR: doctor JSON output missing required fields"
   echo "$DOCTOR_JSON"
@@ -495,16 +495,16 @@ if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '
   and .data.schema_status
   and .data.verify_level
   and .data.recovery
-  and (.data.recovery.AbortedLogicalFiles != null)
-  and (.data.recovery.AbortedChunks != null)
-  and (.data.recovery.QuarantinedMissing != null)
-  and (.data.recovery.QuarantinedCorruptTail != null)
-  and (.data.recovery.QuarantinedOrphan != null)
-  and (.data.recovery.CheckedContainerRecord != null)
-  and (.data.recovery.CheckedDiskFiles != null)
-  and (.data.recovery.SkippedDirEntries != null)
-  and (.data.recovery.SealingCompleted != null)
-  and (.data.recovery.SealingQuarantined != null)
+  and (.data.recovery.aborted_logical_files != null)
+  and (.data.recovery.aborted_chunks != null)
+  and (.data.recovery.quarantined_missing != null)
+  and (.data.recovery.quarantined_corrupt_tail != null)
+  and (.data.recovery.quarantined_orphan != null)
+  and (.data.recovery.checked_container_record != null)
+  and (.data.recovery.checked_disk_files != null)
+  and (.data.recovery.skipped_dir_entries != null)
+  and (.data.recovery.sealing_completed != null)
+  and (.data.recovery.sealing_quarantined != null)
 ' > /dev/null 2>&1; then
   echo "[smoke] ERROR: doctor --full --output json missing required fields"
   echo "$DOCTOR_FULL_JSON"

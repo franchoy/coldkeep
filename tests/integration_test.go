@@ -977,6 +977,45 @@ func TestDoctorCommand(t *testing.T) {
 		t.Fatalf("doctor JSON verify_level mismatch: want standard got %q payload=%v", verifyLevel, doctorJSON)
 	}
 
+	recoveryData, ok := doctorData["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing recovery object: payload=%v", doctorJSON)
+	}
+
+	for _, key := range []string{
+		"aborted_logical_files",
+		"aborted_chunks",
+		"quarantined_missing",
+		"quarantined_corrupt_tail",
+		"quarantined_orphan",
+		"skipped_dir_entries",
+		"checked_container_record",
+		"checked_disk_files",
+		"sealing_completed",
+		"sealing_quarantined",
+	} {
+		if _, ok := recoveryData[key]; !ok {
+			t.Fatalf("doctor JSON recovery missing required key %q: payload=%v", key, doctorJSON)
+		}
+	}
+
+	for _, legacyKey := range []string{
+		"AbortedLogicalFiles",
+		"AbortedChunks",
+		"QuarantinedMissing",
+		"QuarantinedCorruptTail",
+		"QuarantinedOrphan",
+		"SkippedDirEntries",
+		"CheckedContainerRecord",
+		"CheckedDiskFiles",
+		"SealingCompleted",
+		"SealingQuarantined",
+	} {
+		if _, ok := recoveryData[legacyKey]; ok {
+			t.Fatalf("doctor JSON recovery should not include legacy key %q: payload=%v", legacyKey, doctorJSON)
+		}
+	}
+
 	// Test doctor --full --output json
 	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
 	if res.exitCode != 0 {
@@ -1011,6 +1050,27 @@ func TestDoctorCommand(t *testing.T) {
 	}
 	if verifyLevel, _ := doctorFullData["verify_level"].(string); verifyLevel != "full" {
 		t.Fatalf("doctor --full JSON verify_level mismatch: want full got %q payload=%v", verifyLevel, doctorFullJSON)
+	}
+
+	fullRecoveryData, ok := doctorFullData["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor --full JSON missing recovery object: payload=%v", doctorFullJSON)
+	}
+	for _, key := range []string{
+		"aborted_logical_files",
+		"aborted_chunks",
+		"quarantined_missing",
+		"quarantined_corrupt_tail",
+		"quarantined_orphan",
+		"skipped_dir_entries",
+		"checked_container_record",
+		"checked_disk_files",
+		"sealing_completed",
+		"sealing_quarantined",
+	} {
+		if _, ok := fullRecoveryData[key]; !ok {
+			t.Fatalf("doctor --full JSON recovery missing required key %q: payload=%v", key, doctorFullJSON)
+		}
 	}
 
 	// Deliberately corrupt one stored container byte and verify doctor fails

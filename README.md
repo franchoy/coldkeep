@@ -632,16 +632,16 @@ Doctor health report
   "command": "doctor",
   "data": {
     "recovery": {
-      "AbortedLogicalFiles": 0,
-      "AbortedChunks": 0,
-      "QuarantinedMissing": 0,
-      "QuarantinedCorruptTail": 0,
-      "QuarantinedOrphan": 0,
-      "SkippedDirEntries": 0,
-      "CheckedContainerRecord": 12,
-      "CheckedDiskFiles": 12,
-      "SealingCompleted": 0,
-      "SealingQuarantined": 0
+      "aborted_logical_files": 0,
+      "aborted_chunks": 0,
+      "quarantined_missing": 0,
+      "quarantined_corrupt_tail": 0,
+      "quarantined_orphan": 0,
+      "skipped_dir_entries": 0,
+      "checked_container_record": 12,
+      "checked_disk_files": 12,
+      "sealing_completed": 0,
+      "sealing_quarantined": 0
     },
     "verify_level": "standard",
     "schema_version": 5,

@@ -29,16 +29,16 @@ type recoveryStats struct {
 }
 
 type Report struct {
-	AbortedLogicalFiles    int64
-	AbortedChunks          int64
-	QuarantinedMissing     int64
-	QuarantinedCorruptTail int64
-	QuarantinedOrphan      int64
-	SkippedDirEntries      int64
-	CheckedContainerRecord int64
-	CheckedDiskFiles       int64
-	SealingCompleted       int64
-	SealingQuarantined     int64
+	AbortedLogicalFiles    int64 `json:"aborted_logical_files"`
+	AbortedChunks          int64 `json:"aborted_chunks"`
+	QuarantinedMissing     int64 `json:"quarantined_missing"`
+	QuarantinedCorruptTail int64 `json:"quarantined_corrupt_tail"`
+	QuarantinedOrphan      int64 `json:"quarantined_orphan"`
+	SkippedDirEntries      int64 `json:"skipped_dir_entries"`
+	CheckedContainerRecord int64 `json:"checked_container_record"`
+	CheckedDiskFiles       int64 `json:"checked_disk_files"`
+	SealingCompleted       int64 `json:"sealing_completed"`
+	SealingQuarantined     int64 `json:"sealing_quarantined"`
 }
 
 // isStrictRecovery returns true unless COLDKEEP_STRICT_RECOVERY is explicitly
