@@ -508,6 +508,45 @@ func fetchFirstFileChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileC
 	return record
 }
 
+func corruptFirstCompletedChunkByte(t *testing.T, dbconn *sql.DB, containersDir string) {
+	t.Helper()
+
+	var blockOffset int64
+	var storedSize int64
+	var containerFilename string
+	err := dbconn.QueryRow(`
+		SELECT b.block_offset, b.stored_size, ctr.filename
+		FROM chunk c
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE c.status = $1
+		ORDER BY c.id ASC
+		LIMIT 1
+	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
+	if err != nil {
+		t.Fatalf("query first completed chunk for corruption: %v", err)
+	}
+
+	containerPath := filepath.Join(containersDir, containerFilename)
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file for corruption: %v", err)
+	}
+
+	corruptionOffset := blockOffset
+	if storedSize > 10 {
+		corruptionOffset += 10
+	}
+
+	if _, err := f.WriteAt([]byte{0xAC}, corruptionOffset); err != nil {
+		_ = f.Close()
+		t.Fatalf("write corruption byte: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close container file after corruption: %v", err)
+	}
+}
+
 // Helpers (small, local)
 func mustRead(t *testing.T, p string) []byte {
 	t.Helper()
@@ -885,38 +924,7 @@ func TestDoctorCommand(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	var blockOffset int64
-	var storedSize int64
-	var containerFilename string
-	err = dbconn.QueryRow(`
-		SELECT b.block_offset, b.stored_size, ctr.filename
-		FROM chunk c
-		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = $1
-		ORDER BY c.id ASC
-		LIMIT 1
-	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
-	if err != nil {
-		t.Fatalf("query first completed chunk for doctor corruption: %v", err)
-	}
-
-	containerPath := filepath.Join(container.ContainersDir, containerFilename)
-	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatalf("open container file for doctor corruption: %v", err)
-	}
-	corruptionOffset := blockOffset
-	if storedSize > 10 {
-		corruptionOffset += 10
-	}
-	if _, err := f.WriteAt([]byte{0xAC}, corruptionOffset); err != nil {
-		_ = f.Close()
-		t.Fatalf("write doctor corruption byte: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close container file after doctor corruption: %v", err)
-	}
+	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
 	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
 	if res.exitCode != 3 {
@@ -942,6 +950,98 @@ func TestDoctorCommand(t *testing.T) {
 	}
 
 	t.Logf("doctor command test passed: recovery=%q verify=%q schema=%q", recoveryStatus, verifyStatus, schemaStatus)
+}
+
+func TestDoctorJSONContractConsistency(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_contract.bin", 512*1024)
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.exitCode != 0 {
+		t.Fatalf("doctor --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	successPayload, ok := tryParseLastJSONLine(res.stdout)
+	if !ok {
+		t.Fatalf("doctor success JSON must be emitted on stdout\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+	if status, _ := successPayload["status"].(string); status != "ok" {
+		t.Fatalf("doctor success payload status mismatch: payload=%v", successPayload)
+	}
+	if command, _ := successPayload["command"].(string); command != "doctor" {
+		t.Fatalf("doctor success payload command mismatch: payload=%v", successPayload)
+	}
+	if _, ok := successPayload["data"].(map[string]any); !ok {
+		t.Fatalf("doctor success payload missing data object: payload=%v", successPayload)
+	}
+
+	if errPayload, hasErr := findCLIErrorPayload(res.stdout); hasErr {
+		t.Fatalf("doctor success run should not emit error payload on stdout: payload=%v stdout=%s", errPayload, res.stdout)
+	}
+
+	for _, payload := range parseJSONLines(res.stderr) {
+		if status, _ := payload["status"].(string); status == "ok" {
+			if command, _ := payload["command"].(string); command == "doctor" {
+				t.Fatalf("doctor success payload should not be duplicated to stderr: payload=%v stderr=%s", payload, res.stderr)
+			}
+		}
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB for doctor corruption step: %v", err)
+	}
+	defer dbconn.Close()
+
+	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+
+	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
+	if res.exitCode != 3 {
+		t.Fatalf("doctor --full on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	if errPayload, hasErr := findCLIErrorPayload(res.stdout); hasErr {
+		t.Fatalf("doctor failure run should not emit error payload on stdout: payload=%v stdout=%s", errPayload, res.stdout)
+	}
+
+	errPayload, ok := findCLIErrorPayload(res.stderr)
+	if !ok {
+		t.Fatalf("doctor failure JSON must be emitted on stderr\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor failure error class mismatch: want VERIFY got %q payload=%v", got, errPayload)
+	}
+	if got, _ := errPayload["exit_code"].(float64); int(got) != 3 {
+		t.Fatalf("doctor failure exit_code mismatch: want 3 got %v payload=%v", got, errPayload)
+	}
+	if msg, _ := errPayload["message"].(string); !strings.Contains(msg, "doctor verify phase failed") {
+		t.Fatalf("doctor failure message should mention verify phase: payload=%v", errPayload)
+	}
 }
 
 func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
