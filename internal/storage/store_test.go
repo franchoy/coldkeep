@@ -79,6 +79,16 @@ type commitAckWriter struct {
 	pendingClear bool
 }
 
+type rollbackCleanupFailureWriter struct {
+	offset          int64
+	rollbackErr     error
+	rollbackCalls   int
+	retireErr       error
+	retireCalls     int
+	retireContainer int64
+	db              *sql.DB
+}
+
 func (w *commitAckWriter) WriteChunk(c chunk.Info) error {
 	_ = c
 	return nil
@@ -108,6 +118,52 @@ func (w *commitAckWriter) AppendPayload(_ db.DBTX, payload []byte) (container.Lo
 func (w *commitAckWriter) AcknowledgeAppendCommitted() {
 	w.ackCalls++
 	w.pendingClear = true
+}
+
+func (w *rollbackCleanupFailureWriter) WriteChunk(c chunk.Info) error {
+	_ = c
+	return nil
+}
+
+func (w *rollbackCleanupFailureWriter) FinalizeContainer() error {
+	return nil
+}
+
+func (w *rollbackCleanupFailureWriter) ContainerCount() int {
+	return 1
+}
+
+func (w *rollbackCleanupFailureWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {
+	offset := w.offset
+	w.offset += int64(len(payload))
+	return container.LocalPlacement{
+		ContainerID:      1,
+		Filename:         "rollback_cleanup_test_container.bin",
+		Offset:           offset,
+		StoredSize:       int64(len(payload)),
+		NewContainerSize: -1,
+	}, nil
+}
+
+func (w *rollbackCleanupFailureWriter) RollbackLastAppend() error {
+	w.rollbackCalls++
+	if w.rollbackErr != nil {
+		return w.rollbackErr
+	}
+	return nil
+}
+
+func (w *rollbackCleanupFailureWriter) RetireActiveContainer() error {
+	w.retireCalls++
+	if w.db != nil && w.retireContainer > 0 {
+		if _, err := w.db.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, w.retireContainer); err != nil {
+			return err
+		}
+	}
+	if w.retireErr != nil {
+		return w.retireErr
+	}
+	return nil
 }
 
 func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
@@ -485,6 +541,164 @@ func TestStoreFileSuccessfulCommitAcknowledgesWriterAppendState(t *testing.T) {
 	}
 	if !writer.pendingClear {
 		t.Fatalf("expected writer pending rollback state to be cleared after commit acknowledgment")
+	}
+}
+
+func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed, quarantine)
+		 VALUES (1, $1, $2, $3, FALSE, FALSE)`,
+		"rollback_cleanup_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "payload.txt")
+	if err := os.WriteFile(path, []byte("rollback-cleanup-failure-escalation"), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &rollbackCleanupFailureWriter{
+		rollbackErr:     errors.New("injected rollback truncate failure"),
+		retireContainer: 1,
+		db:              dbconn,
+	}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err == nil {
+		t.Fatal("expected store to fail when rollback cleanup fails")
+	}
+	if !strings.Contains(err.Error(), "rollback failed; retired active container as precaution") {
+		t.Fatalf("expected rollback escalation in error, got: %v", err)
+	}
+
+	if writer.rollbackCalls == 0 {
+		t.Fatalf("expected RollbackLastAppend to be attempted")
+	}
+	if writer.retireCalls == 0 {
+		t.Fatalf("expected active container retirement when rollback cleanup fails")
+	}
+
+	var quarantined bool
+	if err := dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = 1`).Scan(&quarantined); err != nil {
+		t.Fatalf("query container quarantine: %v", err)
+	}
+	if !quarantined {
+		t.Fatalf("expected container id=1 to be quarantined after rollback cleanup failure")
+	}
+}
+
+func TestStoreFileRetainsCommittedChunksWhenFinalCompletionUpdateFails(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed, quarantine)
+		 VALUES (1, $1, $2, $3, FALSE, FALSE)`,
+		"final-completion-failure-container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		CREATE TRIGGER fail_finalize_completion
+		BEFORE UPDATE OF status ON logical_file
+		WHEN NEW.status = 'COMPLETED'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected finalize completion failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create finalize failure trigger: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "payload.txt")
+	if err := os.WriteFile(path, []byte("finalize-logical-file-failure-state-test"), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err == nil {
+		t.Fatal("expected store to fail when final logical-file completion update fails")
+	}
+	if !strings.Contains(err.Error(), "injected finalize completion failure") {
+		t.Fatalf("expected injected finalize failure in error, got: %v", err)
+	}
+
+	var logicalStatus string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file ORDER BY id DESC LIMIT 1`).Scan(&logicalStatus); err != nil {
+		t.Fatalf("query logical_file status: %v", err)
+	}
+	if logicalStatus != filestate.LogicalFileAborted {
+		t.Fatalf("expected logical_file to be ABORTED after finalization failure cleanup, got %s", logicalStatus)
+	}
+
+	var completedChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkCompleted).Scan(&completedChunkCount); err != nil {
+		t.Fatalf("count completed chunks: %v", err)
+	}
+	if completedChunkCount == 0 {
+		t.Fatalf("expected committed COMPLETED chunk rows to remain after finalization failure")
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk`).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked file_chunk rows: %v", err)
+	}
+	if linkedChunkCount == 0 {
+		t.Fatalf("expected committed file_chunk mappings to remain after finalization failure")
+	}
+
+	var blockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&blockCount); err != nil {
+		t.Fatalf("count blocks: %v", err)
+	}
+	if blockCount == 0 {
+		t.Fatalf("expected committed blocks metadata to remain after finalization failure")
 	}
 }
 

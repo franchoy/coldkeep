@@ -309,6 +309,17 @@ These limits are intended to keep CLI commands from hanging indefinitely on dead
   - `always`: run semantic validation for every completed-file reuse candidate. Strongest inline integrity gate, but highest IO/CPU cost and can noticeably increase store latency on reuse-heavy workloads.
 - If ingestion performance drops unexpectedly after enabling this feature, check whether `COLDKEEP_REUSE_SEMANTIC_VALIDATION=always` is set.
 
+### Operational trust model
+
+- Startup recovery is part of normal operation, not an exceptional maintenance step.
+- Verification (`verify standard/full/deep`) assumes the system has already run recovery and reconciled in-flight state.
+- `COLDKEEP_STRICT_RECOVERY=true` is the recommended production baseline. Treat strict-mode startup failures as safety signals that require investigation.
+- `COLDKEEP_REUSE_SEMANTIC_VALIDATION` controls inline trust/cost tradeoffs on reuse:
+  - `off`: fastest, relies more on explicit verify cadence.
+  - `suspicious` (default): validates deeply only when risk signals exist.
+  - `always`: strongest inline validation, highest IO/CPU cost.
+- `pin_count` protects restore safety by preventing GC/remove from reclaiming data while restore pins are active.
+
 ---
 
 ## CLI Output (v0.8)
