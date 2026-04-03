@@ -2105,6 +2105,62 @@ func TestCLIJSONErrorContractsDoctorRecoveryFailure(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONFailureShortPathSingleMachineReadablePayload(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	// Unrecoverable startup path for doctor: force DB connect failure.
+	env["DB_HOST"] = "127.0.0.1"
+	env["DB_PORT"] = "1"
+
+	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.exitCode != 4 {
+		t.Fatalf("exit code mismatch: want=4 got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	if strings.TrimSpace(res.stdout) != "" {
+		t.Fatalf("expected no stdout for doctor short-path failure, got:\n%s", res.stdout)
+	}
+
+	stderrPayloads := parseJSONLines(res.stderr)
+	machineReadable := make([]map[string]any, 0, len(stderrPayloads))
+	for _, payload := range stderrPayloads {
+		if _, ok := payload["error_class"]; ok {
+			machineReadable = append(machineReadable, payload)
+		}
+	}
+
+	if len(machineReadable) != 1 {
+		t.Fatalf("expected exactly one machine-readable error payload, got %d\nstderr:\n%s", len(machineReadable), res.stderr)
+	}
+
+	errPayload := machineReadable[0]
+	if got, _ := errPayload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: want=error got=%q payload=%v", got, errPayload)
+	}
+	if got, _ := errPayload["error_class"].(string); got != "RECOVERY" {
+		t.Fatalf("error_class mismatch: want=RECOVERY got=%q payload=%v", got, errPayload)
+	}
+	if got := jsonInt64(t, errPayload, "exit_code"); got != 4 {
+		t.Fatalf("exit_code mismatch in payload: want=4 got=%d payload=%v", got, errPayload)
+	}
+
+	if _, exists := errPayload["command"]; exists {
+		t.Fatalf("doctor short-path failure must use generic CLI error payload (no command field): %v", errPayload)
+	}
+	if _, exists := errPayload["data"]; exists {
+		t.Fatalf("doctor short-path failure must use generic CLI error payload (no data field): %v", errPayload)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // test cases
 // -----------------------------------------------------------------------------
