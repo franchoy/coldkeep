@@ -359,3 +359,36 @@ func TestLocalWriterQuarantineActiveContainerNoopWhenInactive(t *testing.T) {
 		t.Fatalf("expected no-op quarantine for inactive writer, got: %v", err)
 	}
 }
+
+func TestNewLocalWriterWithDirAndDBUsesDefaultsForEmptyDirAndSmallMaxSize(t *testing.T) {
+	origContainersDir := ContainersDir
+	origMax := GetContainerMaxSize()
+	t.Cleanup(func() {
+		ContainersDir = origContainersDir
+		SetContainerMaxSize(origMax)
+	})
+
+	defaultDir := t.TempDir()
+	ContainersDir = defaultDir
+	SetContainerMaxSize(ContainerHdrLen + 999)
+
+	w := NewLocalWriterWithDirAndDB("", ContainerHdrLen, nil)
+	if w.dir != defaultDir {
+		t.Fatalf("expected default dir %q, got %q", defaultDir, w.dir)
+	}
+	if w.maxSize != ContainerHdrLen+999 {
+		t.Fatalf("expected default max size %d, got %d", ContainerHdrLen+999, w.maxSize)
+	}
+}
+
+func TestNewLocalWriterWithDirAndDBPreservesExplicitValues(t *testing.T) {
+	dir := t.TempDir()
+	w := NewLocalWriterWithDirAndDB(dir, ContainerHdrLen+1234, nil)
+
+	if w.dir != dir {
+		t.Fatalf("expected explicit dir %q, got %q", dir, w.dir)
+	}
+	if w.maxSize != ContainerHdrLen+1234 {
+		t.Fatalf("expected explicit max size %d, got %d", ContainerHdrLen+1234, w.maxSize)
+	}
+}
