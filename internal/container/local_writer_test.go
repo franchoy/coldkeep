@@ -3,6 +3,7 @@ package container
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,20 @@ func TestLockContainerRowNowaitWithRetryZeroAttemptsReturnsContention(t *testing
 	}
 	if !strings.Contains(err.Error(), "container 88") {
 		t.Fatalf("expected error to mention container id, got: %v", err)
+	}
+}
+
+func TestLocalWriterEnsureActiveExcludingWrapsDirectoryCreationFailure(t *testing.T) {
+	base := t.TempDir()
+	filePath := base + "/not-a-dir"
+	if err := os.WriteFile(filePath, []byte("blocker"), 0o644); err != nil {
+		t.Fatalf("create blocker file: %v", err)
+	}
+
+	w := NewLocalWriterWithDir(filePath, ContainerHdrLen+64)
+	err := w.ensureActiveExcluding(nil, 0)
+	if err == nil || !strings.Contains(err.Error(), "ensure container directory") {
+		t.Fatalf("expected wrapped ensure-directory error contract, got: %v", err)
 	}
 }
 
