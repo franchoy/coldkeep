@@ -47,6 +47,9 @@ jobs:
 
       - name: Check shell script syntax
         run: bash -n scripts/*.sh
+
+      - name: Audit validation matrix coverage
+        run: bash scripts/validate_validation_matrix.sh
           
       - name: Lint
         uses: golangci/golangci-lint-action@v7

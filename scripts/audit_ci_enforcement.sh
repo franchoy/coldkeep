@@ -61,6 +61,7 @@ fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 WORKFLOW_FILE="$REPO_ROOT/.github/workflows/ci.yml"
+VALIDATION_MATRIX_FILE="$REPO_ROOT/VALIDATION_MATRIX.md"
 
 require_pattern() {
   local file="$1"
@@ -85,6 +86,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, smoke\]' 'required gate depends on all upstream jobs'
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check shell script syntax' 'shell script syntax validation step'
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Audit validation matrix coverage' 'validation matrix CI audit step'
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_SMOKE_RESET_DB:\s*1' 'isolated smoke reset toggle'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/\.\.\.' 'integration correctness race run'
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
@@ -100,6 +102,10 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_CORRECTNESS_RESULT.*!= "success"' 'required gate rejects skipped integration correctness'
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_STRESS_RESULT.*!= "success"' 'required gate rejects skipped integration stress'
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job'
+  require_pattern "$VALIDATION_MATRIX_FILE" '^# v1\.0 Validation Matrix$' 'validation matrix artifact'
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| Deterministic, byte-identical restore \|' 'validation matrix deterministic restore row'
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| Non-destructive garbage collection \|' 'validation matrix GC row'
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| Safe concurrent storage operations \|' 'validation matrix concurrency row'
 }
 
 require_gh() {
