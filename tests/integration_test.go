@@ -6522,6 +6522,191 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	assertCleanedUp(iterations)
 }
 
+// TestRandomizedLongRunLifecycleSoak expands the dedicated long-run tier with a
+// deterministic-random lifecycle program: store, verify, GC, repeated restore,
+// occasional restart/recovery, remove, and cleanup. The system must keep
+// converging to a bounded clean state with correct restored bytes.
+func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
+	requireDB(t)
+	requireLongRun(t)
+
+	const iterations = 30
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(20260403 + 1001))
+
+	assertBoundedCleanup := func(label string) {
+		t.Helper()
+
+		assertNoProcessingRows(t, dbconn)
+		assertUniqueFileChunkOrders(t, dbconn)
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+			t.Fatalf("%s: verify after cleanup: %v", label, err)
+		}
+
+		var remainingFiles int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file`).Scan(&remainingFiles); err != nil {
+			t.Fatalf("%s: count logical_file rows after cleanup: %v", label, err)
+		}
+		if remainingFiles != 0 {
+			t.Fatalf("%s: expected 0 logical_file rows after cleanup, got %d", label, remainingFiles)
+		}
+
+		var remainingMappings int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk`).Scan(&remainingMappings); err != nil {
+			t.Fatalf("%s: count file_chunk rows after cleanup: %v", label, err)
+		}
+		if remainingMappings != 0 {
+			t.Fatalf("%s: expected 0 file_chunk rows after cleanup, got %d", label, remainingMappings)
+		}
+
+		var liveOrPinnedChunks int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count > 0 OR pin_count > 0`).Scan(&liveOrPinnedChunks); err != nil {
+			t.Fatalf("%s: count live/pinned chunks after cleanup: %v", label, err)
+		}
+		if liveOrPinnedChunks != 0 {
+			t.Fatalf("%s: expected 0 live/pinned chunks after cleanup, got %d", label, liveOrPinnedChunks)
+		}
+
+		var remainingChunks int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&remainingChunks); err != nil {
+			t.Fatalf("%s: count chunks after cleanup: %v", label, err)
+		}
+		if remainingChunks > 2 {
+			t.Fatalf("%s: expected at most 2 dead chunk rows in reusable active container, got %d", label, remainingChunks)
+		}
+
+		var remainingBlocks int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&remainingBlocks); err != nil {
+			t.Fatalf("%s: count blocks after cleanup: %v", label, err)
+		}
+		if remainingBlocks != remainingChunks {
+			t.Fatalf("%s: expected block rows to match chunk rows after cleanup, got blocks=%d chunks=%d", label, remainingBlocks, remainingChunks)
+		}
+
+		var sealedContainers int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedContainers); err != nil {
+			t.Fatalf("%s: count sealed containers after cleanup: %v", label, err)
+		}
+		if sealedContainers != 0 {
+			t.Fatalf("%s: expected 0 sealed containers after cleanup, got %d", label, sealedContainers)
+		}
+	}
+
+	for i := 0; i < iterations; i++ {
+		size := 256*1024 + rng.Intn(3*1024*1024)
+		path := filepath.Join(inputDir, fmt.Sprintf("longrun-random-%02d.bin", i))
+		wantBytes := make([]byte, size)
+		for j := range wantBytes {
+			wantBytes[j] = byte((j*17 + i*31 + j/2048 + 9) % 251)
+		}
+		if err := os.WriteFile(path, wantBytes, 0o644); err != nil {
+			t.Fatalf("iteration %d: write input file: %v", i, err)
+		}
+		wantHash := sha256File(t, path)
+
+		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), path); err != nil {
+			t.Fatalf("iteration %d: store: %v", i, err)
+		}
+		fileID := fetchFileIDByHash(t, dbconn, wantHash)
+
+		ops := []string{"verify_standard", "verify_full", "gc_dry", "gc_real", "restore_twice"}
+		rng.Shuffle(len(ops), func(a, b int) {
+			ops[a], ops[b] = ops[b], ops[a]
+		})
+		runCount := 3 + rng.Intn(3)
+
+		for opIndex := 0; opIndex < runCount; opIndex++ {
+			switch ops[opIndex] {
+			case "verify_standard":
+				if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+					t.Fatalf("iteration %d: verify standard while live: %v", i, err)
+				}
+			case "verify_full":
+				if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+					t.Fatalf("iteration %d: verify full while live: %v", i, err)
+				}
+			case "gc_dry":
+				if _, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir); err != nil {
+					t.Fatalf("iteration %d: gc dry-run while live: %v", i, err)
+				}
+			case "gc_real":
+				if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+					t.Fatalf("iteration %d: gc real while live: %v", i, err)
+				}
+			case "restore_twice":
+				for restoreRun := 0; restoreRun < 2; restoreRun++ {
+					outPath := filepath.Join(restoreDir, fmt.Sprintf("longrun-random-%02d-r%d.restored.bin", i, restoreRun))
+					if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+						t.Fatalf("iteration %d: restore run %d: %v", i, restoreRun, err)
+					}
+					if gotBytes := mustRead(t, outPath); !bytes.Equal(gotBytes, wantBytes) {
+						t.Fatalf("iteration %d: restore run %d bytes differ from original", i, restoreRun)
+					}
+				}
+			}
+		}
+
+		if i > 0 && i%5 == 0 {
+			if err := dbconn.Close(); err != nil {
+				t.Fatalf("iteration %d: close db before recovery: %v", i, err)
+			}
+			if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+				t.Fatalf("iteration %d: recovery: %v", i, err)
+			}
+			dbconn, err = db.ConnectDB()
+			if err != nil {
+				t.Fatalf("iteration %d: reconnect db: %v", i, err)
+			}
+		}
+
+		if err := storage.RemoveFileWithDB(dbconn, fileID); err != nil {
+			t.Fatalf("iteration %d: remove: %v", i, err)
+		}
+
+		gcRuns := 1 + rng.Intn(2)
+		for gcRun := 0; gcRun < gcRuns; gcRun++ {
+			if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+				t.Fatalf("iteration %d: cleanup gc run %d: %v", i, gcRun, err)
+			}
+		}
+
+		assertBoundedCleanup(fmt.Sprintf("iteration %d", i))
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("final full verify after randomized long-run soak: %v", err)
+	}
+	assertBoundedCleanup("final")
+}
+
 // TestGCRestorePinRaceContainerNotDeleted validates that GC cannot delete a
 // sealed container while a restore-style chunk pin is in-flight.
 func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {

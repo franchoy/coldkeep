@@ -146,6 +146,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving`: runs multi-round
   store/gc/restore/remove interleavings with deterministic randomized start
   offsets and asserts victim removal plus restore/invariant stability
+- Added dedicated long-run randomized soak regression
+  `TestRandomizedLongRunLifecycleSoak`: runs repeated store/verify/gc/restore/
+  recovery/remove cycles under deterministic randomization and is included in
+  the CI long-run gate alongside `TestStoreGCVerifyRestoreDeleteLoopStability`
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious

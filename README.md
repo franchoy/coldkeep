@@ -47,6 +47,7 @@ v1.0 will only be released once these guarantees are validated under real-world 
 - It maps each v0.9 guarantee to concrete evidence in verify checks, integration tests, or both.
 - It is maintained alongside code changes so new trust claims do not drift ahead of evidence.
 - It is audited locally via `scripts/validate_validation_matrix.sh` and enforced in CI.
+- It includes explicit long-run validation evidence for the v1.0 trust phase, not only one-shot correctness tests.
 
 This keeps the validation branch grounded in explicit proof obligations rather than informal release notes.
 

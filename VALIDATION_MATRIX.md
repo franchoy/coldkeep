@@ -28,7 +28,7 @@ Use this section for branch-specific additions that are not yet fully covered.
 
 | Item | Target evidence | Owner | Status |
 | --- | --- | --- | --- |
-| Long-run randomized fault loop expansion | Seeded randomized lifecycle loop (`TestStoreLifecycleSeededRandomizedOperationOrder`) + repeated CI stress passes | TBD | in-progress |
+| Long-run randomized fault loop expansion | Stress-tier seeded randomized lifecycle loop (`TestStoreLifecycleSeededRandomizedOperationOrder`) plus dedicated long-run soak (`TestRandomizedLongRunLifecycleSoak`) and repeated CI long-run passes | TBD | completed |
 | Multi-process contention (non-goal for v1.0 baseline) | Separate post-v1.0 track | TBD | deferred |
 
 ## Exit Criteria
