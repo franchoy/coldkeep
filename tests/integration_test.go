@@ -36,8 +36,10 @@ import (
 // They are organized into three tiers:
 //
 //	 correctness (default) — all non-stress tests; requires COLDKEEP_TEST_DB=1
-//	 stress                — high-concurrency / long-running tests; additionally
-//	                        requires -short=false (they are skipped under go test -short)
+//	 stress                — high-concurrency tests; additionally requires
+//	                        -short=false (they are skipped under go test -short)
+//	 long-run              — extended soak/stability tests; requires
+//	                        COLDKEEP_LONG_RUN=1 and -short=false
 //
 // Run correctness tier:
 //
@@ -46,6 +48,10 @@ import (
 // Run correctness + stress tier:
 //
 //	COLDKEEP_TEST_DB=1 go test ./tests/... -v -timeout 10m
+//
+// Run the dedicated long-run tier:
+//
+//	COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -v -timeout 20m
 //
 // Run correctness only (skip stress regardless of environment):
 //
@@ -69,6 +75,18 @@ func requireStress(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping stress test in -short mode")
+	}
+}
+
+// requireLongRun gates soak-style tests that are intentionally separated from
+// the standard stress tier so CI can enable or disable them independently.
+func requireLongRun(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping long-run test in -short mode")
+	}
+	if os.Getenv("COLDKEEP_LONG_RUN") == "" {
+		t.Skip("Set COLDKEEP_LONG_RUN=1 to run long-run integration tests")
 	}
 }
 
@@ -5904,7 +5922,7 @@ func TestStoreGCRestore(t *testing.T) {
 // not show up in one-shot roundtrip tests.
 func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	requireDB(t)
-	requireStress(t)
+	requireLongRun(t)
 
 	const iterations = 50
 

@@ -826,6 +826,12 @@ Integration tests validate:
 - consistency across GC and recovery
 - deterministic behavior across datasets
 
+They are organized into three tiers:
+
+- correctness: default DB-backed integration coverage
+- stress: concurrency and higher-load coverage, skipped by `-short`
+- long-run: dedicated soak/stability coverage, enabled only with `COLDKEEP_LONG_RUN=1`
+
 ### Local test flow for newcomers
 
 For a reproducible local run that mirrors DB-backed integration expectations:
@@ -855,11 +861,17 @@ export DB_SSLMODE=disable
 go test ./tests -short -count=1 -v -timeout 20m
 ```
 
-1. Run full integration and then full repository tests:
+1. Run the standard stress tier and then full repository tests:
 
 ```bash
 go test ./tests -count=1 -v -timeout 20m
 go test ./... -count=1 -timeout 25m
+```
+
+1. Run the dedicated long-run stability tier when needed:
+
+```bash
+COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -count=1 -v -timeout 20m
 ```
 
 ---

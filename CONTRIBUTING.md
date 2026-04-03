@@ -156,9 +156,15 @@ For v0.9, changes that affect storage, restore, verification, recovery, GC,
 or CLI contracts are expected to pass the full GitHub Actions pipeline:
 
 -   quality
--   integration
+-   integration-correctness
+-   integration-stress
 -   smoke
 -   the aggregate `CI Required Gate`
+
+The repository also has a separate `integration-long-run` soak job for extended
+stability coverage. It is intentionally isolated from the required gate so it
+can be enabled, tuned, or temporarily disabled without changing the standard
+correctness/stress merge path.
 
 If adding storage logic, include at least one restore verification test.
 
@@ -195,6 +201,12 @@ go test ./tests -short -count=1 -v -timeout 20m
 
 ``` bash
 go test ./tests -count=1 -v -timeout 20m
+```
+
+1. Run the dedicated long-run stability tier when you need soak coverage:
+
+``` bash
+COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -count=1 -v -timeout 20m
 ```
 
 1. Run full repository suite before opening a PR:

@@ -154,7 +154,7 @@ jobs:
           go-version: '1.23'
           cache: true
 
-      - name: Run integration tests (full suite including stress)
+      - name: Run integration tests (standard stress tier)
         env:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_CODEC: ${{ matrix.codec }}
@@ -166,6 +166,53 @@ jobs:
           DB_NAME: coldkeep
           DB_SSLMODE: disable
         run: go test -race -count=1 ./tests/...
+
+  integration-long-run:
+    runs-on: ubuntu-latest
+    needs: integration-stress
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        codec: [plain, aes-gcm]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run dedicated long-run stability test
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_LONG_RUN: 1
+          COLDKEEP_CODEC: ${{ matrix.codec }}
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: go test -race -count=1 ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability
 
   smoke:
     runs-on: ubuntu-latest
