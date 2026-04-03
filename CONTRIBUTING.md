@@ -168,6 +168,9 @@ correctness/stress merge path.
 
 If adding storage logic, include at least one restore verification test.
 
+Maintainers preparing a release should also run the
+[`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) flow.
+
 ### Quick Start: Local Test Runs For New Contributors
 
 Use this sequence to run tests with the same DB-backed setup used by integration checks.
