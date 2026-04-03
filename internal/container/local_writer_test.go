@@ -288,3 +288,30 @@ func TestIsLockNotAvailableFalseForOtherErrors(t *testing.T) {
 		t.Fatalf("expected pq non-lock code to not be lock-not-available")
 	}
 }
+
+func TestLocalWriterQuarantineContainerResetsStateAndReturnsDBError(t *testing.T) {
+	// Closed sqlite DB forces QuarantineContainer(db, id) to fail deterministically.
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close sqlite db: %v", err)
+	}
+
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), ContainerHdrLen+64, dbconn)
+	w.pendingAppend = true
+	w.prevAppendFile = "will-be-cleared.bin"
+	w.prevAppendSize = 99
+
+	err = w.quarantineContainer(123)
+	if err == nil {
+		t.Fatalf("expected db quarantine failure from closed sqlite db")
+	}
+	if w.pendingAppend || w.prevAppendFile != "" || w.prevAppendSize != 0 {
+		t.Fatalf("expected quarantine path to clear pending append bookkeeping, got pending=%v file=%q size=%d", w.pendingAppend, w.prevAppendFile, w.prevAppendSize)
+	}
+	if w.hasActive || w.activeID != 0 || w.activeFile != "" || w.activeHandle != nil {
+		t.Fatalf("expected quarantine path to clear active state, got hasActive=%v id=%d file=%q handle=%v", w.hasActive, w.activeID, w.activeFile, w.activeHandle)
+	}
+}
