@@ -165,6 +165,46 @@ func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
 	}
 }
 
+func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
+	output := captureStderr(t, func() {
+		code := runCLI([]string{"doctor", "--output", "json", "--limit"})
+		if code != exitUsage {
+			t.Fatalf("expected usage exit code %d, got %d", exitUsage, code)
+		}
+	})
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	nonEmpty := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			nonEmpty = append(nonEmpty, trimmed)
+		}
+	}
+
+	if len(nonEmpty) != 1 {
+		t.Fatalf("expected exactly one non-empty output line, got %d\noutput=%q", len(nonEmpty), output)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(nonEmpty[0]), &payload); err != nil {
+		t.Fatalf("expected single JSON object line, parse error: %v\nline=%q", err, nonEmpty[0])
+	}
+
+	if got, _ := payload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["error_class"].(string); got != "USAGE" {
+		t.Fatalf("error_class mismatch: got=%v payload=%v", payload["error_class"], payload)
+	}
+	if got, _ := payload["exit_code"].(float64); int(got) != exitUsage {
+		t.Fatalf("exit_code mismatch: got=%v payload=%v", payload["exit_code"], payload)
+	}
+	if message, _ := payload["message"].(string); !strings.Contains(message, "missing value for --limit") {
+		t.Fatalf("message mismatch: payload=%v", payload)
+	}
+}
+
 func TestFormatDoctorTextReportGoldenHealthy(t *testing.T) {
 	report := doctorReport{
 		Recovery: recovery.Report{

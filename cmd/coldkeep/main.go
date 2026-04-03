@@ -153,12 +153,12 @@ func runCLI(args []string) int {
 
 	parsed, err := parseCommandLine(args, flagsWithValues)
 	if err != nil {
-		return printCLIError(err, outputModeText)
+		return printCLIError(err, startupMode)
 	}
 
 	outputMode, err := resolveOutputMode(parsed)
 	if err != nil {
-		return printCLIError(err, outputModeText)
+		return printCLIError(err, startupMode)
 	}
 
 	switch parsed.method {
