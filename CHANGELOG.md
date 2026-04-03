@@ -133,6 +133,11 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`: stores a file
   with the `aes-gcm` codec, mutates `blocks.nonce` metadata in DB, and asserts
   both deep verify and restore reject the tampered authenticated context
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`: stores a file with the
+  `aes-gcm` codec, verifies baseline success under the original key, then
+  switches to a different valid key and asserts both deep verify and restore
+  reject the mismatched-key read path
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
