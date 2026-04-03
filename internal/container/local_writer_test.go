@@ -272,3 +272,19 @@ func TestLocalWriterClearActiveResetsAllActiveState(t *testing.T) {
 		t.Fatalf("expected active internals reset, got id=%d file=%q size=%d handle=%v", w.activeID, w.activeFile, w.activeSize, w.activeHandle)
 	}
 }
+
+func TestIsLockNotAvailableTrueForPostgresLockCode(t *testing.T) {
+	err := &pq.Error{Code: "55P03"}
+	if !isLockNotAvailable(err) {
+		t.Fatalf("expected lock-not-available classification for pq code 55P03")
+	}
+}
+
+func TestIsLockNotAvailableFalseForOtherErrors(t *testing.T) {
+	if isLockNotAvailable(errors.New("something else")) {
+		t.Fatalf("expected non-pq error to not be lock-not-available")
+	}
+	if isLockNotAvailable(&pq.Error{Code: "23505"}) {
+		t.Fatalf("expected pq non-lock code to not be lock-not-available")
+	}
+}
