@@ -84,3 +84,15 @@ func TestOpenWritableContainerFailsOnInvalidHeader(t *testing.T) {
 		t.Fatalf("expected wrapped header-validation contract, got: %v", err)
 	}
 }
+
+func TestOpenReadOnlyContainerFailsOnInvalidHeader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad-header-readonly.bin")
+	if err := os.WriteFile(path, []byte("still-not-a-valid-container-header"), 0o644); err != nil {
+		t.Fatalf("write invalid container file: %v", err)
+	}
+
+	_, err := OpenReadOnlyContainer(path, ContainerHdrLen+32)
+	if err == nil || !strings.Contains(err.Error(), "validate container header") {
+		t.Fatalf("expected wrapped readonly header-validation contract, got: %v", err)
+	}
+}
