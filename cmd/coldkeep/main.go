@@ -350,6 +350,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 		return
 	}
 	// These commands emit their own structured JSON payload.
+	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
 	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
 		return

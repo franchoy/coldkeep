@@ -41,6 +41,34 @@ func captureStderr(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	originalStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	os.Stdout = w
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close write pipe: %v", err)
+	}
+	os.Stdout = originalStdout
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read stdout output: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close read pipe: %v", err)
+	}
+
+	return buf.String()
+}
+
 func TestEmitStartupRecoveryReportJSONSuccessSchema(t *testing.T) {
 	report := recovery.Report{
 		AbortedLogicalFiles:    2,
@@ -647,5 +675,37 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 	}
 	if level != verify.VerifyFull {
 		t.Fatalf("expected explicit doctor verify level full, got %v", level)
+	}
+}
+
+func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version"}
+
+	for _, command := range selfEmittingJSONCommands {
+		output := captureStdout(t, func() {
+			printCLISuccess(parsedCommandLine{method: command}, outputModeJSON)
+		})
+		if strings.TrimSpace(output) != "" {
+			t.Fatalf("expected no generic success JSON for self-emitting command %q, got %q", command, output)
+		}
+	}
+
+	genericSuccessCommands := []string{"verify", "help", "init"}
+
+	for _, command := range genericSuccessCommands {
+		output := captureStdout(t, func() {
+			printCLISuccess(parsedCommandLine{method: command}, outputModeJSON)
+		})
+
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+			t.Fatalf("expected JSON payload for command %q: %v, output=%q", command, err, output)
+		}
+		if got, ok := payload["status"].(string); !ok || got != "ok" {
+			t.Fatalf("status mismatch for command %q: got=%v", command, payload["status"])
+		}
+		if got, ok := payload["command"].(string); !ok || got != command {
+			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
+		}
 	}
 }
