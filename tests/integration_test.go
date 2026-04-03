@@ -6276,6 +6276,55 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	}
 }
 
+func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
+	requireDB(t)
+	setTestAESGCMKey(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_invalid_hex_key.bin", 512*1024)
+
+	sgctx := newTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
+	if err != nil {
+		t.Fatalf("store aes-gcm file: %v", err)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err != nil {
+		t.Fatalf("baseline deep verify with valid key should pass: %v", err)
+	}
+
+	// Simulate malformed operator key configuration (non-hex value).
+	t.Setenv("COLDKEEP_KEY", "this-is-not-hex")
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
+		t.Fatal("verify system --deep should fail with non-hex aes-gcm key configuration but returned nil")
+	}
+
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	outPath := filepath.Join(restoreDir, "restored.bin")
+	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
+		t.Fatal("restore should fail with non-hex aes-gcm key configuration but returned nil")
+	}
+}
+
 func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 	requireDB(t)
 
