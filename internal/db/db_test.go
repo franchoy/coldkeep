@@ -276,9 +276,23 @@ func TestLoadConnMaxLifetimeAllowsZero(t *testing.T) {
 	}
 }
 
+func TestLoadConnMaxLifetimeUsesPositiveOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONN_MAX_LIFETIME_MS", "45000")
+	if got := loadConnMaxLifetime(); got != 45*time.Second {
+		t.Fatalf("expected conn max lifetime 45s, got %v", got)
+	}
+}
+
 func TestLoadConnMaxIdleTimeAllowsZero(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS", "0")
 	if got := loadConnMaxIdleTime(); got != 0 {
 		t.Fatalf("expected conn max idle time 0 for zero override, got %v", got)
+	}
+}
+
+func TestLoadConnectTimeoutFallsBackOnNegativeValues(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONNECT_TIMEOUT_MS", "-1")
+	if got := loadConnectTimeout(); got != 5*time.Second {
+		t.Fatalf("expected default connect timeout 5s for negative value, got %v", got)
 	}
 }
