@@ -30,6 +30,27 @@ func TestBackendFromDBNil(t *testing.T) {
 	if SupportsSelectForUpdate(nil) {
 		t.Fatalf("expected nil DB to report no SELECT FOR UPDATE support")
 	}
+	if SupportsSelectForUpdateSkipLocked(nil) {
+		t.Fatalf("expected nil DB to report no SKIP LOCKED support")
+	}
+	if SupportsSelectForUpdateNowait(nil) {
+		t.Fatalf("expected nil DB to report no NOWAIT support")
+	}
+}
+
+func TestSupportsSelectForUpdateVariantsSQLite(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if SupportsSelectForUpdateSkipLocked(dbconn) {
+		t.Fatalf("expected sqlite to report no SKIP LOCKED support")
+	}
+	if SupportsSelectForUpdateNowait(dbconn) {
+		t.Fatalf("expected sqlite to report no NOWAIT support")
+	}
 }
 
 func TestQueryWithOptionalForUpdateSQLite(t *testing.T) {
