@@ -151,6 +151,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   explicit `plain` codec selection instead of relying on the process default,
   and `TestVerifySystemDeepDetectsChunkDataCorruption` now asserts both deep
   verify aggregate failure and restore `chunk hash mismatch` semantics
+- Hardened verification fixtures and nearby full-mode regressions against
+  default-codec drift: `setupStoredFileForVerification`, `TestVerifyFull`, and
+  `TestVerifySystemFullDetectsNonContiguousOffsets` now store with explicit
+  `plain` codec selection so DB-backed runs do not depend on process defaults
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED

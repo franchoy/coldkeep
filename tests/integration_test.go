@@ -481,7 +481,7 @@ func setupStoredFileForVerification(t *testing.T, filename string, size int) (*s
 
 	sgctx := newTestContext(dbconn)
 
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -5506,7 +5506,7 @@ func TestVerifyStandard(t *testing.T) {
 		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
 	}
 
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -5672,12 +5672,9 @@ func TestVerifyFull(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_full.bin", 256*1024)
 
-	sgctx := storage.StorageContext{
-		DB:     dbconn,
-		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
-	}
+	sgctx := newTestContext(dbconn)
 
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -6472,11 +6469,8 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_full_non_contiguous.bin", 4*1024*1024)
 
-	sgctx := storage.StorageContext{
-		DB:     dbconn,
-		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
-	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	sgctx := newTestContext(dbconn)
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
