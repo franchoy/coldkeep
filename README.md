@@ -58,7 +58,7 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Recover from interrupted operations on startup.
 - Provide storage statistics and container health information.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
-- Run `coldkeep doctor` as the recommended operator-facing health check that bundles recovery, verification, and schema sanity checks.
+- Run `coldkeep doctor` as the recommended operator health gate that bundles recovery, verification, and schema sanity checks.
 - Simulate storage operations without writing data to disk (v0.8).
 - Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
 
@@ -69,11 +69,11 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - `gc` mutates metadata and container files unless `--dry-run` is used.
 - startup `recovery` is corrective and mutates recoverable metadata/state.
 - `doctor` is corrective and may mutate metadata because it runs recovery before verify.
-- `verify` is read-only during its verification phase.
+- `verify` is observational and assumes recovered state; its verification phase is read-only.
 
 CLI note: `coldkeep verify ...` still runs automatic startup recovery before the
 verification phase, so the overall command may correct stale recoverable state
-before the read-only verification checks begin.
+before the observational, read-only verification checks begin.
 
 ---
 
@@ -385,7 +385,7 @@ operator trust model.
   step — it is the expected lifecycle entry point. Startup recovery is itself a
   corrective, state-changing step.
 
-- **`doctor` is the recommended operator health command and is corrective, not read-only.**
+- **`doctor` is the recommended operator health gate and is corrective, not read-only.**
   It runs recovery + verify + schema/version sanity in one command and may
   update metadata (abort dangling writes, clear stale sealing markers) before
   running verification. Use it after startup, before first ingestion in a new
@@ -630,9 +630,9 @@ docker compose run --rm \
 
 ---
 
-## Doctor (recommended health check)
+## Doctor (recommended health gate)
 
-`coldkeep doctor` is the recommended operator-facing health command and a first-class
+`coldkeep doctor` is the recommended operator health gate and a first-class
 v1.0 CLI primitive. Treat it as the first command to run after startup and as the
 standard pre-release and pre-ingestion readiness gate.
 
@@ -803,6 +803,9 @@ Verification is a recovered-state checker, not a general online consistency chec
 Running verification while writes are in-flight can produce transient false positives.
 Operationally, run `verify` after startup recovery has completed and when ingestion
 work is idle or quiesced.
+
+Verification is observational: it assumes recovered state and does not perform
+corrective recovery itself.
 
 The `verify` checks themselves do not mutate stored state. In the CLI, any
 state change observed before verification comes from the automatic startup

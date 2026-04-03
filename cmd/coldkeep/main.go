@@ -1323,7 +1323,7 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Corrective state-changing health command (may update metadata via recovery before verify; default: --standard)"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
@@ -1332,7 +1332,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  stats", "Show storage statistics"},
-		{"  verify [target] [fileID] [options]", "Read-only layered integrity verification (default: --standard)"},
+		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
 		{"    no options defaults to '--standard'", ""},
@@ -1342,7 +1342,7 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
-		{"  simulate <store|store-folder> <path>", "Dry-run store without writing to storage"},
+		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
 	fmt.Println("      --name <substring>")
@@ -1386,10 +1386,12 @@ func printHelp() {
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
 	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
+	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
+	fmt.Println("  Simulated mode is not proof of physical durability")
 	fmt.Println()
 	fmt.Println("Operator quick check:")
 	fmt.Println("  coldkeep doctor --standard")
-	fmt.Println("  After significant operations, run coldkeep doctor to validate system health.")
+	fmt.Println("  Recommended operator health gate: run coldkeep doctor after significant operations.")
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")
