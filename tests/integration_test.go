@@ -1147,14 +1147,40 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 	if !ok {
 		t.Fatalf("doctor success JSON must be emitted on stdout\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
 	}
+
+	// Frozen v1.0 contract: success envelope keys are intentionally exact.
+	wantSuccessKeys := []string{"command", "data", "status"}
+	gotSuccessKeys := make([]string, 0, len(successPayload))
+	for k := range successPayload {
+		gotSuccessKeys = append(gotSuccessKeys, k)
+	}
+	slices.Sort(gotSuccessKeys)
+	slices.Sort(wantSuccessKeys)
+	if !slices.Equal(gotSuccessKeys, wantSuccessKeys) {
+		t.Fatalf("doctor success JSON keys mismatch\nwant=%v\ngot=%v\npayload=%v", wantSuccessKeys, gotSuccessKeys, successPayload)
+	}
+
 	if status, _ := successPayload["status"].(string); status != "ok" {
 		t.Fatalf("doctor success payload status mismatch: payload=%v", successPayload)
 	}
 	if command, _ := successPayload["command"].(string); command != "doctor" {
 		t.Fatalf("doctor success payload command mismatch: payload=%v", successPayload)
 	}
-	if _, ok := successPayload["data"].(map[string]any); !ok {
+	data, ok := successPayload["data"].(map[string]any)
+	if !ok {
 		t.Fatalf("doctor success payload missing data object: payload=%v", successPayload)
+	}
+
+	// Frozen v1.0 contract: doctor data keys are intentionally exact.
+	wantDataKeys := []string{"recovery", "recovery_status", "schema_status", "schema_version", "verify_level", "verify_status"}
+	gotDataKeys := make([]string, 0, len(data))
+	for k := range data {
+		gotDataKeys = append(gotDataKeys, k)
+	}
+	slices.Sort(gotDataKeys)
+	slices.Sort(wantDataKeys)
+	if !slices.Equal(gotDataKeys, wantDataKeys) {
+		t.Fatalf("doctor success data keys mismatch\nwant=%v\ngot=%v\npayload=%v", wantDataKeys, gotDataKeys, successPayload)
 	}
 
 	if errPayload, hasErr := findCLIErrorPayload(res.stdout); hasErr {

@@ -667,6 +667,17 @@ generic CLI error path.
 This contract is covered by integration and command-layer tests and is intended
 to remain stable for automation.
 
+### Frozen v1.0 Doctor Contract
+
+The following product decisions are explicitly frozen for v1.0:
+
+- Default doctor verify level remains `standard`.
+- Success JSON shape remains exactly the current `status + command + data` envelope,
+  with the existing doctor `data` fields unchanged.
+- Failure JSON remains owned by the generic CLI error contract (not doctor-specific).
+- Doctor is corrective, not read-only: recovery runs before verify and may mutate
+  metadata to resolve recoverable state.
+
 ### Operational guidance
 
 - Run `doctor` after startup, before first ingestion in a new environment.
