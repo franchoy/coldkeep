@@ -456,6 +456,16 @@ coldkeep simulate store-folder ./data --output json
 - In `--output json` mode, each command invocation emits exactly one canonical JSON payload: success payloads go to stdout, and error payloads go to stderr with a non-zero exit code.
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
 
+### Frozen v1.0 JSON surface
+
+The following JSON fields are frozen for v1.0 and should not change without a
+major-version bump:
+
+- Top-level success envelope fields: `status`, `command`
+- Top-level error envelope fields: `error_class`, `exit_code`
+- Doctor success payload fields under `data`: `recovery`, `verify_level`, `schema_version`, `recovery_status`, `verify_status`, `schema_status`
+- Doctor nested recovery fields under `data.recovery`: `aborted_logical_files`, `aborted_chunks`, `quarantined_missing`, `quarantined_corrupt_tail`, `quarantined_orphan`, `skipped_dir_entries`, `checked_container_record`, `checked_disk_files`, `sealing_completed`, `sealing_quarantined`
+
 ### Frozen CLI exit codes (public contract)
 
 The CLI exit-code mapping is frozen for v1.0 compatibility and should not change
