@@ -21,6 +21,20 @@ type stubTx struct {
 	queries   []string
 }
 
+type fakeContainer struct {
+	syncErr  error
+	closeErr error
+}
+
+func (f *fakeContainer) Append(data []byte) (int64, error) { return 0, nil }
+func (f *fakeContainer) ReadAt(offset int64, size int64) ([]byte, error) {
+	return nil, nil
+}
+func (f *fakeContainer) Size() int64               { return ContainerHdrLen }
+func (f *fakeContainer) Truncate(size int64) error { return nil }
+func (f *fakeContainer) Sync() error               { return f.syncErr }
+func (f *fakeContainer) Close() error              { return f.closeErr }
+
 func (s *stubTx) Exec(query string, args ...any) (sql.Result, error) {
 	s.queries = append(s.queries, query)
 	idx := s.execCalls
@@ -92,5 +106,29 @@ func TestLockContainerRowNowaitWithRetryReturnsNonLockErrorImmediately(t *testin
 	}
 	if tx.execCalls != 1 {
 		t.Fatalf("expected no retries on non-lock error, got %d calls", tx.execCalls)
+	}
+}
+
+func TestLocalWriterFinalizePhysicalOnlyWrapsSyncError(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	w.hasActive = true
+	w.activeID = 11
+	w.activeHandle = &fakeContainer{syncErr: errors.New("sync failed")}
+
+	err := w.finalizePhysicalOnly()
+	if err == nil || !strings.Contains(err.Error(), "sync container 11") || !strings.Contains(err.Error(), "sync failed") {
+		t.Fatalf("expected wrapped sync error contract, got: %v", err)
+	}
+}
+
+func TestLocalWriterFinalizePhysicalOnlyWrapsCloseError(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	w.hasActive = true
+	w.activeID = 12
+	w.activeHandle = &fakeContainer{closeErr: errors.New("close failed")}
+
+	err := w.finalizePhysicalOnly()
+	if err == nil || !strings.Contains(err.Error(), "close container 12") || !strings.Contains(err.Error(), "close failed") {
+		t.Fatalf("expected wrapped close error contract, got: %v", err)
 	}
 }
