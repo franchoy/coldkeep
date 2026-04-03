@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,5 +139,31 @@ func TestApplySQLiteSessionPragmasFailsWhenDBIsClosed(t *testing.T) {
 	err = ApplySQLiteSessionPragmas(dbconn)
 	if err == nil {
 		t.Fatalf("expected error when applying pragmas to closed db")
+	}
+}
+
+func TestBuildConnectionOptionsUsesCurrentTimeoutGlobals(t *testing.T) {
+	origStatement := statementTimeout
+	origLock := lockTimeout
+	origIdleInTx := idleInTransactionTimeout
+	t.Cleanup(func() {
+		statementTimeout = origStatement
+		lockTimeout = origLock
+		idleInTransactionTimeout = origIdleInTx
+	})
+
+	statementTimeout = 1500 * time.Millisecond
+	lockTimeout = 2750 * time.Millisecond
+	idleInTransactionTimeout = 4200 * time.Millisecond
+
+	options := buildConnectionOptions()
+	if !strings.Contains(options, "-c statement_timeout=1500") {
+		t.Fatalf("expected statement timeout option in %q", options)
+	}
+	if !strings.Contains(options, "-c lock_timeout=2750") {
+		t.Fatalf("expected lock timeout option in %q", options)
+	}
+	if !strings.Contains(options, "-c idle_in_transaction_session_timeout=4200") {
+		t.Fatalf("expected idle-in-tx timeout option in %q", options)
 	}
 }
