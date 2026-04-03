@@ -596,3 +596,121 @@ func TestRestoreFailsWhenAESGCMTransformerKeyIsMissing(t *testing.T) {
 		t.Fatalf("expected missing-key transformer error contract, got: %v", err)
 	}
 }
+
+func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload0 := []byte("chunk-order-zero")
+	payload2 := []byte("chunk-order-two")
+
+	containerFile0 := "chunk-order-0.bin"
+	containerPath0 := filepath.Join(containersDir, containerFile0)
+	if err := writeReusableTestContainerFileWithPayload(containerPath0, payload0); err != nil {
+		t.Fatalf("write first container file: %v", err)
+	}
+
+	containerFile2 := "chunk-order-2.bin"
+	containerPath2 := filepath.Join(containersDir, containerFile2)
+	if err := writeReusableTestContainerFileWithPayload(containerPath2, payload2); err != nil {
+		t.Fatalf("write second container file: %v", err)
+	}
+
+	var containerID0 int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFile0,
+		int64(container.ContainerHdrLen+len(payload0)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID0); err != nil {
+		t.Fatalf("insert first container: %v", err)
+	}
+
+	var containerID2 int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFile2,
+		int64(container.ContainerHdrLen+len(payload2)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID2); err != nil {
+		t.Fatalf("insert second container: %v", err)
+	}
+
+	sum0 := sha256.Sum256(payload0)
+	hash0 := hex.EncodeToString(sum0[:])
+	sum2 := sha256.Sum256(payload2)
+	hash2 := hex.EncodeToString(sum2[:])
+
+	var chunkID0 int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash0, int64(len(payload0)), filestate.ChunkCompleted,
+	).Scan(&chunkID0); err != nil {
+		t.Fatalf("insert first chunk: %v", err)
+	}
+
+	var chunkID2 int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash2, int64(len(payload2)), filestate.ChunkCompleted,
+	).Scan(&chunkID2); err != nil {
+		t.Fatalf("insert second chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID0, int64(len(payload0)), int64(len(payload0)), []byte{}, containerID0, int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert first block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID2, int64(len(payload2)), int64(len(payload2)), []byte{}, containerID2, int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert second block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"chunk-order-discontinuity.bin", int64(len(payload0)+len(payload2)), strings.Repeat("d", 64), filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`,
+		fileID, chunkID0, int64(0),
+	); err != nil {
+		t.Fatalf("insert first file_chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`,
+		fileID, chunkID2, int64(2),
+	); err != nil {
+		t.Fatalf("insert second file_chunk: %v", err)
+	}
+
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	outPath := filepath.Join(t.TempDir(), "out.bin")
+	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
+	if err == nil || !strings.Contains(err.Error(), "chunk order discontinuity for file") || !strings.Contains(err.Error(), "expected order 1 got 2") {
+		t.Fatalf("expected chunk-order discontinuity contract, got: %v", err)
+	}
+}
