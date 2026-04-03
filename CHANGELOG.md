@@ -78,6 +78,8 @@ eliminate remaining correctness risks before the v1.0 milestone.
   not a live online-consistency checker during in-flight writes
 - Documented `VALIDATION_MATRIX.md` in README as the maintained v0.10/v1.0
   guarantee-to-evidence contract, audited locally and enforced in CI
+- Tightened validation-matrix auditing so README v0.9 guarantee summary bullets
+  are counted and checked against the maintained validation contract surface
 - Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
   explicit cost/coverage guidance
 - Elevated `coldkeep doctor` in docs/help/smoke as the recommended
@@ -140,6 +142,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestRepeatedJitteredStoreGCRestoreInterleaving`: runs multi-round
   store/restore/gc interleavings with deterministic randomized start offsets and
   asserts restore correctness plus post-run invariant stability
+- Added stress-tier four-way repeated interleaving regression
+  `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving`: runs multi-round
+  store/gc/restore/remove interleavings with deterministic randomized start
+  offsets and asserts victim removal plus restore/invariant stability
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious
