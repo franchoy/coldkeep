@@ -132,3 +132,37 @@ func TestLocalWriterFinalizePhysicalOnlyWrapsCloseError(t *testing.T) {
 		t.Fatalf("expected wrapped close error contract, got: %v", err)
 	}
 }
+
+func TestLocalWriterAcknowledgeAppendCommittedClearsRollbackState(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	w.pendingAppend = true
+	w.prevAppendSize = 123
+	w.prevAppendFile = "active.bin"
+
+	w.AcknowledgeAppendCommitted()
+
+	if w.pendingAppend {
+		t.Fatalf("expected pendingAppend to be false after commit acknowledgment")
+	}
+	if w.prevAppendSize != 0 {
+		t.Fatalf("expected prevAppendSize to be reset, got %d", w.prevAppendSize)
+	}
+	if w.prevAppendFile != "" {
+		t.Fatalf("expected prevAppendFile to be reset, got %q", w.prevAppendFile)
+	}
+}
+
+func TestLocalWriterRollbackLastAppendNoopWhenNothingPending(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	w.pendingAppend = false
+	w.prevAppendSize = 77
+	w.prevAppendFile = "keep-me.bin"
+
+	err := w.RollbackLastAppend()
+	if err != nil {
+		t.Fatalf("expected no-op rollback without pending append, got: %v", err)
+	}
+	if w.prevAppendSize != 77 || w.prevAppendFile != "keep-me.bin" {
+		t.Fatalf("expected rollback no-op to leave bookkeeping unchanged, got size=%d file=%q", w.prevAppendSize, w.prevAppendFile)
+	}
+}
