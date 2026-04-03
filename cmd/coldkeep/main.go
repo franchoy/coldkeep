@@ -332,7 +332,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"status":      "error",
-			"error_class": exitCodeLabel(code),
+			"error_class": exitErrorClassLabel(code),
 			"exit_code":   code,
 			"message":     strings.TrimSpace(err.Error()),
 		}
@@ -341,7 +341,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 		return code
 	}
 
-	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitCodeLabel(code), strings.TrimSpace(err.Error()))
+	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), strings.TrimSpace(err.Error()))
 	return code
 }
 
@@ -467,7 +467,7 @@ func shouldRunStartupRecovery(command string) bool {
 	}
 }
 
-func exitCodeLabel(code int) string {
+func exitErrorClassLabel(code int) string {
 	switch code {
 	case exitUsage:
 		return "USAGE"
@@ -478,6 +478,17 @@ func exitCodeLabel(code int) string {
 	default:
 		return "GENERAL"
 	}
+}
+
+// Keep fallback matching intentionally narrow; typed cliError classifications are authoritative.
+// Usage-like verify parser errors are handled in the usage branch inside classifyExitCode.
+func isLikelyVerifyFailureMessage(msg string) bool {
+	if strings.Contains(msg, "verification failed") {
+		return true
+	}
+
+	return strings.Contains(msg, "verify phase failed") ||
+		strings.Contains(msg, "verify command failed")
 }
 
 func classifyExitCode(err error) int {
@@ -520,7 +531,7 @@ func classifyExitCode(err error) int {
 		return exitUsage
 	}
 
-	if strings.Contains(msg, "verification failed") || strings.Contains(msg, "verify ") {
+	if isLikelyVerifyFailureMessage(msg) {
 		return exitVerify
 	}
 

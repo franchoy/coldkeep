@@ -404,6 +404,45 @@ func TestClassifyExitCodeFallbackStringMatch(t *testing.T) {
 	}
 }
 
+func TestClassifyExitCodeFallbackVerifyMessage(t *testing.T) {
+	err := errors.New("doctor verify phase failed: chunk mismatch")
+	if got := classifyExitCode(err); got != exitVerify {
+		t.Fatalf("expected verify exit code from fallback matching %d, got %d", exitVerify, got)
+	}
+}
+
+func TestClassifyExitCodeUnknownVerifyLevelClassifiesAsUsage(t *testing.T) {
+	err := errors.New("unknown verify level: ultra")
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestClassifyExitCodeFallbackDoesNotOvermatchVerifyWord(t *testing.T) {
+	err := errors.New("could not verify credentials for DB user")
+	if got := classifyExitCode(err); got != exitGeneral {
+		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	}
+}
+
+func TestExitErrorClassLabelKnownCodes(t *testing.T) {
+	if got := exitErrorClassLabel(exitUsage); got != "USAGE" {
+		t.Fatalf("expected USAGE label, got %q", got)
+	}
+	if got := exitErrorClassLabel(exitVerify); got != "VERIFY" {
+		t.Fatalf("expected VERIFY label, got %q", got)
+	}
+	if got := exitErrorClassLabel(exitRecovery); got != "RECOVERY" {
+		t.Fatalf("expected RECOVERY label, got %q", got)
+	}
+}
+
+func TestExitErrorClassLabelSuccessDefaultsToGeneral(t *testing.T) {
+	if got := exitErrorClassLabel(exitSuccess); got != "GENERAL" {
+		t.Fatalf("expected GENERAL label for non-error code, got %q", got)
+	}
+}
+
 func TestResolveOutputModeInvalidValueClassifiesAsUsage(t *testing.T) {
 	parsed := parsedCommandLine{
 		method: "stats",
