@@ -5888,9 +5888,11 @@ func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should detect a container content mismatch")
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"system-container-hash-mismatch",
+	)
 }
 
 func TestSharedChunkSafety(t *testing.T) {
@@ -6511,9 +6513,12 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		t.Fatalf("corrupt block offset continuity: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
-		t.Fatal("verify system --full should detect non-contiguous block offsets")
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
+		"found 2 errors in checkChunkOffsetValidity checks",
+		"system-full non-contiguous-offsets",
+	)
 }
 
 func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {

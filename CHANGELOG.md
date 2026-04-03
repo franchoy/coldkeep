@@ -159,6 +159,9 @@ eliminate remaining correctness risks before the v1.0 milestone.
   contracts instead of generic failure only, including deep chunk corruption,
   full container truncation/missing-file cases, and standard missing-metadata /
   broken-order cases
+- Tightened remaining system-level verification regressions to assert returned
+  error contracts, including deep container-content mismatch aggregation and
+  full-mode non-contiguous offset detection
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
