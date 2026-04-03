@@ -273,6 +273,8 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 	}
 
 	if mode == outputModeJSON {
+		// Startup recovery JSON is an event-style diagnostic stream on stderr.
+		// It is intentionally separate from command result contracts on stdout.
 		payload := map[string]any{
 			"event":                               "startup_recovery",
 			"status":                              "ok",
@@ -1084,6 +1086,8 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	report.VerifyStatus = "ok"
 
 	// Intentional JSON contract (frozen v1.0):
+	// - Startup/preflight recovery diagnostics are emitted as stderr events
+	//   (`event=startup_recovery`) outside this doctor command payload.
 	// - Success: doctor-specific payload emitted to stdout; includes phase statuses,
 	//   verify_level, schema_version, and the full recovery counter set under "recovery".
 	// - Execution short-circuits by phase on error: recovery -> schema -> verify.

@@ -455,6 +455,7 @@ coldkeep simulate store-folder ./data --output json
 - Errors are classified into usage, system/runtime, verification, and recovery categories
 - In `--output json` mode, each command invocation emits exactly one canonical JSON payload: success payloads go to stdout, and error payloads go to stderr with a non-zero exit code.
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
+- `startup_recovery` JSON is an event-style diagnostic emitted on stderr (preflight stream), while `doctor --output json` emits a command-style result payload on stdout (`status + command + data`).
 
 ### Frozen v1.0 JSON surface
 
