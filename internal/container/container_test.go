@@ -72,3 +72,15 @@ func TestFileContainerReadAtFailsOnShortRead(t *testing.T) {
 		t.Fatalf("expected short-read error contract, got: %v", err)
 	}
 }
+
+func TestOpenWritableContainerFailsOnInvalidHeader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad-header.bin")
+	if err := os.WriteFile(path, []byte("not-a-valid-container-header"), 0o644); err != nil {
+		t.Fatalf("write invalid container file: %v", err)
+	}
+
+	_, err := OpenWritableContainer(path, ContainerHdrLen+32)
+	if err == nil || !strings.Contains(err.Error(), "validate container header") {
+		t.Fatalf("expected wrapped header-validation contract, got: %v", err)
+	}
+}
