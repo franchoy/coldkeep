@@ -66,6 +66,8 @@ eliminate remaining correctness risks before the v1.0 milestone.
   interleavings
 - Added integration regression for deep verification trailing-byte detection
   after the last completed block payload
+- Added `VALIDATION_MATRIX.md` to map v0.9 guarantees to concrete verify checks
+  and integration evidence during the v0.10 trust-validation phase
 
 ### Changed
 

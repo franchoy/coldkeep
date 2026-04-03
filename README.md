@@ -36,6 +36,7 @@ During v0.10:
 - Changes focus on hardening invariants and lifecycle guarantees
 - Integration tests are expanded for stress and adversarial validation, including long-run scenarios
 - The goal is to actively try to break the system and eliminate remaining correctness risks
+- Validation scope and guarantee-to-evidence mapping are tracked in `VALIDATION_MATRIX.md`
 
 v1.0 will only be released once these guarantees are validated under real-world conditions.
 

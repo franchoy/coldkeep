@@ -5962,6 +5962,72 @@ func TestRepeatRestoreDeterminism(t *testing.T) {
 	}
 }
 
+// TestRepeatedStorePreservesChunkGraphDeterminism stores the same multi-chunk
+// file repeatedly in one environment and asserts that chunk graph structure
+// stays stable while store reports AlreadyStored after the first ingest.
+func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	inPath := createTempFile(t, inputDir, "repeated_store_determinism.bin", 5*1024*1024)
+
+	ctx := newTestContext(dbconn)
+	first, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("first store: %v", err)
+	}
+	if first.AlreadyStored {
+		t.Fatal("first store unexpectedly reported AlreadyStored=true")
+	}
+
+	baselineGraph := queryChunkGraph(t, dbconn, first.FileID)
+	if len(baselineGraph) < 2 {
+		t.Fatalf("expected multi-chunk baseline graph, got %d chunk(s)", len(baselineGraph))
+	}
+
+	const reruns = 25
+	for i := 0; i < reruns; i++ {
+		result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+		if err != nil {
+			t.Fatalf("rerun %d store: %v", i, err)
+		}
+		if !result.AlreadyStored {
+			t.Fatalf("rerun %d expected AlreadyStored=true", i)
+		}
+		if result.FileID != first.FileID {
+			t.Fatalf("rerun %d file ID changed: want %d got %d", i, first.FileID, result.FileID)
+		}
+
+		graph := queryChunkGraph(t, dbconn, result.FileID)
+		if !slices.Equal(baselineGraph, graph) {
+			t.Fatalf("rerun %d chunk graph changed: baseline=%v current=%v", i, baselineGraph, graph)
+		}
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify after repeated stores: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+}
+
 // TestStoreGCRestore is the v0.5 headline guarantee: a stored file remains
 // fully restorable after GC runs (even in the presence of other deleted files).
 func TestStoreGCRestore(t *testing.T) {
