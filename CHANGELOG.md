@@ -76,6 +76,8 @@ eliminate remaining correctness risks before the v1.0 milestone.
 
 - Clarified verification operational contract as a recovered-state checker,
   not a live online-consistency checker during in-flight writes
+- Documented `VALIDATION_MATRIX.md` in README as the maintained v0.10/v1.0
+  guarantee-to-evidence contract, audited locally and enforced in CI
 - Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
   explicit cost/coverage guidance
 - Elevated `coldkeep doctor` in docs/help/smoke as the recommended
@@ -134,6 +136,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestStoreLifecycleSeededRandomizedOperationOrder`: runs deterministic-random
   operation ordering across store/verify/gc/restore/remove loops with per-step
   integrity assertions
+- Added stress-tier repeated jittered interleaving regression
+  `TestRepeatedJitteredStoreGCRestoreInterleaving`: runs multi-round
+  store/restore/gc interleavings with deterministic randomized start offsets and
+  asserts restore correctness plus post-run invariant stability
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious

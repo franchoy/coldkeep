@@ -40,6 +40,16 @@ During v0.10:
 
 v1.0 will only be released once these guarantees are validated under real-world conditions.
 
+### Validation Matrix
+
+`VALIDATION_MATRIX.md` is the branch-level contract for the v0.10 trust-validation phase.
+
+- It maps each v0.9 guarantee to concrete evidence in verify checks, integration tests, or both.
+- It is maintained alongside code changes so new trust claims do not drift ahead of evidence.
+- It is audited locally via `scripts/validate_validation_matrix.sh` and enforced in CI.
+
+This keeps the validation branch grounded in explicit proof obligations rather than informal release notes.
+
 For v0.9, every change intended for mainline or release delivery is expected to
 pass the full GitHub Actions pipeline before merge or tag publication. The repo
 contains a synthetic required check named `CI Required Gate` that aggregates the

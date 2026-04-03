@@ -9920,6 +9920,166 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 	assertNoProcessingRows(t, dbconn)
 }
 
+// TestRepeatedJitteredStoreGCRestoreInterleaving extends the one-shot
+// interleaving coverage into multiple deterministic-random rounds where store,
+// restore, and GC start with different jitters. The system must converge with
+// correct restored bytes and no invalid metadata drift.
+func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(20260403 + 77))
+	const rounds = 12
+
+	for round := 0; round < rounds; round++ {
+		shared := make([]byte, 256*1024)
+		for i := range shared {
+			shared[i] = byte((i*29 + round*11 + 3) % 251)
+		}
+
+		keepTail := make([]byte, 1024*1024+rng.Intn(512*1024))
+		for i := range keepTail {
+			keepTail[i] = byte((i*7 + round*19 + 41) % 251)
+		}
+		victimTail := make([]byte, 1024*1024+rng.Intn(512*1024))
+		for i := range victimTail {
+			victimTail[i] = byte((i*13 + round*23 + 17) % 251)
+		}
+		newcomerBytes := make([]byte, 1536*1024+rng.Intn(512*1024))
+		for i := range newcomerBytes {
+			newcomerBytes[i] = byte((i*31 + round*5 + 9) % 251)
+		}
+
+		keepBytes := append(append([]byte{}, shared...), keepTail...)
+		victimBytes := append(append([]byte{}, shared...), victimTail...)
+
+		keepPath := filepath.Join(inputDir, fmt.Sprintf("jitter-keep-%02d.bin", round))
+		victimPath := filepath.Join(inputDir, fmt.Sprintf("jitter-victim-%02d.bin", round))
+		newcomerPath := filepath.Join(inputDir, fmt.Sprintf("jitter-newcomer-%02d.bin", round))
+		if err := os.WriteFile(keepPath, keepBytes, 0o644); err != nil {
+			t.Fatalf("round %d write keep file: %v", round, err)
+		}
+		if err := os.WriteFile(victimPath, victimBytes, 0o644); err != nil {
+			t.Fatalf("round %d write victim file: %v", round, err)
+		}
+		if err := os.WriteFile(newcomerPath, newcomerBytes, 0o644); err != nil {
+			t.Fatalf("round %d write newcomer file: %v", round, err)
+		}
+
+		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), keepPath); err != nil {
+			t.Fatalf("round %d store keep file: %v", round, err)
+		}
+		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), victimPath); err != nil {
+			t.Fatalf("round %d store victim file: %v", round, err)
+		}
+
+		keepHash := sha256File(t, keepPath)
+		newcomerHash := sha256File(t, newcomerPath)
+		keepID := fetchFileIDByHash(t, dbconn, keepHash)
+		victimID := fetchFileIDByHash(t, dbconn, sha256File(t, victimPath))
+
+		if err := storage.RemoveFileWithDB(dbconn, victimID); err != nil {
+			t.Fatalf("round %d remove victim file: %v", round, err)
+		}
+
+		restoreDelay := time.Duration(rng.Intn(8)) * time.Millisecond
+		storeDelay := time.Duration(rng.Intn(8)) * time.Millisecond
+		gcDelay := time.Duration(rng.Intn(8)) * time.Millisecond
+
+		restoreOut := filepath.Join(outDir, fmt.Sprintf("jitter-keep-%02d.restored.bin", round))
+		results := make(chan error, 3)
+
+		go func() {
+			time.Sleep(restoreDelay)
+			results <- storage.RestoreFileWithDB(dbconn, keepID, restoreOut)
+		}()
+		go func() {
+			time.Sleep(storeDelay)
+			results <- storage.StoreFileWithStorageContext(newTestContext(dbconn), newcomerPath)
+		}()
+		go func() {
+			time.Sleep(gcDelay)
+			_, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir)
+			results <- err
+		}()
+
+		for i := 0; i < 3; i++ {
+			if err := <-results; err != nil {
+				t.Fatalf("round %d interleaving operation failed: %v", round, err)
+			}
+		}
+
+		if got := mustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
+			t.Fatalf("round %d restored keep file differs after jittered interleaving", round)
+		}
+
+		newcomerID := fetchFileIDByHash(t, dbconn, newcomerHash)
+		newcomerOut := filepath.Join(outDir, fmt.Sprintf("jitter-newcomer-%02d.restored.bin", round))
+		if err := storage.RestoreFileWithDB(dbconn, newcomerID, newcomerOut); err != nil {
+			t.Fatalf("round %d restore newcomer after interleaving: %v", round, err)
+		}
+		if got := sha256File(t, newcomerOut); got != newcomerHash {
+			t.Fatalf("round %d newcomer hash mismatch after interleaving: want %s got %s", round, newcomerHash, got)
+		}
+
+		var negativeRefs int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count < 0`).Scan(&negativeRefs); err != nil {
+			t.Fatalf("round %d count negative live_ref_count: %v", round, err)
+		}
+		if negativeRefs != 0 {
+			t.Fatalf("round %d found %d chunks with negative live_ref_count", round, negativeRefs)
+		}
+
+		var negativePins int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE pin_count < 0`).Scan(&negativePins); err != nil {
+			t.Fatalf("round %d count negative pin_count: %v", round, err)
+		}
+		if negativePins != 0 {
+			t.Fatalf("round %d found %d chunks with negative pin_count", round, negativePins)
+		}
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+			t.Fatalf("round %d verify after jittered interleaving: %v", round, err)
+		}
+
+		if err := storage.RemoveFileWithDB(dbconn, keepID); err != nil {
+			t.Fatalf("round %d cleanup remove keep file: %v", round, err)
+		}
+		if err := storage.RemoveFileWithDB(dbconn, newcomerID); err != nil {
+			t.Fatalf("round %d cleanup remove newcomer file: %v", round, err)
+		}
+		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+			t.Fatalf("round %d cleanup gc: %v", round, err)
+		}
+
+		assertNoProcessingRows(t, dbconn)
+		assertUniqueFileChunkOrders(t, dbconn)
+	}
+}
+
 // TestStoreMultiChunkFileVerifiesAtomicFinalization stores a multi-chunk file
 // and verifies that the atomic finalization boundary works correctly:
 // - File is marked COMPLETED
