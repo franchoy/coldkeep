@@ -130,6 +130,42 @@ func (w *rollbackCleanupFailureWriter) QuarantineActiveContainer() error {
 	return nil
 }
 
+func TestRunWithRetryableTxAbortRetriesThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	err := runWithRetryableTxAbort(context.Background(), func() error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("pq: current transaction is aborted, commands ignored until end of transaction block (25P02)")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runWithRetryableTxAbort returned error: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestRunWithRetryableTxAbortStopsOnNonRetryableError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("permanent store failure")
+	attempts := 0
+	err := runWithRetryableTxAbort(context.Background(), func() error {
+		attempts++
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
 func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	originalContainersDir := container.ContainersDir
 	container.ContainersDir = t.TempDir()

@@ -204,6 +204,42 @@ type reusableLogicalFileGraphSummary struct {
 	invalidContainers int64
 }
 
+const (
+	retryableTxAbortMaxAttempts = 4
+	retryableTxAbortBaseBackoff = 10 * time.Millisecond
+)
+
+func isRetryableTxAbortError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "current transaction is aborted") || strings.Contains(msg, "25p02")
+}
+
+func runWithRetryableTxAbort(ctx context.Context, fn func() error) error {
+	var err error
+	for attempt := 0; attempt < retryableTxAbortMaxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		if !isRetryableTxAbortError(err) || attempt == retryableTxAbortMaxAttempts-1 {
+			return err
+		}
+
+		if sleepErr := sleepWithContext(ctx, retryableTxAbortBaseBackoff*time.Duration(attempt+1)); sleepErr != nil {
+			return sleepErr
+		}
+	}
+
+	return err
+}
+
 type reuseSemanticValidationMode string
 
 const (
@@ -1817,7 +1853,9 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 					if ctx.Err() != nil {
 						return
 					}
-					if err := StoreFileWithStorageContextAndCodec(workerCtx, p, codec); err != nil {
+					if err := runWithRetryableTxAbort(ctx, func() error {
+						return StoreFileWithStorageContextAndCodec(workerCtx, p, codec)
+					}); err != nil {
 						reportErr(err)
 						return
 					}
