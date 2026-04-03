@@ -440,6 +440,10 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
+	var reusedCount int64
+	var skippedExistingCount int64
+	var warningCount int64
+
 	logRecoveryEvent("quarantine_orphan_containers_start")
 	// recover files in container folder
 	entries, err := os.ReadDir(containersDir)
@@ -510,35 +514,17 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 		}
 
 		if existingQuarantine && existingCurrentSize == fileSize && existingMaxSize == fileSize {
-			logRecoveryEvent(
-				"quarantine_orphan_container_reused",
-				"filename="+name,
-				fmt.Sprintf("size_bytes=%d", fileSize),
-				"reason=duplicate_retrier",
-			)
+			reusedCount++
 			continue
 		}
 
 		if !existingQuarantine {
-			logRecoveryEvent(
-				"quarantine_orphan_container_skipped",
-				"filename="+name,
-				fmt.Sprintf("size_bytes=%d", fileSize),
-				"reason=existing_non_quarantine_row",
-			)
+			skippedExistingCount++
 			continue
 		}
 
 		if !isStrictRecovery() {
-			logRecoveryEvent(
-				"quarantine_orphan_container_conflict_warning",
-				"filename="+name,
-				fmt.Sprintf("existing_current_size=%d", existingCurrentSize),
-				fmt.Sprintf("existing_max_size=%d", existingMaxSize),
-				fmt.Sprintf("expected_size=%d", fileSize),
-				"reason=quarantine_size_mismatch",
-				"strict=false",
-			)
+			warningCount++
 			continue
 		}
 		return fmt.Errorf(
@@ -550,7 +536,13 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 		)
 	}
 
-	logRecoveryEvent("quarantine_orphan_containers_done", fmt.Sprintf("quarantined_count=%d", stats.quarantinedOrphan))
+	logRecoveryEvent(
+		"quarantine_orphan_containers_done",
+		fmt.Sprintf("quarantined_count=%d", stats.quarantinedOrphan),
+		fmt.Sprintf("reused_count=%d", reusedCount),
+		fmt.Sprintf("skipped_existing_count=%d", skippedExistingCount),
+		fmt.Sprintf("warning_count=%d", warningCount),
+	)
 
 	return nil
 }
