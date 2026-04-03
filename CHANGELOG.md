@@ -12,8 +12,14 @@ production stability.
 
 ## [0.10.0] - Unreleased
 
-Feature-branch hardening work for adversarial lifecycle interleavings,
-verification contracts, and recovery behavior clarity.
+Validation and adversarial testing phase before v1.0.
+
+This release focuses on validating coldkeep's correctness guarantees under stress,
+failure, and adversarial lifecycle interleavings.
+
+The core architecture and CLI contracts are considered stable. Changes in this
+phase aim to eliminate remaining correctness risks and strengthen confidence
+in recovery, verification, and storage invariants.
 
 ### Reuse Integrity Hardening
 
