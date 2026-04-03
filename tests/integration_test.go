@@ -581,6 +581,27 @@ func setTestAESGCMKey(t *testing.T) {
 	t.Setenv("COLDKEEP_KEY", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 }
 
+func assertDeepVerifyAggregateError(t *testing.T, err error, context string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %s verify error but got nil", context)
+	}
+	errText := err.Error()
+	if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
+		t.Fatalf("expected %s verify error to keep deep aggregate contract, got: %v", context, err)
+	}
+}
+
+func assertErrorContains(t *testing.T, err error, substring string, context string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %s error but got nil", context)
+	}
+	if !strings.Contains(err.Error(), substring) {
+		t.Fatalf("expected %s error to contain %q, got: %v", context, substring, err)
+	}
+}
+
 func itoa(i int) string {
 	// small int to string without fmt to keep output clean
 	if i == 0 {
@@ -6099,25 +6120,23 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 
 	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should detect aes-gcm ciphertext tampering but returned nil")
-	} else {
-		errText := err.Error()
-		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
-			t.Fatalf("expected ciphertext-tamper verify error to keep deep aggregate contract, got: %v", err)
-		}
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"ciphertext-tamper",
+	)
 
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
-		t.Fatal("restore should fail after aes-gcm ciphertext tampering but returned nil")
-	} else if !strings.Contains(err.Error(), "cipher: message authentication failed") {
-		t.Fatalf("expected ciphertext-tamper restore error to mention AEAD authentication failure, got: %v", err)
-	}
+	assertErrorContains(
+		t,
+		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		"cipher: message authentication failed",
+		"ciphertext-tamper restore",
+	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
@@ -6171,25 +6190,23 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 		t.Fatalf("tamper nonce metadata: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should detect aes-gcm nonce tampering but returned nil")
-	} else {
-		errText := err.Error()
-		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
-			t.Fatalf("expected nonce-tamper verify error to keep deep aggregate contract, got: %v", err)
-		}
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"nonce-tamper",
+	)
 
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
-		t.Fatal("restore should fail after aes-gcm nonce tampering but returned nil")
-	} else if !strings.Contains(err.Error(), "cipher: message authentication failed") {
-		t.Fatalf("expected nonce-tamper restore error to mention AEAD authentication failure, got: %v", err)
-	}
+	assertErrorContains(
+		t,
+		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		"cipher: message authentication failed",
+		"nonce-tamper restore",
+	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
@@ -6227,25 +6244,23 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 	// Switch to a different valid AES-256 key to simulate operator key mismatch.
 	t.Setenv("COLDKEEP_KEY", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should fail with mismatched aes-gcm key but returned nil")
-	} else {
-		errText := err.Error()
-		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
-			t.Fatalf("expected wrong-key verify error to keep deep aggregate contract, got: %v", err)
-		}
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"wrong-key",
+	)
 
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
-		t.Fatal("restore should fail with mismatched aes-gcm key but returned nil")
-	} else if !strings.Contains(err.Error(), "cipher: message authentication failed") {
-		t.Fatalf("expected wrong-key restore error to mention AEAD authentication failure, got: %v", err)
-	}
+	assertErrorContains(
+		t,
+		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		"cipher: message authentication failed",
+		"wrong-key restore",
+	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
@@ -6283,25 +6298,23 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	// Simulate malformed operator key configuration (invalid AES-256 key length).
 	t.Setenv("COLDKEEP_KEY", "abcd")
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should fail with invalid aes-gcm key configuration but returned nil")
-	} else {
-		errText := err.Error()
-		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
-			t.Fatalf("expected malformed-key verify error to keep deep aggregate contract, got: %v", err)
-		}
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"malformed-key",
+	)
 
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
-		t.Fatal("restore should fail with invalid aes-gcm key configuration but returned nil")
-	} else if !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
-		t.Fatalf("expected malformed-key restore error to mention missing/invalid aes-gcm key, got: %v", err)
-	}
+	assertErrorContains(
+		t,
+		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		"aes-gcm requires COLDKEEP_KEY",
+		"malformed-key restore",
+	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
@@ -6339,25 +6352,23 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 	// Simulate malformed operator key configuration (non-hex value).
 	t.Setenv("COLDKEEP_KEY", "this-is-not-hex")
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should fail with non-hex aes-gcm key configuration but returned nil")
-	} else {
-		errText := err.Error()
-		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
-			t.Fatalf("expected non-hex-key verify error to keep deep aggregate contract, got: %v", err)
-		}
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"non-hex-key",
+	)
 
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
-		t.Fatal("restore should fail with non-hex aes-gcm key configuration but returned nil")
-	} else if !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
-		t.Fatalf("expected non-hex-key restore error to mention missing/invalid aes-gcm key, got: %v", err)
-	}
+	assertErrorContains(
+		t,
+		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		"aes-gcm requires COLDKEEP_KEY",
+		"non-hex-key restore",
+	)
 }
 
 func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
