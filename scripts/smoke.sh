@@ -13,8 +13,13 @@ set -euo pipefail
 #   docker compose up -d postgres
 #   docker compose run --rm  -e COLDKEEP_SAMPLES_DIR=/samples -v ./samples:/samples --entrypoint bash app scripts/smoke.sh
 
+SMOKE_TEMP_STORAGE_DIR=""
+
 cleanup() {
   rm -rf ./_smoke_out
+  if [[ -n "$SMOKE_TEMP_STORAGE_DIR" ]]; then
+    rm -rf "$SMOKE_TEMP_STORAGE_DIR"
+  fi
 }
 
 trap cleanup EXIT
@@ -149,7 +154,15 @@ test_invalid_command() {
 
 echo "[smoke] starting"
 
-: "${COLDKEEP_STORAGE_DIR:=./storage/containers}"
+if [[ -z "${COLDKEEP_STORAGE_DIR:-}" ]]; then
+  SMOKE_TEMP_STORAGE_DIR=$(mktemp -d -t coldkeep-smoke-storage-XXXXXX)
+  COLDKEEP_STORAGE_DIR="$SMOKE_TEMP_STORAGE_DIR"
+  export COLDKEEP_STORAGE_DIR
+  echo "[smoke] using isolated temp storage dir: $COLDKEEP_STORAGE_DIR"
+else
+  echo "[smoke] using caller-provided storage dir: $COLDKEEP_STORAGE_DIR"
+fi
+
 mkdir -p "$COLDKEEP_STORAGE_DIR"
 
 ensure_postgres_schema
