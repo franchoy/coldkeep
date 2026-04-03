@@ -4,12 +4,13 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (3);
+INSERT OR IGNORE INTO schema_version(version) VALUES (5);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   filename TEXT NOT NULL UNIQUE,
   sealed INTEGER NOT NULL DEFAULT 0,
+  sealing INTEGER NOT NULL DEFAULT 0,
   container_hash TEXT DEFAULT NULL,
   quarantine INTEGER NOT NULL DEFAULT 0,
   current_size INTEGER NOT NULL DEFAULT 0 CHECK (current_size >= 0),
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS container (
 );
 
 CREATE INDEX IF NOT EXISTS idx_container_sealed ON container(sealed);
+CREATE INDEX IF NOT EXISTS idx_container_sealing ON container(sealing);
 CREATE INDEX IF NOT EXISTS idx_container_quarantine ON container(quarantine);
 CREATE INDEX IF NOT EXISTS idx_container_sealed_quarantine ON container(sealed, quarantine);
 
@@ -27,14 +29,16 @@ CREATE TABLE IF NOT EXISTS chunk (
   chunk_hash TEXT NOT NULL,
   size INTEGER NOT NULL CHECK (size > 0),
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
-  ref_count INTEGER NOT NULL DEFAULT 0 CHECK (ref_count >= 0),
+  live_ref_count INTEGER NOT NULL DEFAULT 0 CHECK (live_ref_count >= 0),
+  pin_count INTEGER NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
-CREATE INDEX IF NOT EXISTS idx_chunk_ref_count ON chunk(ref_count);
+CREATE INDEX IF NOT EXISTS idx_chunk_live_ref_count ON chunk(live_ref_count);
+CREATE INDEX IF NOT EXISTS idx_chunk_pin_count ON chunk(pin_count);
 CREATE INDEX IF NOT EXISTS idx_chunk_status ON chunk(status);
 
 CREATE TABLE IF NOT EXISTS logical_file (

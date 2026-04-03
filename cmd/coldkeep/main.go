@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -25,10 +29,11 @@ import (
 )
 
 const (
-	exitSuccess = 0
-	exitGeneral = 1
-	exitUsage   = 2
-	exitVerify  = 3
+	exitSuccess  = 0
+	exitGeneral  = 1
+	exitUsage    = 2
+	exitVerify   = 3
+	exitRecovery = 4
 )
 
 var stdoutRedirectMu sync.Mutex
@@ -55,6 +60,35 @@ type parsedCommandLine struct {
 	positionals []string
 	flags       map[string][]string
 }
+
+// doctorReport is the stable v1.0 JSON data payload for `coldkeep doctor --output json`.
+// All fields are frozen API: do not remove or rename fields without a major version bump.
+//
+// The Recovery field intentionally includes the full recovery.Report counter set
+// (aborted_logical_files, aborted_chunks, quarantined_missing, quarantined_corrupt_tail,
+// quarantined_orphan, skipped_dir_entries, checked_container_record, checked_disk_files,
+// sealing_completed, sealing_quarantined). These counters are actionable for operators
+// and monitoring scripts: any non-zero quarantined_* or aborted_* value signals that
+// corrective action was taken and should trigger alerting or human review.
+// Including the full report here is a deliberate decision, not an oversight.
+type doctorReport struct {
+	Recovery       recovery.Report `json:"recovery"`
+	VerifyLevel    string          `json:"verify_level"`
+	SchemaVersion  int64           `json:"schema_version"`
+	RecoveryStatus string          `json:"recovery_status"`
+	VerifyStatus   string          `json:"verify_status"`
+	SchemaStatus   string          `json:"schema_status"`
+}
+
+// Frozen v1.0 product contract: doctor is the fast corrective recovery + health gate.
+// Default remains `standard`; operators can opt into `--full` / `--deep`.
+const doctorDefaultVerifyLevel = verify.VerifyStandard
+
+const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
+
+var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
+var doctorSchemaVersionPhase = querySchemaVersion
+var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 
 type cliError struct {
 	code int
@@ -87,6 +121,13 @@ func verifyError(err error) error {
 	return &cliError{code: exitVerify, err: err}
 }
 
+func recoveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &cliError{code: exitRecovery, err: err}
+}
+
 func main() {
 	code := runCLI(os.Args[1:])
 	if code != exitSuccess {
@@ -107,34 +148,38 @@ func runCLI(args []string) int {
 		}()
 	}
 
-	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
-	if recoveryErr != nil {
-		log.Printf("System recovery failed: %v\n", recoveryErr)
-	}
-	emitStartupRecoveryReport(startupMode, recoveryReport, recoveryErr)
-
-	if startupMode != outputModeJSON {
-		checkEnvFilePermissions()
-	}
-
 	if len(args) < 1 {
 		printHelp()
 		return exitSuccess
 	}
 
+	if shouldRunStartupRecovery(args[0]) {
+		recoveryReport, recoveryErr := runStartupRecoveryWithOptionalLogBuffering(startupMode)
+		if recoveryErr != nil {
+			log.Printf("System recovery failed: %v\n", recoveryErr)
+		}
+		emitStartupRecoveryReport(startupMode, recoveryReport, recoveryErr)
+
+		if startupMode != outputModeJSON {
+			checkEnvFilePermissions()
+		}
+	}
+
 	parsed, err := parseCommandLine(args, flagsWithValues)
 	if err != nil {
-		return printCLIError(err, outputModeText)
+		return printCLIError(err, startupMode)
 	}
 
 	outputMode, err := resolveOutputMode(parsed)
 	if err != nil {
-		return printCLIError(err, outputModeText)
+		return printCLIError(err, startupMode)
 	}
 
 	switch parsed.method {
 	case "init":
 		err = initCommand()
+	case "doctor":
+		err = runDoctorCommand(parsed, outputMode)
 	case "store":
 		err = runStoreCommand(parsed, outputMode)
 	case "store-folder":
@@ -152,13 +197,13 @@ func runCLI(args []string) int {
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
-		fmt.Println("coldkeep version", version.String())
+		err = runVersionCommand(outputMode)
 	case "list":
 		err = runListCommand(parsed, outputMode)
 	case "search":
 		err = runSearchCommand(parsed, outputMode)
 	case "verify":
-		err = runVerifyCommand(parsed)
+		err = runVerifyCommand(parsed, outputMode)
 	default:
 		err = usageErrorf("unknown command: %s", parsed.method)
 	}
@@ -172,18 +217,75 @@ func runCLI(args []string) int {
 	return exitSuccess
 }
 
+func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Report, error) {
+	if mode != outputModeText || !isQuietHealthyStartupRecoveryEnabled() {
+		return recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	}
+
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	}()
+
+	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if shouldReplayBufferedRecoveryLogs(recoveryReport, recoveryErr) {
+		if _, err := io.Copy(prevOutput, &buf); err != nil {
+			log.Printf("failed to replay buffered startup recovery logs: %v", err)
+		}
+	}
+
+	return recoveryReport, recoveryErr
+}
+
+func isQuietHealthyStartupRecoveryEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY")))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldReplayBufferedRecoveryLogs(report recovery.Report, err error) bool {
+	if err != nil {
+		return true
+	}
+	if report.AbortedLogicalFiles > 0 || report.AbortedChunks > 0 {
+		return true
+	}
+	if report.QuarantinedMissing > 0 || report.QuarantinedCorruptTail > 0 || report.QuarantinedOrphan > 0 {
+		return true
+	}
+	if report.SealingCompleted > 0 || report.SealingQuarantined > 0 {
+		return true
+	}
+	return false
+}
+
 func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err error) {
+	if mode == outputModeText && isQuietHealthyStartupRecoveryEnabled() && !shouldReplayBufferedRecoveryLogs(report, err) {
+		return
+	}
+
 	if mode == outputModeJSON {
+		// Startup recovery JSON is an event-style diagnostic stream on stderr.
+		// It is intentionally separate from command result contracts on stdout.
 		payload := map[string]any{
-			"event":                          "startup_recovery",
-			"status":                         "ok",
-			"aborted_logical_files":          report.AbortedLogicalFiles,
-			"aborted_chunks":                 report.AbortedChunks,
-			"quarantined_missing_containers": report.QuarantinedMissing,
-			"quarantined_orphan_containers":  report.QuarantinedOrphan,
-			"checked_container_records":      report.CheckedContainerRecord,
-			"checked_disk_files":             report.CheckedDiskFiles,
-			"skipped_dir_entries":            report.SkippedDirEntries,
+			"event":                               "startup_recovery",
+			"status":                              "ok",
+			"aborted_logical_files":               report.AbortedLogicalFiles,
+			"aborted_chunks":                      report.AbortedChunks,
+			"quarantined_missing_containers":      report.QuarantinedMissing,
+			"quarantined_corrupt_tail_containers": report.QuarantinedCorruptTail,
+			"quarantined_orphan_containers":       report.QuarantinedOrphan,
+			"checked_container_records":           report.CheckedContainerRecord,
+			"checked_disk_files":                  report.CheckedDiskFiles,
+			"skipped_dir_entries":                 report.SkippedDirEntries,
 		}
 		if err != nil {
 			payload["status"] = "error"
@@ -197,10 +299,11 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 	if err != nil {
 		fmt.Fprintf(
 			os.Stderr,
-			"RECOVERY status=error aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d message=%q\n",
+			"RECOVERY status=error aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d message=%q\n",
 			report.AbortedLogicalFiles,
 			report.AbortedChunks,
 			report.QuarantinedMissing,
+			report.QuarantinedCorruptTail,
 			report.QuarantinedOrphan,
 			report.CheckedContainerRecord,
 			report.CheckedDiskFiles,
@@ -212,10 +315,11 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 
 	fmt.Fprintf(
 		os.Stderr,
-		"RECOVERY status=ok aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d\n",
+		"RECOVERY status=ok aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d checked_container_records=%d checked_disk_files=%d skipped_dir_entries=%d\n",
 		report.AbortedLogicalFiles,
 		report.AbortedChunks,
 		report.QuarantinedMissing,
+		report.QuarantinedCorruptTail,
 		report.QuarantinedOrphan,
 		report.CheckedContainerRecord,
 		report.CheckedDiskFiles,
@@ -228,7 +332,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"status":      "error",
-			"error_class": exitCodeLabel(code),
+			"error_class": exitErrorClassLabel(code),
 			"exit_code":   code,
 			"message":     strings.TrimSpace(err.Error()),
 		}
@@ -237,7 +341,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 		return code
 	}
 
-	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitCodeLabel(code), strings.TrimSpace(err.Error()))
+	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), strings.TrimSpace(err.Error()))
 	return code
 }
 
@@ -246,8 +350,9 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 		return
 	}
 	// These commands emit their own structured JSON payload.
+	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate":
+	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
 		return
 	}
 
@@ -267,6 +372,24 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 
 	encoded, _ := json.Marshal(payload)
 	fmt.Println(string(encoded))
+}
+
+func runVersionCommand(mode cliOutputMode) error {
+	if mode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "version",
+			"data": map[string]any{
+				"version": version.String(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Println("coldkeep version", version.String())
+	return nil
 }
 
 func verifyLevelToString(level verify.VerifyLevel) string {
@@ -299,6 +422,7 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 }
 
 var outputSupportedCommands = map[string]bool{
+	"doctor":       true,
 	"verify":       true,
 	"list":         true,
 	"search":       true,
@@ -333,15 +457,39 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	return outputModeText
 }
 
-func exitCodeLabel(code int) string {
+func shouldRunStartupRecovery(command string) bool {
+	switch command {
+	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
+	// report corrective recovery/verify/schema in a single command-specific payload.
+	case "store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify":
+		return true
+	default:
+		return false
+	}
+}
+
+func exitErrorClassLabel(code int) string {
 	switch code {
 	case exitUsage:
 		return "USAGE"
 	case exitVerify:
 		return "VERIFY"
+	case exitRecovery:
+		return "RECOVERY"
 	default:
 		return "GENERAL"
 	}
+}
+
+// Keep fallback matching intentionally narrow; typed cliError classifications are authoritative.
+// Usage-like verify parser errors are handled in the usage branch inside classifyExitCode.
+func isLikelyVerifyFailureMessage(msg string) bool {
+	if strings.Contains(msg, "verification failed") {
+		return true
+	}
+
+	return strings.Contains(msg, "verify phase failed") ||
+		strings.Contains(msg, "verify command failed")
 }
 
 func classifyExitCode(err error) int {
@@ -356,6 +504,8 @@ func classifyExitCode(err error) int {
 			return exitUsage
 		case exitVerify:
 			return exitVerify
+		case exitRecovery:
+			return exitRecovery
 		default:
 			return exitGeneral
 		}
@@ -382,8 +532,12 @@ func classifyExitCode(err error) int {
 		return exitUsage
 	}
 
-	if strings.Contains(msg, "verification failed") || strings.Contains(msg, "verify ") {
+	if isLikelyVerifyFailureMessage(msg) {
 		return exitVerify
+	}
+
+	if strings.Contains(msg, "recovery phase failed") || strings.Contains(msg, "system recovery failed") {
+		return exitRecovery
 	}
 
 	return exitGeneral
@@ -451,6 +605,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 	_, _ = fmt.Fprintln(os.Stdout, "  FileID: "+strconv.FormatInt(result.FileID, 10))
 	_, _ = fmt.Fprintln(os.Stdout, "  SHA256: "+result.FileHash)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
 
@@ -501,6 +656,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout, "Folder stored successfully: "+path)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
 
@@ -543,6 +699,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	fmt.Printf("File restored successfully: id=%d output=%s\n", result.FileID, result.OutputPath)
 	fmt.Printf("  Name: %s\n", result.OriginalName)
 	fmt.Printf("  SHA256: %s\n", result.RestoredHash)
+	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
 	return nil
 }
 
@@ -583,6 +740,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 	fmt.Printf("Logical file removed: id=%d\n", result.FileID)
 	fmt.Printf("  Removed mappings: %d\n", result.RemovedMappings)
+	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
 	return nil
 }
 
@@ -623,6 +781,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 	if result.AffectedContainers == 0 {
 		fmt.Println("GC completed. No containers eligible for deletion.")
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
 
@@ -631,6 +790,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			fmt.Printf("[DRY-RUN] Would delete container: %s\n", filename)
 		}
 		fmt.Printf("GC dry-run completed. Containers eligible for deletion: %d\n", result.AffectedContainers)
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
 
@@ -638,6 +798,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		fmt.Printf("Deleted container: %s\n", filename)
 	}
 	fmt.Printf("GC completed. Containers deleted: %d\n", result.AffectedContainers)
+	fmt.Printf("Hint: %s\n", doctorOperationalHint)
 	return nil
 }
 
@@ -685,9 +846,14 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if len(parsed.positionals) != 0 {
 		return usageErrorf("Usage: coldkeep list [--limit <count>] [--offset <count>]")
 	}
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
 
 	if outputMode == outputModeJSON {
-		files, err := listing.ListFilesResult(listArgs(parsed))
+		files, err := listing.ListFilesResultWithDB(dbconn, listArgs(parsed))
 		if err != nil {
 			return err
 		}
@@ -704,7 +870,7 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return nil
 	}
 
-	files, err := listing.ListFilesResult(listArgs(parsed))
+	files, err := listing.ListFilesResultWithDB(dbconn, listArgs(parsed))
 	if err != nil {
 		return err
 	}
@@ -730,9 +896,14 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	if err := validateNonNegativeIntegerFlag(parsed, "offset"); err != nil {
 		return err
 	}
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return fmt.Errorf("failed to connect to DB: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
 
 	if outputMode == outputModeJSON {
-		files, err := listing.SearchFilesResult(searchArgs(parsed))
+		files, err := listing.SearchFilesResultWithDB(dbconn, searchArgs(parsed))
 		if err != nil {
 			return err
 		}
@@ -749,7 +920,7 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return nil
 	}
 
-	files, err := listing.SearchFilesResult(searchArgs(parsed))
+	files, err := listing.SearchFilesResultWithDB(dbconn, searchArgs(parsed))
 	if err != nil {
 		return err
 	}
@@ -808,7 +979,12 @@ func printStatsReport(r *maintenance.StatsResult) {
 	}
 }
 
-func runVerifyCommand(parsed parsedCommandLine) error {
+// runVerifyCommand executes recovered-state verification. The verification phase
+// itself is read-only; any corrective mutation happens earlier via automatic
+// startup recovery before this function is called. It is not intended to be an
+// online checker during active writes, where transient metadata/data divergence
+// can produce false positives.
+func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
 		return err
 	}
@@ -827,7 +1003,14 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 		if len(parsed.positionals) > 2 {
 			return usageErrorf("Usage: coldkeep verify system [--standard|--full|--deep]")
 		}
-		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel))
+		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
+		if verifyErr != nil {
+			return verifyError(verifyErr)
+		}
+		if outputMode == outputModeText {
+			fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		}
+		return nil
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
 			return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
@@ -838,10 +1021,160 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 			return usageErrorf("Invalid fileID: %v", err)
 		}
 
-		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel))
+		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel)
+		if verifyErr != nil {
+			return verifyError(verifyErr)
+		}
+		if outputMode == outputModeText {
+			fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		}
+		return nil
 	default:
 		return usageErrorf("Unknown target for verify: %s", target)
 	}
+}
+
+func querySchemaVersion() (int64, error) {
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return 0, fmt.Errorf("connect DB for schema check: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	var version sql.NullInt64
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
+		return 0, fmt.Errorf("query schema_version: %w", err)
+	}
+	if !version.Valid {
+		return 0, errors.New("schema_version table is empty")
+	}
+
+	return version.Int64, nil
+}
+
+// runDoctorCommand implements the doctor corrective recovery command.
+// Doctor is NOT read-only: it runs corrective recovery before verification, and may update
+// database metadata (aborting dangling PROCESSING writes, clearing stale sealing
+// markers) before any integrity check executes. Running doctor on a fresh
+// deployment or after an unclean shutdown is safe and intended.
+func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 0 {
+		return usageErrorf("Usage: coldkeep doctor [--standard|--full|--deep]")
+	}
+
+	verifyLevel, err := parseDoctorVerifyLevel(parsed)
+	if err != nil {
+		return err
+	}
+
+	report := doctorReport{
+		VerifyLevel: verifyLevelToString(verifyLevel),
+	}
+
+	recoveryReport, recoveryErr := doctorRecoveryPhase(container.ContainersDir)
+	report.Recovery = recoveryReport
+	if recoveryErr != nil {
+		report.RecoveryStatus = "error"
+		return recoveryError(fmt.Errorf("doctor recovery phase failed: %w", recoveryErr))
+	}
+	report.RecoveryStatus = "ok"
+
+	schemaVersion, schemaErr := doctorSchemaVersionPhase()
+	if schemaErr != nil {
+		report.SchemaStatus = "error"
+		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
+	}
+	report.SchemaVersion = schemaVersion
+	report.SchemaStatus = "ok"
+
+	verifyErr := doctorVerifyPhase(container.ContainersDir, "system", 0, verifyLevel)
+	if verifyErr != nil {
+		report.VerifyStatus = "error"
+		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
+	}
+	report.VerifyStatus = "ok"
+
+	// Intentional JSON contract (frozen v1.0):
+	// - Startup/preflight recovery diagnostics are emitted as stderr events
+	//   (`event=startup_recovery`) outside this doctor command payload.
+	// - Success: doctor-specific payload emitted to stdout; includes phase statuses,
+	//   verify_level, schema_version, and the full recovery counter set under "recovery".
+	// - Execution short-circuits by phase on error: recovery -> schema -> verify.
+	//   This avoids running expensive later checks once an earlier gate already failed.
+	// - Failure: generic CLI error payload on stderr via printCLIError.
+	// Doctor does not emit partial doctor data on failure.
+	// See doctorReport for the full field list and rationale for including recovery counters.
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "doctor",
+			"data":    report,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if outputMode == outputModeText {
+		fmt.Print(formatDoctorTextReport(report))
+	}
+
+	return nil
+}
+
+func formatDoctorTextReport(report doctorReport) string {
+	overallStatus := "ok"
+	if report.RecoveryStatus != "ok" || report.VerifyStatus != "ok" || report.SchemaStatus != "ok" {
+		overallStatus = "error"
+	}
+	recommendedNextStep := doctorRecommendedNextStep(report, overallStatus)
+
+	var b strings.Builder
+	b.WriteString("Doctor health report\n")
+	b.WriteString(fmt.Sprintf("  Overall status:      %s\n", overallStatus))
+	b.WriteString(fmt.Sprintf("  Verify level:        %s\n", report.VerifyLevel))
+	b.WriteString(fmt.Sprintf("  Phase 1 - Recovery:  %s\n", report.RecoveryStatus))
+	b.WriteString(fmt.Sprintf("  Phase 2 - Verify:    %s\n", report.VerifyStatus))
+	if report.SchemaStatus == "ok" {
+		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s (version=%d)\n", report.SchemaStatus, report.SchemaVersion))
+	} else {
+		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s\n", report.SchemaStatus))
+	}
+	b.WriteString("  Note: Recovery phase may have modified metadata\n")
+	b.WriteString(fmt.Sprintf("  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
+		report.Recovery.AbortedLogicalFiles,
+		report.Recovery.AbortedChunks,
+		report.Recovery.QuarantinedMissing,
+		report.Recovery.QuarantinedCorruptTail,
+		report.Recovery.QuarantinedOrphan,
+	))
+	b.WriteString(fmt.Sprintf("  Recommended next step: %s\n", recommendedNextStep))
+
+	return b.String()
+}
+
+func doctorRecommendedNextStep(report doctorReport, overallStatus string) string {
+	if overallStatus != "ok" {
+		return "inspect stderr / doctor output"
+	}
+
+	if report.VerifyLevel == verifyLevelToString(verify.VerifyStandard) {
+		return "run doctor --full"
+	}
+
+	return "none"
+}
+
+func parseDoctorVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
+	if !parsed.hasFlag("standard", "full", "deep") {
+		return doctorDefaultVerifyLevel, nil
+	}
+
+	return parseVerifyLevel(parsed)
 }
 
 // SimulateReport holds the result of a dry-run simulation.
@@ -949,6 +1282,8 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 		Subcommand: subcommand,
 		Path:       path,
 	}
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	queries := []struct {
 		dest  interface{}
@@ -959,10 +1294,10 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
 		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status = $1`, []any{filestate.ChunkCompleted}},
 		{&r.Containers, `SELECT COUNT(DISTINCT b.container_id) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.status = $1`, []any{filestate.ChunkCompleted}},
-		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.ref_count > 0`, nil},
+		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.live_ref_count > 0 OR c.pin_count > 0`, nil},
 	}
 	for _, q := range queries {
-		if err := sgctx.DB.QueryRow(q.query, q.args...).Scan(q.dest); err != nil {
+		if err := sgctx.DB.QueryRowContext(ctx, q.query, q.args...).Scan(q.dest); err != nil {
 			return fmt.Errorf("query simulate stats: %w", err)
 		}
 	}
@@ -1004,15 +1339,16 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  store [--codec <codec>] <file>", "Store a single file"},
-		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
+		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
+		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
-		{"  remove <fileID>", "Remove logical file (decrement refcounts)"},
-		{"  gc [options]", "Run garbage collection"},
-		{"    (no options)", "Perform standard GC"},
+		{"  remove <fileID>", "Remove logical file (state-changing; decrements chunk reference counts)"},
+		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
+		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  stats", "Show storage statistics"},
-		{"  verify [target] [fileID] [options]", "Verify stored files"},
+		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
 		{"    no options defaults to '--standard'", ""},
@@ -1022,7 +1358,7 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
-		{"  simulate <store|store-folder> <path>", "Dry-run store without writing to storage"},
+		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
 	fmt.Println("      --name <substring>")
@@ -1040,6 +1376,16 @@ func printHelp() {
 	fmt.Println("  DB_USER")
 	fmt.Println("  DB_PASSWORD")
 	fmt.Println("  DB_NAME")
+	fmt.Println("  DB_SSLMODE (default: disable)")
+	fmt.Println("  COLDKEEP_DB_CONNECT_TIMEOUT_MS (default: 5000)")
+	fmt.Println("  COLDKEEP_DB_OPERATION_TIMEOUT_MS (default: 300000)")
+	fmt.Println("  COLDKEEP_DB_STATEMENT_TIMEOUT_MS (default: 30000)")
+	fmt.Println("  COLDKEEP_DB_LOCK_TIMEOUT_MS (default: 5000)")
+	fmt.Println("  COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS (default: 60000)")
+	fmt.Println("  COLDKEEP_DB_MAX_OPEN_CONNS (default: 25)")
+	fmt.Println("  COLDKEEP_DB_MAX_IDLE_CONNS (default: 5)")
+	fmt.Println("  COLDKEEP_DB_CONN_MAX_LIFETIME_MS (default: 1800000)")
+	fmt.Println("  COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS (default: 300000)")
 	fmt.Println("  COLDKEEP_STORAGE_DIR (default: ./storage/containers)")
 	fmt.Println("  COLDKEEP_CONTAINER_MAX_SIZE_MB (default: 64)")
 	fmt.Println("  COLDKEEP_LOGICAL_FILE_WAIT_MS (default: 100)")
@@ -1048,9 +1394,24 @@ func printHelp() {
 	fmt.Println("  COLDKEEP_MAX_CLAIM_WAIT_MS (default: 120000)")
 	fmt.Println("  COLDKEEP_CODEC (default: aes-gcm)")
 	fmt.Println("  COLDKEEP_KEY (required for aes-gcm)")
+	fmt.Println("  COLDKEEP_STRICT_RECOVERY (default: true; recommended for production)")
+	fmt.Println("    true: fail startup on suspicious orphan container conflicts (intentional trust-first behavior)")
+	fmt.Println("    false: warn and continue (relaxed mode for messy/retrier/restart-race environments)")
+	fmt.Println("  COLDKEEP_REUSE_SEMANTIC_VALIDATION (default: suspicious)")
+	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
+	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
+	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
+	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
+	fmt.Println("  Simulated mode is not proof of physical durability")
+	fmt.Println()
+	fmt.Println("Operator quick check:")
+	fmt.Println("  coldkeep doctor --standard")
+	fmt.Println("  Recommended operator health gate: run coldkeep doctor after significant operations.")
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")
+	fmt.Println("  coldkeep doctor --full")
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep store --codec aes-gcm myfile.bin")
 	fmt.Println("  coldkeep store-folder --codec plain ./samples")

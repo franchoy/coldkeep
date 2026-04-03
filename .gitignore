@@ -75,9 +75,9 @@ temp/
 .ci-storage/
 .tmp-bin/
 .timing/
+.ci-bin/
 
 # =========================
 # smoke scripts output
 # =========================
-_smoke_out/
-
+_smoke_*/

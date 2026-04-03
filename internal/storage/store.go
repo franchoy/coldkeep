@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,11 +28,144 @@ type payloadStatefulWriter interface {
 	FinalizeContainer() error
 }
 
+// Append lifecycle state machine (authoritative v1.0 contract):
+//
+// Trigger:
+//   - Every successful AppendPayload(tx, payload) creates exactly one unresolved
+//     append outcome that MUST be resolved before returning to the caller.
+//
+// Terminal resolution (exactly one path per successful append):
+//   - Commit acknowledgment path:
+//     If tx.Commit() succeeds, caller MUST invoke AcknowledgeAppendCommitted()
+//     exactly once when supported.
+//   - Rollback path:
+//     If tx is rolled back, or any error happens before tx.Commit() succeeds,
+//     caller MUST invoke RollbackLastAppend() when supported.
+//
+// Quarantine on failed cleanup:
+//   - If RollbackLastAppend() fails, caller MUST trigger quarantine for the active
+//     container before any further writes.
+//   - If physical finalize/sync fails, caller MUST trigger quarantine for the active
+//     container before any further writes.
+//   - If DB seal/update fails after physical finalize, implementation MUST NOT
+//     permit that container to be reused; quarantine (or equivalent
+//     exclusion from writable selection) is required.
+//
+// Boundary invariants:
+//   - No successful append may remain unresolved at function boundary.
+//   - No successful append may execute both rollback path and commit acknowledgment path.
+//   - No container that crosses a failed rollback/finalize/seal boundary may
+//     re-enter the writable pool.
+
+// optionalAppendRollbacker is implemented by writers that can truncate a physical
+// container file back to its pre-append offset when the enclosing DB transaction
+// is rolled back or fails to commit.
+type optionalAppendRollbacker interface {
+	RollbackLastAppend() error
+}
+
+// optionalAppendCommitAcknowledger is implemented by writers that maintain rollback
+// state after an unresolved append. Calling AcknowledgeAppendCommitted after a
+// successful tx.Commit() closes the commit acknowledgment path of the state
+// machine, ensuring that already-committed bytes can never be accidentally
+// truncated by a subsequent RollbackLastAppend call.
+type optionalAppendCommitAcknowledger interface {
+	AcknowledgeAppendCommitted()
+}
+
+type optionalFailedActiveContainerQuarantiner interface {
+	QuarantineActiveContainer() error
+}
+
+type optionalWriterDBBinder interface {
+	BindDB(dbconn *sql.DB)
+}
+
+// rollbackWriterLastAppend calls RollbackLastAppend on the writer if it supports it.
+// Safe to call on any rollback path; if no unresolved append is pending the
+// implementation returns immediately without truncating.
+// Returns any error from the rollback operation; callers must handle rollback failures
+// as they indicate physical/logical inconsistency and must trigger container
+// quarantine.
+func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
+	if rb, ok := writer.(optionalAppendRollbacker); ok {
+		return rb.RollbackLastAppend()
+	}
+	return nil
+}
+
+// acknowledgeWriterAppendCommitted calls AcknowledgeAppendCommitted on the writer
+// if it supports it. Must be called immediately after every successful tx.Commit()
+// that followed an AppendPayload call, completing the commit acknowledgment path of the writer
+// state machine so pending rollback bookkeeping is cleared before function return.
+// This call is expected exactly once per successful append transaction.
+func acknowledgeWriterAppendCommitted(writer payloadStatefulWriter) {
+	if ack, ok := writer.(optionalAppendCommitAcknowledger); ok {
+		ack.AcknowledgeAppendCommitted()
+	}
+}
+
+func quarantineWriterActiveContainer(writer payloadStatefulWriter) error {
+	if quarantiner, ok := writer.(optionalFailedActiveContainerQuarantiner); ok {
+		return quarantiner.QuarantineActiveContainer()
+	}
+	return nil
+}
+
+// rollbackWriterLastAppendWithQuarantine attempts to rollback the writer's last append,
+// and if that fails, executes the active-container quarantine path to
+// prevent further use.
+// Returns the rollback error, or if rollback fails, returns an error wrapping both
+// the rollback failure and any quarantine error. This ensures that failed rollbacks
+// (physical consistency violations) are treated as critical container failures.
+func rollbackWriterLastAppendWithQuarantine(writer payloadStatefulWriter) error {
+	rollbackErr := rollbackWriterLastAppend(writer)
+	if rollbackErr == nil {
+		return nil
+	}
+
+	// Rollback failed; this indicates physical/logical inconsistency.
+	// Log loudly and attempt to quarantine the active container as a safeguard.
+	log.Printf("event=store_rollback_failed error=%v", rollbackErr)
+
+	quarantineErr := quarantineWriterActiveContainer(writer)
+	if quarantineErr != nil {
+		return errors.Join(
+			fmt.Errorf("rollback failed (physical append may be truncated): %w", rollbackErr),
+			fmt.Errorf("active container quarantine also failed: %w", quarantineErr),
+		)
+	}
+
+	return fmt.Errorf("rollback failed; quarantined active container as precaution: %w", rollbackErr)
+}
+
+func bindWriterDB(writer payloadStatefulWriter, dbconn *sql.DB) {
+	if binder, ok := writer.(optionalWriterDBBinder); ok {
+		binder.BindDB(dbconn)
+	}
+}
+
+func quarantineContainerNow(dbconn *sql.DB, containerID int64) error {
+	return container.QuarantineContainer(dbconn, containerID)
+}
+
 type optionalContainerSealer interface {
 	SealContainer(tx db.DBTX, containerID int64, filename string, containersDir string) error
 }
 
+func markContainerSealingInTx(tx *sql.Tx, containerID int64) error {
+	if tx == nil || containerID <= 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE container SET sealing = TRUE WHERE id = $1`, containerID); err != nil {
+		return fmt.Errorf("mark container %d sealing in tx: %w", containerID, err)
+	}
+	return nil
+}
+
 // StoreFileResult contains structured metadata about a store operation.
+// Store is a state-changing path: it mutates logical-file, chunk, block, and
+// container state as payload is committed.
 type StoreFileResult struct {
 	FileID        int64  `json:"file_id"`
 	FileHash      string `json:"file_hash"`
@@ -49,8 +183,9 @@ func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, container
 func newWriterFromPrototype(prototype container.ContainerWriter) (container.ContainerWriter, error) {
 	switch w := prototype.(type) {
 	case *container.LocalWriter:
-		// Clone LocalWriter per worker for thread safety.
-		return container.NewLocalWriterWithDir(w.Dir(), w.MaxSize()), nil
+		// Clone LocalWriter per worker for thread safety; propagate DB connection
+		// so the per-worker writer can commit sealing markers independently.
+		return container.NewLocalWriterWithDirAndDB(w.Dir(), w.MaxSize(), w.DB()), nil
 	case *container.SimulatedWriter:
 		// Do NOT clone SimulatedWriter; return the original for shared, realistic container packing.
 		// Concurrency contract: SimulatedWriter is internally synchronized (mutex-protected).
@@ -60,13 +195,581 @@ func newWriterFromPrototype(prototype container.ContainerWriter) (container.Cont
 	}
 }
 
+type reusableLogicalFileGraphSummary struct {
+	totalSize         int64
+	chunkRefs         int64
+	brokenChunkOrders int64
+	invalidChunks     int64
+	missingBlocks     int64
+	invalidContainers int64
+}
+
+type reuseSemanticValidationMode string
+
+const (
+	reuseSemanticValidationOff        reuseSemanticValidationMode = "off"
+	reuseSemanticValidationSuspicious reuseSemanticValidationMode = "suspicious"
+	reuseSemanticValidationAlways     reuseSemanticValidationMode = "always"
+)
+
+type semanticReuseSuspicionSummary struct {
+	fileRetryCount       int64
+	chunkRetryRefs       int64
+	mutableContainerRefs int64
+}
+
+type reusableCompletedChunkSummary struct {
+	blockRows                int64
+	existingContainerRows    int64
+	quarantinedContainerRows int64
+}
+
+func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
+	var summary reusableCompletedChunkSummary
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(b.id) AS block_rows,
+			COUNT(ctr.id) AS existing_container_rows,
+			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
+		FROM blocks b
+		LEFT JOIN container ctr ON ctr.id = b.container_id
+		WHERE b.chunk_id = $1
+	`, chunkID).Scan(
+		&summary.blockRows,
+		&summary.existingContainerRows,
+		&summary.quarantinedContainerRows,
+	)
+	if err != nil {
+		return fmt.Errorf("query reusable completed chunk %d: %w", chunkID, err)
+	}
+
+	if summary.blockRows != 1 {
+		return fmt.Errorf("chunk %d has invalid block metadata rows: expected 1 got %d", chunkID, summary.blockRows)
+	}
+	if summary.existingContainerRows != 1 {
+		return fmt.Errorf("chunk %d has missing container metadata", chunkID)
+	}
+	if summary.quarantinedContainerRows != 0 {
+		return fmt.Errorf("chunk %d references quarantined container", chunkID)
+	}
+	if strings.TrimSpace(containersDir) == "" {
+		return nil
+	}
+
+	var (
+		containerID   int64
+		filename      string
+		blockOffset   int64
+		storedSize    int64
+		containerSize int64
+		maxSize       int64
+	)
+	err = dbconn.QueryRowContext(ctx, `
+		SELECT ctr.id, ctr.filename, b.block_offset, b.stored_size, ctr.current_size, ctr.max_size
+		FROM blocks b
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE b.chunk_id = $1
+	`, chunkID).Scan(
+		&containerID,
+		&filename,
+		&blockOffset,
+		&storedSize,
+		&containerSize,
+		&maxSize,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("chunk %d has missing container metadata", chunkID)
+		}
+		return fmt.Errorf("query reusable completed chunk placement %d: %w", chunkID, err)
+	}
+
+	if maxSize > 0 && containerSize > maxSize {
+		return fmt.Errorf("chunk %d references container %d with invalid size metadata: current_size=%d max_size=%d", chunkID, containerID, containerSize, maxSize)
+	}
+	if storedSize <= 0 {
+		return fmt.Errorf("chunk %d has invalid stored_size=%d", chunkID, storedSize)
+	}
+	if blockOffset < int64(container.ContainerHdrLen) {
+		return fmt.Errorf("chunk %d has invalid block_offset=%d before container header", chunkID, blockOffset)
+	}
+	if blockOffset > containerSize-storedSize {
+		return fmt.Errorf("chunk %d has out-of-bounds placement in container %d: block_offset=%d stored_size=%d container_size=%d", chunkID, containerID, blockOffset, storedSize, containerSize)
+	}
+
+	fullPath := filepath.Join(containersDir, filename)
+	info, statErr := os.Stat(fullPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return fmt.Errorf("chunk %d references missing container file %d (%s)", chunkID, containerID, fullPath)
+		}
+		return fmt.Errorf("stat container file for reusable chunk %d container %d: %w", chunkID, containerID, statErr)
+	}
+	if info.Size() < blockOffset+storedSize {
+		return fmt.Errorf("chunk %d placement exceeds physical container file bounds for container %d: block_offset=%d stored_size=%d file_size=%d", chunkID, containerID, blockOffset, storedSize, info.Size())
+	}
+
+	return nil
+}
+
+func markChunkForRebuildWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) error {
+	result, err := dbconn.ExecContext(ctx,
+		`UPDATE chunk SET status = $1 WHERE id = $2 AND status = $3`,
+		filestate.ChunkAborted,
+		chunkID,
+		filestate.ChunkCompleted,
+	)
+	if err != nil {
+		return fmt.Errorf("mark chunk %d for rebuild: %w", chunkID, err)
+	}
+	if _, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("rows affected while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+	if _, err := dbconn.ExecContext(ctx, `DELETE FROM blocks WHERE chunk_id = $1`, chunkID); err != nil {
+		return fmt.Errorf("delete stale blocks while marking chunk %d for rebuild: %w", chunkID, err)
+	}
+
+	return nil
+}
+
+func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
+	var summary reusableLogicalFileGraphSummary
+	err := dbconn.QueryRowContext(ctx, `
+		WITH target_file AS (
+			SELECT id, total_size
+			FROM logical_file
+			WHERE id = $1
+		),
+		ordered_chunks AS (
+			SELECT
+				fc.chunk_id,
+				fc.chunk_order,
+				ROW_NUMBER() OVER (ORDER BY fc.chunk_order) - 1 AS expected_order
+			FROM file_chunk fc
+			WHERE fc.logical_file_id = $1
+		),
+		graph_summary AS (
+			SELECT
+				COUNT(*) AS chunk_refs,
+				COALESCE(SUM(CASE WHEN oc.chunk_order <> oc.expected_order THEN 1 ELSE 0 END), 0) AS broken_chunk_orders,
+				COALESCE(SUM(CASE WHEN c.id IS NULL OR c.status <> $2 THEN 1 ELSE 0 END), 0) AS invalid_chunks,
+				COALESCE(SUM(CASE WHEN b.id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
+				COALESCE(SUM(CASE WHEN ctr.id IS NULL OR ctr.quarantine THEN 1 ELSE 0 END), 0) AS invalid_containers
+			FROM ordered_chunks oc
+			LEFT JOIN chunk c ON c.id = oc.chunk_id
+			LEFT JOIN blocks b ON b.chunk_id = oc.chunk_id
+			LEFT JOIN container ctr ON ctr.id = b.container_id
+		)
+		SELECT
+			tf.total_size,
+			gs.chunk_refs,
+			gs.broken_chunk_orders,
+			gs.invalid_chunks,
+			gs.missing_blocks,
+			gs.invalid_containers
+		FROM target_file tf
+		CROSS JOIN graph_summary gs
+	`, fileID, filestate.ChunkCompleted).Scan(
+		&summary.totalSize,
+		&summary.chunkRefs,
+		&summary.brokenChunkOrders,
+		&summary.invalidChunks,
+		&summary.missingBlocks,
+		&summary.invalidContainers,
+	)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("logical file %d does not exist", fileID)
+	}
+	if err != nil {
+		return fmt.Errorf("query reusable logical file graph %d: %w", fileID, err)
+	}
+
+	if summary.totalSize == 0 {
+		if summary.chunkRefs != 0 {
+			return fmt.Errorf("zero-byte logical file %d unexpectedly has %d file_chunk rows", fileID, summary.chunkRefs)
+		}
+		return nil
+	}
+
+	if summary.chunkRefs == 0 {
+		return fmt.Errorf("logical file %d has no file_chunk rows", fileID)
+	}
+	if summary.brokenChunkOrders > 0 {
+		return fmt.Errorf("logical file %d has non-contiguous chunk ordering", fileID)
+	}
+	if summary.invalidChunks > 0 {
+		return fmt.Errorf("logical file %d references missing or non-completed chunks", fileID)
+	}
+	if summary.missingBlocks > 0 {
+		return fmt.Errorf("logical file %d references chunks without block metadata", fileID)
+	}
+	if summary.invalidContainers > 0 {
+		return fmt.Errorf("logical file %d references missing or quarantined containers", fileID)
+	}
+
+	if strings.TrimSpace(containersDir) == "" {
+		return nil
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT DISTINCT ctr.id, ctr.filename
+		FROM file_chunk fc
+		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE fc.logical_file_id = $1
+	`, fileID)
+	if err != nil {
+		return fmt.Errorf("query reusable logical file containers %d: %w", fileID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var containerID int64
+		var filename string
+		if err := rows.Scan(&containerID, &filename); err != nil {
+			return fmt.Errorf("scan reusable logical file container for file %d: %w", fileID, err)
+		}
+		fullPath := filepath.Join(containersDir, filename)
+		if _, err := os.Stat(fullPath); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("logical file %d references missing container file %d (%s)", fileID, containerID, fullPath)
+			}
+			return fmt.Errorf("stat container file for logical file %d container %d: %w", fileID, containerID, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate reusable logical file containers %d: %w", fileID, err)
+	}
+
+	return nil
+}
+
+func loadReuseSemanticValidationModeFromEnv() reuseSemanticValidationMode {
+	modeValue := strings.ToLower(strings.TrimSpace(os.Getenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION")))
+	switch modeValue {
+	case "", string(reuseSemanticValidationSuspicious):
+		return reuseSemanticValidationSuspicious
+	case string(reuseSemanticValidationOff):
+		return reuseSemanticValidationOff
+	case string(reuseSemanticValidationAlways):
+		return reuseSemanticValidationAlways
+	default:
+		log.Printf("event=store_reuse_semantic_validation_invalid_mode value=%q fallback=%q", modeValue, reuseSemanticValidationSuspicious)
+		return reuseSemanticValidationSuspicious
+	}
+}
+
+func shouldRunSemanticReuseValidationWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, mode reuseSemanticValidationMode) (bool, string, error) {
+	switch mode {
+	case reuseSemanticValidationOff:
+		return false, "mode=off", nil
+	case reuseSemanticValidationAlways:
+		return true, "mode=always", nil
+	}
+
+	var summary semanticReuseSuspicionSummary
+	err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			lf.retry_count,
+			COALESCE(COUNT(DISTINCT CASE WHEN c.retry_count > 0 THEN c.id END), 0) AS chunk_retry_refs,
+			COALESCE(COUNT(DISTINCT CASE WHEN ctr.sealed = FALSE OR ctr.sealing = TRUE THEN ctr.id END), 0) AS mutable_container_refs
+		FROM logical_file lf
+		LEFT JOIN file_chunk fc ON fc.logical_file_id = lf.id
+		LEFT JOIN chunk c ON c.id = fc.chunk_id
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN container ctr ON ctr.id = b.container_id
+		WHERE lf.id = $1
+		GROUP BY lf.retry_count
+	`, fileID).Scan(
+		&summary.fileRetryCount,
+		&summary.chunkRetryRefs,
+		&summary.mutableContainerRefs,
+	)
+	if err == sql.ErrNoRows {
+		return false, "", fmt.Errorf("logical file %d does not exist", fileID)
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("query semantic reuse suspicion summary for logical file %d: %w", fileID, err)
+	}
+
+	reasons := make([]string, 0, 3)
+	if summary.fileRetryCount > 0 {
+		reasons = append(reasons, fmt.Sprintf("file_retry_count=%d", summary.fileRetryCount))
+	}
+	if summary.chunkRetryRefs > 0 {
+		reasons = append(reasons, fmt.Sprintf("chunk_retry_refs=%d", summary.chunkRetryRefs))
+	}
+	if summary.mutableContainerRefs > 0 {
+		reasons = append(reasons, fmt.Sprintf("mutable_container_refs=%d", summary.mutableContainerRefs))
+	}
+
+	if len(reasons) == 0 {
+		return false, "mode=suspicious no_signals", nil
+	}
+
+	return true, "mode=suspicious " + strings.Join(reasons, ","), nil
+}
+
+func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) (err error) {
+	_, expectedFileHash, chunkRows, pinnedChunkIDs, err := pinLogicalFileRestoreChunksWithContext(ctx, dbconn, fileID)
+	if err != nil {
+		return fmt.Errorf("pin reusable logical file %d for semantic validation: %w", fileID, err)
+	}
+	defer func() {
+		if unpinErr := unpinRestoreChunksWithContext(ctx, dbconn, pinnedChunkIDs); unpinErr != nil {
+			if err == nil {
+				err = fmt.Errorf("unpin reusable logical file %d chunks after semantic validation: %w", fileID, unpinErr)
+				return
+			}
+			log.Printf("event=store_reuse_semantic_validation_unpin_failed file_id=%d error=%v", fileID, unpinErr)
+		}
+	}()
+
+	hasher := sha256.New()
+	var filecontainer *container.FileContainer
+	containerfilename := ""
+	defer func() {
+		if filecontainer != nil {
+			_ = filecontainer.Close()
+		}
+	}()
+
+	transformerCache := make(map[blocks.Codec]blocks.Transformer)
+	var expectedOrder int64
+
+	for _, chunkRow := range chunkRows {
+		if chunkRow.chunkOrder != expectedOrder {
+			return fmt.Errorf("semantic reuse chunk order discontinuity for file %d: expected %d got %d", fileID, expectedOrder, chunkRow.chunkOrder)
+		}
+		expectedOrder++
+
+		if containerfilename != chunkRow.filename {
+			if filecontainer != nil {
+				if closeErr := filecontainer.Close(); closeErr != nil {
+					return fmt.Errorf("close container %q during semantic validation: %w", containerfilename, closeErr)
+				}
+				filecontainer = nil
+			}
+
+			containerPath := filepath.Join(containersDir, chunkRow.filename)
+			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+			if err != nil {
+				return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+			}
+			containerfilename = chunkRow.filename
+		}
+
+		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
+		if err != nil {
+			return fmt.Errorf("read payload for semantic validation from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
+		}
+
+		codec := blocks.Codec(chunkRow.blocksCodec)
+		transformer, ok := transformerCache[codec]
+		if !ok {
+			transformer, err = blocks.GetBlockTransformer(codec)
+			if err != nil {
+				return fmt.Errorf("get block transformer for semantic validation codec %s: %w", chunkRow.blocksCodec, err)
+			}
+			transformerCache[codec] = transformer
+		}
+
+		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
+			ChunkHash: chunkRow.expectedChunkHash,
+			Descriptor: blocks.Descriptor{
+				ChunkID:       chunkRow.chunkID,
+				Codec:         codec,
+				FormatVersion: chunkRow.blocksFormatVersion,
+				PlaintextSize: chunkRow.plaintextSize,
+				StoredSize:    chunkRow.storedSize,
+				Nonce:         chunkRow.blocksNonce,
+				ContainerID:   chunkRow.blocksContainerID,
+				BlockOffset:   chunkRow.blockOffset,
+			},
+			Payload: payload,
+		})
+		if err != nil {
+			return fmt.Errorf("decode payload for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
+		}
+
+		if int64(len(plaintext)) != chunkRow.plaintextSize {
+			return fmt.Errorf("semantic reuse plaintext size mismatch for file %d chunk %d: expected %d got %d", fileID, chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
+		}
+
+		sum := sha256.Sum256(plaintext)
+		gotChunkHash := hex.EncodeToString(sum[:])
+		if gotChunkHash != chunkRow.expectedChunkHash {
+			return fmt.Errorf("semantic reuse chunk hash mismatch for file %d chunk %d: expected %s got %s", fileID, chunkRow.chunkID, chunkRow.expectedChunkHash, gotChunkHash)
+		}
+
+		if _, err := hasher.Write(plaintext); err != nil {
+			return fmt.Errorf("update semantic reuse file hash for file %d chunk %d: %w", fileID, chunkRow.chunkID, err)
+		}
+	}
+
+	if expectedOrder == 0 {
+		const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		if expectedFileHash != emptyFileSHA256 {
+			return fmt.Errorf("semantic reuse found no chunks for non-empty-hash file %d", fileID)
+		}
+		return nil
+	}
+
+	gotFileHash := hex.EncodeToString(hasher.Sum(nil))
+	if gotFileHash != expectedFileHash {
+		return fmt.Errorf("semantic reuse file hash mismatch for file %d: expected %s got %s", fileID, expectedFileHash, gotFileHash)
+	}
+
+	return nil
+}
+
+func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, containersDir string) error {
+	if err := validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+		return err
+	}
+
+	mode := loadReuseSemanticValidationModeFromEnv()
+	runSemanticValidation, reason, err := shouldRunSemanticReuseValidationWithContext(ctx, dbconn, fileID, mode)
+	if err != nil {
+		return err
+	}
+	if !runSemanticValidation {
+		return nil
+	}
+
+	if err := validateReusableLogicalFileSemanticsWithContext(ctx, dbconn, fileID, containersDir); err != nil {
+		return fmt.Errorf("semantic reuse validation failed (%s): %w", reason, err)
+	}
+
+	log.Printf("event=store_reuse_semantic_validation_passed file_id=%d mode=%s reason=%s", fileID, mode, reason)
+	return nil
+}
+
+func markLogicalFileForRebuildWithPolicyWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, markChunksSuspicious bool) error {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for logical file %d rebuild: %w", fileID, err)
+	}
+	txclosed := false
+	defer func() {
+		if !txclosed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Mark the file ABORTED only if it is still COMPLETED; bail out silently if
+	// some other goroutine already transitioned it.
+	result, err := tx.ExecContext(ctx,
+		`UPDATE logical_file SET status = $1 WHERE id = $2 AND status = $3`,
+		filestate.LogicalFileAborted,
+		fileID,
+		filestate.LogicalFileCompleted,
+	)
+	if err != nil {
+		return fmt.Errorf("mark logical file %d for rebuild: %w", fileID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected while marking logical file %d for rebuild: %w", fileID, err)
+	}
+	if rowsAffected == 0 {
+		// Another goroutine already transitioned this row; nothing left to do.
+		txclosed = true
+		return tx.Rollback()
+	}
+
+	// Collect chunk IDs referenced by stale file_chunk mappings so we can
+	// decrement their live_ref_count before removing the mappings.
+	rows, err := tx.QueryContext(ctx,
+		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	)
+	if err != nil {
+		return fmt.Errorf("query stale file_chunk rows for logical file %d: %w", fileID, err)
+	}
+	var chunkIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan stale chunk id for logical file %d: %w", fileID, err)
+		}
+		chunkIDs = append(chunkIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close stale file_chunk cursor for logical file %d: %w", fileID, err)
+	}
+
+	// Decrement live_ref_count for every stale mapping.  We guard against
+	// going below zero (which the DB schema CHECK constraint would reject anyway)
+	// by only decrementing when live_ref_count > 0.
+	for _, chunkID := range chunkIDs {
+		var remaining int64
+		err := tx.QueryRowContext(ctx,
+			`UPDATE chunk
+			 SET live_ref_count = live_ref_count - 1
+			 WHERE id = $1 AND live_ref_count > 0
+			 RETURNING live_ref_count`,
+			chunkID,
+		).Scan(&remaining)
+		if err == sql.ErrNoRows {
+			// live_ref_count was already 0; inconsistent but non-fatal here –
+			// the mapping is being removed regardless.
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("decrement live_ref_count for chunk %d (logical file %d): %w", chunkID, fileID, err)
+		}
+	}
+
+	if markChunksSuspicious {
+		// Mark implicated chunks as suspicious so future reuse in suspicious mode
+		// performs semantic validation rather than trusting stale completion state.
+		seenChunkIDs := make(map[int64]struct{}, len(chunkIDs))
+		for _, chunkID := range chunkIDs {
+			if _, ok := seenChunkIDs[chunkID]; ok {
+				continue
+			}
+			seenChunkIDs[chunkID] = struct{}{}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE chunk SET retry_count = retry_count + 1 WHERE id = $1`,
+				chunkID,
+			); err != nil {
+				return fmt.Errorf("mark chunk %d suspicious during logical file %d rebuild: %w", chunkID, fileID, err)
+			}
+		}
+	}
+
+	// Remove all stale file_chunk mappings for this logical file.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	); err != nil {
+		return fmt.Errorf("delete stale file_chunk rows for logical file %d: %w", fileID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit logical file %d rebuild reset: %w", fileID, err)
+	}
+	txclosed = true
+	return nil
+}
+
+func markLogicalFileForRebuildWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	return markLogicalFileForRebuildWithPolicyWithContext(ctx, dbconn, fileID, false)
+}
+
+func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, dbconn *sql.DB, fileID int64) error {
+	return markLogicalFileForRebuildWithPolicyWithContext(ctx, dbconn, fileID, true)
+}
+
 // -----------------------------------------------------------------------------
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
 
-func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
+func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
 
-	tx, err := dbconn.Begin()
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err
 	}
@@ -80,7 +783,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 	// Insert logical file (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
 
-	insErr := tx.QueryRow(
+	insErr := tx.QueryRowContext(
+		ctx,
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
@@ -95,7 +799,8 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 	case sql.ErrNoRows:
 		// Conflict happened: someone else already stored this file hash
 		var existingID int64
-		if err := tx.QueryRow(
+		if err := tx.QueryRowContext(
+			ctx,
 			`SELECT id, status FROM logical_file WHERE file_hash = $1 and total_size = $2`,
 			fileHash,
 			fileinfo.Size(),
@@ -110,7 +815,7 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			txclosed = true
 
 			var inconsistentChunks int
-			if err := dbconn.QueryRow(`
+			if err := dbconn.QueryRowContext(ctx, `
 				SELECT COUNT(*)
 				FROM file_chunk fc
 				JOIN chunk c ON c.id = fc.chunk_id
@@ -130,58 +835,81 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 			// Another process is currently storing this file: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			attempt := 0
-			waitStart := time.Now()
-			for keep_waiting := true; keep_waiting; {
-				if time.Since(waitStart) >= maxClaimWaitDuration {
-					return 0, "", fmt.Errorf("timeout waiting for logical file %d to finish processing", existingID)
-				}
-
-				// Poll with bounded exponential backoff to reduce DB pressure under contention.
-				time.Sleep(claimPollingBackoff(logicalFileWaitingtime, attempt))
-				attempt++
-
-				var finalStatus string
-				if err := dbconn.QueryRow(
-					`SELECT status FROM logical_file WHERE id = $1`,
-					existingID,
-				).Scan(&finalStatus); err != nil {
-					return 0, "", err
-				}
-
-				switch finalStatus {
-				case filestate.LogicalFileCompleted:
-					return existingID, finalStatus, nil
-				case filestate.LogicalFileAborted:
-					// Previous attempt was aborted while we were waiting: we can try to store again
-					filestatus = finalStatus // Update status to break the loop and retry storing
-					keep_waiting = false
-				}
+			finalStatus, waitErr := waitForLogicalFileTerminalStatus(ctx, dbconn, existingID)
+			if waitErr != nil {
+				return 0, "", waitErr
 			}
+			if finalStatus == filestate.LogicalFileCompleted {
+				return existingID, finalStatus, nil
+			}
+			filestatus = finalStatus
 		}
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
 		if filestatus == filestate.LogicalFileAborted {
-			// Previous attempt was aborted while we were waiting: we can try to store again
-			// We can reuse the same logical_file row since it has the same file_hash
-			tx2, err := dbconn.Begin()
-			if err != nil {
-				return 0, "", err
+			if !txclosed {
+				_ = tx.Rollback()
+				txclosed = true
 			}
-			if _, err := tx2.Exec(
-				`UPDATE logical_file SET status = $1, retry_count = retry_count + 1 WHERE id = $2`,
-				filestate.LogicalFileProcessing,
-				existingID,
-			); err != nil {
-				_ = tx2.Rollback()
-				return 0, "", err
+			for casAttempt := 0; casAttempt < 3; casAttempt++ {
+				tx2, beginErr := dbconn.BeginTx(ctx, nil)
+				if beginErr != nil {
+					return 0, "", beginErr
+				}
+				casResult, execErr := tx2.ExecContext(
+					ctx,
+					`UPDATE logical_file
+					 SET status = $1, retry_count = retry_count + 1
+					 WHERE id = $2 AND status = $3`,
+					filestate.LogicalFileProcessing,
+					existingID,
+					filestate.LogicalFileAborted,
+				)
+				if execErr != nil {
+					_ = tx2.Rollback()
+					return 0, "", execErr
+				}
+				rowsAffected, rowsErr := casResult.RowsAffected()
+				if rowsErr != nil {
+					_ = tx2.Rollback()
+					return 0, "", rowsErr
+				}
+				if commitErr := tx2.Commit(); commitErr != nil {
+					_ = tx2.Rollback()
+					return 0, "", commitErr
+				}
+
+				if rowsAffected == 1 {
+					fileID = existingID
+					filestatus = filestate.LogicalFileProcessing
+					break
+				}
+
+				var latestStatus string
+				if statusErr := dbconn.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, existingID).Scan(&latestStatus); statusErr != nil {
+					return 0, "", statusErr
+				}
+				switch latestStatus {
+				case filestate.LogicalFileCompleted:
+					return existingID, latestStatus, nil
+				case filestate.LogicalFileProcessing:
+					finalStatus, waitErr := waitForLogicalFileTerminalStatus(ctx, dbconn, existingID)
+					if waitErr != nil {
+						return 0, "", waitErr
+					}
+					if finalStatus == filestate.LogicalFileCompleted {
+						return existingID, finalStatus, nil
+					}
+				case filestate.LogicalFileAborted:
+					// Contended retry claim: loop and attempt CAS again.
+				default:
+					return 0, "", fmt.Errorf("unexpected logical_file status during claim retry: %s", latestStatus)
+				}
 			}
-			if err := tx2.Commit(); err != nil {
-				_ = tx2.Rollback()
-				return 0, "", err
+
+			if filestatus != filestate.LogicalFileProcessing {
+				return 0, "", fmt.Errorf("could not claim aborted logical file %d after contention", existingID)
 			}
-			fileID = existingID
-			filestatus = filestate.LogicalFileProcessing
 		}
 	case nil:
 		// We won: this file is new and we should store it
@@ -198,11 +926,53 @@ func claimLogicalFile(dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fi
 	return fileID, filestatus, nil
 }
 
-func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, err error) {
+func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, container.ContainersDir)
+}
 
-	tx, err := dbconn.Begin()
+func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
 	if err != nil {
 		return 0, "", err
+	}
+
+	if filestatus != filestate.LogicalFileCompleted {
+		return fileID, filestatus, nil
+	}
+
+	reuseErr := validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
+	if reuseErr == nil {
+		return fileID, filestatus, nil
+	}
+
+	log.Printf("event=store_reuse_validation_failed file_id=%d error=%v", fileID, reuseErr)
+	if err := markLogicalFileForReuseValidationFailureWithContext(ctx, dbconn, fileID); err != nil {
+		return 0, "", errors.Join(reuseErr, err)
+	}
+
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
+	if err != nil {
+		return 0, "", err
+	}
+	if filestatus != filestate.LogicalFileCompleted {
+		return fileID, filestatus, nil
+	}
+
+	reuseErr = validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
+	if reuseErr != nil {
+		return 0, "", fmt.Errorf("logical file %d remained non-reusable after retry: %w", fileID, reuseErr)
+	}
+
+	return fileID, filestatus, nil
+}
+
+func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, "", false, err
 	}
 	txclosed := false
 	defer func() {
@@ -213,9 +983,10 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 
 	// Insert chunk (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
-	insErr := tx.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, ref_count)
-				VALUES ($1, $2, $3, 1)
+	insErr := tx.QueryRowContext(
+		ctx,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+				VALUES ($1, $2, $3, 0)
 				ON CONFLICT (chunk_hash, size) DO NOTHING
 				RETURNING id`,
 		chunkHash,
@@ -227,82 +998,310 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 	case nil:
 		// We won: this chunk is new
 		chunkstatus = filestate.ChunkProcessing
+		isNew = true
 	case sql.ErrNoRows:
 		// Someone else inserted it first
-		if err := tx.QueryRow(`SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
-			return 0, "", err
+		if err := tx.QueryRowContext(ctx, `SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
+			return 0, "", false, err
 		}
 		switch chunkstatus {
 		case filestate.ChunkCompleted:
-			// Chunk already stored and ready: we can reuse it
+			// Chunk is marked COMPLETED; verify its block/container metadata before reuse.
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			return chunkID, chunkstatus, nil
+
+			reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+			if reuseErr == nil {
+				return chunkID, chunkstatus, false, nil
+			}
+
+			log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+			if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+				return 0, "", false, errors.Join(reuseErr, err)
+			}
+			chunkstatus = filestate.ChunkAborted
 		case filestate.ChunkProcessing:
 			// Another process is currently storing this chunk: we can wait and reuse it once done
 			_ = tx.Rollback() // Don't hold locks while waiting
 			txclosed = true
-			attempt := 0
-			waitStart := time.Now()
-			for keep_waiting := true; keep_waiting; {
-				if time.Since(waitStart) >= maxClaimWaitDuration {
-					return 0, "", fmt.Errorf("timeout waiting for chunk %d to finish processing", chunkID)
-				}
-
-				// Poll with bounded exponential backoff to reduce DB pressure under contention.
-				time.Sleep(claimPollingBackoff(chunkWaitingtime, attempt))
-				attempt++
-
-				var finalStatus string
-				if err := dbconn.QueryRow(
-					`SELECT status FROM chunk WHERE id = $1`,
-					chunkID,
-				).Scan(&finalStatus); err != nil {
-					return 0, "", err
-				}
-				switch finalStatus {
-				case filestate.ChunkCompleted:
-					return chunkID, finalStatus, nil
-				case filestate.ChunkAborted:
-					// Previous attempt was aborted while we were waiting: we can try to store again
-					chunkstatus = finalStatus // Update status to break the loop and retry storing
-					keep_waiting = false
-				}
+			finalStatus, waitErr := waitForChunkTerminalStatus(ctx, dbconn, chunkID)
+			if waitErr != nil {
+				return 0, "", false, waitErr
 			}
+			if finalStatus == filestate.ChunkCompleted {
+				reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+				if reuseErr == nil {
+					return chunkID, finalStatus, false, nil
+				}
+
+				log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+				if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+					return 0, "", false, errors.Join(reuseErr, err)
+				}
+				chunkstatus = filestate.ChunkAborted
+				break
+			}
+			chunkstatus = finalStatus
 		}
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
 		if chunkstatus == filestate.ChunkAborted {
-			// Previous attempt was aborted while we were waiting: we can try to store again
-			// We can reuse the same chunk row since it has the same chunk_hash and size
-			tx2, err := dbconn.Begin()
-			if err != nil {
-				return 0, "", err
+			for casAttempt := 0; casAttempt < 3; casAttempt++ {
+				tx2, beginErr := dbconn.BeginTx(ctx, nil)
+				if beginErr != nil {
+					return 0, "", false, beginErr
+				}
+				casResult, execErr := tx2.ExecContext(
+					ctx,
+					`UPDATE chunk
+					 SET status = $1, retry_count = retry_count + 1
+					 WHERE id = $2 AND status = $3`,
+					filestate.ChunkProcessing,
+					chunkID,
+					filestate.ChunkAborted,
+				)
+				if execErr != nil {
+					_ = tx2.Rollback()
+					return 0, chunkstatus, false, execErr
+				}
+				rowsAffected, rowsErr := casResult.RowsAffected()
+				if rowsErr != nil {
+					_ = tx2.Rollback()
+					return 0, chunkstatus, false, rowsErr
+				}
+				if commitErr := tx2.Commit(); commitErr != nil {
+					_ = tx2.Rollback()
+					return 0, chunkstatus, false, commitErr
+				}
+
+				if rowsAffected == 1 {
+					chunkstatus = filestate.ChunkProcessing
+					break
+				}
+
+				var latestStatus string
+				if statusErr := dbconn.QueryRowContext(ctx, `SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&latestStatus); statusErr != nil {
+					return 0, chunkstatus, false, statusErr
+				}
+				switch latestStatus {
+				case filestate.ChunkCompleted:
+					reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+					if reuseErr == nil {
+						return chunkID, latestStatus, false, nil
+					}
+
+					log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+					if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+						return 0, "", false, errors.Join(reuseErr, err)
+					}
+					chunkstatus = filestate.ChunkAborted
+					continue
+				case filestate.ChunkProcessing:
+					finalStatus, waitErr := waitForChunkTerminalStatus(ctx, dbconn, chunkID)
+					if waitErr != nil {
+						return 0, "", false, waitErr
+					}
+					if finalStatus == filestate.ChunkCompleted {
+						reuseErr := validateReusableCompletedChunkWithContext(ctx, dbconn, chunkID, containersDir)
+						if reuseErr == nil {
+							return chunkID, finalStatus, false, nil
+						}
+
+						log.Printf("event=chunk_reuse_validation_failed chunk_id=%d error=%v", chunkID, reuseErr)
+						if err := markChunkForRebuildWithContext(ctx, dbconn, chunkID); err != nil {
+							return 0, "", false, errors.Join(reuseErr, err)
+						}
+						chunkstatus = filestate.ChunkAborted
+						continue
+					}
+				case filestate.ChunkAborted:
+					// Contended retry claim: loop and attempt CAS again.
+				default:
+					return 0, chunkstatus, false, fmt.Errorf("unexpected chunk status during claim retry: %s", latestStatus)
+				}
 			}
-			if _, err := tx2.Exec(
-				`UPDATE chunk SET status = $1, retry_count = retry_count + 1 WHERE id = $2`,
-				filestate.ChunkProcessing,
-				chunkID,
-			); err != nil {
-				_ = tx2.Rollback()
-				return 0, chunkstatus, err
+
+			if chunkstatus != filestate.ChunkProcessing {
+				return 0, chunkstatus, false, fmt.Errorf("could not claim aborted chunk %d after contention", chunkID)
 			}
-			if err := tx2.Commit(); err != nil {
-				_ = tx2.Rollback()
-				return 0, chunkstatus, err
-			}
-			chunkstatus = filestate.ChunkProcessing
 		}
 	default:
-		return 0, "", insErr
+		return 0, "", false, insErr
 	}
 
 	if !txclosed {
 		if err := tx.Commit(); err != nil {
-			return 0, chunkstatus, err
+			return 0, chunkstatus, isNew, err
 		}
 	}
-	return chunkID, chunkstatus, nil
+	return chunkID, chunkstatus, isNew, nil
+}
+
+func waitForLogicalFileTerminalStatus(ctx context.Context, dbconn *sql.DB, fileID int64) (string, error) {
+	attempt := 0
+	waitStart := time.Now()
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if time.Since(waitStart) >= maxClaimWaitDuration {
+			return "", fmt.Errorf("timeout waiting for logical file %d to finish processing", fileID)
+		}
+
+		// Poll with bounded exponential backoff to reduce DB pressure under contention.
+		if err := sleepWithContext(ctx, claimPollingBackoff(logicalFileWaitingtime, attempt)); err != nil {
+			return "", err
+		}
+		attempt++
+
+		var finalStatus string
+		if err := dbconn.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&finalStatus); err != nil {
+			return "", err
+		}
+		switch finalStatus {
+		case filestate.LogicalFileCompleted, filestate.LogicalFileAborted:
+			return finalStatus, nil
+		}
+	}
+}
+
+func waitForChunkTerminalStatus(ctx context.Context, dbconn *sql.DB, chunkID int64) (string, error) {
+	attempt := 0
+	waitStart := time.Now()
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if time.Since(waitStart) >= maxClaimWaitDuration {
+			return "", fmt.Errorf("timeout waiting for chunk %d to finish processing", chunkID)
+		}
+
+		// Poll with bounded exponential backoff to reduce DB pressure under contention.
+		if err := sleepWithContext(ctx, claimPollingBackoff(chunkWaitingtime, attempt)); err != nil {
+			return "", err
+		}
+		attempt++
+
+		var finalStatus string
+		if err := dbconn.QueryRowContext(ctx, `SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&finalStatus); err != nil {
+			return "", err
+		}
+		switch finalStatus {
+		case filestate.ChunkCompleted, filestate.ChunkAborted:
+			return finalStatus, nil
+		}
+	}
+}
+
+func linkFileChunk(tx *sql.Tx, fileID int64, chunkID int64, chunkOrder int, incrementRefCount bool) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+	return linkFileChunkWithContext(ctx, tx, fileID, chunkID, chunkOrder, incrementRefCount)
+}
+
+func linkFileChunkWithContext(ctx context.Context, tx *sql.Tx, fileID int64, chunkID int64, chunkOrder int, incrementRefCount bool) error {
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
+		fileID,
+		chunkID,
+		chunkOrder,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		var existingChunkID int64
+		err := tx.QueryRowContext(
+			ctx,
+			`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 AND chunk_order = $2`,
+			fileID,
+			chunkOrder,
+		).Scan(&existingChunkID)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("suspicious file_chunk conflict for file_id=%d chunk_order=%d: insert reported conflict but mapping is missing", fileID, chunkOrder)
+		}
+		if err != nil {
+			return err
+		}
+		if existingChunkID != chunkID {
+			return fmt.Errorf("suspicious file_chunk conflict for file_id=%d chunk_order=%d: existing chunk_id=%d attempted chunk_id=%d", fileID, chunkOrder, existingChunkID, chunkID)
+		}
+		return nil
+	}
+
+	if rowsAffected > 0 && incrementRefCount {
+		if _, err := tx.ExecContext(ctx, `UPDATE chunk SET live_ref_count = live_ref_count + 1 WHERE id = $1`, chunkID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// finalizeLogicalFileStorageWithContext atomically verifies that all chunks are linked
+// and marks the logical file as COMPLETED in a single transaction. This ensures that
+// if verification fails, the file remains in PROCESSING state and no partial completion
+// leaks out. If this transaction fails, corrective recovery/cleanup will mark the file ABORTED,
+// maintaining semantic consistency: either all chunks are linked AND file is complete,
+// or file is in PROCESSING/ABORTED (never a state where chunks exist but file isn't marked).
+func finalizeLogicalFileStorageWithContext(ctx context.Context, dbconn *sql.DB, fileID int64, expectedChunkCount int) error {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin finalize transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Verify all chunks are linked (chunk_order must be 0..expectedChunkCount-1 contiguous).
+	// If any are missing, this transaction fails and file stays PROCESSING for later recovery.
+	var linkedCount int
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	).Scan(&linkedCount); err != nil {
+		return fmt.Errorf("count file chunks: %w", err)
+	}
+	if linkedCount != expectedChunkCount {
+		return fmt.Errorf("finalize: file %d has %d linked chunks, expected %d (incomplete store or race)", fileID, linkedCount, expectedChunkCount)
+	}
+
+	// Verify chunk_order contiguity (0, 1, 2,... n-1 with no gaps).
+	var maxOrder int
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(MAX(chunk_order), -1) FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	).Scan(&maxOrder); err != nil {
+		return fmt.Errorf("check chunk_order max: %w", err)
+	}
+	if maxOrder != expectedChunkCount-1 {
+		return fmt.Errorf("finalize: file %d chunk_order max is %d, expected %d (non-contiguous linking)", fileID, maxOrder, expectedChunkCount-1)
+	}
+
+	// All verification passed; mark file complete in the same transaction.
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE logical_file SET status = $1 WHERE id = $2`,
+		filestate.LogicalFileCompleted,
+		fileID,
+	); err != nil {
+		return fmt.Errorf("update logical_file to COMPLETED: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit finalize transaction: %w", err)
+	}
+
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -375,6 +1374,8 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 // metadata suitable for CLI text and JSON output.
 func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
 	result.Path = path
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	transformer, err := blocks.GetBlockTransformer(codec)
 	if err != nil {
@@ -387,8 +1388,6 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	blockRepo := &blocks.Repository{
 		DB: sgctx.DB,
 	}
-
-	ctx := context.Background()
 
 	file, err := os.Open(path)
 	if err != nil {
@@ -413,15 +1412,19 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		return StoreFileResult{}, err
 	}
 
+	validationContainerDir := sgctx.EffectiveContainerDir()
+	if sgctx.IsSimulated() {
+		validationContainerDir = ""
+	}
+
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := claimLogicalFile(sgctx.DB, fileinfo, fileHash)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 	result.FileID = fileID
 
 	if filestatus == filestate.LogicalFileCompleted {
-		// File already stored and ready: we can reuse it
 		result.AlreadyStored = true
 		return result, nil
 	}
@@ -429,7 +1432,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	completed := false
 	defer func() {
 		if !completed {
-			if _, execErr := sgctx.DB.Exec(
+			cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+			defer cleanupCancel()
+			if _, execErr := sgctx.DB.ExecContext(
+				cleanupCtx,
 				`UPDATE logical_file SET status = $1 WHERE id = $2`,
 				filestate.LogicalFileAborted,
 				fileID,
@@ -450,34 +1456,30 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	if !ok {
 		return StoreFileResult{}, fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
 	}
+	bindWriterDB(writer, sgctx.DB)
 	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
 	// not by this low-level result function.
 
 	for _, chunkData := range chunks {
+		if err := ctx.Err(); err != nil {
+			return StoreFileResult{}, err
+		}
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, err := claimChunk(sgctx.DB, chunkHash, int64(len(chunkData)))
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 
 		if chunkStatus == filestate.ChunkCompleted {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			tx, err := sgctx.DB.Begin()
+			tx, err := sgctx.DB.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
 
-			_, err = tx.Exec(
-				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-			 VALUES ($1, $2, $3)
-			 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
-				fileID,
-				claimedChunkID,
-				chunkOrder,
-			)
-			if err != nil {
+			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
 				_ = tx.Rollback()
 				return StoreFileResult{}, err
 			}
@@ -494,7 +1496,10 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 		// At this point, we have a chunk row in "PROCESSING" status for this chunk hash, either created by us or by another process.
 
 		for {
-			tx, err := sgctx.DB.Begin()
+			if err := ctx.Err(); err != nil {
+				return StoreFileResult{}, err
+			}
+			tx, err := sgctx.DB.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
@@ -513,6 +1518,13 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 			if err != nil {
 				_ = tx.Rollback()
+				var brokenOpenErr *container.BrokenOpenContainerError
+				if errors.As(err, &brokenOpenErr) {
+					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID); quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d after rollback: %w", brokenOpenErr.ContainerID, quarantineErr))
+					}
+					return StoreFileResult{}, err
+				}
 				if errors.Is(err, container.ErrContainerLockContention) {
 					continue
 				}
@@ -523,57 +1535,79 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				if getBlockErr == nil && existingBlock != nil {
 					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
 					// block metadata already exists for this chunk ID.
-					tx2, err2 := sgctx.DB.Begin()
+					tx2, err2 := sgctx.DB.BeginTx(ctx, nil)
 					if err2 != nil {
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+							return StoreFileResult{}, errors.Join(err2, rbErr)
+						}
 						return StoreFileResult{}, err2
 					}
 
-					if _, err2 = tx2.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
+					if _, err2 = tx2.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
 						_ = tx2.Rollback()
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+							return StoreFileResult{}, errors.Join(err2, rbErr)
+						}
 						return StoreFileResult{}, err2
 					}
 
-					if _, err2 = tx2.Exec(
-						`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-						 VALUES ($1, $2, $3)
-						 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
-						fileID,
-						claimedChunkID,
-						chunkOrder,
-					); err2 != nil {
+					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, chunkOrder, true); err2 != nil {
 						_ = tx2.Rollback()
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+							return StoreFileResult{}, errors.Join(err2, rbErr)
+						}
 						return StoreFileResult{}, err2
 					}
 
 					if err2 = tx2.Commit(); err2 != nil {
 						_ = tx2.Rollback()
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+							return StoreFileResult{}, errors.Join(err2, rbErr)
+						}
 						return StoreFileResult{}, err2
 					}
 
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, rbErr
+					}
 					chunkOrder++
 					break
 				}
 				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, errors.Join(getBlockErr, rbErr)
+					}
 					return StoreFileResult{}, getBlockErr
 				}
 
-				if _, err3 := sgctx.DB.Exec(
+				if _, err3 := sgctx.DB.ExecContext(
+					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
 					filestate.ChunkAborted,
 					claimedChunkID,
 				); err3 != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, errors.Join(err3, rbErr)
+					}
 					return StoreFileResult{}, err3
+				}
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return StoreFileResult{}, errors.Join(err, rbErr)
 				}
 				return StoreFileResult{}, err
 			}
 
 			// Mark chunk as completed
-			if _, err := tx.Exec(
+			if _, err := tx.ExecContext(
+				ctx,
 				`UPDATE chunk SET status = $1 WHERE id = $2`,
 				filestate.ChunkCompleted,
 				claimedChunkID,
 			); err != nil {
 				_ = tx.Rollback()
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return StoreFileResult{}, errors.Join(err, rbErr)
+				}
 				return StoreFileResult{}, err
 			}
 
@@ -582,10 +1616,20 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				// Caller must persist final size and seal the previously active container row in DB.
 				if err := container.UpdateContainerSize(tx, placement.PreviousID, placement.PreviousSize); err != nil {
 					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, errors.Join(err, rbErr)
+					}
 					return StoreFileResult{}, err
 				}
 				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, errors.Join(err, rbErr)
+					}
+					quarantineErr := quarantineContainerNow(sgctx.DB, placement.PreviousID)
+					if quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, quarantineErr))
+					}
 					return StoreFileResult{}, err
 				}
 			}
@@ -593,52 +1637,70 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			// Always persist size for the container that received this payload.
 			if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
 				_ = tx.Rollback()
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return StoreFileResult{}, errors.Join(err, rbErr)
+				}
 				return StoreFileResult{}, err
 			}
 
 			// Link file ↔ chunk
-			_, err = tx.Exec(
-				`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
-				 VALUES ($1, $2, $3)
-				 ON CONFLICT (logical_file_id, chunk_order) DO NOTHING`,
-				fileID,
-				claimedChunkID,
-				chunkOrder,
-			)
-			if err != nil {
+			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
 				_ = tx.Rollback()
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return StoreFileResult{}, errors.Join(err, rbErr)
+				}
 				return StoreFileResult{}, err
 			}
-
-			// Seal if reached max size.
 			if placement.Full {
+				// Mark sealing in the current transaction, which already owns the row lock.
+				if err := markContainerSealingInTx(tx, placement.ContainerID); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, errors.Join(err, rbErr)
+					}
+					return StoreFileResult{}, err
+				}
 				if err := writer.FinalizeContainer(); err != nil {
 					_ = tx.Rollback()
+					quarantineErr := quarantineWriterActiveContainer(writer)
+					if quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine active container after finalize failure: %w", quarantineErr))
+					}
 					return StoreFileResult{}, err
 				}
 				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
 				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return StoreFileResult{}, errors.Join(err, rbErr)
+					}
+					quarantineErr := quarantineContainerNow(sgctx.DB, placement.ContainerID)
+					if quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, quarantineErr))
+					}
 					return StoreFileResult{}, err
 				}
 			}
 
 			if err = tx.Commit(); err != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return StoreFileResult{}, errors.Join(err, rbErr)
+				}
 				return StoreFileResult{}, err
 			}
+			acknowledgeWriterAppendCommitted(writer)
 
 			chunkOrder++
 			break
 		}
 	}
 
-	// After all chunks are stored and linked, mark logical file as "COMPLETED"
-	_, err = sgctx.DB.Exec(
-		`UPDATE logical_file SET status = $1 WHERE id = $2`,
-		filestate.LogicalFileCompleted,
-		fileID,
-	)
-	if err != nil {
+	// Atomically verify all chunks are linked and mark logical file as COMPLETED in a single transaction.
+	// This groups the final state transition into a deliberate second phase that is logically atomic:
+	// either all chunks are successfully linked AND the file is marked complete, or the file
+	// remains PROCESSING for corrective recovery if any verification fails. This avoids the semantic gap
+	// where chunks could be fully committed but the file completion is left dangling.
+	if err := finalizeLogicalFileStorageWithContext(ctx, sgctx.DB, fileID, chunkOrder); err != nil {
 		return StoreFileResult{}, err
 	}
 	// Mark the operation as completed to avoid aborting it in the deferred function
@@ -693,6 +1755,9 @@ func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
 
 	workerCount := runtime.NumCPU()
+	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
+		workerCount = 1
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -795,10 +1860,31 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 	return nil
 }
 
+func sleepWithContext(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // --------------------------------------------------------------------------
 // --------------------------------------------------------------------------
 
-// StoreBlock is the new version of StoreChunk that takes care of block encoding and metadata management in the blocks table
+// Store a chunk payload as one encoded block and persist its metadata.
 func storeChunkAsPlainBlockWithWriter(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -833,7 +1919,7 @@ func storeChunkAsPlainBlockWithWriter(
 	return placement, &encoded.Descriptor, nil
 }
 
-// new store payload data into a container directly, without the chunk record wrapper
+// Store payload bytes directly in a container and return offset/size metadata.
 func StoreBlockPayload(c container.Container, payload []byte) (offset int64, newSize int64, err error) {
 	offset, err = c.Append(payload)
 	if err != nil {
@@ -841,21 +1927,4 @@ func StoreBlockPayload(c container.Container, payload []byte) (offset int64, new
 	}
 
 	return offset, offset + int64(len(payload)), nil
-}
-
-func SyncCloseAndSealContainer(tx db.DBTX, activecontainer container.ActiveContainer, containersDir string) error {
-	// sync active container to disk
-	if err := activecontainer.Container.Sync(); err != nil {
-		return err
-	}
-	// close active container file
-	if err := activecontainer.Container.Close(); err != nil {
-		return err
-	}
-	// seal active container in DB
-	if err := container.SealContainerInDir(tx, activecontainer.ID, activecontainer.Filename, containersDir); err != nil {
-		return err
-	}
-
-	return nil
 }

@@ -10,6 +10,125 @@ production stability.
 
 ------------------------------------------------------------------------
 
+## [0.10.0] - Unreleased
+
+Validation and adversarial testing phase before v1.0.
+
+This release focuses on validating coldkeep's correctness guarantees under stress,
+failure, and adversarial lifecycle interleavings.
+
+The core architecture, storage model, and CLI contracts are considered stable.
+This phase is dedicated to actively attempting to break system invariants and
+eliminate remaining correctness risks before the v1.0 milestone.
+
+### Reuse Integrity Hardening
+
+- Added semantic integrity validation for completed logical-file reuse, controlled by
+  `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default `suspicious`)
+- Hardened structural reuse acceptance: completed-file reuse now requires contiguous
+  file-chunk graph integrity, completed referenced chunks, valid block metadata,
+  non-quarantined containers, and on-disk container file presence before
+  returning `AlreadyStored=true`
+- Hardened completed-chunk reuse validation: chunk reuse now enforces block-row
+  cardinality and validates container presence/quarantine state plus
+  block offset/size bounds against container metadata and physical file size
+- Added integration regression proving semantically corrupted completed-file reuse
+  is refused and rebuild/retry paths are triggered
+
+### Atomicity & Lifecycle Safety
+
+- Added atomic logical-file completion boundary: the final transition to
+  `COMPLETED` now verifies full chunk linkage and contiguous ordering in the same
+  transaction
+- Hardened rollback error handling: rollback failures are now surfaced and
+  escalated instead of silently ignored, with failed append paths retiring or
+  quarantining unsafe containers
+- Added in-process container quarantine behavior for active/just-sealed
+  container failures so unsafe containers are withdrawn immediately, not only on
+  next startup recovery
+
+### Lifecycle Hardening
+
+- Hardened startup sealing recovery: containers in `sealing=TRUE` state are now
+  quarantined (not auto-sealed) when physical file size differs from DB
+  `current_size`, preventing ghost-byte containers from being promoted as healthy
+- Added integration regression for append-rollback ghost-byte state: startup
+  recovery quarantines the sealing container and GC (dry-run + real) skips it
+- Fixed SQLite compatibility in remove path tests by falling back from
+  `SELECT ... FOR UPDATE` to plain `SELECT` when the dialect does not support
+  row-lock syntax
+
+### Added
+
+- Added integration coverage for non-strict startup recovery on suspicious
+  orphan-container conflicts (`COLDKEEP_STRICT_RECOVERY=false`)
+- Added adversarial integration coverage for restore pin + remove + GC
+  interleavings
+- Added integration regression for deep verification trailing-byte detection
+  after the last completed block payload
+
+### Changed
+
+- Clarified verification operational contract as a recovered-state checker,
+  not a live online-consistency checker during in-flight writes
+- Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
+  explicit cost/coverage guidance
+- Elevated `coldkeep doctor` in docs/help/smoke as the recommended
+  operator-facing health-check and release-gate command
+- Froze `doctor` default mode as a v1.0 product contract: no-flag `doctor`
+  remains the fast `standard` health gate; `--full` and `--deep` are explicit
+  stronger/slow-path escalations
+- Documented `doctor` as a corrective health command that may update
+  metadata through recovery before running verification
+- Documented startup recovery strictness as intentional fail-fast behavior,
+  with a non-strict override for restart-race scenarios
+- Documented contiguous offset validation as an explicit current-format
+  invariant (append-only contiguous layout per container)
+- Froze and documented `doctor --output json` failure contract: failures emit
+  only generic CLI error JSON on `stderr` (no partial doctor report payload)
+- Strengthened GC emptiness invariants and stats accounting to treat chunk
+  liveness as `live_ref_count OR pin_count`, preserving restore safety under
+  remove/GC interleavings
+
+### Verification & Recovery Semantics
+
+- Standard verification now enforces pinned-chunk integrity:
+  `pin_count > 0` chunks must remain `COMPLETED` and retain block metadata
+- Deep verification now fails when container tails contain trailing
+  unaccounted bytes beyond the last completed block
+- PostgreSQL startup schema guard now explicitly requires
+  `schema_version >= 5`; optional first-run bootstrap remains available via
+  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`
+
+### v1.0 Trust Model
+
+- Consolidated operator trust model documentation: startup recovery is the normal
+  lifecycle entry point (not exceptional maintenance), `doctor` is the recommended
+  health gate and is corrective (not read-only), `verify` assumes recovered state,
+  strict recovery is the production baseline, and semantic reuse validation trades
+  read/CPU cost for stronger inline integrity confidence
+- Made `coldkeep doctor` a named first-class v1.0 command: it is explicitly
+  corrective (may abort dangling writes and clear stale sealing markers before
+  verifying), is the recommended pre-ingestion, post-startup, and pre-release gate,
+  and its default mode (`--standard`) is a frozen v1.0 product contract
+
+### Tests
+
+- Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
+  injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
+  it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
+  and subsequent verify passes
+- Added integration assertions for GC/restore pinning under remove/GC/restore
+  interleavings
+- Added integration assertion that non-strict recovery continues on suspicious
+  orphan conflict states instead of aborting startup
+- Added command-layer test that pins doctor JSON failure behavior to generic
+  CLI error payload shape (no `command`/`data` fields)
+- Added integration coverage for atomic logical-file completion and contiguous
+  file_chunk ordering under both single-file and concurrent multi-chunk ingestion
+
+------------------------------------------------------------------------
+
 ## [0.9.0] - 2026-03-31
 
 Release hardening and delivery-gate enforcement.
@@ -138,7 +257,7 @@ encoding layer with support for encryption.
 - Restore pipeline now decodes blocks before reconstructing files
 - Verification system operates on decoded block payloads
 - Stats now report physical storage using block sizes (`stored_size`)
-- Garbage collection operates on blocks and uses `ref_count` as deletion invariant
+- Garbage collection operates on blocks and uses `live_ref_count OR pin_count` as deletion invariant
 - CLI command handling refactored for extensibility and clarity
 
 ### Removed

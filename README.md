@@ -19,9 +19,25 @@ coldkeep is designed to guarantee deterministic, byte-identical restore of store
 validated by end-to-end hashing and resilient across garbage collection
 and system restart/recovery under defined operating conditions.
 
-
 > coldkeep is designed as a correctness-first storage engine, prioritizing
 > determinism and recoverability over performance and feature completeness.
+
+## ⚠️ v0.10 — Trust Validation Phase
+
+v0.10 marks the transition from system construction to system validation.
+
+The core architecture, storage model, and CLI contracts are considered stable.
+This phase focuses on stress and adversarial validation, including failure conditions.
+
+During v0.10:
+
+- No major storage features are expected to be added
+- On-disk format and metadata model are expected to remain stable unless a correctness issue is discovered
+- Changes focus on hardening invariants and lifecycle guarantees
+- Integration tests are expanded for stress and adversarial validation, including long-run scenarios
+- The goal is to actively try to break the system and eliminate remaining correctness risks
+
+v1.0 will only be released once these guarantees are validated under real-world conditions.
 
 For v0.9, every change intended for mainline or release delivery is expected to
 pass the full GitHub Actions pipeline before merge or tag publication. The repo
@@ -59,8 +75,22 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Recover from interrupted operations on startup.
 - Provide storage statistics and container health information.
 - Perform multi-level integrity verification (metadata, container structure, and full data integrity).
+- Run `coldkeep doctor` as the recommended operator health gate that bundles recovery, verification, and schema sanity checks.
 - Simulate storage operations without writing data to disk (v0.8).
 - Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
+
+### Command mutation model
+
+- `store` / `store-folder` mutate stored data and metadata.
+- `remove` mutates metadata and may make unreferenced physical data eligible for collection.
+- `gc` mutates metadata and container files unless `--dry-run` is used.
+- startup `recovery` is corrective and mutates recoverable metadata/state.
+- `doctor` is corrective and may mutate metadata because it runs recovery before verify.
+- `verify` is observational and assumes recovered state; its verification phase is read-only.
+
+CLI note: `coldkeep verify ...` still runs automatic startup recovery before the
+verification phase, so the overall command may correct stale recoverable state
+before the observational, read-only verification checks begin.
 
 ---
 
@@ -78,6 +108,18 @@ coldkeep v0.9 guarantees:
 - non-destructive garbage collection
 - atomic restore operations
 - safe concurrent storage operations
+
+### Core invariants
+
+The system relies on a small set of invariants that should stay true across store,
+restore, verification, garbage collection, and recovery:
+
+- every `COMPLETED` chunk has exactly one valid block record
+- every block record references a valid container
+- every `COMPLETED` logical file has a complete, contiguous, ordered `file_chunk` graph
+- `live_ref_count > 0` protects a chunk from garbage collection
+- `pin_count > 0` protects a chunk from concurrent deletion during restore-like operations
+- committed metadata implies the referenced bytes are already durable on disk
 
 ### Core validity model
 
@@ -114,6 +156,12 @@ coldkeep guarantees **safe recovery after crashes or interruptions**:
 
 > No partially written or inconsistent data is exposed as valid.
 
+### Contributor note (append lifecycle contract)
+
+For storage-writer lifecycle semantics, use the single authoritative state machine in
+[`internal/storage/store.go`](internal/storage/store.go) (see "Append lifecycle state machine").
+Implementation comments in writer files are intentionally brief pointers to that source of truth.
+
 ---
 
 ### Restore safety
@@ -133,8 +181,8 @@ Restore operations are **atomic and verified**:
 
 Garbage collection is **non-destructive**:
 
-- Only unreferenced chunks are removed
-- Containers are deleted only when fully unreferenced
+- Only chunks with no live file references and no active restore pins are removed
+- Containers are deleted only when all their chunks are unreferenced
 - Referenced data is never removed
 
 > GC cannot delete data required to restore a valid logical file.
@@ -166,6 +214,10 @@ Verification assumes:
 - all `COMPLETED` chunks are valid
 - corrupted or missing containers are quarantined
 
+The verification checks themselves are read-only. When using the CLI, startup
+recovery still runs before `verify`, so corrective metadata changes can happen
+before the read-only verification phase starts.
+
 > The system can detect corruption explicitly when verification is run.
 
 ---
@@ -176,8 +228,26 @@ The `simulate` command provides **accurate metadata-level estimation**:
 
 - No data is written to storage
 - Real chunking and deduplication logic is executed
+- Container packing math follows the real write path closely enough to estimate size and layout
 
 > Simulation reflects real storage behavior without side effects.
+
+Use simulated mode for:
+
+- planning
+- estimation
+- tests
+- workflow validation
+
+Simulated mode is intended for planning, estimation, tests, and workflow validation — not as proof of real durability.
+Simulated mode is not proof of physical durability guarantees.
+
+Simulation is still a confidence tool, not a correctness proof for the PostgreSQL-backed runtime:
+
+- Simulated mode uses an isolated SQLite database
+- It does not exercise PostgreSQL advisory locks
+- It does not prove row-lock or lock-wait behavior under contention
+- It is not strong evidence for GC exclusivity or retry behavior under real concurrent load
 
 > These guarantees describe system behavior under controlled conditions.
 > coldkeep remains experimental and is not yet recommended for production use.
@@ -205,6 +275,66 @@ Guarantees hold only if:
 
 ---
 
+## 🔬 Validation Strategy (v0.10)
+
+coldkeep v0.10 focuses on validating guarantees through stress and adversarial validation.
+
+The validation approach includes:
+
+- Stress and adversarial scenarios:
+  - repeated store / remove / gc / verify / restore cycles
+  - concurrent ingestion and deletion workloads
+  - crash during store / gc / recovery
+  - partial container writes
+  - corrupted or missing container files
+  - inconsistent database states
+- Long-run stability:
+  - extended operation loops to detect drift and accumulation bugs
+- Invariant validation:
+  - explicit checks that core invariants hold after every operation
+
+The goal is not only to pass tests, but to demonstrate that:
+
+- recovery converges to a valid state
+- garbage collection never breaks restore
+- restore remains deterministic under all conditions
+- no silent corruption or data loss occurs
+
+---
+
+## 🎯 v1.0 Readiness Criteria
+
+coldkeep will reach v1.0 when:
+
+- All core invariants are explicitly tested and consistently hold
+- Stress and adversarial validation tests show no data loss or silent corruption
+- Recovery reliably converges to a valid state after failures
+- Garbage collection is proven safe under concurrent and interleaved operations
+- Restore remains deterministic and byte-identical across all scenarios
+- The `doctor` command is reliable as a system health gate
+
+v1.0 is not defined by feature completeness, but by confidence in correctness.
+The goal is to reach a state where failures are either impossible or explicitly detected and surfaced.
+
+---
+
+## ✨ What’s new in v0.10
+
+- Reuse integrity hardening for `COMPLETED` logical files:
+  - semantic validation mode via `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default: `suspicious`)
+  - `suspicious`: semantic re-read/re-hash only when risk signals are present (for example retry history or mutable container references)
+  - `always`: semantic re-read/re-hash for every reuse candidate (strongest inline gate, highest read/CPU cost)
+  - structural graph validation remains mandatory in all modes (contiguous file-chunk links, completed chunks, valid block/container references, on-disk container presence)
+- Startup sealing recovery hardening: containers left in `sealing=TRUE` are quarantined (not auto-sealed) when physical size and DB `current_size` diverge, preventing ghost-byte promotion as healthy
+- Restore safety hardening under interleavings:
+  - GC/delete liveness checks consistently honor `live_ref_count OR pin_count`
+  - restore pinning behavior is covered by adversarial integration tests for restore/remove/GC races
+- Deep verification hardening: deep verify now fails on trailing unaccounted bytes after the last completed block payload in a container
+- Verification contract clarity: verification remains a recovered-state checker (run after recovery; not an online in-flight-write consistency checker)
+- Completion-boundary hardening: logical-file completion verifies chunk linkage and contiguous ordering at the completion boundary before exposing the file as `COMPLETED`
+
+---
+
 ## ✨ What’s new in v0.8
 
 - `simulate` command for dry-run storage analysis
@@ -224,7 +354,7 @@ Guarantees hold only if:
 
 coldkeep now supports simulation to evaluate storage impact without writing data.
 
-### Example
+### Example simulation commands
 
 ```bash
 coldkeep simulate store-folder ./data
@@ -247,9 +377,116 @@ coldkeep simulate store file.txt --output json
 - Does not write container files
 - Does not persist data
 - Does not modify real storage
+- Does not validate PostgreSQL-specific locking, advisory lock, or contention semantics
+
+Use simulation for planning, estimation, tests, and workflow validation only.
+It is not proof of physical durability.
 
 Simulation is designed as a **decision tool** for evaluating coldkeep before adoption,
 providing realistic estimates of storage efficiency and expected container usage.
+
+### Operational timeouts
+
+Database operations now run with bounded connection and statement limits by default. The main tuning knobs are:
+
+- `COLDKEEP_DB_CONNECT_TIMEOUT_MS`
+- `COLDKEEP_DB_OPERATION_TIMEOUT_MS`
+- `COLDKEEP_DB_STATEMENT_TIMEOUT_MS`
+- `COLDKEEP_DB_LOCK_TIMEOUT_MS`
+- `COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS`
+- `COLDKEEP_DB_MAX_OPEN_CONNS`
+- `COLDKEEP_DB_MAX_IDLE_CONNS`
+- `COLDKEEP_DB_CONN_MAX_LIFETIME_MS`
+- `COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS`
+
+These limits are intended to keep CLI commands from hanging indefinitely on dead connections, blocked sessions, or stalled lock acquisition.
+
+Current defaults:
+
+- `COLDKEEP_DB_CONNECT_TIMEOUT_MS=5000`
+- `COLDKEEP_DB_OPERATION_TIMEOUT_MS=300000`
+- `COLDKEEP_DB_STATEMENT_TIMEOUT_MS=30000`
+- `COLDKEEP_DB_LOCK_TIMEOUT_MS=5000`
+- `COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS=60000`
+- `COLDKEEP_DB_MAX_OPEN_CONNS=25`
+- `COLDKEEP_DB_MAX_IDLE_CONNS=5`
+- `COLDKEEP_DB_CONN_MAX_LIFETIME_MS=1800000`
+- `COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS=300000`
+
+### Recovery strictness
+
+- `COLDKEEP_STRICT_RECOVERY` (default: `true`) — controls how startup recovery handles suspicious orphan container conflicts.
+  - `true` (default): Recovery aborts startup with an error on suspicious orphan container state.
+    This is intentional and is the trust-first behavior.
+  - `false`: Suspicious conflicts are downgraded to warnings and recovery continues.
+    This relaxed mode is intended for messy environments and known duplicate-retrier/restart-race scenarios (for example during rolling restarts or replaying a partially-applied recovery).
+- Production guidance: keep strict mode enabled (`COLDKEEP_STRICT_RECOVERY=true`).
+- Operational expectation: strict mode can fail startup by design when state is suspicious; treat that as a safety signal, investigate, and recover explicitly.
+
+### Semantic reuse validation
+
+- `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default: `suspicious`) controls whether coldkeep performs an operational semantic validation pass before reusing a `COMPLETED` logical file row.
+- Operationally, semantic validation can pin chunk rows, read/decode payload data from container files, and recompute chunk/file hashes.
+- Modes:
+  - `off`: run structural graph checks only. Fastest mode. Skips semantic payload re-validation, so corruption is more likely to be detected later by explicit `verify` runs.
+  - `suspicious` (default): run semantic validation only when risk signals are present (for example file/chunk retry history or mutable container references). This is the recommended balance for normal production throughput.
+  - `always`: run semantic validation for every completed-file reuse candidate. Strongest inline integrity gate, but highest IO/CPU cost and can noticeably increase store latency on reuse-heavy workloads.
+- If ingestion performance drops unexpectedly after enabling this feature, check whether `COLDKEEP_REUSE_SEMANTIC_VALIDATION=always` is set.
+
+### v1.0 trust model
+
+This section describes how coldkeep's subsystems compose into a coherent
+operator trust model.
+
+- **Startup recovery is part of normal safe operation.**
+  It runs automatically before every substantive command (`store`, `store-folder`,
+  `restore`, `remove`, `gc`, `stats`, `list`, `search`, `verify`) and resolves
+  in-flight write state from prior sessions. It is not an exceptional maintenance
+  step — it is the expected lifecycle entry point. Startup recovery is itself a
+  corrective, state-changing step.
+
+- **`doctor` is the recommended operator health gate and is corrective, not read-only.**
+  It runs recovery + verify + schema/version sanity in one command and may
+  update metadata (abort dangling writes, clear stale sealing markers) before
+  running verification. Use it after startup, before first ingestion in a new
+  environment, and as the standard pre-release gate.
+
+- **`verify` assumes recovered state.**
+  Verification (`verify standard/full/deep`) is layered integrity checking
+  scoped to metadata and payload consistency. It is not a live online-consistency
+  checker during in-flight writes and does not resolve incomplete write state
+  itself — recovery must have run first. The verification phase itself is
+  read-only.
+
+- **Strict recovery is recommended in production.**
+  `COLDKEEP_STRICT_RECOVERY=true` (the default) aborts startup on suspicious
+  orphan container state. Treat strict-mode failures as intentional safety signals
+  that require investigation, not as operational noise to suppress.
+
+- **Semantic reuse validation trades performance for stronger reuse confidence.**
+  `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (default `suspicious`) controls whether
+  coldkeep re-reads and re-hashes payload before accepting a completed-file reuse
+  shortcut:
+  - `off`: graph-only structural checks — fastest, relies on `verify` runs for
+    corruption detection.
+  - `suspicious` (default): semantic checks only when risk signals are present
+    (retry history, mutable container references) — recommended balance.
+  - `always`: semantic checks for every reuse candidate — strongest inline gate,
+    highest read/CPU cost.
+
+- **`pin_count` protects restore safety** by preventing GC/remove from reclaiming
+  data while a restore operation holds active pins.
+
+**Production baseline:** strict recovery (`COLDKEEP_STRICT_RECOVERY=true`) +
+`doctor --standard` as the pre-ingestion readiness gate.
+
+### PostgreSQL assumptions
+
+coldkeep runtime guarantees assume a supported PostgreSQL deployment where:
+
+- schema bootstrap/version state matches this release's expected migration graph
+- standard PostgreSQL transactional and lock semantics are enforced
+- advisory locks are available and reliable for maintenance/coordination paths
 
 ---
 
@@ -262,7 +499,7 @@ coldkeep supports structured output for automation.
 - `text` (default)
 - `json`
 
-### Example
+### Example JSON output commands
 
 ```bash
 coldkeep stats --output json
@@ -271,12 +508,42 @@ coldkeep list --limit 50 --offset 100 --output json
 coldkeep simulate store-folder ./data --output json
 ```
 
-### Notes
+### Output notes
 
 - JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
 - CLI exit codes are now consistent and machine-friendly
-- Errors are classified into usage, verification, and runtime categories
+- Errors are classified into usage, system/runtime, verification, and recovery categories
+- In `--output json` mode, each command invocation emits exactly one canonical JSON payload: success payloads go to stdout, and error payloads go to stderr with a non-zero exit code.
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
+- `startup_recovery` JSON is an event-style diagnostic emitted on stderr (preflight stream), while `doctor --output json` emits a command-style result payload on stdout (`status + command + data`).
+
+### Frozen v1.0 JSON surface
+
+The following JSON fields are frozen for v1.0 and should not change without a
+major-version bump:
+
+- Top-level success envelope fields: `status`, `command`
+- Top-level error envelope fields: `error_class`, `exit_code`
+- Doctor success payload fields under `data`: `recovery`, `verify_level`, `schema_version`, `recovery_status`, `verify_status`, `schema_status`
+- Doctor nested recovery fields under `data.recovery`: `aborted_logical_files`, `aborted_chunks`, `quarantined_missing`, `quarantined_corrupt_tail`, `quarantined_orphan`, `skipped_dir_entries`, `checked_container_record`, `checked_disk_files`, `sealing_completed`, `sealing_quarantined`
+
+### Frozen CLI exit codes (public contract)
+
+The CLI exit-code mapping is frozen for v1.0 compatibility and should not change
+without a major-version bump.
+
+| Exit code | Class | Meaning |
+| --- | --- | --- |
+| `0` | `SUCCESS` | Command completed successfully |
+| `2` | `USAGE` | Validation / user input error (invalid args, unknown command/flag, invalid ID/level) |
+| `1` | `GENERAL` | System/runtime error (I/O, DB, internal command failures not covered below) |
+| `3` | `VERIFY` | Verification failure |
+| `4` | `RECOVERY` | Recovery-phase failure |
+
+For JSON errors (`--output json`), `error_class` matches this table (`USAGE`,
+`GENERAL`, `VERIFY`, `RECOVERY`) and `exit_code` contains the numeric code.
+In particular, `coldkeep doctor --output json` recovery-phase failures are
+guaranteed to return `error_class=RECOVERY` with exit code `4`.
 
 ---
 
@@ -341,7 +608,7 @@ Load it into your shell:
 export $(cat .env | xargs)
 ```
 
-### Docker:
+### Docker
 
 The `/app` mount ensures the `.env` file created by `init` persists on the host.
 
@@ -394,7 +661,7 @@ export $(cat .env | xargs)
 coldkeep store file.txt
 ```
 
-#### Optional: simulate storage impact before storing
+#### Optional: simulate storage impact before storing (local)
 
 ```bash
 coldkeep simulate store file.txt
@@ -419,8 +686,7 @@ docker compose run --rm -v "$PWD:/app" app init
 ```
 
 > **Important:** This creates a `.env` file with your encryption key.  
-> You must pass this file to subsequent commands using `--env-file`.
-
+> You must pass this file to subsequent commands using `--env-file`.  
 > **Security note:** If you lose the key, data cannot be recovered.
 
 ```bash
@@ -431,7 +697,7 @@ docker compose run --rm \
   app store /samples/hello.txt
 ```
 
-#### Optional: simulate storage impact before storing
+#### Optional: simulate storage impact before storing (Docker)
 
 ```bash
 docker compose run --rm \
@@ -440,6 +706,124 @@ docker compose run --rm \
 ```
 
 > Simulation does not write any data and can be safely used before storing files.
+
+---
+
+## Doctor (recommended health gate)
+
+`coldkeep doctor` is the recommended operator health gate and a first-class
+v1.0 CLI primitive. Treat it as the first command to run after startup and as the
+standard pre-release and pre-ingestion readiness gate.
+
+After significant operations, run `coldkeep doctor` to validate system health.
+
+> **Doctor is corrective, not read-only.** It runs recovery before running
+> verification, and may update database metadata — aborting dangling in-flight
+> writes, clearing stale sealing markers — before the verification phase executes.
+> Running doctor on a fresh deployment or after an unclean shutdown is safe and
+> intended: it resolves recoverable state and then confirms integrity.
+
+It runs the checks in this order:
+
+1. Corrective recovery phase (may abort dangling writes and resolve stale state)
+2. Schema/version sanity query
+3. System verification (`standard` by default, or `full` / `deep`)
+
+Execution is intentionally phase-gated: doctor short-circuits on failure.
+If recovery fails, schema/verify are skipped; if schema fails, verify is skipped.
+
+Doctor intentionally runs its own internal recovery phase and does not use the generic startup recovery event path used by commands such as `store`, `restore`, and `verify`.
+
+### Doctor usage
+
+```bash
+coldkeep doctor
+coldkeep doctor --full
+coldkeep doctor --deep --output json
+```
+
+### Text output example
+
+```text
+Doctor health report
+  Overall status:      ok
+  Verify level:        full
+  Phase 1 - Recovery:  ok
+  Phase 2 - Verify:    ok
+  Phase 3 - Schema:    ok (version=5)
+  Note: Recovery phase may have modified metadata
+  Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0
+  Recommended next step: none
+```
+
+### JSON output example
+
+```json
+{
+  "status": "ok",
+  "command": "doctor",
+  "data": {
+    "recovery": {
+      "aborted_logical_files": 0,
+      "aborted_chunks": 0,
+      "quarantined_missing": 0,
+      "quarantined_corrupt_tail": 0,
+      "quarantined_orphan": 0,
+      "skipped_dir_entries": 0,
+      "checked_container_record": 12,
+      "checked_disk_files": 12,
+      "sealing_completed": 0,
+      "sealing_quarantined": 0
+    },
+    "verify_level": "standard",
+    "schema_version": 5,
+    "recovery_status": "ok",
+    "verify_status": "ok",
+    "schema_status": "ok"
+  }
+}
+```
+
+### JSON failure contract (frozen)
+
+For `doctor --output json`, failure handling is intentionally delegated to the
+generic CLI error path.
+
+- On failure, doctor emits exactly one generic error JSON payload on `stderr`
+  and exits non-zero.
+- Doctor does not emit a doctor-shaped `command=data` success payload on
+  failure.
+- Doctor does not emit partial phase data (`recovery`, `verify`,
+  `schema_version`) on failure.
+- Failure phase detail is conveyed only in the generic `message` field
+  (for example: `doctor verify phase failed: ...`).
+
+This contract is covered by integration and command-layer tests and is intended
+to remain stable for automation.
+
+### Frozen v1.0 Doctor Contract
+
+The following product decisions are explicitly frozen for v1.0:
+
+- Default doctor verify level remains `standard`.
+- Success JSON shape remains exactly the current `status + command + data` envelope,
+  with the existing doctor `data` fields unchanged.
+- Nested `data.recovery.*` counters are part of the stable public CLI JSON contract;
+  field names and presence are frozen (subject only to major-version changes).
+- Failure JSON remains owned by the generic CLI error contract (not doctor-specific).
+- Doctor is corrective, not read-only: recovery runs before verify and may mutate
+  metadata to resolve recoverable state.
+
+### Operational guidance
+
+- Run `doctor` after startup, before first ingestion in a new environment.
+- Treat `doctor` as the canonical operator gate command in automation/smoke/release checks.
+- After significant operations, run `coldkeep doctor` to validate system health.
+- Frozen v1.0 product decision: `doctor` is the fast health gate and defaults to `--standard`.
+- Frozen v1.0 text contract: doctor text mode always prints `Note: Recovery phase may have modified metadata`.
+- Prefer `doctor --standard` for frequent checks.
+- Use `doctor --full` for stronger structural assurance.
+- Reserve `doctor --deep` for periodic audits due to higher I/O cost.
 
 ---
 
@@ -464,37 +848,62 @@ consistency and detect corruption across metadata and stored data.
   - Reads container data and recomputes chunk hashes
   - Detects physical data corruption at the byte level
 
-### Usage
+### Verification usage
 
 Verify the entire system:
 
 ```bash
-coldkeep verify system --level standard
-coldkeep verify system --level full
-coldkeep verify system --level deep
+coldkeep verify system --standard
+coldkeep verify system --full
+coldkeep verify system --deep
 ```
 
 Verify a specific file:
 
 ```bash
-coldkeep verify file <file_id> --level standard
-coldkeep verify file <file_id> --level full
-coldkeep verify file <file_id> --level deep
+coldkeep verify file <file_id> --standard
+coldkeep verify file <file_id> --full
+coldkeep verify file <file_id> --deep
 ```
 
 Verification results can be exported in JSON format using `--output json`.
 
-### Notes
+CLI defaults/parsing rules:
+
+- Verify defaults to `standard` when no level is provided.
+- Verify level can be passed as flags (`--standard|--full|--deep`) or as positional level tokens in canonical forms:
+  - `coldkeep verify system <standard|full|deep>`
+  - `coldkeep verify file <file_id> <standard|full|deep>`
+- Do not pass both a verify-level flag and positional level token in the same invocation.
+
+### Verification notes
+
+Verification is a recovered-state checker, not a live online consistency checker.
+It assumes that recovery has already resolved any incomplete or inconsistent state.
+Running verification during active writes may produce transient false positives.
+Operationally, run `verify` after startup recovery has completed and when ingestion
+work is idle or quiesced.
+
+Verification is observational: it assumes recovered state and does not perform
+corrective recovery itself.
+
+The `verify` checks themselves do not mutate stored state. In the CLI, any
+state change observed before verification comes from the automatic startup
+recovery step, not from the verification phase.
+
+Mode guidance:
+
+- `standard`: fast metadata sanity checks
+- `full`: stronger structural checks, moderate I/O
+- `deep`: strongest content proof, highest I/O and runtime cost
 
 Deep verification performs full reads of container files and may be slow,
 especially for large datasets.
 Recommended for periodic integrity audits rather than frequent execution.
 
-
-
 ---
 
-## Deterministic restore (historical note)
+## Deterministic restore
 
 Deterministic restore was introduced in v0.5 and is now part of the
 core storage guarantees defined in the Storage Guarantees section above.
@@ -504,6 +913,57 @@ Integration tests validate:
 - byte-identical restore outputs
 - consistency across GC and recovery
 - deterministic behavior across datasets
+
+They are organized into three tiers:
+
+- correctness: default DB-backed integration coverage
+- stress: concurrency and higher-load coverage, skipped by `-short`
+- long-run: dedicated soak/stability coverage, enabled only with `COLDKEEP_LONG_RUN=1`
+
+### Local test flow for newcomers
+
+For a reproducible local run that mirrors DB-backed integration expectations:
+
+1. Start Postgres:
+
+```bash
+docker compose up -d postgres
+```
+
+1. Set environment variables:
+
+```bash
+export COLDKEEP_TEST_DB=1
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+export COLDKEEP_CODEC=plain
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+```
+
+If you prefer not to use auto-bootstrap, apply `db/schema_postgres.sql` first.
+
+1. Run correctness tier first:
+
+```bash
+go test ./tests -short -count=1 -v -timeout 20m
+```
+
+1. Run the standard stress tier and then full repository tests:
+
+```bash
+go test ./tests -count=1 -v -timeout 20m
+go test ./... -count=1 -timeout 25m
+```
+
+1. Run the dedicated long-run stability tier when needed:
+
+```bash
+COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -count=1 -v -timeout 20m
+```
 
 ---
 
@@ -560,7 +1020,7 @@ Core tables:
   User-visible file entry (name, size, file_hash).
 
 - **chunk**  
-  Logical identity of a content-addressed chunk (chunk_hash, size, ref_count).
+  Logical identity of a content-addressed chunk (chunk_hash, size, live_ref_count, pin_count).
 
 - **blocks**  
   Physical placement and codec metadata for each chunk (codec, block_offset, stored_size, container_id).
@@ -781,6 +1241,17 @@ and require a running PostgreSQL instance.
 
 store -> stats -> list -> restore -> dedup check.
 
+By default, smoke uses an isolated temporary storage directory and cleans it up
+on exit. This avoids permission/stale-state interference from repository-local
+`storage/containers` during repeated local runs. To persist smoke storage
+artifacts, set `COLDKEEP_STORAGE_DIR` explicitly.
+
+Smoke also enables quiet healthy startup recovery output by default
+(`COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY=1`), so repeated healthy startup
+recovery internals do not flood logs. Set
+`COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY=0` (or `false`) to force full startup
+recovery log replay during smoke.
+
 #### Local
 
 ``` bash
@@ -799,7 +1270,7 @@ bash scripts/smoke.sh
 
 This option truncates smoke tables and clears `COLDKEEP_STORAGE_DIR` before running.
 
-#### Docker
+#### Smoke in Docker
 
 ``` bash
 docker compose up -d postgres
@@ -819,6 +1290,66 @@ docker compose run --rm \
 Database configuration is read from environment variables\
 (see `docker-compose.yml` for defaults).
 
+On PostgreSQL connections, coldkeep validates that `schema_version` exists and
+is up to date (`>= 5`) during startup.
+
+- Default: schema must already be initialized (apply `db/schema_postgres.sql`).
+- Optional bootstrap: set `COLDKEEP_DB_AUTO_BOOTSTRAP=true` to auto-apply the
+  embedded PostgreSQL schema if `schema_version` is missing.
+
+### First-run PostgreSQL behavior
+
+Startup uses a strict default for correctness.
+
+- If `schema_version` is missing and `COLDKEEP_DB_AUTO_BOOTSTRAP` is not set to
+  `true`, coldkeep exits with an error.
+- The error is expected on a brand-new PostgreSQL database that has not been
+  initialized yet.
+
+You can choose one of two setup modes:
+
+1. Explicit setup (default)
+
+``` bash
+psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
+./coldkeep stats
+```
+
+1. Self-bootstrap on first run
+
+``` bash
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+./coldkeep stats
+```
+
+If you hit the first-run failure, use either of the two modes above and rerun
+the command.
+
+### Troubleshooting: first run fails on PostgreSQL
+
+If startup fails with:
+
+``` text
+postgres schema is not initialized (missing schema_version table); apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true
+```
+
+it means the target PostgreSQL database is reachable, but its schema has not
+been initialized yet.
+
+Fix with one of these options:
+
+1. Explicit init (recommended default)
+
+``` bash
+psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
+```
+
+1. Enable auto-bootstrap for first run
+
+``` bash
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+```
+
 Storage is written to:
 
 ./storage/
@@ -829,6 +1360,7 @@ Additional environment variables used in development:
 
 - COLDKEEP_STORAGE_DIR
 - COLDKEEP_SAMPLES_DIR
+- COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY
 
 ---
 
@@ -915,6 +1447,9 @@ class of failure until the system becomes fully trustworthy.
 
 - **v0.9 — Internal Hardening**  
   Improve reliability, simplify internals, and finalize implementation details.
+
+- **v0.10 — Trust Validation Phase**  
+  Validate guarantees under adversarial conditions and eliminate remaining correctness risks.
 
 - **v1.0 — Storage Engine Stable**  
   Coldkeep becomes a trustworthy storage engine for real cold backups.

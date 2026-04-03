@@ -1,25 +1,28 @@
 package maintenance
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
+var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
+	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
+	return err
+}
+
 // GCResult contains structured metadata about a GC run.
+// Non-dry-run GC is state-changing: it deletes unreferenced metadata rows and
+// container files. Dry-run is read-only and only reports what would be removed.
 type GCResult struct {
 	DryRun             bool     `json:"dry_run"`
 	AffectedContainers int      `json:"affected_containers"`
 	ContainerFilenames []string `json:"container_filenames"`
-}
-
-func RunGC(dryRun bool) error {
-	_, err := RunGCWithContainersDirResult(dryRun, container.ContainersDir)
-	return err
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
@@ -35,11 +38,13 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		return GCResult{}, fmt.Errorf("failed to connect to DB: %w", err)
 	}
 	defer func() { _ = dbconn.Close() }()
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	// Attempt to acquire advisory lock to ensure only one GC runs at a time
 	var locked bool
 
-	err = dbconn.QueryRow("SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
+	err = dbconn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", gcAdvisoryLockID).Scan(&locked)
 	if err != nil {
 		return GCResult{}, fmt.Errorf("failed to attempt advisory lock: %w", err)
 	}
@@ -49,13 +54,15 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	}
 
 	defer func() {
-		_, err = dbconn.Exec("SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
-		if err != nil {
-			log.Printf("warning: failed to release advisory lock: %v\n", err)
+		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
+		defer cleanupCancel()
+		unlockErr := gcAdvisoryUnlock(cleanupCtx, dbconn)
+		if unlockErr != nil {
+			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
 		}
 	}()
 
-	rows, err := dbconn.Query(`
+	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
 	`)
@@ -74,27 +81,76 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			return GCResult{}, err
 		}
 
-		tx, err := dbconn.Begin()
+		if err := ctx.Err(); err != nil {
+			return GCResult{}, err
+		}
+
+		tx, err := dbconn.BeginTx(ctx, nil)
 		if err != nil {
 			return GCResult{}, err
 		}
 
-		// Re-check inside transaction
 		var stillEmpty bool
-		err = tx.QueryRow(`
-			SELECT 
-				COALESCE(sealed, false) AND NOT EXISTS (
-					SELECT 1
-					FROM blocks b
-					JOIN chunk ch ON ch.id = b.chunk_id
-					WHERE b.container_id = $1
-					AND ch.ref_count > 0
+		if dryRun {
+			// Dry-run keeps a non-blocking check and reports what would be deleted.
+			err = tx.QueryRowContext(ctx, `
+				SELECT 
+					COALESCE(sealed, false) AND NOT EXISTS (
+						SELECT 1
+						FROM blocks b
+						JOIN chunk ch ON ch.id = b.chunk_id
+						WHERE b.container_id = $1
+						AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
+					)
+				FROM container where id = $1
+			`, containerID).Scan(&stillEmpty)
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, err
+			}
+		} else {
+			// Lock the container row first so status/metadata used for deletion is stable.
+			var isSealed bool
+			var isQuarantined bool
+			containerLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
+				SELECT COALESCE(sealed, false), COALESCE(quarantine, false)
+				FROM container
+				WHERE id = $1
+			`)
+			err = tx.QueryRowContext(ctx, containerLockQuery, containerID).Scan(&isSealed, &isQuarantined)
+			if err == sql.ErrNoRows {
+				_ = tx.Rollback()
+				continue
+			}
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, err
+			}
+			if !isSealed || isQuarantined {
+				_ = tx.Rollback()
+				continue
+			}
+
+			// Lock all chunk rows referenced by this container, then evaluate emptiness.
+			chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
+				SELECT ch.live_ref_count, ch.pin_count
+				FROM blocks b
+				JOIN chunk ch ON ch.id = b.chunk_id
+				WHERE b.container_id = $1
+			`)
+			emptyContainerQuery := fmt.Sprintf(`
+				WITH locked_chunks AS (
+					%s
 				)
-			FROM container where id = $1
-		`, containerID).Scan(&stillEmpty)
-		if err != nil {
-			_ = tx.Rollback()
-			return GCResult{}, err
+				SELECT NOT EXISTS (
+					SELECT 1 FROM locked_chunks WHERE live_ref_count > 0 OR pin_count > 0
+				)
+			`, chunkLockQuery)
+			err = tx.QueryRowContext(ctx, emptyContainerQuery, containerID).Scan(&stillEmpty)
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, err
+			}
 		}
 
 		if !stillEmpty {
@@ -112,7 +168,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		}
 
 		// Delete location records and then chunk rows linked to this container.
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			WITH deleted_blocks AS (
 				DELETE FROM blocks
 				WHERE container_id = $1
@@ -121,7 +177,8 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			DELETE FROM chunk c
 			USING deleted_blocks db
 			WHERE c.id = db.chunk_id
-			AND c.ref_count = 0
+			AND c.live_ref_count = 0
+			AND c.pin_count = 0
 		`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
@@ -129,7 +186,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		}
 
 		// Delete container row
-		_, err = tx.Exec(`DELETE FROM container WHERE id = $1`, containerID)
+		_, err = tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return GCResult{}, err

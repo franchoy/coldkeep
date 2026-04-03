@@ -1,6 +1,8 @@
 package listing
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -8,13 +10,14 @@ import (
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
-// SearchFilesResult returns matching records without printing them.
-func SearchFilesResult(args []string) ([]FileRecord, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to DB: %w", err)
+// SearchFilesResultWithDB returns matching records using a caller-managed DB connection.
+func SearchFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error) {
+	if dbconn == nil {
+		return nil, fmt.Errorf("db connection is nil")
 	}
-	defer func() { _ = dbconn.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	limit, offset, err := parsePaginationArgs(args)
 	if err != nil {
@@ -77,7 +80,7 @@ func SearchFilesResult(args []string) ([]FileRecord, error) {
 	query += " ORDER BY created_at DESC"
 	query, params = applyPagination(query, params, paramIndex, limit, offset)
 
-	rows, err := dbconn.Query(query, params...)
+	rows, err := dbconn.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, err
 	}

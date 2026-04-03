@@ -1,6 +1,8 @@
 package listing
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -17,13 +19,14 @@ type FileRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// ListFilesResult returns the raw records without printing them.
-func ListFilesResult(args []string) ([]FileRecord, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to DB: %w", err)
+// ListFilesResultWithDB returns raw records using a caller-managed DB connection.
+func ListFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error) {
+	if dbconn == nil {
+		return nil, fmt.Errorf("db connection is nil")
 	}
-	defer func() { _ = dbconn.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
 
 	limit, offset, err := parsePaginationArgs(args)
 	if err != nil {
@@ -39,7 +42,7 @@ func ListFilesResult(args []string) ([]FileRecord, error) {
 	params := []interface{}{filestate.LogicalFileCompleted}
 	query, params = applyPagination(query, params, 2, limit, offset)
 
-	rows, err := dbconn.Query(query, params...)
+	rows, err := dbconn.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, err
 	}

@@ -11,24 +11,28 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func printCounters(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	var containerCount, chunkCount, fileCount int
 	//list container counter to be checked
-	err := dbconn.QueryRow("SELECT COUNT(*) FROM container").Scan(&containerCount)
+	err := dbconn.QueryRowContext(ctx, "SELECT COUNT(*) FROM container").Scan(&containerCount)
 	if err != nil {
 		return fmt.Errorf("failed to query container count: %w", err)
 	}
 	//list chunk counter to be checked
-	err = dbconn.QueryRow("SELECT COUNT(*) FROM chunk").Scan(&chunkCount)
+	err = dbconn.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunk").Scan(&chunkCount)
 	if err != nil {
 		return fmt.Errorf("failed to query chunk count: %w", err)
 	}
 	//list file counter to be checked
-	err = dbconn.QueryRow("SELECT COUNT(*) FROM logical_file").Scan(&fileCount)
+	err = dbconn.QueryRowContext(ctx, "SELECT COUNT(*) FROM logical_file").Scan(&fileCount)
 	if err != nil {
 		return fmt.Errorf("failed to query logical file count: %w", err)
 	}
@@ -36,10 +40,6 @@ func printCounters(dbconn *sql.DB) error {
 	log.Printf("Starting verification: %d containers, %d chunks, %d logical files to check", containerCount, chunkCount, fileCount)
 
 	return nil
-}
-
-func VerifySystemStandard(dbconn *sql.DB) error {
-	return VerifySystemStandardWithContainersDir(dbconn, container.ContainersDir)
 }
 
 func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
@@ -56,13 +56,18 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 		return err
 	}
 
-	//check that all chunks have correct reference counts (chunk.ref_count should match the actual number of file_chunk references)
+	//check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
 	if err = checkReferenceCounts(dbconn); err != nil {
 		return err
 	}
 
-	//check that there are no orphan chunks (chunks with ref_count > 0 but no file_chunk references)
+	//check that there are no orphan chunks (chunks with live_ref_count > 0 but no file_chunk references)
 	if err = checkOrphanChunks(dbconn); err != nil {
+		return err
+	}
+
+	//check that temporary restore pins remain on COMPLETED chunks only
+	if err = checkPinnedChunkStatus(dbconn); err != nil {
 		return err
 	}
 
@@ -74,10 +79,6 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 	log.Printf("Standard system verification completed successfully.")
 
 	return nil
-}
-
-func VerifySystemFull(dbconn *sql.DB) error {
-	return VerifySystemFullWithContainersDir(dbconn, container.ContainersDir)
 }
 
 func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
@@ -134,10 +135,6 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 	return nil
 }
 
-func VerifySystemDeep(dbconn *sql.DB) error {
-	return VerifySystemDeepWithContainersDir(dbconn, container.ContainersDir)
-}
-
 func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	deep
 	//		standard checks +
@@ -168,8 +165,11 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 
 	// Count all non-quarantined containers that currently hold completed chunks.
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	containerCount := 0
-	containerCountErr := dbconn.QueryRow(`
+	containerCountErr := dbconn.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM container ctr
 		WHERE ctr.quarantine = FALSE
@@ -189,7 +189,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 	processedContainers := 0
 
-	containers, err := dbconn.Query(`
+	containers, err := dbconn.QueryContext(ctx, `
 		SELECT ctr.id, ctr.filename, ctr.current_size, ctr.max_size
 		FROM container ctr
 		WHERE ctr.quarantine = FALSE
@@ -227,7 +227,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 		processContainerErr := func() (retErr error) {
 			//fetch chunks ordered by offset
-			chunks, err := dbconn.Query(`SELECT 
+			chunks, err := dbconn.QueryContext(ctx, `SELECT 
 									b.block_offset,
 									b.stored_size,
 									b.plaintext_size,
@@ -311,7 +311,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 					transformerCache[codecType] = transformer
 				}
 
-				plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+				plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
 					ChunkHash: chunkHash,
 					Descriptor: blocks.Descriptor{
 						Codec:         codecType,
@@ -362,6 +362,16 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 			if err := chunks.Err(); err != nil {
 				appendDeepError(fmt.Errorf("row iteration failed for chunks of container %d: %w", containerID, err))
+			}
+
+			if expectedOffset < fileSize {
+				appendDeepError(fmt.Errorf(
+					"trailing unaccounted bytes in container %d (%s): expected end at %d, file size is %d",
+					containerID,
+					filename,
+					expectedOffset,
+					fileSize,
+				))
 			}
 
 			return nil

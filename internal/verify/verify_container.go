@@ -29,6 +29,7 @@ package verify
 //     and subject to a separate remediation flow.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -36,17 +37,21 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all containers have their files present on disk
 	// and that the file sizes match the DB records
 	log.Printf("Checking container file existence and size consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`
+	rows, err := dbconn.QueryContext(ctx, `
 		SELECT ctr.id, ctr.filename, ctr.current_size
 		FROM container ctr
 		WHERE ctr.quarantine = FALSE
@@ -122,19 +127,25 @@ func checkContainerFile(id int, filename string, currentSize int64, containersDi
 	// indicates either an incomplete recovery or data corruption, not a
 	// normal mid-write race.
 	if actualSize != currentSize {
-		return fmt.Errorf("file size mismatch: expected %d, got %d", currentSize, actualSize)
+		if actualSize > currentSize {
+			return fmt.Errorf("file size mismatch (ghost bytes): expected %d, got %d", currentSize, actualSize)
+		}
+		return fmt.Errorf("file size mismatch (truncated): expected %d, got %d", currentSize, actualSize)
 	}
 
 	return nil
 }
 
 func checkChunkContainerConsistency(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all chunks are correctly associated with their containers
 	// if blocks.container_id exists for a chunk → chunk.status must be COMPLETED
 	log.Printf("Checking chunk-container consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT c.id
+	rows, err := dbconn.QueryContext(ctx, `SELECT c.id
 							FROM chunk c
 							JOIN blocks b ON b.chunk_id = c.id
 							WHERE c.status != $1;`, filestate.ChunkCompleted)
@@ -178,6 +189,9 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 }
 
 func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all sealed containers have a valid hash that matches the file content.
 	// Verify contract assumption 3: for simulated (test) backends the hash stored at
 	// seal time reflects the bytes written by the simulated writer. The check still
@@ -187,7 +201,7 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 	log.Printf("Checking container file hash consistency...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`
+	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename, container_hash, COUNT(*) OVER() AS total_rows
 		FROM container
 		WHERE quarantine = FALSE AND sealed = TRUE
@@ -245,11 +259,14 @@ func checkSealedContainersHash(dbconn *sql.DB, containersDir string) error {
 }
 
 func checkContainerCompleteness(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	//sealed containers should not accept new chunks
 	log.Println("Checking sealed containers for completeness (no new chunks should be added to sealed containers)...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT id
+	rows, err := dbconn.QueryContext(ctx, `SELECT id
 		FROM container
 		WHERE sealed = TRUE
 		AND EXISTS (

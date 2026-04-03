@@ -23,6 +23,23 @@ important than feature velocity.
 
 Major architectural changes should be discussed before implementation.
 
+## v0.10 Focus: Validation Over Features
+
+During the v0.10 phase, contributions should prioritize:
+
+-   strengthening invariants and correctness guarantees
+-   improving stress and adversarial validation coverage, including long-run tests
+-   identifying and reproducing edge-case failures
+-   improving observability and operator-facing behavior
+
+New storage features or architectural changes are discouraged unless they address
+a demonstrated correctness issue.
+
+Changes that alter storage invariants or lifecycle semantics must include
+adversarial or long-run test coverage demonstrating correctness.
+
+This phase is focused on proving system reliability before v1.0.
+
 ------------------------------------------------------------------------
 
 ## Development Requirements
@@ -74,10 +91,20 @@ Initialize the schema:
 psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
 ```
 
+For first run, you can also enable one-time bootstrap behavior instead of
+manually applying the schema:
+
+``` bash
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+```
+
+Without manual schema initialization or this env var, coldkeep will fail fast
+on startup if `schema_version` is missing.
+
 Build:
 
 ``` bash
-go build -o coldkeep ./app
+go build -o coldkeep ./cmd/coldkeep
 ```
 
 Run:
@@ -124,6 +151,13 @@ When modifying storage logic:
 -   Do not introduce non-deterministic container writes
 -   Preserve chunk ordering guarantees
 
+Canonical append lifecycle contract:
+
+-   Use the state machine comment in
+    [`internal/storage/store.go`](internal/storage/store.go) ("Append lifecycle state machine")
+    as the single source of truth for append/rollback/commit-ack/failure handling.
+    Writer implementation comments should remain pointers to this contract.
+
 If unsure, open a discussion before implementing changes.
 
 ------------------------------------------------------------------------
@@ -139,11 +173,88 @@ For v0.9, changes that affect storage, restore, verification, recovery, GC,
 or CLI contracts are expected to pass the full GitHub Actions pipeline:
 
 -   quality
--   integration
+-   integration-correctness
+-   integration-stress
 -   smoke
 -   the aggregate `CI Required Gate`
 
+The repository also has a separate `integration-long-run` soak job for extended
+stability coverage. It is intentionally isolated from the required gate so it
+can be enabled, tuned, or temporarily disabled without changing the standard
+correctness/stress merge path.
+
 If adding storage logic, include at least one restore verification test.
+
+Maintainers preparing a release should also run the
+[`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) flow.
+
+### Quick Start: Local Test Runs For New Contributors
+
+Use this sequence to run tests with the same DB-backed setup used by integration checks.
+
+1. Start Postgres:
+
+``` bash
+docker compose up -d postgres
+```
+
+1. Export integration environment once in your shell:
+
+``` bash
+export COLDKEEP_TEST_DB=1
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+export COLDKEEP_CODEC=plain
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+```
+
+If you prefer not to use auto-bootstrap, apply `db/schema_postgres.sql` before running integration tests.
+
+1. Run correctness tier first (fast signal, stress tests skipped):
+
+``` bash
+go test ./tests -short -count=1 -v -timeout 20m
+```
+
+1. Run full integration suite (includes stress-tier coverage):
+
+``` bash
+go test ./tests -count=1 -v -timeout 20m
+```
+
+1. Run the dedicated long-run stability tier when you need soak coverage:
+
+``` bash
+COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -count=1 -v -timeout 20m
+```
+
+1. Run full repository suite before opening a PR:
+
+``` bash
+go test ./... -count=1 -timeout 25m
+```
+
+Optional focused run while working on doctor behavior:
+
+``` bash
+go test ./tests -run 'TestDoctor(Command|JSONContractConsistency|FailureJSONContractAndStreams)$' -count=1 -v
+```
+
+Recommended focused runs for v0.10 lifecycle/reuse hardening changes:
+
+``` bash
+go test ./tests -run 'TestReuseRefusesSemanticallyCorruptedCompletedFile|TestGCRestorePinRaceContainerNotDeleted|TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock|TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt' -count=1 -v
+```
+
+If you modify startup recovery, semantic reuse validation, verify semantics, restore
+pinning, or GC locking behavior, include at least one targeted regression test
+for the changed contract in your PR.
+
+If your shell does not keep exported variables between commands, prefix each test command with the environment variables directly.
 
 ------------------------------------------------------------------------
 

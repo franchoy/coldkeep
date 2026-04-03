@@ -12,23 +12,28 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
 func checkFileChunkOrdering(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	// Check that all non-empty files have chunk rows and that chunk_order is contiguous from 0 with no duplicates.
 	log.Printf("Checking file chunk ordering continuity and gaps...")
 	var errorList []error
 	var errorCount int
-	rows, err := dbconn.Query(`SELECT id
+	rows, err := dbconn.QueryContext(ctx, `SELECT id
 							FROM logical_file lf
-							WHERE lf.total_size > 0
+							WHERE lf.status = $1
+							  AND lf.total_size > 0
 							  AND NOT EXISTS (
 								SELECT 1
 								FROM file_chunk fc
 								WHERE fc.logical_file_id = lf.id
-							);`)
+							);`, filestate.LogicalFileCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query file chunk ordering: %v", err)
@@ -52,7 +57,7 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
 	}
 
-	rows2, err := dbconn.Query(`WITH ordered_file_chunks AS (
+	rows2, err := dbconn.QueryContext(ctx, `WITH ordered_file_chunks AS (
 									SELECT
 										fc.logical_file_id,
 										fc.chunk_order,
@@ -62,12 +67,13 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 										) - 1 AS expected_order
 									FROM file_chunk fc
 									JOIN logical_file lf ON lf.id = fc.logical_file_id
-									WHERE lf.total_size > 0
+									WHERE lf.status = $1
+									  AND lf.total_size > 0
 								)
 								SELECT logical_file_id, chunk_order, expected_order
 								FROM ordered_file_chunks
 								WHERE chunk_order <> expected_order
-								ORDER BY logical_file_id, expected_order;`)
+								ORDER BY logical_file_id, expected_order;`, filestate.LogicalFileCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query file chunk continuity: %v", err)
@@ -108,11 +114,10 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 	return nil
 }
 
-func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
-	return VerifyFileStandardWithContainersDir(dbconn, fileId, container.ContainersDir)
-}
-
 func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
 	log.Printf("starting standard file verification for logical file with ID %d...", fileId)
 	if fileId <= 0 {
 		return fmt.Errorf("invalid file ID: %d", fileId)
@@ -122,7 +127,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	var id int
 	var status string
 	var totalSize int64
-	err := dbconn.QueryRow(`SELECT id, 
+	err := dbconn.QueryRowContext(ctx, `SELECT id, 
 							status,
 							total_size
 							from logical_file 
@@ -136,7 +141,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	}
 	hasChunks := false
 	//ensure file_chunks exists for the file
-	filechunkrows, err := dbconn.Query(`SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = $1 order by chunk_order asc`, fileId)
+	filechunkrows, err := dbconn.QueryContext(ctx, `SELECT chunk_id, chunk_order FROM file_chunk WHERE logical_file_id = $1 order by chunk_order asc`, fileId)
 	if err != nil {
 		return fmt.Errorf("failed to query file chunks: %w", err)
 	}
@@ -173,7 +178,7 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	}
 
 	//ensure all chunks have status COMPLETED and have associated blocks
-	chunkrows, err := dbconn.Query(`SELECT
+	chunkrows, err := dbconn.QueryContext(ctx, `SELECT
 									c.id,
 									c.status,
 									b.id
@@ -217,8 +222,11 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	return nil
 }
 
-func verifyFileContainersAndOffsets(db *sql.DB, fileID int, containersDir string) error {
-	rows, err := db.Query(`
+func verifyFileContainersAndOffsets(dbconn *sql.DB, fileID int, containersDir string) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	rows, err := dbconn.QueryContext(ctx, `
 		SELECT
 			c.id,
 			b.block_offset,
@@ -320,10 +328,6 @@ func verifyFileContainersAndOffsets(db *sql.DB, fileID int, containersDir string
 	return nil
 }
 
-func VerifyFileFull(dbconn *sql.DB, fileId int) error {
-	return VerifyFileFullWithContainersDir(dbconn, fileId, container.ContainersDir)
-}
-
 func VerifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
 	if err := VerifyFileStandardWithContainersDir(dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("standard verification failed: %w", err)
@@ -338,8 +342,11 @@ func VerifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir s
 	return nil
 }
 
-func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
-	rows, err := db.Query(`
+func verifyFileChunkHashes(dbconn *sql.DB, fileID int, containersDir string) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	rows, err := dbconn.QueryContext(ctx, `
 			SELECT
 			c.id,
 			b.block_offset,
@@ -440,7 +447,7 @@ func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 			transformerCache[codecType] = transformer
 		}
 
-		plaintext, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
 			ChunkHash: expectedChunkHash,
 			Descriptor: blocks.Descriptor{
 				ChunkID:       int64(chunkID),
@@ -489,10 +496,6 @@ func verifyFileChunkHashes(db *sql.DB, fileID int, containersDir string) error {
 	}
 
 	return nil
-}
-
-func VerifyFileDeep(dbconn *sql.DB, fileId int) error {
-	return VerifyFileDeepWithContainersDir(dbconn, fileId, container.ContainersDir)
 }
 
 func VerifyFileDeepWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {

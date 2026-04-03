@@ -5,7 +5,7 @@ import "context"
 // PlainTransformer stores chunks as-is without any transformation.
 type PlainTransformer struct{}
 
-func (t *PlainTransformer) Encode(ctx context.Context, in EncodeInput) (*EncodedBlock, error) {
+func (t *PlainTransformer) Encode(_ context.Context, in EncodeInput) (*EncodedBlock, error) {
 	// Copy plaintext to avoid accidental mutation
 	payload := append([]byte(nil), in.Plaintext...)
 
@@ -23,7 +23,7 @@ func (t *PlainTransformer) Encode(ctx context.Context, in EncodeInput) (*Encoded
 }
 
 // No transformation needed for plain codec, just return the payload as-is.
-func (t *PlainTransformer) Decode(ctx context.Context, in DecodeInput) ([]byte, error) {
+func (t *PlainTransformer) Decode(_ context.Context, in DecodeInput) ([]byte, error) {
 	// Copy payload to avoid mutation
 	out := append([]byte(nil), in.Payload...)
 	return out, nil

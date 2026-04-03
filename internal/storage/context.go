@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -84,6 +86,45 @@ const (
 	S3Storage        StorageContextType = "s3"
 )
 
+// OpenLocalStorage is the recommended library entry point for the local storage
+// backend. It runs startup recovery against containersDir first, then opens a
+// ready StorageContext. Callers are guaranteed that in-progress logical files
+// and chunks have been aborted, partially-sealed containers are resolved, and
+// quarantine invariants hold before any store/restore operation begins.
+//
+// If recovery fails the error is returned and no StorageContext is created.
+// Callers that want fine-grained control over recovery (e.g. to emit a
+// structured report) should call recovery.SystemRecoveryWithContainersDir
+// themselves and then use ParseStorageContext or LoadDefaultStorageContext.
+func OpenLocalStorage(containersDir string) (StorageContext, error) {
+	if err := recovery.SystemRecoveryWithContainersDir(containersDir); err != nil {
+		return StorageContext{}, fmt.Errorf("startup recovery: %w", err)
+	}
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return StorageContext{}, fmt.Errorf("failed to connect to local DB: %w", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		_ = dbconn.Close()
+		return StorageContext{}, fmt.Errorf("writer cannot be nil")
+	}
+	return StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: containersDir,
+	}, nil
+}
+
+// ParseStorageContext constructs a StorageContext for the given backend type.
+// WARNING: this function does NOT run startup recovery. Callers are responsible
+// for ensuring recovery.SystemRecoveryWithContainersDir has been called before
+// performing any write operations, or use OpenLocalStorage which bundles both
+// steps. ParseStorageContext is intentionally low-level to support simulated
+// mode, testing, and advanced callers that manage the startup sequence
+// themselves.
 func ParseStorageContext(value string) (StorageContext, error) {
 	value = strings.TrimSpace(strings.ToLower(value))
 
@@ -95,12 +136,11 @@ func ParseStorageContext(value string) (StorageContext, error) {
 			return StorageContext{}, fmt.Errorf("failed to connect to local DB: %w", err)
 		}
 
-		writer := container.NewLocalWriterWithDir(container.ContainersDir, container.GetContainerMaxSize())
+		writer := container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn)
 		if writer == nil {
 			_ = dbconn.Close()
 			return StorageContext{}, fmt.Errorf("writer cannot be nil")
 		}
-
 		return StorageContext{
 			DB:           dbconn, // metadata store (required)
 			Writer:       writer,
@@ -121,8 +161,21 @@ func ParseStorageContext(value string) (StorageContext, error) {
 			_ = os.Remove(tempDBFile.Name())
 			return StorageContext{}, fmt.Errorf("failed to create simulated DB: %w", err)
 		}
+		// SQLite is process-local and simulated mode performs frequent writes;
+		// a single shared connection avoids spurious "database is locked" errors.
+		sqliteDB.SetMaxOpenConns(1)
+		sqliteDB.SetMaxIdleConns(1)
 
-		if err := sqliteDB.Ping(); err != nil {
+		if err := db.ApplySQLiteSessionPragmas(sqliteDB); err != nil {
+			_ = sqliteDB.Close()
+			_ = os.Remove(tempDBFile.Name())
+			return StorageContext{}, fmt.Errorf("failed to configure simulated DB: %w", err)
+		}
+
+		pingCtx, cancel := db.NewOperationContext(context.Background())
+		defer cancel()
+
+		if err := sqliteDB.PingContext(pingCtx); err != nil {
 			_ = sqliteDB.Close()
 			_ = os.Remove(tempDBFile.Name())
 			return StorageContext{}, fmt.Errorf("failed to ping simulated DB: %w", err)
@@ -166,6 +219,11 @@ func ParseStorageContext(value string) (StorageContext, error) {
 
 // LoadDefaultStorageContext resolves storage context from env with a secure default.
 // Precedence: env (COLDKEEP_STORAGE_CONTEXT) -> default (local).
+//
+// WARNING: this function does NOT run startup recovery. For the local backend,
+// prefer OpenLocalStorage which includes recovery. Use this function only when
+// you have already run recovery separately (e.g. the CLI startup path) or when
+// operating in simulated mode.
 func LoadDefaultStorageContext() (StorageContext, error) {
 	value := utils_env.GetenvOrDefault("COLDKEEP_STORAGE_CONTEXT", string(LocalStorage))
 	if strings.TrimSpace(value) == "" {
