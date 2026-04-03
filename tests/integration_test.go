@@ -3065,6 +3065,154 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 	assertUniqueFileChunkOrders(t, dbconn)
 }
 
+func TestDoctorMutatesRecoverableState(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Store a file to create baseline good state
+	inPath := createTempFile(t, inputDir, "recoverable_test.bin", 256*1024)
+	storeRes := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := jsonMap(t, storeRes, "data")
+	fileID := jsonInt64(t, storeData, "file_id")
+
+	// Seed a PROCESSING logical_file to simulate incomplete store (crash during store)
+	_, err = dbconn.Exec(`
+		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count)
+		VALUES ($1, $2, $3, $4, 0)
+	`, "incomplete_file.bin", "0000000000000000000000000000000000000000000000000000000000000000", 512, filestate.LogicalFileProcessing)
+	if err != nil {
+		t.Fatalf("seed PROCESSING logical_file: %v", err)
+	}
+
+	// Verify the PROCESSING file exists before doctor runs
+	var countBefore int
+	err = dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).Scan(&countBefore)
+	if err != nil {
+		t.Fatalf("count PROCESSING files before doctor: %v", err)
+	}
+	if countBefore != 1 {
+		t.Fatalf("expected 1 PROCESSING logical_file before doctor, got %d", countBefore)
+	}
+
+	dbconn.Close()
+
+	// Run doctor on recoverable state - recovery should abort incomplete file
+	doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if doctorRes.exitCode != 0 {
+		t.Fatalf("doctor failed with exit=%d\nstdout:\n%s\nstderr:\n%s", doctorRes.exitCode, doctorRes.stdout, doctorRes.stderr)
+	}
+
+	doctorPayload, ok := tryParseLastJSONLine(doctorRes.stdout)
+	if !ok {
+		doctorPayload, ok = tryParseLastJSONLine(doctorRes.stdout + "\n" + doctorRes.stderr)
+	}
+	if !ok {
+		t.Fatalf("doctor --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", doctorRes.stdout, doctorRes.stderr)
+	}
+
+	if status, _ := doctorPayload["status"].(string); status != "ok" {
+		t.Fatalf("doctor did not return status=ok: payload=%v", doctorPayload)
+	}
+
+	doctorData, ok := doctorPayload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", doctorPayload)
+	}
+
+	// Assert recovery corrected state: aborted_logical_files > 0
+	recoveryData, ok := doctorData["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing recovery object: payload=%v", doctorPayload)
+	}
+
+	abortedLogicalFilesRaw, ok := recoveryData["aborted_logical_files"]
+	if !ok {
+		t.Fatalf("doctor JSON recovery missing aborted_logical_files: payload=%v", doctorPayload)
+	}
+	abortedLogicalFiles := int64(abortedLogicalFilesRaw.(float64))
+	if abortedLogicalFiles <= 0 {
+		t.Fatalf("expected aborted_logical_files > 0 after recovery, got %d", abortedLogicalFiles)
+	}
+	t.Logf("doctor recovery corrected: aborted %d incomplete logical file(s)", abortedLogicalFiles)
+
+	// Assert verify now passes - recovery should have fixed the state
+	verifyRes := runColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--full", "--output", "json")
+	if verifyRes.exitCode != 0 {
+		t.Fatalf("verify system --full failed after doctor recovery\nexit=%d\nstdout:\n%s\nstderr:\n%s", verifyRes.exitCode, verifyRes.stdout, verifyRes.stderr)
+	}
+
+	verifyPayload, ok := tryParseLastJSONLine(verifyRes.stdout)
+	if !ok {
+		verifyPayload, ok = tryParseLastJSONLine(verifyRes.stdout + "\n" + verifyRes.stderr)
+	}
+	if !ok {
+		t.Fatalf("verify system --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", verifyRes.stdout, verifyRes.stderr)
+	}
+
+	if status, _ := verifyPayload["status"].(string); status != "ok" {
+		t.Fatalf("verify did not return status=ok after recovery: payload=%v", verifyPayload)
+	}
+
+	// Restore originally stored file to validate it's still intact post-recovery
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	restoreRes := runColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileID), restoreDir, "--output", "json")
+	if restoreRes.exitCode != 0 {
+		t.Fatalf("restore failed after doctor: exit=%d\nstdout:\n%s\nstderr:\n%s", restoreRes.exitCode, restoreRes.stdout, restoreRes.stderr)
+	}
+
+	restorePayload, ok := tryParseLastJSONLine(restoreRes.stdout)
+	if !ok {
+		restorePayload, ok = tryParseLastJSONLine(restoreRes.stdout + "\n" + restoreRes.stderr)
+	}
+	if !ok {
+		t.Fatalf("restore --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", restoreRes.stdout, restoreRes.stderr)
+	}
+
+	if status, _ := restorePayload["status"].(string); status != "ok" {
+		t.Fatalf("restore did not return status=ok: payload=%v", restorePayload)
+	}
+
+	// Verify restored file matches original
+	restoredFile := filepath.Join(restoreDir, "recoverable_test.bin")
+	if _, err := os.Stat(restoredFile); err != nil {
+		t.Fatalf("restored file not found: %v", err)
+	}
+
+	originalHash := sha256File(t, inPath)
+	restoredHash := sha256File(t, restoredFile)
+	if originalHash != restoredHash {
+		t.Fatalf("restored file hash mismatch: original=%s restored=%s", originalHash, restoredHash)
+	}
+
+	t.Logf("TestDoctorMutatesRecoverableState PASSED: recovery corrected incomplete file, verify passed, originally stored file restored successfully")
+}
+
 // openRawPostgresDB opens a raw PostgreSQL connection WITHOUT calling
 // EnsurePostgresSchema or any other startup guards. Pass an empty dbName to use
 // the env-configured database. The caller is responsible for closing the returned
