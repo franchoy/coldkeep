@@ -729,6 +729,8 @@ The following product decisions are explicitly frozen for v1.0:
 - Default doctor verify level remains `standard`.
 - Success JSON shape remains exactly the current `status + command + data` envelope,
   with the existing doctor `data` fields unchanged.
+- Nested `data.recovery.*` counters are part of the stable public CLI JSON contract;
+  field names and presence are frozen (subject only to major-version changes).
 - Failure JSON remains owned by the generic CLI error contract (not doctor-specific).
 - Doctor is corrective, not read-only: recovery runs before verify and may mutate
   metadata to resolve recoverable state.
