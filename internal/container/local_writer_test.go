@@ -130,6 +130,21 @@ func TestLockContainerRowNowaitWithRetryUsesBackendAwareQueryWhenDBProvided(t *t
 	}
 }
 
+func TestLockContainerRowNowaitWithRetryZeroAttemptsReturnsContention(t *testing.T) {
+	tx := &stubTx{}
+
+	err := lockContainerRowNowaitWithRetry(tx, nil, 88, 0, time.Millisecond)
+	if !errors.Is(err, ErrContainerLockContention) {
+		t.Fatalf("expected ErrContainerLockContention for zero attempts, got: %v", err)
+	}
+	if tx.execCalls != 0 {
+		t.Fatalf("expected zero exec calls when attempts=0, got %d", tx.execCalls)
+	}
+	if !strings.Contains(err.Error(), "container 88") {
+		t.Fatalf("expected error to mention container id, got: %v", err)
+	}
+}
+
 func TestLocalWriterFinalizePhysicalOnlyWrapsSyncError(t *testing.T) {
 	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
 	w.hasActive = true
