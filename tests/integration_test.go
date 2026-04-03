@@ -5899,6 +5899,139 @@ func TestStoreGCRestore(t *testing.T) {
 	}
 }
 
+// TestStoreGCVerifyRestoreDeleteLoopStability repeats the full file lifecycle
+// enough times to catch drift, leaked state, and cleanup regressions that do
+// not show up in one-shot roundtrip tests.
+func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	const iterations = 50
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	assertCleanedUp := func(iteration int) {
+		t.Helper()
+
+		assertNoProcessingRows(t, dbconn)
+		assertUniqueFileChunkOrders(t, dbconn)
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+			t.Fatalf("iteration %d: verify after cleanup: %v", iteration, err)
+		}
+
+		var remainingChunks int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&remainingChunks); err != nil {
+			t.Fatalf("iteration %d: count chunks after cleanup: %v", iteration, err)
+		}
+		if remainingChunks != 0 {
+			t.Fatalf("iteration %d: expected 0 chunk rows after cleanup, got %d", iteration, remainingChunks)
+		}
+
+		var remainingBlocks int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&remainingBlocks); err != nil {
+			t.Fatalf("iteration %d: count blocks after cleanup: %v", iteration, err)
+		}
+		if remainingBlocks != 0 {
+			t.Fatalf("iteration %d: expected 0 block rows after cleanup, got %d", iteration, remainingBlocks)
+		}
+
+		var remainingContainers int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&remainingContainers); err != nil {
+			t.Fatalf("iteration %d: count containers after cleanup: %v", iteration, err)
+		}
+		if remainingContainers != 0 {
+			t.Fatalf("iteration %d: expected 0 container rows after cleanup, got %d", iteration, remainingContainers)
+		}
+
+		entries, err := os.ReadDir(container.ContainersDir)
+		if err != nil {
+			t.Fatalf("iteration %d: read container dir after cleanup: %v", iteration, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("iteration %d: expected empty container dir after cleanup, found %d entries", iteration, len(entries))
+		}
+	}
+
+	for i := 0; i < iterations; i++ {
+		size := 640*1024 + (i%7)*8192 + i*37
+		path := filepath.Join(inputDir, fmt.Sprintf("stability-%02d.bin", i))
+		wantBytes := make([]byte, size)
+		for j := range wantBytes {
+			wantBytes[j] = byte((j*31 + 7 + i*17 + j/1024) % 251)
+		}
+		if err := os.WriteFile(path, wantBytes, 0o644); err != nil {
+			t.Fatalf("iteration %d: write input file: %v", i, err)
+		}
+		wantHash := sha256File(t, path)
+
+		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), path); err != nil {
+			t.Fatalf("iteration %d: store: %v", i, err)
+		}
+
+		fileID := fetchFileIDByHash(t, dbconn, wantHash)
+
+		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+			t.Fatalf("iteration %d: GC while file is live: %v", i, err)
+		}
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+			t.Fatalf("iteration %d: verify after store+gc: %v", i, err)
+		}
+		assertNoProcessingRows(t, dbconn)
+		assertUniqueFileChunkOrders(t, dbconn)
+
+		outPath := filepath.Join(restoreDir, fmt.Sprintf("stability-%02d.restored.bin", i))
+		if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+			t.Fatalf("iteration %d: restore: %v", i, err)
+		}
+
+		gotBytes := mustRead(t, outPath)
+		if !bytes.Equal(wantBytes, gotBytes) {
+			t.Fatalf("iteration %d: restored bytes differ from original", i)
+		}
+		if gotHash := sha256File(t, outPath); gotHash != wantHash {
+			t.Fatalf("iteration %d: restored hash mismatch: want %s got %s", i, wantHash, gotHash)
+		}
+
+		if err := storage.RemoveFileWithDB(dbconn, fileID); err != nil {
+			t.Fatalf("iteration %d: remove: %v", i, err)
+		}
+
+		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+			t.Fatalf("iteration %d: cleanup GC after remove: %v", i, err)
+		}
+
+		assertCleanedUp(i)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("final full verify after stability loop: %v", err)
+	}
+	assertCleanedUp(iterations)
+}
+
 // TestGCRestorePinRaceContainerNotDeleted validates that GC cannot delete a
 // sealed container while a restore-style chunk pin is in-flight.
 func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
