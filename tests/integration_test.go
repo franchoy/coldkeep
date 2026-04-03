@@ -1605,6 +1605,109 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 		"verify", "system", "--output", "json"), "verify")
 }
 
+// TestEndToEndTrustProof exercises the operator trust narrative end-to-end:
+// store -> crash simulation -> recovery -> doctor -> verify -> restore -> hash compare.
+func TestEndToEndTrustProof(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "trust_proof.bin", 512*1024)
+	originalHash := sha256File(t, inPath)
+
+	storePayload := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := jsonMap(t, storePayload, "data")
+	fileID := jsonInt64(t, storeData, "file_id")
+
+	var danglingID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		VALUES ($1, $2, $3, $4) RETURNING id`,
+		"trust_proof_crash.bin", 4096,
+		"0000000000000000000000000000000000000000000000000000000000000000",
+		filestate.LogicalFileProcessing,
+	).Scan(&danglingID)
+	if err != nil {
+		t.Fatalf("seed dangling PROCESSING logical_file: %v", err)
+	}
+
+	var processingBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).Scan(&processingBefore); err != nil {
+		t.Fatalf("count PROCESSING logical_file rows before recovery: %v", err)
+	}
+	if processingBefore < 1 {
+		t.Fatalf("expected at least one PROCESSING logical_file before recovery, got %d", processingBefore)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before recovery: %v", err)
+	}
+
+	recoveryReport, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("system recovery failed: %v", err)
+	}
+	if recoveryReport.AbortedLogicalFiles < 1 {
+		t.Fatalf("expected recovery to abort at least one dangling logical file, got report=%+v", recoveryReport)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB after recovery: %v", err)
+	}
+	defer dbconn.Close()
+
+	var danglingStatus string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, danglingID).Scan(&danglingStatus); err != nil {
+		t.Fatalf("query dangling logical_file after recovery: %v", err)
+	}
+	if danglingStatus != filestate.LogicalFileAborted {
+		t.Fatalf("expected dangling logical_file status ABORTED after recovery, got %q", danglingStatus)
+	}
+	assertNoProcessingRows(t, dbconn)
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--full", "--output", "json"), "verify")
+
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileID), restoreDir, "--output", "json"), "restore")
+
+	restoredPath := filepath.Join(restoreDir, "trust_proof.bin")
+	if _, err := os.Stat(restoredPath); err != nil {
+		t.Fatalf("restored file not found: %v", err)
+	}
+	restoredHash := sha256File(t, restoredPath)
+	if restoredHash != originalHash {
+		t.Fatalf("restored file hash mismatch: original=%s restored=%s", originalHash, restoredHash)
+	}
+}
+
 func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	requireDB(t)
 
