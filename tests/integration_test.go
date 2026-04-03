@@ -6215,6 +6215,11 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should fail with mismatched aes-gcm key but returned nil")
+	} else {
+		errText := err.Error()
+		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
+			t.Fatalf("expected wrong-key verify error to keep deep aggregate contract, got: %v", err)
+		}
 	}
 
 	restoreDir := filepath.Join(tmp, "restore")
@@ -6224,6 +6229,8 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 	outPath := filepath.Join(restoreDir, "restored.bin")
 	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
 		t.Fatal("restore should fail with mismatched aes-gcm key but returned nil")
+	} else if !strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected wrong-key restore error to mention AEAD authentication failure, got: %v", err)
 	}
 }
 
