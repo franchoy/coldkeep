@@ -1419,10 +1419,7 @@ func TestFinalizeLogicalFileStorageAtomicBoundary(t *testing.T) {
 					t.Fatalf("expected status COMPLETED, got %s", status)
 				}
 			} else {
-				if err == nil {
-					t.Fatalf("expected finalize to fail, but succeeded")
-				}
-				if tc.wantErrSubstr != "" && !strings.Contains(err.Error(), tc.wantErrSubstr) {
+				if err == nil || (tc.wantErrSubstr != "" && !strings.Contains(err.Error(), tc.wantErrSubstr)) {
 					t.Fatalf("expected error containing %q, got: %v", tc.wantErrSubstr, err)
 				}
 
