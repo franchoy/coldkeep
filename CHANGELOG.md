@@ -155,6 +155,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   recoverable PROCESSING logical-file and chunk rows during live workload,
   runs `doctor`, and asserts corrective counters plus preserved restore/verify
   behavior for valid data across repeated rounds
+- Added recovery preservation regression
+  `TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData`:
+  quarantines a truncated active container, proves unrelated live data remains
+  restorable, and verifies new writes avoid the quarantined container
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious

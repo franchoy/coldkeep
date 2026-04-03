@@ -4802,6 +4802,142 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	}
 }
 
+func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	anchorPath := createTempFile(t, inputDir, "recovery-anchor.bin", 600*1024)
+	anchorHash := sha256File(t, anchorPath)
+	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), anchorPath); err != nil {
+		t.Fatalf("store anchor file: %v", err)
+	}
+	anchorID := fetchFileIDByHash(t, dbconn, anchorHash)
+
+	spacerPath := createTempFile(t, inputDir, "recovery-spacer.bin", 600*1024)
+	spacerHash := sha256File(t, spacerPath)
+	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), spacerPath); err != nil {
+		t.Fatalf("store spacer file: %v", err)
+	}
+	spacerID := fetchFileIDByHash(t, dbconn, spacerHash)
+
+	if err := storage.RemoveFileWithDB(dbconn, spacerID); err != nil {
+		t.Fatalf("remove spacer file before recovery damage: %v", err)
+	}
+
+	var damagedContainerID int64
+	var damagedFilename string
+	var dbCurrentSize int64
+	var sealed bool
+	err = dbconn.QueryRow(`
+		SELECT id, filename, current_size, sealed
+		FROM container
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&damagedContainerID, &damagedFilename, &dbCurrentSize, &sealed)
+	if err != nil {
+		t.Fatalf("select active container to damage: %v", err)
+	}
+	if sealed {
+		t.Fatalf("expected newest container to be active/unsealed")
+	}
+
+	damagedPath := filepath.Join(container.ContainersDir, damagedFilename)
+	truncatedSize := dbCurrentSize - 32
+	if truncatedSize <= 0 {
+		t.Fatalf("invalid truncation target for container size %d", dbCurrentSize)
+	}
+	if err := os.Truncate(damagedPath, truncatedSize); err != nil {
+		t.Fatalf("truncate active container tail: %v", err)
+	}
+
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("system recovery: %v", err)
+	}
+	if report.QuarantinedCorruptTail < 1 {
+		t.Fatalf("expected corrupt-tail quarantine count >= 1, got %d", report.QuarantinedCorruptTail)
+	}
+
+	var quarantine bool
+	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, damagedContainerID).Scan(&quarantine)
+	if err != nil {
+		t.Fatalf("query damaged container quarantine: %v", err)
+	}
+	if !quarantine {
+		t.Fatalf("expected damaged active container to be quarantined")
+	}
+
+	anchorOut := filepath.Join(restoreDir, "recovery-anchor.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, anchorID, anchorOut); err != nil {
+		t.Fatalf("restore anchor after recovery quarantine: %v", err)
+	}
+	if gotHash := sha256File(t, anchorOut); gotHash != anchorHash {
+		t.Fatalf("anchor hash mismatch after recovery quarantine: want %s got %s", anchorHash, gotHash)
+	}
+
+	newPath := createTempFile(t, inputDir, "recovery-after-quarantine.bin", 320*1024)
+	newHash := sha256File(t, newPath)
+	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), newPath); err != nil {
+		t.Fatalf("store after quarantining damaged active container: %v", err)
+	}
+	newID := fetchFileIDByHash(t, dbconn, newHash)
+
+	var restoredNewContainerID int64
+	err = dbconn.QueryRow(`
+		SELECT DISTINCT b.container_id
+		FROM blocks b
+		JOIN file_chunk fc ON fc.chunk_id = b.chunk_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY b.container_id DESC
+		LIMIT 1
+	`, newID).Scan(&restoredNewContainerID)
+	if err != nil {
+		t.Fatalf("query container used for post-quarantine store: %v", err)
+	}
+	if restoredNewContainerID == damagedContainerID {
+		t.Fatalf("post-recovery store reused quarantined damaged container")
+	}
+
+	newOut := filepath.Join(restoreDir, "recovery-after-quarantine.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, newID, newOut); err != nil {
+		t.Fatalf("restore new file after quarantining damaged container: %v", err)
+	}
+	if gotHash := sha256File(t, newOut); gotHash != newHash {
+		t.Fatalf("new file hash mismatch after post-recovery store: want %s got %s", newHash, gotHash)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify full after quarantining damaged active container: %v", err)
+	}
+	assertNoProcessingRows(t, dbconn)
+}
+
 func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t *testing.T) {
 	requireDB(t)
 
