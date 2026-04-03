@@ -460,15 +460,29 @@ echo "[smoke] validating doctor JSON output contract"
 DOCTOR_JSON=$(coldkeep doctor --output json)
 DOCTOR_PAYLOAD=$(echo "$DOCTOR_JSON" | grep -E '^\{.*\}$' | tail -n1)
 
-# Doctor JSON must expose nested data shape used by automation.
+# Frozen v1.0 doctor JSON contract:
+# - success envelope keys are exactly: status, command, data
+# - doctor data keys are exactly: recovery, verify_level, schema_version,
+#   recovery_status, verify_status, schema_status
+# - nested recovery object includes the full stable counter set
 if ! echo "$DOCTOR_PAYLOAD" | jq -e '
   .status == "ok"
   and .command == "doctor"
-  and .data.recovery_status
-  and .data.verify_status
-  and .data.schema_status
-  and .data.verify_level
-  and .data.recovery
+  and ((keys | sort) == ["command", "data", "status"])
+  and ((.data | keys | sort) == ["recovery", "recovery_status", "schema_status", "schema_version", "verify_level", "verify_status"])
+  and (.data.recovery | type == "object")
+  and ((.data.recovery | keys | sort) == [
+    "aborted_chunks",
+    "aborted_logical_files",
+    "checked_container_record",
+    "checked_disk_files",
+    "quarantined_corrupt_tail",
+    "quarantined_missing",
+    "quarantined_orphan",
+    "sealing_completed",
+    "sealing_quarantined",
+    "skipped_dir_entries"
+  ])
   and (.data.recovery.aborted_logical_files != null)
   and (.data.recovery.aborted_chunks != null)
   and (.data.recovery.quarantined_missing != null)
@@ -506,11 +520,21 @@ DOCTOR_FULL_PAYLOAD=$(echo "$DOCTOR_FULL_JSON" | grep -E '^\{.*\}$' | tail -n1)
 if ! echo "$DOCTOR_FULL_PAYLOAD" | jq -e '
   .status == "ok"
   and .command == "doctor"
-  and .data.recovery_status
-  and .data.verify_status
-  and .data.schema_status
-  and .data.verify_level
-  and .data.recovery
+  and ((keys | sort) == ["command", "data", "status"])
+  and ((.data | keys | sort) == ["recovery", "recovery_status", "schema_status", "schema_version", "verify_level", "verify_status"])
+  and (.data.recovery | type == "object")
+  and ((.data.recovery | keys | sort) == [
+    "aborted_chunks",
+    "aborted_logical_files",
+    "checked_container_record",
+    "checked_disk_files",
+    "quarantined_corrupt_tail",
+    "quarantined_missing",
+    "quarantined_orphan",
+    "sealing_completed",
+    "sealing_quarantined",
+    "skipped_dir_entries"
+  ])
   and (.data.recovery.aborted_logical_files != null)
   and (.data.recovery.aborted_chunks != null)
   and (.data.recovery.quarantined_missing != null)
