@@ -20,7 +20,7 @@ during the v0.10 trust-validation phase.
 | Atomic restore operations | Restore path writes temp + fsync + atomic rename | `TestStoreGCRestore`, `TestSampleDatasetEndToEnd` | covered |
 | Safe concurrent storage operations | Verify catches graph/reference corruption; transactional claims/retries in write path | `TestConcurrentStoreSameFile`, `TestConcurrentStoreSameChunk`, `TestConcurrentStoreFolderStress`, `TestRepeatedJitteredStoreGCRestoreInterleaving`, `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving` | covered |
 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
-| Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload` | covered |
+| Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload`, `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData` | covered |
 
 ## Open Work Tracking
 

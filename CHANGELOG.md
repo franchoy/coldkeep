@@ -150,6 +150,11 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestRandomizedLongRunLifecycleSoak`: runs repeated store/verify/gc/restore/
   recovery/remove cycles under deterministic randomization and is included in
   the CI long-run gate alongside `TestStoreGCVerifyRestoreDeleteLoopStability`
+- Added repeated doctor convergence regression
+  `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData`: injects
+  recoverable PROCESSING logical-file and chunk rows during live workload,
+  runs `doctor`, and asserts corrective counters plus preserved restore/verify
+  behavior for valid data across repeated rounds
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious

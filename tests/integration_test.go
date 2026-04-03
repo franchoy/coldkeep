@@ -3540,6 +3540,155 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 	t.Logf("TestDoctorMutatesRecoverableState PASSED: recovery corrected incomplete file, verify passed, originally stored file restored successfully")
 }
 
+func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	anchorPath := createTempFile(t, inputDir, "doctor_anchor.bin", 512*1024)
+	anchorHash := sha256File(t, anchorPath)
+	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), anchorPath); err != nil {
+		t.Fatalf("store anchor file: %v", err)
+	}
+	anchorID := fetchFileIDByHash(t, dbconn, anchorHash)
+
+	const rounds = 6
+	for round := 0; round < rounds; round++ {
+		roundPath := createTempFile(t, inputDir, fmt.Sprintf("doctor_round_%02d.bin", round), 256*1024+round*65537)
+		roundHash := sha256File(t, roundPath)
+		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), roundPath); err != nil {
+			t.Fatalf("round %d store live file: %v", round, err)
+		}
+		roundFileID := fetchFileIDByHash(t, dbconn, roundHash)
+
+		var danglingLogicalID int64
+		err = dbconn.QueryRow(`
+			INSERT INTO logical_file (original_name, total_size, file_hash, status)
+			VALUES ($1, $2, $3, $4) RETURNING id`,
+			fmt.Sprintf("doctor_dangling_%02d.bin", round),
+			int64(2048+round),
+			fmt.Sprintf("%064x", round+1),
+			filestate.LogicalFileProcessing,
+		).Scan(&danglingLogicalID)
+		if err != nil {
+			t.Fatalf("round %d inject dangling PROCESSING logical_file: %v", round, err)
+		}
+
+		var danglingChunkID int64
+		err = dbconn.QueryRow(`
+			INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
+			VALUES ($1, $2, $3, 0, 0, 0) RETURNING id`,
+			fmt.Sprintf("doctor-processing-chunk-%02d", round),
+			int64(4096+round),
+			filestate.ChunkProcessing,
+		).Scan(&danglingChunkID)
+		if err != nil {
+			t.Fatalf("round %d inject PROCESSING chunk: %v", round, err)
+		}
+
+		if err := dbconn.Close(); err != nil {
+			t.Fatalf("round %d close db before doctor: %v", round, err)
+		}
+
+		doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+		doctorPayload := assertCLIJSONOK(t, doctorRes, "doctor")
+		doctorData := jsonMap(t, doctorPayload, "data")
+		recoveryData := jsonMap(t, doctorData, "recovery")
+
+		if got := jsonInt64(t, recoveryData, "aborted_logical_files"); got < 1 {
+			t.Fatalf("round %d expected aborted_logical_files >= 1, got %d recovery=%v", round, got, recoveryData)
+		}
+		if got := jsonInt64(t, recoveryData, "aborted_chunks"); got < 1 {
+			t.Fatalf("round %d expected aborted_chunks >= 1, got %d recovery=%v", round, got, recoveryData)
+		}
+		if got, _ := doctorData["verify_status"].(string); got != "ok" {
+			t.Fatalf("round %d expected doctor verify_status=ok, got %q payload=%v", round, got, doctorPayload)
+		}
+
+		dbconn, err = db.ConnectDB()
+		if err != nil {
+			t.Fatalf("round %d reconnect db after doctor: %v", round, err)
+		}
+
+		var danglingLogicalStatus string
+		if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, danglingLogicalID).Scan(&danglingLogicalStatus); err != nil {
+			t.Fatalf("round %d query dangling logical file after doctor: %v", round, err)
+		}
+		if danglingLogicalStatus != filestate.LogicalFileAborted {
+			t.Fatalf("round %d expected dangling logical file ABORTED, got %q", round, danglingLogicalStatus)
+		}
+
+		var danglingChunkStatus string
+		if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, danglingChunkID).Scan(&danglingChunkStatus); err != nil {
+			t.Fatalf("round %d query dangling chunk after doctor: %v", round, err)
+		}
+		if danglingChunkStatus != filestate.ChunkAborted {
+			t.Fatalf("round %d expected dangling chunk ABORTED, got %q", round, danglingChunkStatus)
+		}
+
+		anchorOut := filepath.Join(restoreDir, fmt.Sprintf("doctor-anchor-%02d.restored.bin", round))
+		if err := storage.RestoreFileWithDB(dbconn, anchorID, anchorOut); err != nil {
+			t.Fatalf("round %d restore anchor after doctor: %v", round, err)
+		}
+		if gotHash := sha256File(t, anchorOut); gotHash != anchorHash {
+			t.Fatalf("round %d anchor hash mismatch after doctor: want %s got %s", round, anchorHash, gotHash)
+		}
+
+		roundOut := filepath.Join(restoreDir, fmt.Sprintf("doctor-live-%02d.restored.bin", round))
+		if err := storage.RestoreFileWithDB(dbconn, roundFileID, roundOut); err != nil {
+			t.Fatalf("round %d restore live file after doctor: %v", round, err)
+		}
+		if gotHash := sha256File(t, roundOut); gotHash != roundHash {
+			t.Fatalf("round %d live file hash mismatch after doctor: want %s got %s", round, roundHash, gotHash)
+		}
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+			t.Fatalf("round %d verify full after doctor: %v", round, err)
+		}
+
+		if err := storage.RemoveFileWithDB(dbconn, roundFileID); err != nil {
+			t.Fatalf("round %d cleanup remove live file: %v", round, err)
+		}
+		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+			t.Fatalf("round %d cleanup gc: %v", round, err)
+		}
+		assertNoProcessingRows(t, dbconn)
+	}
+
+	finalAnchorOut := filepath.Join(restoreDir, "doctor-anchor.final.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, anchorID, finalAnchorOut); err != nil {
+		t.Fatalf("restore anchor after repeated doctor convergence: %v", err)
+	}
+	if gotHash := sha256File(t, finalAnchorOut); gotHash != anchorHash {
+		t.Fatalf("anchor hash mismatch after repeated doctor convergence: want %s got %s", anchorHash, gotHash)
+	}
+}
+
 // openRawPostgresDB opens a raw PostgreSQL connection WITHOUT calling
 // EnsurePostgresSchema or any other startup guards. Pass an empty dbName to use
 // the env-configured database. The caller is responsible for closing the returned
