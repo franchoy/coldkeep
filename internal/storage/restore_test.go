@@ -880,3 +880,98 @@ func TestRestoreFailsWhenOutputParentPathIsFile(t *testing.T) {
 		t.Fatalf("expected create-parent-directories error contract, got: %v", err)
 	}
 }
+
+func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission-denial test when running as root")
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("create-temp-permission-denied")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "create-temp-perm.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash, int64(len(payload)), filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"create-temp-perm-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID, chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	// Create the output parent directory, then revoke write permission so os.CreateTemp
+	// fails while os.MkdirAll (on a pre-existing dir) still succeeds.
+	outputBase := t.TempDir()
+	outputParentDir := filepath.Join(outputBase, "restricted")
+	if err := os.MkdirAll(outputParentDir, 0o755); err != nil {
+		t.Fatalf("create restricted dir: %v", err)
+	}
+	if err := os.Chmod(outputParentDir, 0o000); err != nil {
+		t.Fatalf("chmod restricted dir: %v", err)
+	}
+	// Restore permissions before TempDir cleanup removes outputBase.
+	t.Cleanup(func() { _ = os.Chmod(outputParentDir, 0o755) })
+
+	outputTarget := filepath.Join(outputParentDir, "restored.bin")
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	err = RestoreFileWithStorageContext(sgctx, fileID, outputTarget)
+	if err == nil || !strings.Contains(err.Error(), "create temporary output file for") {
+		t.Fatalf("expected create-temp-file error contract, got: %v", err)
+	}
+}
