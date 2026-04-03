@@ -84,6 +84,8 @@ type doctorReport struct {
 // Default remains `standard`; operators can opt into `--full` / `--deep`.
 const doctorDefaultVerifyLevel = verify.VerifyStandard
 
+const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
+
 type cliError struct {
 	code int
 	msg  string
@@ -585,6 +587,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 	_, _ = fmt.Fprintln(os.Stdout, "  FileID: "+strconv.FormatInt(result.FileID, 10))
 	_, _ = fmt.Fprintln(os.Stdout, "  SHA256: "+result.FileHash)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
 
@@ -635,6 +638,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout, "Folder stored successfully: "+path)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
 
@@ -677,6 +681,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	fmt.Printf("File restored successfully: id=%d output=%s\n", result.FileID, result.OutputPath)
 	fmt.Printf("  Name: %s\n", result.OriginalName)
 	fmt.Printf("  SHA256: %s\n", result.RestoredHash)
+	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
 	return nil
 }
 
@@ -717,6 +722,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 	fmt.Printf("Logical file removed: id=%d\n", result.FileID)
 	fmt.Printf("  Removed mappings: %d\n", result.RemovedMappings)
+	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
 	return nil
 }
 
@@ -757,6 +763,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 	if result.AffectedContainers == 0 {
 		fmt.Println("GC completed. No containers eligible for deletion.")
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
 
@@ -765,6 +772,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			fmt.Printf("[DRY-RUN] Would delete container: %s\n", filename)
 		}
 		fmt.Printf("GC dry-run completed. Containers eligible for deletion: %d\n", result.AffectedContainers)
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
 
@@ -772,6 +780,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		fmt.Printf("Deleted container: %s\n", filename)
 	}
 	fmt.Printf("GC completed. Containers deleted: %d\n", result.AffectedContainers)
+	fmt.Printf("Hint: %s\n", doctorOperationalHint)
 	return nil
 }
 
@@ -1367,6 +1376,7 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Operator quick check:")
 	fmt.Println("  coldkeep doctor --standard")
+	fmt.Println("  After significant operations, run coldkeep doctor to validate system health.")
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")

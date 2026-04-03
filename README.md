@@ -605,6 +605,8 @@ docker compose run --rm \
 v1.0 CLI primitive. Treat it as the first command to run after startup and as the
 standard pre-release and pre-ingestion readiness gate.
 
+After significant operations, run `coldkeep doctor` to validate system health.
+
 > **Doctor is corrective, not read-only.** It runs recovery before running
 > verification, and may update database metadata — aborting dangling in-flight
 > writes, clearing stale sealing markers — before the verification phase executes.
@@ -701,6 +703,7 @@ The following product decisions are explicitly frozen for v1.0:
 
 - Run `doctor` after startup, before first ingestion in a new environment.
 - Treat `doctor` as the canonical operator gate command in automation/smoke/release checks.
+- After significant operations, run `coldkeep doctor` to validate system health.
 - Frozen v1.0 product decision: `doctor` is the fast health gate and defaults to `--standard`.
 - Frozen v1.0 text contract: doctor text mode always prints `Note: Recovery phase may have modified metadata`.
 - Prefer `doctor --standard` for frequent checks.
