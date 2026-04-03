@@ -2,11 +2,25 @@ package db
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"strings"
+	"sync"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// dummyDriver is a minimal sql.Driver stub that is neither sqlite3 nor pq,
+// so BackendFromDB returns BackendUnknown for connections opened with it.
+type dummyDriver struct{}
+
+func (d dummyDriver) Open(_ string) (driver.Conn, error) { return nil, nil }
+
+var registerOnce sync.Once
+
+func registerDummyDriver() {
+	registerOnce.Do(func() { sql.Register("dummy", dummyDriver{}) })
+}
 
 func TestRunMigrationsFailsWhenDBIsNil(t *testing.T) {
 	err := RunMigrations(nil)
@@ -31,6 +45,20 @@ func TestRunMigrationsSucceedsOnSQLiteInMemory(t *testing.T) {
 
 	if err := RunMigrations(dbconn); err != nil {
 		t.Fatalf("expected RunMigrations to succeed on sqlite, got: %v", err)
+	}
+}
+
+func TestRunMigrationsRejectsNonSQLiteBackend(t *testing.T) {
+	registerDummyDriver()
+	dbconn, err := sql.Open("dummy", "")
+	if err != nil {
+		t.Fatalf("open dummy db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	err = RunMigrations(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "RunMigrations requires sqlite backend") {
+		t.Fatalf("expected non-sqlite error contract, got: %v", err)
 	}
 }
 
