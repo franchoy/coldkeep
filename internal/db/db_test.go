@@ -1,8 +1,11 @@
 package db
 
 import (
+	"database/sql"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestLoadSessionTimeoutFallsBackOnNonPositiveValues(t *testing.T) {
@@ -95,5 +98,45 @@ func TestLoadConnMaxIdleTimeFallbackAndOverride(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS", "90000")
 	if got := loadConnMaxIdleTime(); got != 90*time.Second {
 		t.Fatalf("expected conn max idle time 90s, got %v", got)
+	}
+}
+
+func TestApplySQLiteSessionPragmasSetsBusyTimeout(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := ApplySQLiteSessionPragmas(dbconn); err != nil {
+		t.Fatalf("apply sqlite session pragmas: %v", err)
+	}
+
+	var busyTimeout int
+	if err := dbconn.QueryRow(`PRAGMA busy_timeout;`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("query busy_timeout pragma: %v", err)
+	}
+
+	want := int(DefaultStatementTimeout() / time.Millisecond)
+	if want <= 0 {
+		want = 1
+	}
+	if busyTimeout != want {
+		t.Fatalf("unexpected busy_timeout: got %d want %d", busyTimeout, want)
+	}
+}
+
+func TestApplySQLiteSessionPragmasFailsWhenDBIsClosed(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close sqlite db: %v", err)
+	}
+
+	err = ApplySQLiteSessionPragmas(dbconn)
+	if err == nil {
+		t.Fatalf("expected error when applying pragmas to closed db")
 	}
 }
