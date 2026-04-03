@@ -202,6 +202,7 @@ docker compose up -d postgres
 
 ``` bash
 export COLDKEEP_TEST_DB=1
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 export COLDKEEP_CODEC=plain
 export DB_HOST=127.0.0.1
 export DB_PORT=5432
@@ -210,6 +211,8 @@ export DB_PASSWORD=coldkeep
 export DB_NAME=coldkeep
 export DB_SSLMODE=disable
 ```
+
+If you prefer not to use auto-bootstrap, apply `db/schema_postgres.sql` before running integration tests.
 
 1. Run correctness tier first (fast signal, stress tests skipped):
 
