@@ -62,3 +62,17 @@ func TestSearchFilesFailsWhenOffsetArgIsMissing(t *testing.T) {
 		t.Fatalf("expected missing-offset error contract, got: %v", err)
 	}
 }
+
+func TestSearchFilesFailsWhenMinSizeArgIsInvalid(t *testing.T) {
+	_, err := SearchFilesResultWithDB(openTestDB(t), []string{"--min-size", "-1"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --min-size value") {
+		t.Fatalf("expected invalid-min-size error contract, got: %v", err)
+	}
+}
+
+func TestSearchFilesFailsWhenMaxSizeArgIsInvalid(t *testing.T) {
+	_, err := SearchFilesResultWithDB(openTestDB(t), []string{"--max-size", "not-a-number"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --max-size value") {
+		t.Fatalf("expected invalid-max-size error contract, got: %v", err)
+	}
+}
