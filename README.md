@@ -420,6 +420,14 @@ operator trust model.
 **Production baseline:** strict recovery (`COLDKEEP_STRICT_RECOVERY=true`) +
 `doctor --standard` as the pre-ingestion readiness gate.
 
+### PostgreSQL assumptions
+
+coldkeep runtime guarantees assume a supported PostgreSQL deployment where:
+
+- schema bootstrap/version state matches this release's expected migration graph
+- standard PostgreSQL transactional and lock semantics are enforced
+- advisory locks are available and reliable for maintenance/coordination paths
+
 ---
 
 ## CLI Output (v0.8)

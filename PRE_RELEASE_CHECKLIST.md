@@ -67,6 +67,14 @@ docker compose run --rm app doctor
 
 Expected: no manual local state is required beyond documented setup, and basic commands succeed.
 
+## 6) PostgreSQL assumptions note
+
+Operator expectation surface for supported PostgreSQL deployments:
+
+- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. With `COLDKEEP_DB_AUTO_BOOTSTRAP=true`, it may create/validate required schema objects; with bootstrap disabled, missing schema should fail fast.
+- Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
+- Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
+
 ## Sign-off
 
 - [ ] Smoke passed
