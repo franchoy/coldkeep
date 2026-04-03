@@ -231,6 +231,87 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	}
 }
 
+func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
+	originalRecovery := doctorRecoveryPhase
+	originalSchema := doctorSchemaVersionPhase
+	originalVerify := doctorVerifyPhase
+	t.Cleanup(func() {
+		doctorRecoveryPhase = originalRecovery
+		doctorSchemaVersionPhase = originalSchema
+		doctorVerifyPhase = originalVerify
+	})
+
+	schemaCalled := false
+	verifyCalled := false
+
+	doctorRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, errors.New("recovery unavailable")
+	}
+	doctorSchemaVersionPhase = func() (int64, error) {
+		schemaCalled = true
+		return 5, nil
+	}
+	doctorVerifyPhase = func(string, string, int, verify.VerifyLevel) error {
+		verifyCalled = true
+		return nil
+	}
+
+	err := runDoctorCommand(parsedCommandLine{method: "doctor", flags: map[string][]string{}}, outputModeText)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := classifyExitCode(err); got != exitRecovery {
+		t.Fatalf("expected recovery exit code %d, got %d", exitRecovery, got)
+	}
+	if !strings.Contains(err.Error(), "doctor recovery phase failed") {
+		t.Fatalf("expected recovery phase failure message, got: %v", err)
+	}
+	if schemaCalled {
+		t.Fatal("schema phase should not run after recovery failure")
+	}
+	if verifyCalled {
+		t.Fatal("verify phase should not run after recovery failure")
+	}
+}
+
+func TestRunDoctorCommandShortCircuitsAfterSchemaFailure(t *testing.T) {
+	originalRecovery := doctorRecoveryPhase
+	originalSchema := doctorSchemaVersionPhase
+	originalVerify := doctorVerifyPhase
+	t.Cleanup(func() {
+		doctorRecoveryPhase = originalRecovery
+		doctorSchemaVersionPhase = originalSchema
+		doctorVerifyPhase = originalVerify
+	})
+
+	verifyCalled := false
+
+	doctorRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	doctorSchemaVersionPhase = func() (int64, error) {
+		return 0, errors.New("schema query failed")
+	}
+	doctorVerifyPhase = func(string, string, int, verify.VerifyLevel) error {
+		verifyCalled = true
+		return nil
+	}
+
+	err := runDoctorCommand(parsedCommandLine{method: "doctor", flags: map[string][]string{}}, outputModeText)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := classifyExitCode(err); got != exitGeneral {
+		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	}
+	if !strings.Contains(err.Error(), "doctor schema/version check failed") {
+		t.Fatalf("expected schema failure message, got: %v", err)
+	}
+	if verifyCalled {
+		t.Fatal("verify phase should not run after schema failure")
+	}
+}
+
 func TestFormatDoctorTextReportGoldenHealthy(t *testing.T) {
 	report := doctorReport{
 		Recovery: recovery.Report{

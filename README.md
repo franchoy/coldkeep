@@ -647,8 +647,11 @@ After significant operations, run `coldkeep doctor` to validate system health.
 It runs the checks in this order:
 
 1. Corrective recovery phase (may abort dangling writes and resolve stale state)
-2. System verification (`standard` by default, or `full` / `deep`)
-3. Schema/version sanity query
+2. Schema/version sanity query
+3. System verification (`standard` by default, or `full` / `deep`)
+
+Execution is intentionally phase-gated: doctor short-circuits on failure.
+If recovery fails, schema/verify are skipped; if schema fails, verify is skipped.
 
 Doctor intentionally runs its own internal recovery phase and does not use the generic startup recovery event path used by commands such as `store`, `restore`, and `verify`.
 

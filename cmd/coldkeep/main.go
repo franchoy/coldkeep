@@ -86,6 +86,10 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
+var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
+var doctorSchemaVersionPhase = querySchemaVersion
+var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
+
 type cliError struct {
 	code int
 	msg  string
@@ -1056,44 +1060,37 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		VerifyLevel: verifyLevelToString(verifyLevel),
 	}
 
-	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	recoveryReport, recoveryErr := doctorRecoveryPhase(container.ContainersDir)
 	report.Recovery = recoveryReport
 	if recoveryErr != nil {
 		report.RecoveryStatus = "error"
-	} else {
-		report.RecoveryStatus = "ok"
+		return recoveryError(fmt.Errorf("doctor recovery phase failed: %w", recoveryErr))
 	}
+	report.RecoveryStatus = "ok"
 
-	schemaVersion, schemaErr := querySchemaVersion()
+	schemaVersion, schemaErr := doctorSchemaVersionPhase()
 	if schemaErr != nil {
 		report.SchemaStatus = "error"
-	} else {
-		report.SchemaVersion = schemaVersion
-		report.SchemaStatus = "ok"
+		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
 	}
+	report.SchemaVersion = schemaVersion
+	report.SchemaStatus = "ok"
 
-	verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verifyLevel)
+	verifyErr := doctorVerifyPhase(container.ContainersDir, "system", 0, verifyLevel)
 	if verifyErr != nil {
 		report.VerifyStatus = "error"
-	} else {
-		report.VerifyStatus = "ok"
+		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
 	}
+	report.VerifyStatus = "ok"
 
 	// Intentional JSON contract (frozen v1.0):
 	// - Success: doctor-specific payload emitted to stdout; includes phase statuses,
 	//   verify_level, schema_version, and the full recovery counter set under "recovery".
+	// - Execution short-circuits by phase on error: recovery -> schema -> verify.
+	//   This avoids running expensive later checks once an earlier gate already failed.
 	// - Failure: generic CLI error payload on stderr via printCLIError.
 	// Doctor does not emit partial doctor data on failure.
 	// See doctorReport for the full field list and rationale for including recovery counters.
-	if recoveryErr != nil {
-		return recoveryError(fmt.Errorf("doctor recovery phase failed: %w", recoveryErr))
-	}
-	if schemaErr != nil {
-		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
-	}
-	if verifyErr != nil {
-		return verifyError(fmt.Errorf("doctor verify phase failed: %w", verifyErr))
-	}
 
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
