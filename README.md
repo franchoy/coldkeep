@@ -877,8 +877,9 @@ CLI defaults/parsing rules:
 
 ### Verification notes
 
-Verification is a recovered-state checker, not a general online consistency checker.
-Running verification while writes are in-flight can produce transient false positives.
+Verification is a recovered-state checker, not a live online consistency checker.
+It assumes that recovery has already resolved any incomplete or inconsistent state.
+Running verification during active writes may produce transient false positives.
 Operationally, run `verify` after startup recovery has completed and when ingestion
 work is idle or quiesced.
 
