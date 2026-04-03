@@ -35,6 +35,9 @@ During the v0.10 phase, contributions should prioritize:
 New storage features or architectural changes are discouraged unless they address
 a demonstrated correctness issue.
 
+Changes that alter storage invariants or lifecycle semantics must include
+adversarial or long-run test coverage demonstrating correctness.
+
 This phase is focused on proving system reliability before v1.0.
 
 ------------------------------------------------------------------------

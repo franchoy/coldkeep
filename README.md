@@ -32,6 +32,7 @@ This phase focuses on stress and adversarial validation, including failure condi
 During v0.10:
 
 - No major storage features are expected to be added
+- On-disk format and metadata model are expected to remain stable unless a correctness issue is discovered
 - Changes focus on hardening invariants and lifecycle guarantees
 - Integration tests are expanded for stress and adversarial validation, including long-run scenarios
 - The goal is to actively try to break the system and eliminate remaining correctness risks
@@ -280,7 +281,7 @@ coldkeep v0.10 focuses on validating guarantees through stress and adversarial v
 
 The validation approach includes:
 
-- Stress and adversarial validation:
+- Stress and adversarial scenarios:
   - repeated store / remove / gc / verify / restore cycles
   - concurrent ingestion and deletion workloads
   - crash during store / gc / recovery
@@ -313,6 +314,7 @@ coldkeep will reach v1.0 when:
 - The `doctor` command is reliable as a system health gate
 
 v1.0 is not defined by feature completeness, but by confidence in correctness.
+The goal is to reach a state where failures are either impossible or explicitly detected and surfaced.
 
 ---
 
