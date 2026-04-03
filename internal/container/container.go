@@ -201,14 +201,6 @@ func containersDirOrDefault(dir string) string {
 // functions
 // --------------------------------------------------------------------------
 
-func GetOrCreateOpenContainer(db db.DBTX) (ActiveContainer, error) {
-	return GetOrCreateOpenContainerInDir(db, ContainersDir)
-}
-
-func GetOrCreateOpenContainerInDir(db db.DBTX, containersDir string) (ActiveContainer, error) {
-	return getOrCreateOpenContainerInDirExcluding(db, nil, containersDir, 0)
-}
-
 // newContainerFilename returns a collision-resistant filename by combining the
 // current nanosecond timestamp with 8 random bytes. This prevents the
 // container_filename_key unique constraint from being violated when multiple
@@ -330,7 +322,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 		}
 	}()
 
-	// 4 Write V0 header
+	// 4 Write container header
 	if err := writeNewContainerHeader(f, containerMaxSize); err != nil {
 		return ActiveContainer{}, retireNewContainer(err)
 	}
