@@ -1074,6 +1074,17 @@ and require a running PostgreSQL instance.
 
 store -> stats -> list -> restore -> dedup check.
 
+By default, smoke uses an isolated temporary storage directory and cleans it up
+on exit. This avoids permission/stale-state interference from repository-local
+`storage/containers` during repeated local runs. To persist smoke storage
+artifacts, set `COLDKEEP_STORAGE_DIR` explicitly.
+
+Smoke also enables quiet healthy startup recovery output by default
+(`COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY=1`), so repeated healthy startup
+recovery internals do not flood logs. Set
+`COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY=0` (or `false`) to force full startup
+recovery log replay during smoke.
+
 #### Local
 
 ``` bash
@@ -1182,6 +1193,7 @@ Additional environment variables used in development:
 
 - COLDKEEP_STORAGE_DIR
 - COLDKEEP_SAMPLES_DIR
+- COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY
 
 ---
 
