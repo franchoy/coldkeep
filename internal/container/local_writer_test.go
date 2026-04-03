@@ -315,3 +315,47 @@ func TestLocalWriterQuarantineContainerResetsStateAndReturnsDBError(t *testing.T
 		t.Fatalf("expected quarantine path to clear active state, got hasActive=%v id=%d file=%q handle=%v", w.hasActive, w.activeID, w.activeFile, w.activeHandle)
 	}
 }
+
+func TestLocalWriterBindDBIgnoresNil(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	orig := w.DB()
+
+	w.BindDB(nil)
+
+	if w.DB() != orig {
+		t.Fatalf("expected BindDB(nil) to keep existing db binding")
+	}
+}
+
+func TestLocalWriterBindDBSetsDBAndDBAccessorReturnsIt(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	w.BindDB(dbconn)
+
+	if w.DB() != dbconn {
+		t.Fatalf("expected DB accessor to return bound db handle")
+	}
+}
+
+func TestLocalWriterDirAccessorReturnsConfiguredDir(t *testing.T) {
+	dir := t.TempDir()
+	w := NewLocalWriterWithDir(dir, ContainerHdrLen+64)
+
+	if got := w.Dir(); got != dir {
+		t.Fatalf("expected dir %q, got %q", dir, got)
+	}
+}
+
+func TestLocalWriterQuarantineActiveContainerNoopWhenInactive(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+
+	err := w.QuarantineActiveContainer()
+	if err != nil {
+		t.Fatalf("expected no-op quarantine for inactive writer, got: %v", err)
+	}
+}
