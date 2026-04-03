@@ -164,6 +164,8 @@ func markContainerSealingInTx(tx *sql.Tx, containerID int64) error {
 }
 
 // StoreFileResult contains structured metadata about a store operation.
+// Store is a state-changing path: it mutates logical-file, chunk, block, and
+// container state as payload is committed.
 type StoreFileResult struct {
 	FileID        int64  `json:"file_id"`
 	FileHash      string `json:"file_hash"`

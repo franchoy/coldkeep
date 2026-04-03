@@ -17,6 +17,8 @@ var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
 }
 
 // GCResult contains structured metadata about a GC run.
+// Non-dry-run GC is state-changing: it deletes unreferenced metadata rows and
+// container files. Dry-run is read-only and only reports what would be removed.
 type GCResult struct {
 	DryRun             bool     `json:"dry_run"`
 	AffectedContainers int      `json:"affected_containers"`

@@ -961,9 +961,11 @@ func printStatsReport(r *maintenance.StatsResult) {
 	}
 }
 
-// runVerifyCommand executes recovered-state verification. It is not intended
-// to be an online checker during active writes, where transient metadata/data
-// divergence can produce false positives.
+// runVerifyCommand executes recovered-state verification. The verification phase
+// itself is read-only; any corrective mutation happens earlier via automatic
+// startup recovery before this function is called. It is not intended to be an
+// online checker during active writes, where transient metadata/data divergence
+// can produce false positives.
 func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
 		return err
@@ -1324,16 +1326,16 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
-		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Corrective health command (may update metadata via recovery before verify; default: --standard)"},
-		{"  store [--codec <codec>] <file>", "Store a single file"},
-		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively"},
+		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Corrective state-changing health command (may update metadata via recovery before verify; default: --standard)"},
+		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
+		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
 		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
-		{"  remove <fileID>", "Remove logical file (decrements chunk reference counts)"},
-		{"  gc [options]", "Run garbage collection"},
+		{"  remove <fileID>", "Remove logical file (state-changing; decrements chunk reference counts)"},
+		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  stats", "Show storage statistics"},
-		{"  verify [target] [fileID] [options]", "Layered integrity verification (default: --standard)"},
+		{"  verify [target] [fileID] [options]", "Read-only layered integrity verification (default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
 		{"    no options defaults to '--standard'", ""},
@@ -1386,7 +1388,7 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
-	fmt.Println("  Startup recovery runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
 	fmt.Println()
 	fmt.Println("Operator quick check:")
 	fmt.Println("  coldkeep doctor --standard")

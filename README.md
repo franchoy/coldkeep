@@ -62,6 +62,19 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Simulate storage operations without writing data to disk (v0.8).
 - Provide structured JSON output for all CLI commands for automation and scripting (v0.8).
 
+### Command mutation model
+
+- `store` / `store-folder` mutate stored data and metadata.
+- `remove` mutates metadata and may make unreferenced physical data eligible for collection.
+- `gc` mutates metadata and container files unless `--dry-run` is used.
+- startup `recovery` is corrective and mutates recoverable metadata/state.
+- `doctor` is corrective and may mutate metadata because it runs recovery before verify.
+- `verify` is read-only during its verification phase.
+
+CLI note: `coldkeep verify ...` still runs automatic startup recovery before the
+verification phase, so the overall command may correct stale recoverable state
+before the read-only verification checks begin.
+
 ---
 
 ## 🛡️ Storage Guarantees (v0.9)
@@ -171,6 +184,10 @@ Verification assumes:
 
 - all `COMPLETED` chunks are valid
 - corrupted or missing containers are quarantined
+
+The verification checks themselves are read-only. When using the CLI, startup
+recovery still runs before `verify`, so corrective metadata changes can happen
+before the read-only verification phase starts.
 
 > The system can detect corruption explicitly when verification is run.
 
@@ -353,7 +370,8 @@ operator trust model.
   It runs automatically before every substantive command (`store`, `store-folder`,
   `restore`, `remove`, `gc`, `stats`, `list`, `search`, `verify`) and resolves
   in-flight write state from prior sessions. It is not an exceptional maintenance
-  step — it is the expected lifecycle entry point.
+  step — it is the expected lifecycle entry point. Startup recovery is itself a
+  corrective, state-changing step.
 
 - **`doctor` is the recommended operator health command and is corrective, not read-only.**
   It runs recovery + verify + schema/version sanity in one command and may
@@ -365,7 +383,8 @@ operator trust model.
   Verification (`verify standard/full/deep`) is layered integrity checking
   scoped to metadata and payload consistency. It is not a live online-consistency
   checker during in-flight writes and does not resolve incomplete write state
-  itself — recovery must have run first.
+  itself — recovery must have run first. The verification phase itself is
+  read-only.
 
 - **Strict recovery is recommended in production.**
   `COLDKEEP_STRICT_RECOVERY=true` (the default) aborts startup on suspicious
@@ -767,6 +786,10 @@ Verification is a recovered-state checker, not a general online consistency chec
 Running verification while writes are in-flight can produce transient false positives.
 Operationally, run `verify` after startup recovery has completed and when ingestion
 work is idle or quiesced.
+
+The `verify` checks themselves do not mutate stored state. In the CLI, any
+state change observed before verification comes from the automatic startup
+recovery step, not from the verification phase.
 
 Mode guidance:
 

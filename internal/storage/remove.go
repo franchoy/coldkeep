@@ -10,6 +10,8 @@ import (
 )
 
 // RemoveFileResult contains structured metadata about a remove operation.
+// Remove is a state-changing path: it deletes logical-file mappings and
+// decrements chunk live_ref_count values.
 type RemoveFileResult struct {
 	FileID          int64 `json:"file_id"`
 	RemovedMappings int   `json:"removed_mappings"`
