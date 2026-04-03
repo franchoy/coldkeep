@@ -608,9 +608,6 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndQuarantinesContainer(t *test
 	}
 
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
-	if err == nil {
-		t.Fatal("expected store to fail when rollback cleanup fails")
-	}
 	if !errors.Is(err, rollbackCause) {
 		t.Fatalf("expected surfaced rollback cause in store error; got: %v", err)
 	}
@@ -688,11 +685,8 @@ func TestStoreFileRetainsCommittedChunksWhenFinalCompletionUpdateFails(t *testin
 	}
 
 	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
-	if err == nil {
-		t.Fatal("expected store to fail when final logical-file completion update fails")
-	}
-	if !strings.Contains(err.Error(), "injected finalize completion failure") {
-		t.Fatalf("expected injected finalize failure in error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "injected finalize completion failure") {
+		t.Fatalf("expected injected finalize failure containing \"injected finalize completion failure\", got: %v", err)
 	}
 
 	var logicalStatus string
@@ -873,11 +867,8 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 			defer cancel()
 
 			err = validateReusableLogicalFileGraphWithContext(ctx, dbconn, fileID, containersDir)
-			if err == nil {
-				t.Fatalf("expected validation error")
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected validation error containing %q, got: %v", tc.wantErr, err)
 			}
 		})
 	}
@@ -972,11 +963,8 @@ func TestValidateReusableLogicalFileForStoreRunsSemanticValidation(t *testing.T)
 	}
 
 	err = validateReusableLogicalFileForStoreWithContext(ctx, dbconn, fileID, containersDir)
-	if err == nil {
-		t.Fatalf("expected semantic validation failure after chunk hash tamper")
-	}
-	if !strings.Contains(err.Error(), "semantic reuse validation failed") {
-		t.Fatalf("expected semantic validation failure message, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "semantic reuse validation failed") {
+		t.Fatalf("expected semantic reuse validation failure, got: %v", err)
 	}
 }
 

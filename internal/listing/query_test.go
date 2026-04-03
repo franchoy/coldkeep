@@ -33,21 +33,15 @@ func TestParsePaginationArgsUsesLastValue(t *testing.T) {
 
 func TestParsePaginationArgsRejectsNegativeValues(t *testing.T) {
 	_, _, err := parsePaginationArgs([]string{"--offset", "-1"})
-	if err == nil {
-		t.Fatal("expected error for negative offset")
-	}
-	if !strings.Contains(err.Error(), "invalid --offset") {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid --offset") {
+		t.Fatalf("expected error containing \"invalid --offset\", got: %v", err)
 	}
 }
 
 func TestParsePaginationArgsRejectsLimitAboveMaximum(t *testing.T) {
 	_, _, err := parsePaginationArgs([]string{"--limit", "10001"})
-	if err == nil {
-		t.Fatal("expected error for limit above maximum")
-	}
-	if !strings.Contains(err.Error(), "invalid --limit") {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("expected error containing \"invalid --limit\", got: %v", err)
 	}
 }
 

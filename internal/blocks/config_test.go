@@ -1,6 +1,9 @@
 package blocks
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadDefaultCodec_DefaultIsAESGCM(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "")
@@ -30,7 +33,7 @@ func TestLoadDefaultCodec_InvalidEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "invalid")
 
 	_, err := LoadDefaultCodec()
-	if err == nil {
-		t.Fatal("expected error")
+	if err == nil || !strings.Contains(err.Error(), "unsupported codec") {
+		t.Fatalf("expected unsupported codec error, got: %v", err)
 	}
 }
