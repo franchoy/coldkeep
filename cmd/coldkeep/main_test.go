@@ -165,6 +165,32 @@ func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
 	}
 }
 
+func TestDoctorJSONRecoveryFailureUsesRecoveryErrorClass(t *testing.T) {
+	err := recoveryError(errors.New("doctor recovery phase failed: db unavailable"))
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitRecovery {
+			t.Fatalf("expected recovery exit code %d, got %d", exitRecovery, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, ok := payload["status"].(string); !ok || got != "error" {
+		t.Fatalf("status mismatch: got=%v", payload["status"])
+	}
+	if got, ok := payload["error_class"].(string); !ok || got != "RECOVERY" {
+		t.Fatalf("error_class mismatch: got=%v", payload["error_class"])
+	}
+	if got, ok := payload["message"].(string); !ok || !strings.Contains(got, "doctor recovery phase failed") {
+		t.Fatalf("message mismatch: got=%v", payload["message"])
+	}
+}
+
 func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	output := captureStderr(t, func() {
 		code := runCLI([]string{"doctor", "--output", "json", "--limit"})
@@ -280,6 +306,13 @@ func TestClassifyExitCodeTypedVerifyError(t *testing.T) {
 	err := verifyError(errors.New("verification failed: chunk mismatch"))
 	if got := classifyExitCode(err); got != exitVerify {
 		t.Fatalf("expected verify exit code %d, got %d", exitVerify, got)
+	}
+}
+
+func TestClassifyExitCodeTypedRecoveryError(t *testing.T) {
+	err := recoveryError(errors.New("doctor recovery phase failed: db unavailable"))
+	if got := classifyExitCode(err); got != exitRecovery {
+		t.Fatalf("expected recovery exit code %d, got %d", exitRecovery, got)
 	}
 }
 

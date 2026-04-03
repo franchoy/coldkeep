@@ -413,9 +413,25 @@ coldkeep simulate store-folder ./data --output json
 
 - JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
 - CLI exit codes are now consistent and machine-friendly
-- Errors are classified into usage, verification, and runtime categories
+- Errors are classified into usage, system/runtime, verification, and recovery categories
 - In `--output json` mode, each command invocation emits exactly one canonical JSON payload: success payloads go to stdout, and error payloads go to stderr with a non-zero exit code.
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
+
+### Frozen CLI exit codes (public contract)
+
+The CLI exit-code mapping is frozen for v1.0 compatibility and should not change
+without a major-version bump.
+
+| Exit code | Class | Meaning |
+| --- | --- | --- |
+| `0` | `SUCCESS` | Command completed successfully |
+| `2` | `USAGE` | Validation / user input error (invalid args, unknown command/flag, invalid ID/level) |
+| `1` | `GENERAL` | System/runtime error (I/O, DB, internal command failures not covered below) |
+| `3` | `VERIFY` | Verification failure |
+| `4` | `RECOVERY` | Recovery-phase failure |
+
+For JSON errors (`--output json`), `error_class` matches this table (`USAGE`,
+`GENERAL`, `VERIFY`, `RECOVERY`) and `exit_code` contains the numeric code.
 
 ---
 

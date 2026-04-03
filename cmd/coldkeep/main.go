@@ -29,10 +29,11 @@ import (
 )
 
 const (
-	exitSuccess = 0
-	exitGeneral = 1
-	exitUsage   = 2
-	exitVerify  = 3
+	exitSuccess  = 0
+	exitGeneral  = 1
+	exitUsage    = 2
+	exitVerify   = 3
+	exitRecovery = 4
 )
 
 var stdoutRedirectMu sync.Mutex
@@ -112,6 +113,13 @@ func verifyError(err error) error {
 		return nil
 	}
 	return &cliError{code: exitVerify, err: err}
+}
+
+func recoveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &cliError{code: exitRecovery, err: err}
 }
 
 func main() {
@@ -457,6 +465,8 @@ func exitCodeLabel(code int) string {
 		return "USAGE"
 	case exitVerify:
 		return "VERIFY"
+	case exitRecovery:
+		return "RECOVERY"
 	default:
 		return "GENERAL"
 	}
@@ -474,6 +484,8 @@ func classifyExitCode(err error) int {
 			return exitUsage
 		case exitVerify:
 			return exitVerify
+		case exitRecovery:
+			return exitRecovery
 		default:
 			return exitGeneral
 		}
@@ -502,6 +514,10 @@ func classifyExitCode(err error) int {
 
 	if strings.Contains(msg, "verification failed") || strings.Contains(msg, "verify ") {
 		return exitVerify
+	}
+
+	if strings.Contains(msg, "recovery phase failed") || strings.Contains(msg, "system recovery failed") {
+		return exitRecovery
 	}
 
 	return exitGeneral
@@ -1045,7 +1061,7 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	// Doctor does not emit partial doctor data on failure.
 	// See doctorReport for the full field list and rationale for including recovery counters.
 	if recoveryErr != nil {
-		return fmt.Errorf("doctor recovery phase failed: %w", recoveryErr)
+		return recoveryError(fmt.Errorf("doctor recovery phase failed: %w", recoveryErr))
 	}
 	if schemaErr != nil {
 		return fmt.Errorf("doctor schema/version check failed: %w", schemaErr)
