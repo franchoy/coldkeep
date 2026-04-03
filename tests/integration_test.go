@@ -1554,9 +1554,9 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	if !ok {
 		t.Fatalf("doctor JSON missing recovery object under data: payload=%v", doctorPayload)
 	}
-	abortedLogicalFiles, _ := recoveryObj["AbortedLogicalFiles"].(float64)
+	abortedLogicalFiles, _ := recoveryObj["aborted_logical_files"].(float64)
 	if abortedLogicalFiles < 1 {
-		t.Fatalf("doctor recovery expected AbortedLogicalFiles >= 1, got %v: recovery=%v", abortedLogicalFiles, recoveryObj)
+		t.Fatalf("doctor recovery expected aborted_logical_files >= 1, got %v: recovery=%v", abortedLogicalFiles, recoveryObj)
 	}
 
 	// Confirm the dangling row is now ABORTED in the DB.

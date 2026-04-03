@@ -27,12 +27,13 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 	var errorCount int
 	rows, err := dbconn.QueryContext(ctx, `SELECT id
 							FROM logical_file lf
-							WHERE lf.total_size > 0
+							WHERE lf.status = $1
+							  AND lf.total_size > 0
 							  AND NOT EXISTS (
 								SELECT 1
 								FROM file_chunk fc
 								WHERE fc.logical_file_id = lf.id
-							);`)
+							);`, filestate.LogicalFileCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query file chunk ordering: %v", err)
@@ -66,12 +67,13 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 										) - 1 AS expected_order
 									FROM file_chunk fc
 									JOIN logical_file lf ON lf.id = fc.logical_file_id
-									WHERE lf.total_size > 0
+									WHERE lf.status = $1
+									  AND lf.total_size > 0
 								)
 								SELECT logical_file_id, chunk_order, expected_order
 								FROM ordered_file_chunks
 								WHERE chunk_order <> expected_order
-								ORDER BY logical_file_id, expected_order;`)
+								ORDER BY logical_file_id, expected_order;`, filestate.LogicalFileCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query file chunk continuity: %v", err)

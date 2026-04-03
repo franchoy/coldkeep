@@ -845,6 +845,10 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 
 		// If we reach here, it means the previous attempt was aborted while we were waiting: we can try to store again
 		if filestatus == filestate.LogicalFileAborted {
+			if !txclosed {
+				_ = tx.Rollback()
+				txclosed = true
+			}
 			for casAttempt := 0; casAttempt < 3; casAttempt++ {
 				tx2, beginErr := dbconn.BeginTx(ctx, nil)
 				if beginErr != nil {
