@@ -159,6 +159,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData`:
   quarantines a truncated active container, proves unrelated live data remains
   restorable, and verifies new writes avoid the quarantined container
+- Added ghost-byte recovery preservation regression
+  `TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiveData`:
+  quarantines a sealing container with ghost bytes, proves unrelated live data
+  remains restorable, and verifies new writes avoid the quarantined container
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious

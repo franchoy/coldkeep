@@ -5043,6 +5043,133 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 	}
 }
 
+func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiveData(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	anchorPath := createTempFile(t, inputDir, "ghost-anchor.bin", 512*1024)
+	anchorHash := sha256File(t, anchorPath)
+	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), anchorPath); err != nil {
+		t.Fatalf("store anchor file: %v", err)
+	}
+	anchorID := fetchFileIDByHash(t, dbconn, anchorHash)
+
+	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+		t.Fatalf("mkdir containers dir: %v", err)
+	}
+
+	filename := "sealing-ghost-bytes-preserve.bin"
+	containerPath := filepath.Join(container.ContainersDir, filename)
+	dbCurrentSize := int64(container.ContainerHdrLen + 128)
+	ghostBytes := []byte("ghost-bytes-preservation-case")
+	physicalSize := dbCurrentSize + int64(len(ghostBytes))
+
+	if err := os.WriteFile(containerPath, bytes.Repeat([]byte{'p'}, int(physicalSize)), 0o644); err != nil {
+		t.Fatalf("write sealing container file: %v", err)
+	}
+
+	var ghostContainerID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+		VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
+		RETURNING id
+	`, filename, dbCurrentSize, container.GetContainerMaxSize()).Scan(&ghostContainerID)
+	if err != nil {
+		t.Fatalf("insert sealing ghost-byte container: %v", err)
+	}
+
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("system recovery: %v", err)
+	}
+	if report.SealingQuarantined < 1 {
+		t.Fatalf("expected sealing quarantine count >= 1, got %d", report.SealingQuarantined)
+	}
+
+	var sealed bool
+	var sealing bool
+	var quarantine bool
+	err = dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, ghostContainerID).Scan(&sealed, &sealing, &quarantine)
+	if err != nil {
+		t.Fatalf("query ghost-byte sealing container state: %v", err)
+	}
+	if sealed {
+		t.Fatalf("expected ghost-byte sealing container to remain unsealed")
+	}
+	if sealing {
+		t.Fatalf("expected recovery to clear sealing marker on quarantined ghost-byte container")
+	}
+	if !quarantine {
+		t.Fatalf("expected ghost-byte sealing container to be quarantined")
+	}
+
+	anchorOut := filepath.Join(restoreDir, "ghost-anchor.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, anchorID, anchorOut); err != nil {
+		t.Fatalf("restore anchor after ghost-byte quarantine: %v", err)
+	}
+	if gotHash := sha256File(t, anchorOut); gotHash != anchorHash {
+		t.Fatalf("anchor hash mismatch after ghost-byte quarantine: want %s got %s", anchorHash, gotHash)
+	}
+
+	postRecoveryPath := createTempFile(t, inputDir, "ghost-post-recovery.bin", 320*1024)
+	postRecoveryHash := sha256File(t, postRecoveryPath)
+	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), postRecoveryPath); err != nil {
+		t.Fatalf("store after ghost-byte quarantine: %v", err)
+	}
+	postRecoveryID := fetchFileIDByHash(t, dbconn, postRecoveryHash)
+
+	var usedContainerID int64
+	err = dbconn.QueryRow(`
+		SELECT DISTINCT b.container_id
+		FROM blocks b
+		JOIN file_chunk fc ON fc.chunk_id = b.chunk_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY b.container_id DESC
+		LIMIT 1
+	`, postRecoveryID).Scan(&usedContainerID)
+	if err != nil {
+		t.Fatalf("query container used for post-ghost store: %v", err)
+	}
+	if usedContainerID == ghostContainerID {
+		t.Fatalf("post-recovery store reused quarantined ghost-byte container")
+	}
+
+	postRecoveryOut := filepath.Join(restoreDir, "ghost-post-recovery.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, postRecoveryID, postRecoveryOut); err != nil {
+		t.Fatalf("restore post-recovery file after ghost-byte quarantine: %v", err)
+	}
+	if gotHash := sha256File(t, postRecoveryOut); gotHash != postRecoveryHash {
+		t.Fatalf("post-recovery file hash mismatch after ghost-byte quarantine: want %s got %s", postRecoveryHash, gotHash)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify full after ghost-byte quarantine preservation: %v", err)
+	}
+	assertNoProcessingRows(t, dbconn)
+}
+
 func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 	requireDB(t)
 
