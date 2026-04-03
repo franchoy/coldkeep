@@ -607,14 +607,14 @@ func isRetryableTxAbortError(err error) bool {
 }
 
 // rollbackFailingWriter wraps LocalWriter and deterministically fails rollback
-// path cleanup so tests can assert error surfacing plus retirement/quarantine
+// path cleanup so tests can assert error surfacing plus quarantine
 // behavior on failed cleanup.
 type rollbackFailingWriter struct {
 	base            *container.LocalWriter
 	forcedErr       error
 	appendSucceeded bool
 	lastPlacement   container.LocalPlacement
-	retireCalls     int
+	quarantineCalls int
 }
 
 func newRollbackFailingWriter(base *container.LocalWriter) *rollbackFailingWriter {
@@ -655,9 +655,9 @@ func (w *rollbackFailingWriter) RollbackLastAppend() error {
 	return errors.New("injected rollback cleanup failure")
 }
 
-func (w *rollbackFailingWriter) RetireActiveContainer() error {
-	w.retireCalls++
-	return w.base.RetireActiveContainer()
+func (w *rollbackFailingWriter) QuarantineActiveContainer() error {
+	w.quarantineCalls++
+	return w.base.QuarantineActiveContainer()
 }
 
 // chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
@@ -4764,7 +4764,7 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 		t.Fatalf("system recovery: %v", err)
 	}
 	if report.QuarantinedMissing != 0 {
-		t.Fatalf("expected startup recovery not to need quarantining for already-retired container, got %d", report.QuarantinedMissing)
+		t.Fatalf("expected startup recovery not to need quarantining for already-quarantined container, got %d", report.QuarantinedMissing)
 	}
 }
 
@@ -7163,7 +7163,7 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 	assertNoProcessingRows(t, dbconn)
 }
 
-func TestStoreSurfacesRollbackCleanupFailureAndRetiresActiveContainer(t *testing.T) {
+func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *testing.T) {
 	requireDB(t)
 
 	tmp := t.TempDir()
@@ -7184,7 +7184,7 @@ func TestStoreSurfacesRollbackCleanupFailureAndRetiresActiveContainer(t *testing
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Seed one successful store so we have a committed active container row that
-	// can be explicitly retired/quarantined on rollback path cleanup failure.
+	// can be explicitly quarantined on rollback path cleanup failure.
 	seedPath := createTempFile(t, inputDir, "seed.bin", 128*1024)
 	seedCtx := storage.StorageContext{
 		DB:           dbconn,
@@ -7272,25 +7272,25 @@ func TestStoreSurfacesRollbackCleanupFailureAndRetiresActiveContainer(t *testing
 	if !wrappedWriter.appendSucceeded {
 		t.Fatalf("expected append to succeed before injected failure")
 	}
-	if wrappedWriter.retireCalls == 0 {
-		t.Fatalf("expected rollback cleanup failure path to trigger retirement/quarantine of active container")
+	if wrappedWriter.quarantineCalls == 0 {
+		t.Fatalf("expected rollback cleanup failure path to trigger quarantine of active container")
 	}
 
-	retiredID := wrappedWriter.lastPlacement.ContainerID
-	if retiredID <= 0 {
-		t.Fatalf("expected valid retired container id, got %d", retiredID)
+	quarantinedID := wrappedWriter.lastPlacement.ContainerID
+	if quarantinedID <= 0 {
+		t.Fatalf("expected valid quarantined container id, got %d", quarantinedID)
 	}
 
-	var retiredQuarantined bool
+	var isQuarantined bool
 	var dbSizeAfter int64
 	if err := dbconn.QueryRow(
 		`SELECT quarantine, current_size FROM container WHERE id = $1`,
-		retiredID,
-	).Scan(&retiredQuarantined, &dbSizeAfter); err != nil {
-		t.Fatalf("query retired container state: %v", err)
+		quarantinedID,
+	).Scan(&isQuarantined, &dbSizeAfter); err != nil {
+		t.Fatalf("query quarantined container state: %v", err)
 	}
-	if !retiredQuarantined {
-		t.Fatalf("expected active container %d to be quarantined after rollback cleanup failure", retiredID)
+	if !isQuarantined {
+		t.Fatalf("expected active container %d to be quarantined after rollback cleanup failure", quarantinedID)
 	}
 
 	afterStat, err := os.Stat(containerPath)
@@ -8331,7 +8331,7 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("no gaps after repair", func(t *testing.T) {
+	t.Run("no gaps after recovery", func(t *testing.T) {
 		// After corruption tests above (which rollback), verify should pass
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 			t.Fatalf("verify should pass after offset corruption tests are restored: %v", err)
@@ -8357,7 +8357,7 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 }
 
 // TestRemoveWithSharedChunksRefCount verifies that removing a file with shared
-// chunks correctly decrements ref_count without affecting other files still
+// chunks correctly decrements live_ref_count without affecting other files still
 // referencing those chunks. This tests the atomicity and correctness of dedup
 // ref counting under file removal.
 func TestRemoveWithSharedChunksRefCount(t *testing.T) {
@@ -8446,7 +8446,7 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		t.Logf("warning: files don't share chunks as expected, but continuing test")
 	}
 
-	// Record ref_count for chunks referenced by both files
+	// Record live_ref_count for chunks referenced by both files
 	type chunkRef struct {
 		id       int64
 		refCount int64
@@ -8478,12 +8478,12 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		t.Fatalf("remove fileA: %v", err)
 	}
 
-	// Verify chunks' ref_counts decreased by 1 (or went to 0 if fileA was the only ref)
+	// Verify chunks' live_ref_count values decreased by 1 (or went to 0 if fileA was the only ref)
 	for _, before := range chunksBeforeRemove {
 		var afterRefCount int64
 		err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, before.id).Scan(&afterRefCount)
 		if err != nil && err != sql.ErrNoRows {
-			t.Fatalf("query chunk ref_count after remove: %v", err)
+			t.Fatalf("query chunk live_ref_count after remove: %v", err)
 		}
 
 		expectedAfter := before.refCount - 1
@@ -8492,7 +8492,7 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		}
 
 		if afterRefCount != expectedAfter {
-			t.Fatalf("chunk %d ref_count mismatch after remove: before=%d after=%d expected=%d",
+			t.Fatalf("chunk %d live_ref_count mismatch after remove: before=%d after=%d expected=%d",
 				before.id, before.refCount, afterRefCount, expectedAfter)
 		}
 	}

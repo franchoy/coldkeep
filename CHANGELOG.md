@@ -37,7 +37,7 @@ verification contracts, and recovery behavior clarity.
 - Hardened rollback error handling: rollback failures are now surfaced and
   escalated instead of silently ignored, with failed append paths retiring or
   quarantining unsafe containers
-- Added in-process container retirement/quarantine behavior for active/just-sealed
+- Added in-process container quarantine behavior for active/just-sealed
   container failures so unsafe containers are withdrawn immediately, not only on
   next startup recovery
 
@@ -251,7 +251,7 @@ encoding layer with support for encryption.
 - Restore pipeline now decodes blocks before reconstructing files
 - Verification system operates on decoded block payloads
 - Stats now report physical storage using block sizes (`stored_size`)
-- Garbage collection operates on blocks and uses `ref_count` as deletion invariant
+- Garbage collection operates on blocks and uses `live_ref_count OR pin_count` as deletion invariant
 - CLI command handling refactored for extensibility and clarity
 
 ### Removed

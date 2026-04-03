@@ -1146,7 +1146,7 @@ func formatDoctorTextReport(report doctorReport) string {
 
 func doctorRecommendedNextStep(report doctorReport, overallStatus string) string {
 	if overallStatus != "ok" {
-		return "inspect stderr / verify output"
+		return "inspect stderr / doctor output"
 	}
 
 	if report.VerifyLevel == verifyLevelToString(verify.VerifyStandard) {

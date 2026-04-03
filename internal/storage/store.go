@@ -42,13 +42,13 @@ type payloadStatefulWriter interface {
 //     If tx is rolled back, or any error happens before tx.Commit() succeeds,
 //     caller MUST invoke RollbackLastAppend() when supported.
 //
-// Retirement/quarantine on failed cleanup:
-//   - If RollbackLastAppend() fails, caller MUST trigger retirement/quarantine for the active
+// Quarantine on failed cleanup:
+//   - If RollbackLastAppend() fails, caller MUST trigger quarantine for the active
 //     container before any further writes.
-//   - If physical finalize/sync fails, caller MUST trigger retirement/quarantine for the active
+//   - If physical finalize/sync fails, caller MUST trigger quarantine for the active
 //     container before any further writes.
 //   - If DB seal/update fails after physical finalize, implementation MUST NOT
-//     permit that container to be reused; retirement/quarantine (or equivalent
+//     permit that container to be reused; quarantine (or equivalent
 //     exclusion from writable selection) is required.
 //
 // Boundary invariants:
@@ -73,8 +73,8 @@ type optionalAppendCommitAcknowledger interface {
 	AcknowledgeAppendCommitted()
 }
 
-type optionalFailedActiveContainerRetirer interface {
-	RetireActiveContainer() error
+type optionalFailedActiveContainerQuarantiner interface {
+	QuarantineActiveContainer() error
 }
 
 type optionalWriterDBBinder interface {
@@ -86,7 +86,7 @@ type optionalWriterDBBinder interface {
 // implementation returns immediately without truncating.
 // Returns any error from the rollback operation; callers must handle rollback failures
 // as they indicate physical/logical inconsistency and must trigger container
-// retirement/quarantine.
+// quarantine.
 func rollbackWriterLastAppend(writer payloadStatefulWriter) error {
 	if rb, ok := writer.(optionalAppendRollbacker); ok {
 		return rb.RollbackLastAppend()
@@ -105,38 +105,38 @@ func acknowledgeWriterAppendCommitted(writer payloadStatefulWriter) {
 	}
 }
 
-func retireWriterActiveContainer(writer payloadStatefulWriter) error {
-	if retirer, ok := writer.(optionalFailedActiveContainerRetirer); ok {
-		return retirer.RetireActiveContainer()
+func quarantineWriterActiveContainer(writer payloadStatefulWriter) error {
+	if quarantiner, ok := writer.(optionalFailedActiveContainerQuarantiner); ok {
+		return quarantiner.QuarantineActiveContainer()
 	}
 	return nil
 }
 
-// rollbackWriterLastAppendWithRetire attempts to rollback the writer's last append,
-// and if that fails, executes the active-container retirement/quarantine path to
+// rollbackWriterLastAppendWithQuarantine attempts to rollback the writer's last append,
+// and if that fails, executes the active-container quarantine path to
 // prevent further use.
 // Returns the rollback error, or if rollback fails, returns an error wrapping both
-// the rollback failure and any retire error. This ensures that failed rollbacks
+// the rollback failure and any quarantine error. This ensures that failed rollbacks
 // (physical consistency violations) are treated as critical container failures.
-func rollbackWriterLastAppendWithRetire(writer payloadStatefulWriter) error {
+func rollbackWriterLastAppendWithQuarantine(writer payloadStatefulWriter) error {
 	rollbackErr := rollbackWriterLastAppend(writer)
 	if rollbackErr == nil {
 		return nil
 	}
 
 	// Rollback failed; this indicates physical/logical inconsistency.
-	// Log loudly and attempt to retire the active container as a safeguard.
+	// Log loudly and attempt to quarantine the active container as a safeguard.
 	log.Printf("event=store_rollback_failed error=%v", rollbackErr)
 
-	retireErr := retireWriterActiveContainer(writer)
-	if retireErr != nil {
+	quarantineErr := quarantineWriterActiveContainer(writer)
+	if quarantineErr != nil {
 		return errors.Join(
 			fmt.Errorf("rollback failed (physical append may be truncated): %w", rollbackErr),
-			fmt.Errorf("active container retirement also failed: %w", retireErr),
+			fmt.Errorf("active container quarantine also failed: %w", quarantineErr),
 		)
 	}
 
-	return fmt.Errorf("rollback failed; retired active container as precaution: %w", rollbackErr)
+	return fmt.Errorf("rollback failed; quarantined active container as precaution: %w", rollbackErr)
 }
 
 func bindWriterDB(writer payloadStatefulWriter, dbconn *sql.DB) {
@@ -1537,7 +1537,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 					// block metadata already exists for this chunk ID.
 					tx2, err2 := sgctx.DB.BeginTx(ctx, nil)
 					if err2 != nil {
-						if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
 						}
 						return StoreFileResult{}, err2
@@ -1545,7 +1545,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 					if _, err2 = tx2.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
 						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
 						}
 						return StoreFileResult{}, err2
@@ -1553,7 +1553,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, chunkOrder, true); err2 != nil {
 						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
 						}
 						return StoreFileResult{}, err2
@@ -1561,20 +1561,20 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 
 					if err2 = tx2.Commit(); err2 != nil {
 						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
 						}
 						return StoreFileResult{}, err2
 					}
 
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, rbErr
 					}
 					chunkOrder++
 					break
 				}
 				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(getBlockErr, rbErr)
 					}
 					return StoreFileResult{}, getBlockErr
@@ -1586,12 +1586,12 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 					filestate.ChunkAborted,
 					claimedChunkID,
 				); err3 != nil {
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err3, rbErr)
 					}
 					return StoreFileResult{}, err3
 				}
-				if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return StoreFileResult{}, errors.Join(err, rbErr)
 				}
 				return StoreFileResult{}, err
@@ -1605,7 +1605,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				claimedChunkID,
 			); err != nil {
 				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return StoreFileResult{}, errors.Join(err, rbErr)
 				}
 				return StoreFileResult{}, err
@@ -1616,19 +1616,19 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				// Caller must persist final size and seal the previously active container row in DB.
 				if err := container.UpdateContainerSize(tx, placement.PreviousID, placement.PreviousSize); err != nil {
 					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err, rbErr)
 					}
 					return StoreFileResult{}, err
 				}
 				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err, rbErr)
 					}
-					retireErr := quarantineContainerNow(sgctx.DB, placement.PreviousID)
-					if retireErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, retireErr))
+					quarantineErr := quarantineContainerNow(sgctx.DB, placement.PreviousID)
+					if quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, quarantineErr))
 					}
 					return StoreFileResult{}, err
 				}
@@ -1637,7 +1637,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			// Always persist size for the container that received this payload.
 			if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
 				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return StoreFileResult{}, errors.Join(err, rbErr)
 				}
 				return StoreFileResult{}, err
@@ -1646,7 +1646,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 			// Link file ↔ chunk
 			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
 				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return StoreFileResult{}, errors.Join(err, rbErr)
 				}
 				return StoreFileResult{}, err
@@ -1655,35 +1655,35 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 				// Mark sealing in the current transaction, which already owns the row lock.
 				if err := markContainerSealingInTx(tx, placement.ContainerID); err != nil {
 					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err, rbErr)
 					}
 					return StoreFileResult{}, err
 				}
 				if err := writer.FinalizeContainer(); err != nil {
 					_ = tx.Rollback()
-					retireErr := retireWriterActiveContainer(writer)
-					if retireErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("retire active container after finalize failure: %w", retireErr))
+					quarantineErr := quarantineWriterActiveContainer(writer)
+					if quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine active container after finalize failure: %w", quarantineErr))
 					}
 					return StoreFileResult{}, err
 				}
 				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
 				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
 					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err, rbErr)
 					}
-					retireErr := quarantineContainerNow(sgctx.DB, placement.ContainerID)
-					if retireErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, retireErr))
+					quarantineErr := quarantineContainerNow(sgctx.DB, placement.ContainerID)
+					if quarantineErr != nil {
+						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, quarantineErr))
 					}
 					return StoreFileResult{}, err
 				}
 			}
 
 			if err = tx.Commit(); err != nil {
-				if rbErr := rollbackWriterLastAppendWithRetire(writer); rbErr != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return StoreFileResult{}, errors.Join(err, rbErr)
 				}
 				return StoreFileResult{}, err

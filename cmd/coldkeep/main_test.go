@@ -288,7 +288,7 @@ func TestFormatDoctorTextReportGoldenDegraded(t *testing.T) {
 		"  Phase 3 - Schema:    error\n" +
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=1 aborted_chunks=2 quarantined_missing_containers=3 quarantined_corrupt_tail_containers=4 quarantined_orphan_containers=5\n" +
-		"  Recommended next step: inspect stderr / verify output\n"
+		"  Recommended next step: inspect stderr / doctor output\n"
 
 	if got != want {
 		t.Fatalf("doctor text output mismatch\nwant:\n%s\ngot:\n%s", want, got)

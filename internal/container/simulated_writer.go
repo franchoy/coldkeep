@@ -42,7 +42,7 @@ func (w *SimulatedWriter) FinalizeContainer() error {
 	return nil
 }
 
-func (w *SimulatedWriter) RetireActiveContainer() error {
+func (w *SimulatedWriter) QuarantineActiveContainer() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

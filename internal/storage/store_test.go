@@ -23,10 +23,10 @@ import (
 )
 
 type syncFailWriter struct {
-	offset      int64
-	retireErr   error
-	retireCalls int
-	db          *sql.DB
+	offset          int64
+	quarantineErr   error
+	quarantineCalls int
+	db              *sql.DB
 }
 
 func (w *syncFailWriter) FinalizeContainer() error {
@@ -45,14 +45,14 @@ func (w *syncFailWriter) AppendPayload(_ db.DBTX, payload []byte) (container.Loc
 	}, nil
 }
 
-func (w *syncFailWriter) RetireActiveContainer() error {
-	w.retireCalls++
+func (w *syncFailWriter) QuarantineActiveContainer() error {
+	w.quarantineCalls++
 	if w.db != nil {
 		if _, err := w.db.Exec(`UPDATE container SET quarantine = TRUE WHERE id = 1`); err != nil {
 			return err
 		}
 	}
-	return w.retireErr
+	return w.quarantineErr
 }
 
 type commitAckWriter struct {
@@ -62,13 +62,13 @@ type commitAckWriter struct {
 }
 
 type rollbackCleanupFailureWriter struct {
-	offset          int64
-	rollbackErr     error
-	rollbackCalls   int
-	retireErr       error
-	retireCalls     int
-	retireContainer int64
-	db              *sql.DB
+	offset              int64
+	rollbackErr         error
+	rollbackCalls       int
+	quarantineErr       error
+	quarantineCalls     int
+	quarantineContainer int64
+	db                  *sql.DB
 }
 
 func (w *commitAckWriter) FinalizeContainer() error {
@@ -117,15 +117,15 @@ func (w *rollbackCleanupFailureWriter) RollbackLastAppend() error {
 	return nil
 }
 
-func (w *rollbackCleanupFailureWriter) RetireActiveContainer() error {
-	w.retireCalls++
-	if w.db != nil && w.retireContainer > 0 {
-		if _, err := w.db.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, w.retireContainer); err != nil {
+func (w *rollbackCleanupFailureWriter) QuarantineActiveContainer() error {
+	w.quarantineCalls++
+	if w.db != nil && w.quarantineContainer > 0 {
+		if _, err := w.db.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, w.quarantineContainer); err != nil {
 			return err
 		}
 	}
-	if w.retireErr != nil {
-		return w.retireErr
+	if w.quarantineErr != nil {
+		return w.quarantineErr
 	}
 	return nil
 }
@@ -410,8 +410,8 @@ func TestStoreFileUsesAppendLevelDurabilityWithoutExtraSyncHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store using append-level durability contract should succeed: %v", err)
 	}
-	if writer.retireCalls != 0 {
-		t.Fatalf("expected no container retirement on successful store, got %d", writer.retireCalls)
+	if writer.quarantineCalls != 0 {
+		t.Fatalf("expected no container quarantine on successful store, got %d", writer.quarantineCalls)
 	}
 
 	var abortedCount int
@@ -505,7 +505,7 @@ func TestStoreFileSuccessfulCommitAcknowledgesWriterAppendState(t *testing.T) {
 	}
 }
 
-func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.T) {
+func TestStoreFileEscalatesRollbackCleanupFailureAndQuarantinesContainer(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -534,9 +534,9 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.
 
 	rollbackCause := errors.New("injected rollback truncate failure")
 	writer := &rollbackCleanupFailureWriter{
-		rollbackErr:     rollbackCause,
-		retireContainer: 1,
-		db:              dbconn,
+		rollbackErr:         rollbackCause,
+		quarantineContainer: 1,
+		db:                  dbconn,
 	}
 	sgctx := StorageContext{
 		DB:           dbconn,
@@ -556,7 +556,7 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.
 	if !errors.Is(err, rollbackCause) {
 		t.Fatalf("expected surfaced rollback cause in store error; got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "rollback failed; retired active container as precaution") {
+	if !strings.Contains(err.Error(), "rollback failed; quarantined active container as precaution") {
 		t.Fatalf("expected rollback escalation in error, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), rollbackCause.Error()) {
@@ -566,8 +566,8 @@ func TestStoreFileEscalatesRollbackCleanupFailureAndRetiresContainer(t *testing.
 	if writer.rollbackCalls == 0 {
 		t.Fatalf("expected RollbackLastAppend to be attempted")
 	}
-	if writer.retireCalls == 0 {
-		t.Fatalf("expected active container retirement when rollback cleanup fails")
+	if writer.quarantineCalls == 0 {
+		t.Fatalf("expected active container quarantine when rollback cleanup fails")
 	}
 
 	var quarantined bool

@@ -129,9 +129,9 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		}
 
 		if err := w.finalizePhysicalOnly(); err != nil {
-			retireErr := w.retireContainer(previousID)
-			if retireErr != nil {
-				return LocalPlacement{}, errors.Join(fmt.Errorf("rotate finalize active container: %w", err), fmt.Errorf("retire container %d after finalize failure: %w", previousID, retireErr))
+			quarantineErr := w.quarantineContainer(previousID)
+			if quarantineErr != nil {
+				return LocalPlacement{}, errors.Join(fmt.Errorf("rotate finalize active container: %w", err), fmt.Errorf("quarantine container %d after finalize failure: %w", previousID, quarantineErr))
 			}
 			return LocalPlacement{}, fmt.Errorf("rotate finalize active container: %w", err)
 		}
@@ -157,9 +157,9 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	offset, err := w.activeHandle.Append(payload)
 	if err != nil {
 		containerID := w.activeID
-		retireErr := w.RetireActiveContainer()
-		if retireErr != nil {
-			return LocalPlacement{}, errors.Join(fmt.Errorf("append payload to container %d: %w", containerID, err), fmt.Errorf("retire active container %d after append failure: %w", containerID, retireErr))
+		quarantineErr := w.QuarantineActiveContainer()
+		if quarantineErr != nil {
+			return LocalPlacement{}, errors.Join(fmt.Errorf("append payload to container %d: %w", containerID, err), fmt.Errorf("quarantine active container %d after append failure: %w", containerID, quarantineErr))
 		}
 		return LocalPlacement{}, fmt.Errorf("append payload to container %d: %w", containerID, err)
 	}
@@ -168,12 +168,12 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	if err := w.activeHandle.Sync(); err != nil {
 		containerID := w.activeID
 		if truncErr := w.activeHandle.Truncate(w.prevAppendSize); truncErr != nil {
-			retireErr := w.RetireActiveContainer()
-			if retireErr != nil {
+			quarantineErr := w.QuarantineActiveContainer()
+			if quarantineErr != nil {
 				return LocalPlacement{}, errors.Join(
 					fmt.Errorf("sync payload in container %d: %w", containerID, err),
 					fmt.Errorf("rollback append in container %d: %w", containerID, truncErr),
-					fmt.Errorf("retire active container %d after sync+rollback failure: %w", containerID, retireErr),
+					fmt.Errorf("quarantine active container %d after sync+rollback failure: %w", containerID, quarantineErr),
 				)
 			}
 			return LocalPlacement{}, errors.Join(
@@ -182,12 +182,12 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 			)
 		}
 
-		// Truncate succeeded, but sync failed: retire this container to avoid reuse.
-		retireErr := w.RetireActiveContainer()
-		if retireErr != nil {
+		// Truncate succeeded, but sync failed: quarantine this container to avoid reuse.
+		quarantineErr := w.QuarantineActiveContainer()
+		if quarantineErr != nil {
 			return LocalPlacement{}, errors.Join(
 				fmt.Errorf("sync payload in container %d: %w", containerID, err),
-				fmt.Errorf("retire active container %d after sync failure: %w", containerID, retireErr),
+				fmt.Errorf("quarantine active container %d after sync failure: %w", containerID, quarantineErr),
 			)
 		}
 		return LocalPlacement{}, fmt.Errorf("sync payload in container %d: %w", containerID, err)
@@ -327,15 +327,15 @@ func (w *LocalWriter) clearActive() {
 }
 
 // FinalizeContainer performs physical sync/close for the active container and clears
-// local active state. If physical finalization fails, the retirement/quarantine
+// local active state. If physical finalization fails, the quarantine
 // path is executed before returning so no future writes can reuse a potentially
 // unsafe file.
 func (w *LocalWriter) FinalizeContainer() error {
 	if err := w.finalizePhysicalOnly(); err != nil {
 		containerID := w.activeID
-		retireErr := w.RetireActiveContainer()
-		if retireErr != nil {
-			return errors.Join(err, fmt.Errorf("retire active container %d after finalize failure: %w", containerID, retireErr))
+		quarantineErr := w.QuarantineActiveContainer()
+		if quarantineErr != nil {
+			return errors.Join(err, fmt.Errorf("quarantine active container %d after finalize failure: %w", containerID, quarantineErr))
 		}
 		return err
 	}
@@ -361,7 +361,7 @@ func (w *LocalWriter) AcknowledgeAppendCommitted() {
 // Safe to call even if no unresolved append is pending (no-op). After a
 // successful rollback path cleanup, the writer's active state is reset so the
 // next AppendPayload selects a fresh open container from the database.
-// If rollback path cleanup itself fails, caller must trigger retirement/quarantine for the
+// If rollback path cleanup itself fails, caller must trigger quarantine for the
 // active container before any further writes.
 func (w *LocalWriter) RollbackLastAppend() error {
 	if !w.pendingAppend {
@@ -417,22 +417,22 @@ func (w *LocalWriter) BindDB(dbconn *sql.DB) {
 	w.dbconn = dbconn
 }
 
-// RetireActiveContainer is the retirement/quarantine path used after failed
+// QuarantineActiveContainer is the quarantine path used after failed
 // cleanup boundaries (for example rollback/finalize/sync cleanup failure).
 // It closes current handles, clears pending append state, and marks the DB row
 // as quarantined to prevent future reuse.
-func (w *LocalWriter) RetireActiveContainer() error {
+func (w *LocalWriter) QuarantineActiveContainer() error {
 	if !w.hasActive {
 		return nil
 	}
-	return w.retireContainer(w.activeID)
+	return w.quarantineContainer(w.activeID)
 }
 
-func (w *LocalWriter) retireContainer(containerID int64) error {
-	var retireErr error
+func (w *LocalWriter) quarantineContainer(containerID int64) error {
+	var closeErr error
 	if w.activeHandle != nil {
 		if err := w.activeHandle.Close(); err != nil {
-			retireErr = err
+			closeErr = err
 		}
 	}
 	w.pendingAppend = false
@@ -440,12 +440,12 @@ func (w *LocalWriter) retireContainer(containerID int64) error {
 	w.prevAppendSize = 0
 	w.clearActive()
 	if err := QuarantineContainer(w.dbconn, containerID); err != nil {
-		if retireErr != nil {
-			return errors.Join(retireErr, err)
+		if closeErr != nil {
+			return errors.Join(closeErr, err)
 		}
 		return err
 	}
-	return retireErr
+	return closeErr
 }
 
 // DB returns the underlying *sql.DB held by this writer (may be nil).
