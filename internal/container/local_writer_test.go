@@ -166,3 +166,58 @@ func TestLocalWriterRollbackLastAppendNoopWhenNothingPending(t *testing.T) {
 		t.Fatalf("expected rollback no-op to leave bookkeeping unchanged, got size=%d file=%q", w.prevAppendSize, w.prevAppendFile)
 	}
 }
+
+func TestLocalWriterActiveContainerStateReportsAbsentWhenInactive(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+
+	ac, size, ok := w.ActiveContainerState()
+	if ok {
+		t.Fatalf("expected inactive writer to report ok=false")
+	}
+	if size != 0 {
+		t.Fatalf("expected size=0 for inactive writer, got %d", size)
+	}
+	if ac != (ActiveContainer{}) {
+		t.Fatalf("expected zero ActiveContainer for inactive writer, got %+v", ac)
+	}
+}
+
+func TestLocalWriterActiveContainerStateReportsCurrentWhenActive(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	w.hasActive = true
+	w.active = ActiveContainer{ID: 99, Filename: "active.bin"}
+	w.activeSize = ContainerHdrLen + 10
+
+	ac, size, ok := w.ActiveContainerState()
+	if !ok {
+		t.Fatalf("expected active writer to report ok=true")
+	}
+	if ac.ID != 99 || ac.Filename != "active.bin" {
+		t.Fatalf("unexpected active container snapshot: %+v", ac)
+	}
+	if size != ContainerHdrLen+10 {
+		t.Fatalf("unexpected active size: got %d want %d", size, ContainerHdrLen+10)
+	}
+}
+
+func TestLocalWriterClearActiveResetsAllActiveState(t *testing.T) {
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+64)
+	w.hasActive = true
+	w.active = ActiveContainer{ID: 7, Filename: "old.bin", Container: &fakeContainer{}}
+	w.activeID = 7
+	w.activeFile = "old.bin"
+	w.activeSize = ContainerHdrLen + 5
+	w.activeHandle = &fakeContainer{}
+
+	w.clearActive()
+
+	if w.hasActive {
+		t.Fatalf("expected hasActive=false after clearActive")
+	}
+	if w.active != (ActiveContainer{}) {
+		t.Fatalf("expected zeroed active struct, got %+v", w.active)
+	}
+	if w.activeID != 0 || w.activeFile != "" || w.activeSize != 0 || w.activeHandle != nil {
+		t.Fatalf("expected active internals reset, got id=%d file=%q size=%d handle=%v", w.activeID, w.activeFile, w.activeSize, w.activeHandle)
+	}
+}
