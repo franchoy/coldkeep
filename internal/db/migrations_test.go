@@ -48,6 +48,21 @@ func TestRunMigrationsSucceedsOnSQLiteInMemory(t *testing.T) {
 	}
 }
 
+func TestRunMigrationsFailsWhenSQLiteDBIsClosed(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close sqlite db: %v", err)
+	}
+
+	err = RunMigrations(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "enable sqlite foreign keys") {
+		t.Fatalf("expected wrapped foreign-keys pragma error contract, got: %v", err)
+	}
+}
+
 func TestRunMigrationsRejectsNonSQLiteBackend(t *testing.T) {
 	registerDummyDriver()
 	dbconn, err := sql.Open("dummy", "")
