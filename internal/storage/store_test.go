@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -859,28 +861,28 @@ func TestValidateReusableLogicalFileForStoreRunsSemanticValidation(t *testing.T)
 	}
 
 	containersDir := t.TempDir()
-	content := []byte("semantic-reuse-validation-regression-payload")
-	sum := sha256.Sum256(content)
+	payload := []byte("semantic-reuse-validation-regression-payload")
+	sum := sha256.Sum256(payload)
 	hash := hex.EncodeToString(sum[:])
 
 	containerFilename := "semantic-reuse.bin"
 	containerPath := filepath.Join(containersDir, containerFilename)
-	if err := os.WriteFile(containerPath, content, 0644); err != nil {
-		t.Fatalf("write container file: %v", err)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write container file with header: %v", err)
 	}
 
-	fileID := insertReusableTestLogicalFile(t, dbconn, int64(len(content)))
+	fileID := insertReusableTestLogicalFile(t, dbconn, int64(len(payload)))
 	if _, err := dbconn.Exec(`UPDATE logical_file SET file_hash = $1 WHERE id = $2`, hash, fileID); err != nil {
 		t.Fatalf("update logical file hash: %v", err)
 	}
 
 	chunkID := insertReusableTestChunk(t, dbconn, hash, filestate.ChunkCompleted)
-	if _, err := dbconn.Exec(`UPDATE chunk SET size = $1 WHERE id = $2`, int64(len(content)), chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET size = $1 WHERE id = $2`, int64(len(payload)), chunkID); err != nil {
 		t.Fatalf("update chunk size: %v", err)
 	}
 
 	containerID := insertReusableTestContainer(t, dbconn, containerFilename, false)
-	if _, err := dbconn.Exec(`UPDATE container SET current_size = $1 WHERE id = $2`, int64(len(content)), containerID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE container SET current_size = $1 WHERE id = $2`, int64(container.ContainerHdrLen+len(payload)), containerID); err != nil {
 		t.Fatalf("update container size: %v", err)
 	}
 
@@ -890,10 +892,10 @@ func TestValidateReusableLogicalFileForStoreRunsSemanticValidation(t *testing.T)
 		chunkID,
 		"plain",
 		1,
-		int64(len(content)),
-		int64(len(content)),
+		int64(len(payload)),
+		int64(len(payload)),
 		containerID,
-		int64(0),
+		int64(container.ContainerHdrLen),
 	); err != nil {
 		t.Fatalf("insert block row: %v", err)
 	}
@@ -938,6 +940,19 @@ func insertReusableTestLogicalFile(t *testing.T, dbconn *sql.DB, totalSize int64
 	}
 
 	return fileID
+}
+
+func writeReusableTestContainerFileWithPayload(path string, payload []byte) error {
+	hdr := make([]byte, container.ContainerHdrLen)
+	copy(hdr[0:8], []byte(container.ContainerMagic))
+	binary.LittleEndian.PutUint16(hdr[8:10], container.LegacyContainerFormatVersionMajor)
+	binary.LittleEndian.PutUint16(hdr[10:12], 9)
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(container.ContainerHdrLen))
+	binary.LittleEndian.PutUint64(hdr[28:36], uint64(container.GetContainerMaxSize()))
+	binary.LittleEndian.PutUint32(hdr[52:56], crc32.ChecksumIEEE(hdr[0:52]))
+
+	buf := append(hdr, payload...)
+	return os.WriteFile(path, buf, 0644)
 }
 
 func insertReusableTestChunk(t *testing.T, dbconn *sql.DB, hash string, status string) int64 {
@@ -1016,7 +1031,7 @@ func writeReusableTestContainerFile(t *testing.T, containersDir string, filename
 	t.Helper()
 
 	path := filepath.Join(containersDir, filename)
-	if err := os.WriteFile(path, []byte("container"), 0644); err != nil {
+	if err := writeReusableTestContainerFileWithPayload(path, []byte("container")); err != nil {
 		t.Fatalf("write reusable container file %s: %v", filename, err)
 	}
 }

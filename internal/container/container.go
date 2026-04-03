@@ -87,6 +87,11 @@ func openExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 		return nil, err
 	}
 
+	if _, err := readAndValidateContainerHeader(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("validate container header %s: %w", path, err)
+	}
+
 	return &FileContainer{
 		f:       f,
 		offset:  stat.Size(),
