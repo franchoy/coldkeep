@@ -12,10 +12,10 @@ production stability.
 
 ## [0.10.0] - Unreleased
 
-Validation and adversarial testing phase before v1.0.
+Stress and adversarial validation phase before v1.0.
 
-This release focuses on validating coldkeep's correctness guarantees under stress,
-failure, and adversarial lifecycle interleavings.
+This release focuses on stress and adversarial validation of coldkeep's
+correctness guarantees, including failure and lifecycle interleaving scenarios.
 
 The core architecture and CLI contracts are considered stable. Changes in this
 phase aim to eliminate remaining correctness risks and strengthen confidence

@@ -28,7 +28,7 @@ Major architectural changes should be discussed before implementation.
 During the v0.10 phase, contributions should prioritize:
 
 -   strengthening invariants and correctness guarantees
--   improving adversarial and long-run test coverage
+-   improving stress and adversarial validation coverage, including long-run tests
 -   identifying and reproducing edge-case failures
 -   improving observability and operator-facing behavior
 

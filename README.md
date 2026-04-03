@@ -27,13 +27,13 @@ and system restart/recovery under defined operating conditions.
 v0.10 marks the transition from system construction to system validation.
 
 The core architecture, storage model, and CLI contracts are considered stable.
-This phase focuses on validating correctness under stress, failure, and adversarial conditions.
+This phase focuses on stress and adversarial validation, including failure conditions.
 
 During v0.10:
 
 - No major storage features are expected to be added
 - Changes focus on hardening invariants and lifecycle guarantees
-- Integration tests are expanded to include adversarial and long-run scenarios
+- Integration tests are expanded for stress and adversarial validation, including long-run scenarios
 - The goal is to actively try to break the system and eliminate remaining correctness risks
 
 v1.0 will only be released once these guarantees are validated under real-world conditions.
@@ -276,14 +276,13 @@ Guarantees hold only if:
 
 ## 🔬 Validation Strategy (v0.10)
 
-coldkeep v0.10 focuses on validating guarantees through adversarial testing.
+coldkeep v0.10 focuses on validating guarantees through stress and adversarial validation.
 
 The validation approach includes:
 
-- Stress testing:
+- Stress and adversarial validation:
   - repeated store / remove / gc / verify / restore cycles
   - concurrent ingestion and deletion workloads
-- Adversarial scenarios:
   - crash during store / gc / recovery
   - partial container writes
   - corrupted or missing container files
@@ -307,7 +306,7 @@ The goal is not only to pass tests, but to demonstrate that:
 coldkeep will reach v1.0 when:
 
 - All core invariants are explicitly tested and consistently hold
-- Adversarial and stress tests show no data loss or silent corruption
+- Stress and adversarial validation tests show no data loss or silent corruption
 - Recovery reliably converges to a valid state after failures
 - Garbage collection is proven safe under concurrent and interleaved operations
 - Restore remains deterministic and byte-identical across all scenarios
