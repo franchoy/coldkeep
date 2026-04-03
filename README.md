@@ -302,6 +302,21 @@ The goal is not only to pass tests, but to demonstrate that:
 
 ---
 
+## 🎯 v1.0 Readiness Criteria
+
+coldkeep will reach v1.0 when:
+
+- All core invariants are explicitly tested and consistently hold
+- Adversarial and stress tests show no data loss or silent corruption
+- Recovery reliably converges to a valid state after failures
+- Garbage collection is proven safe under concurrent and interleaved operations
+- Restore remains deterministic and byte-identical across all scenarios
+- The `doctor` command is reliable as a system health gate
+
+v1.0 is not defined by feature completeness, but by confidence in correctness.
+
+---
+
 ## ✨ What’s new in v0.10
 
 - Reuse integrity hardening for `COMPLETED` logical files:
