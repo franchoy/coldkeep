@@ -1623,6 +1623,89 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 		"verify", "system", "--output", "json"), "verify")
 }
 
+// TestDoctorAfterRecoverableCorruptionOperatorStory locks down the operator
+// sequence: recoverable corruption is present, doctor succeeds and reports
+// corrective recovery counters, and follow-up verify passes.
+func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := createTempFile(t, inputDir, "doctor_operator_story.bin", 256*1024)
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	// Inject recoverable corruption: dangling PROCESSING logical file.
+	var danglingID int64
+	err = dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		VALUES ($1, $2, $3, $4) RETURNING id`,
+		"doctor_operator_story_dangling.bin", 1024,
+		"1111111111111111111111111111111111111111111111111111111111111111",
+		filestate.LogicalFileProcessing,
+	).Scan(&danglingID)
+	if err != nil {
+		t.Fatalf("inject dangling PROCESSING logical file: %v", err)
+	}
+	_ = dbconn.Close()
+
+	doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if doctorRes.exitCode != 0 {
+		t.Fatalf("doctor should exit successfully on recoverable corruption, got exit=%d\nstdout:\n%s\nstderr:\n%s", doctorRes.exitCode, doctorRes.stdout, doctorRes.stderr)
+	}
+	doctorPayload := assertCLIJSONOK(t, doctorRes, "doctor")
+	doctorData, ok := doctorPayload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing data object: payload=%v", doctorPayload)
+	}
+
+	recoveryObj, ok := doctorData["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("doctor JSON missing recovery object under data: payload=%v", doctorPayload)
+	}
+	if got := jsonInt64(t, recoveryObj, "aborted_logical_files"); got < 1 {
+		t.Fatalf("expected doctor recovery counter aborted_logical_files >= 1, got %d recovery=%v", got, recoveryObj)
+	}
+	if got, _ := doctorData["verify_status"].(string); got != "ok" {
+		t.Fatalf("expected doctor verify_status=ok after recovery, got %q payload=%v", got, doctorPayload)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB after doctor: %v", err)
+	}
+	defer dbconn.Close()
+
+	var statusAfter string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, danglingID).Scan(&statusAfter); err != nil {
+		t.Fatalf("query dangling logical file after doctor: %v", err)
+	}
+	if statusAfter != filestate.LogicalFileAborted {
+		t.Fatalf("expected doctor to abort dangling PROCESSING file, got status %q", statusAfter)
+	}
+
+	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--output", "json"), "verify")
+}
+
 // TestEndToEndTrustProof exercises the operator trust narrative end-to-end:
 // store -> crash simulation -> recovery -> doctor -> verify -> restore -> hash compare.
 func TestEndToEndTrustProof(t *testing.T) {
