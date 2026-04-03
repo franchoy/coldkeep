@@ -166,6 +166,9 @@ eliminate remaining correctness risks before the v1.0 milestone.
   and `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock` so malformed
   completed chunks, missing container files, and deep trailing-byte failures
   assert returned error-contract substrings instead of generic failure only
+- Tightened `TestVerifySystemDeepAggregatesChunkErrors` to assert the returned
+  aggregated deep-verification error count substring instead of generic
+  failure-only behavior
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED

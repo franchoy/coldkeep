@@ -5529,9 +5529,12 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected the corrupted live_ref_count but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
+			"found 1 errors in checkReferenceCounts checks",
+			"verify-standard corrupted live_ref_count",
+		)
 	})
 
 	t.Run("detects orphan chunk", func(t *testing.T) {
@@ -5549,9 +5552,12 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected the orphan chunk but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
+			"found 1 errors in checkReferenceCounts checks",
+			"verify-standard orphan chunk",
+		)
 	})
 
 	t.Run("detects completed chunk missing block row", func(t *testing.T) {
@@ -5568,9 +5574,12 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected completed chunk missing block row but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
+			"found 1 errors in checkCompletedChunkBlockCardinality checks",
+			"verify-standard completed chunk missing block row",
+		)
 	})
 
 	t.Run("detects pin_count on non-completed chunk", func(t *testing.T) {
@@ -5587,9 +5596,12 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected pin_count on a non-completed chunk but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
+			"found 2 errors in checkPinnedChunkStatus checks",
+			"verify-standard pinned processing chunk",
+		)
 	})
 
 	t.Run("detects pinned chunk missing block metadata", func(t *testing.T) {
@@ -5606,9 +5618,12 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected pinned chunk missing block metadata but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
+			"found 1 errors in checkCompletedChunkBlockCardinality checks",
+			"verify-standard pinned chunk missing block metadata",
+		)
 	})
 
 	t.Run("detects broken file chunk ordering continuity", func(t *testing.T) {
@@ -5626,9 +5641,12 @@ func TestVerifyStandard(t *testing.T) {
 			}
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
-			t.Fatal("RunVerify should have detected broken file chunk ordering continuity but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
+			"found 1 errors in checkFileChunkOrdering checks",
+			"verify-standard broken file chunk ordering continuity",
+		)
 	})
 
 	t.Run("detects missing container file", func(t *testing.T) {
@@ -5645,9 +5663,12 @@ func TestVerifyStandard(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
-			t.Fatal("verify full should detect missing container file")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
+			"found 1 errors in checkContainersFileExistence checks",
+			"verify-standard/full missing container file",
+		)
 	})
 }
 
@@ -6609,13 +6630,12 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		}
 	}
 
-	err = maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
-	if err == nil {
-		t.Fatal("verify system --deep should detect multiple corrupted chunks")
-	}
-	if !strings.Contains(err.Error(), "found 2 errors in deep verification of container files") {
-		t.Fatalf("expected aggregated deep verification error count, got: %v", err)
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"found 2 errors in deep verification of container files",
+		"system-deep multiple corrupted chunks",
+	)
 }
 
 // ---------------------------------------------------------------------------
