@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -139,7 +140,7 @@ func runCLI(args []string) int {
 	}
 
 	if shouldRunStartupRecovery(args[0]) {
-		recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+		recoveryReport, recoveryErr := runStartupRecoveryWithOptionalLogBuffering(startupMode)
 		if recoveryErr != nil {
 			log.Printf("System recovery failed: %v\n", recoveryErr)
 		}
@@ -202,7 +203,61 @@ func runCLI(args []string) int {
 	return exitSuccess
 }
 
+func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Report, error) {
+	if mode != outputModeText || !isQuietHealthyStartupRecoveryEnabled() {
+		return recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	}
+
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	}()
+
+	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if shouldReplayBufferedRecoveryLogs(recoveryReport, recoveryErr) {
+		if _, err := io.Copy(prevOutput, &buf); err != nil {
+			log.Printf("failed to replay buffered startup recovery logs: %v", err)
+		}
+	}
+
+	return recoveryReport, recoveryErr
+}
+
+func isQuietHealthyStartupRecoveryEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY")))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldReplayBufferedRecoveryLogs(report recovery.Report, err error) bool {
+	if err != nil {
+		return true
+	}
+	if report.AbortedLogicalFiles > 0 || report.AbortedChunks > 0 {
+		return true
+	}
+	if report.QuarantinedMissing > 0 || report.QuarantinedCorruptTail > 0 || report.QuarantinedOrphan > 0 {
+		return true
+	}
+	if report.SealingCompleted > 0 || report.SealingQuarantined > 0 {
+		return true
+	}
+	return false
+}
+
 func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err error) {
+	if mode == outputModeText && isQuietHealthyStartupRecoveryEnabled() && !shouldReplayBufferedRecoveryLogs(report, err) {
+		return
+	}
+
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"event":                               "startup_recovery",

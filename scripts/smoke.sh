@@ -163,6 +163,9 @@ else
   echo "[smoke] using caller-provided storage dir: $COLDKEEP_STORAGE_DIR"
 fi
 
+: "${COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY:=1}"
+export COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY
+
 mkdir -p "$COLDKEEP_STORAGE_DIR"
 
 ensure_postgres_schema
