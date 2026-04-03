@@ -6264,6 +6264,11 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should fail with invalid aes-gcm key configuration but returned nil")
+	} else {
+		errText := err.Error()
+		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
+			t.Fatalf("expected malformed-key verify error to keep deep aggregate contract, got: %v", err)
+		}
 	}
 
 	restoreDir := filepath.Join(tmp, "restore")
@@ -6273,6 +6278,8 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	outPath := filepath.Join(restoreDir, "restored.bin")
 	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
 		t.Fatal("restore should fail with invalid aes-gcm key configuration but returned nil")
+	} else if !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
+		t.Fatalf("expected malformed-key restore error to mention missing/invalid aes-gcm key, got: %v", err)
 	}
 }
 
@@ -6313,6 +6320,11 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should fail with non-hex aes-gcm key configuration but returned nil")
+	} else {
+		errText := err.Error()
+		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
+			t.Fatalf("expected non-hex-key verify error to keep deep aggregate contract, got: %v", err)
+		}
 	}
 
 	restoreDir := filepath.Join(tmp, "restore")
@@ -6322,6 +6334,8 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 	outPath := filepath.Join(restoreDir, "restored.bin")
 	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
 		t.Fatal("restore should fail with non-hex aes-gcm key configuration but returned nil")
+	} else if !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
+		t.Fatalf("expected non-hex-key restore error to mention missing/invalid aes-gcm key, got: %v", err)
 	}
 }
 
