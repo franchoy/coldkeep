@@ -1835,6 +1835,52 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 	}
 }
 
+func TestCLIJSONErrorContractsDoctorRecoveryFailure(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	repoRoot := findRepoRoot(t)
+	binPath := buildColdkeepBinary(t, repoRoot)
+	env := defaultCLIEnv(container.ContainersDir)
+
+	// Force doctor's recovery phase to fail at DB connect time.
+	env["DB_HOST"] = "127.0.0.1"
+	env["DB_PORT"] = "1"
+
+	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.exitCode != 4 {
+		t.Fatalf("exit code mismatch: want=4 got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	if strings.TrimSpace(res.stdout) != "" {
+		t.Fatalf("expected no stdout for error case, got:\n%s", res.stdout)
+	}
+
+	errPayload, ok := findCLIErrorPayload(res.stderr)
+	if !ok {
+		t.Fatalf("expected JSON error payload in stderr, got:\n%s", res.stderr)
+	}
+
+	if got, _ := errPayload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: want=error got=%q payload=%v", got, errPayload)
+	}
+	if got, _ := errPayload["error_class"].(string); got != "RECOVERY" {
+		t.Fatalf("error_class mismatch: want=RECOVERY got=%q payload=%v", got, errPayload)
+	}
+	if got := jsonInt64(t, errPayload, "exit_code"); got != 4 {
+		t.Fatalf("exit_code mismatch in payload: want=4 got=%d payload=%v", got, errPayload)
+	}
+
+	message, _ := errPayload["message"].(string)
+	if !strings.Contains(strings.ToLower(message), "doctor recovery phase failed") {
+		t.Fatalf("message mismatch: expected substring %q in %q", "doctor recovery phase failed", message)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // test cases
 // -----------------------------------------------------------------------------
