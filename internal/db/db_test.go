@@ -61,3 +61,39 @@ func TestLoadConnMaxLifetimeFallsBackOnNegative(t *testing.T) {
 		t.Fatalf("expected default conn max lifetime 30m for negative, got %v", got)
 	}
 }
+
+func TestLoadConnectTimeoutFallbackAndOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONNECT_TIMEOUT_MS", "0")
+	if got := loadConnectTimeout(); got != 5*time.Second {
+		t.Fatalf("expected default connect timeout 5s for zero, got %v", got)
+	}
+
+	t.Setenv("COLDKEEP_DB_CONNECT_TIMEOUT_MS", "1500")
+	if got := loadConnectTimeout(); got != 1500*time.Millisecond {
+		t.Fatalf("expected connect timeout 1500ms, got %v", got)
+	}
+}
+
+func TestLoadOperationTimeoutFallbackAndOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_OPERATION_TIMEOUT_MS", "-10")
+	if got := loadOperationTimeout(); got != 5*time.Minute {
+		t.Fatalf("expected default operation timeout 5m for negative, got %v", got)
+	}
+
+	t.Setenv("COLDKEEP_DB_OPERATION_TIMEOUT_MS", "60000")
+	if got := loadOperationTimeout(); got != 60*time.Second {
+		t.Fatalf("expected operation timeout 60s, got %v", got)
+	}
+}
+
+func TestLoadConnMaxIdleTimeFallbackAndOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS", "-1")
+	if got := loadConnMaxIdleTime(); got != 5*time.Minute {
+		t.Fatalf("expected default conn max idle time 5m for negative, got %v", got)
+	}
+
+	t.Setenv("COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS", "90000")
+	if got := loadConnMaxIdleTime(); got != 90*time.Second {
+		t.Fatalf("expected conn max idle time 90s, got %v", got)
+	}
+}
