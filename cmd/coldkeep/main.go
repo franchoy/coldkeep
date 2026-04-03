@@ -199,7 +199,7 @@ func runCLI(args []string) int {
 	case "search":
 		err = runSearchCommand(parsed, outputMode)
 	case "verify":
-		err = runVerifyCommand(parsed)
+		err = runVerifyCommand(parsed, outputMode)
 	default:
 		err = usageErrorf("unknown command: %s", parsed.method)
 	}
@@ -964,7 +964,7 @@ func printStatsReport(r *maintenance.StatsResult) {
 // runVerifyCommand executes recovered-state verification. It is not intended
 // to be an online checker during active writes, where transient metadata/data
 // divergence can produce false positives.
-func runVerifyCommand(parsed parsedCommandLine) error {
+func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
 		return err
 	}
@@ -983,7 +983,14 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 		if len(parsed.positionals) > 2 {
 			return usageErrorf("Usage: coldkeep verify system [--standard|--full|--deep]")
 		}
-		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel))
+		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
+		if verifyErr != nil {
+			return verifyError(verifyErr)
+		}
+		if outputMode == outputModeText {
+			fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		}
+		return nil
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
 			return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
@@ -994,7 +1001,14 @@ func runVerifyCommand(parsed parsedCommandLine) error {
 			return usageErrorf("Invalid fileID: %v", err)
 		}
 
-		return verifyError(maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel))
+		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, int(fileID), verifyLevel)
+		if verifyErr != nil {
+			return verifyError(verifyErr)
+		}
+		if outputMode == outputModeText {
+			fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		}
+		return nil
 	default:
 		return usageErrorf("Unknown target for verify: %s", target)
 	}
