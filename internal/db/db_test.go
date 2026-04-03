@@ -199,3 +199,58 @@ func TestNewOperationContextCancelFuncCancelsContext(t *testing.T) {
 		t.Fatalf("expected canceled context after cancel(), got: %v", ctx.Err())
 	}
 }
+
+func TestLoadStatementTimeoutFallbackAndOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_STATEMENT_TIMEOUT_MS", "0")
+	if got := loadStatementTimeout(); got != 30*time.Second {
+		t.Fatalf("expected default statement timeout 30s, got %v", got)
+	}
+
+	t.Setenv("COLDKEEP_DB_STATEMENT_TIMEOUT_MS", "2500")
+	if got := loadStatementTimeout(); got != 2500*time.Millisecond {
+		t.Fatalf("expected statement timeout 2500ms, got %v", got)
+	}
+}
+
+func TestLoadLockTimeoutFallbackAndOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_LOCK_TIMEOUT_MS", "-1")
+	if got := loadLockTimeout(); got != 5*time.Second {
+		t.Fatalf("expected default lock timeout 5s, got %v", got)
+	}
+
+	t.Setenv("COLDKEEP_DB_LOCK_TIMEOUT_MS", "3200")
+	if got := loadLockTimeout(); got != 3200*time.Millisecond {
+		t.Fatalf("expected lock timeout 3200ms, got %v", got)
+	}
+}
+
+func TestLoadIdleInTransactionTimeoutFallbackAndOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS", "0")
+	if got := loadIdleInTransactionTimeout(); got != 60*time.Second {
+		t.Fatalf("expected default idle-in-tx timeout 60s, got %v", got)
+	}
+
+	t.Setenv("COLDKEEP_DB_IDLE_IN_TX_TIMEOUT_MS", "7000")
+	if got := loadIdleInTransactionTimeout(); got != 7*time.Second {
+		t.Fatalf("expected idle-in-tx timeout 7s, got %v", got)
+	}
+}
+
+func TestDefaultTimeoutAccessorsReflectCurrentGlobals(t *testing.T) {
+	origOperation := operationTimeout
+	origStatement := statementTimeout
+	t.Cleanup(func() {
+		operationTimeout = origOperation
+		statementTimeout = origStatement
+	})
+
+	operationTimeout = 12 * time.Second
+	statementTimeout = 34 * time.Second
+
+	if got := DefaultOperationTimeout(); got != 12*time.Second {
+		t.Fatalf("expected DefaultOperationTimeout=12s, got %v", got)
+	}
+	if got := DefaultStatementTimeout(); got != 34*time.Second {
+		t.Fatalf("expected DefaultStatementTimeout=34s, got %v", got)
+	}
+}
