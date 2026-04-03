@@ -3475,6 +3475,38 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("missing_schema_with_auto_bootstrap_enabled", func(t *testing.T) {
+		dbName := tempDBName("coldkeep_cli_bootstrap_success")
+
+		adminDB := openRawPostgresDB(t, "")
+		if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
+			_ = adminDB.Close()
+			t.Skipf("CREATE DATABASE not available (%v); skipping bootstrap-enabled CLI message subtest", err)
+		}
+		_ = adminDB.Close()
+
+		t.Cleanup(func() {
+			cleanupDB := openRawPostgresDB(t, "")
+			defer func() { _ = cleanupDB.Close() }()
+			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
+		})
+
+		env := defaultCLIEnv(container.ContainersDir)
+		env["DB_NAME"] = dbName
+		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "true"
+
+		res := runColdkeepCommand(t, repoRoot, binPath, env, "stats")
+		if res.exitCode != 0 {
+			t.Fatalf("stats must succeed when auto-bootstrap is enabled and schema is missing; exitCode=%d stdout=%q stderr=%q", res.exitCode, res.stdout, res.stderr)
+		}
+
+		// Verify that schema initialization happened silently (no error output).
+		errText := strings.TrimSpace(res.stderr)
+		if strings.Contains(errText, "schema is not initialized") {
+			t.Errorf("expected bootstrap to succeed silently, but got schema error in stderr: %q", errText)
+		}
+	})
 }
 
 func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
