@@ -111,6 +111,7 @@ jobs:
       - name: Run integration tests (correctness tier)
         env:
           COLDKEEP_TEST_DB: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
           COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           DB_HOST: 127.0.0.1
@@ -157,6 +158,7 @@ jobs:
       - name: Run integration tests (standard stress tier)
         env:
           COLDKEEP_TEST_DB: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
           COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           DB_HOST: 127.0.0.1
@@ -204,6 +206,7 @@ jobs:
         env:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_LONG_RUN: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: ${{ matrix.codec }}
           COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           DB_HOST: 127.0.0.1
