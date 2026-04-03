@@ -23,6 +23,20 @@ important than feature velocity.
 
 Major architectural changes should be discussed before implementation.
 
+## v0.10 Focus: Validation Over Features
+
+During the v0.10 phase, contributions should prioritize:
+
+-   strengthening invariants and correctness guarantees
+-   improving adversarial and long-run test coverage
+-   identifying and reproducing edge-case failures
+-   improving observability and operator-facing behavior
+
+New storage features or architectural changes are discouraged unless they address
+a demonstrated correctness issue.
+
+This phase is focused on proving system reliability before v1.0.
+
 ------------------------------------------------------------------------
 
 ## Development Requirements
