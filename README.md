@@ -432,6 +432,8 @@ without a major-version bump.
 
 For JSON errors (`--output json`), `error_class` matches this table (`USAGE`,
 `GENERAL`, `VERIFY`, `RECOVERY`) and `exit_code` contains the numeric code.
+In particular, `coldkeep doctor --output json` recovery-phase failures are
+guaranteed to return `error_class=RECOVERY` with exit code `4`.
 
 ---
 
