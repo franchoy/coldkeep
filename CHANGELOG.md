@@ -138,6 +138,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `aes-gcm` codec, verifies baseline success under the original key, then
   switches to a different valid key and asserts both deep verify and restore
   reject the mismatched-key read path
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`: stores a file
+  with the `aes-gcm` codec, then sets malformed `COLDKEEP_KEY` configuration
+  and asserts both deep verify and restore fail under invalid key setup
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
