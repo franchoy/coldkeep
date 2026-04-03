@@ -5695,9 +5695,12 @@ func TestVerifyFull(t *testing.T) {
 			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'verify_full_bad_chunk'`)
 		}()
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
-			t.Fatal("RunVerify full should have detected malformed completed chunk but returned nil")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
+			"found 1 errors in checkCompletedChunkBlockCardinality checks",
+			"verify-full malformed completed chunk",
+		)
 	})
 
 	t.Run("detects missing container file", func(t *testing.T) {
@@ -5714,9 +5717,12 @@ func TestVerifyFull(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err == nil {
-			t.Fatal("verify full should detect missing container file")
-		}
+		assertErrorContains(
+			t,
+			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
+			"found 1 errors in checkContainersFileExistence checks",
+			"verify-full missing container file",
+		)
 	})
 }
 
@@ -6460,9 +6466,11 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 		t.Fatalf("update container current_size for trailing-byte simulation: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should detect trailing unaccounted bytes but returned nil")
-	}
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"trailing-bytes",
+	)
 }
 
 func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {

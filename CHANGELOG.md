@@ -162,6 +162,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
 - Tightened remaining system-level verification regressions to assert returned
   error contracts, including deep container-content mismatch aggregation and
   full-mode non-contiguous offset detection
+- Tightened the remaining local verify-block regressions in `TestVerifyFull`
+  and `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock` so malformed
+  completed chunks, missing container files, and deep trailing-byte failures
+  assert returned error-contract substrings instead of generic failure only
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
