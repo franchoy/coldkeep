@@ -92,6 +92,18 @@ coldkeep v0.9 guarantees:
 - atomic restore operations
 - safe concurrent storage operations
 
+### Core invariants
+
+The system relies on a small set of invariants that should stay true across store,
+restore, verification, garbage collection, and recovery:
+
+- every `COMPLETED` chunk has exactly one valid block record
+- every block record references a valid container
+- every `COMPLETED` logical file has a complete, contiguous, ordered `file_chunk` graph
+- `live_ref_count > 0` protects a chunk from garbage collection
+- `pin_count > 0` protects a chunk from concurrent deletion during restore-like operations
+- committed metadata implies the referenced bytes are already durable on disk
+
 ### Core validity model
 
 A logical file is considered **valid and restorable** only when:
