@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +167,35 @@ func TestBuildConnectionOptionsUsesCurrentTimeoutGlobals(t *testing.T) {
 	}
 	if !strings.Contains(options, "-c idle_in_transaction_session_timeout=4200") {
 		t.Fatalf("expected idle-in-tx timeout option in %q", options)
+	}
+}
+
+func TestNewOperationContextWithNilParentUsesOperationTimeout(t *testing.T) {
+	origOperationTimeout := operationTimeout
+	t.Cleanup(func() { operationTimeout = origOperationTimeout })
+	operationTimeout = 75 * time.Millisecond
+
+	ctx, cancel := NewOperationContext(nil)
+	defer cancel()
+
+	if ctx == nil {
+		t.Fatalf("expected non-nil context")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatalf("expected context deadline to be set")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 250*time.Millisecond {
+		t.Fatalf("unexpected remaining deadline window: %v", remaining)
+	}
+}
+
+func TestNewOperationContextCancelFuncCancelsContext(t *testing.T) {
+	ctx, cancel := NewOperationContext(nil)
+	cancel()
+
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("expected canceled context after cancel(), got: %v", ctx.Err())
 	}
 }
