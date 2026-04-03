@@ -96,3 +96,29 @@ func TestOpenReadOnlyContainerFailsOnInvalidHeader(t *testing.T) {
 		t.Fatalf("expected wrapped readonly header-validation contract, got: %v", err)
 	}
 }
+
+func TestBrokenOpenContainerErrorFormatsAndUnwraps(t *testing.T) {
+	inner := errors.New("open failed")
+	err := &BrokenOpenContainerError{ContainerID: 77, Err: inner}
+
+	if got := err.Error(); !strings.Contains(got, "open container 77") || !strings.Contains(got, "open failed") {
+		t.Fatalf("unexpected formatted error: %q", got)
+	}
+	if !errors.Is(err, inner) {
+		t.Fatalf("expected errors.Is to match wrapped inner error")
+	}
+	if err.Unwrap() != inner {
+		t.Fatalf("expected Unwrap to return inner error")
+	}
+}
+
+func TestBrokenOpenContainerErrorNilReceiverBehavior(t *testing.T) {
+	var err *BrokenOpenContainerError
+
+	if got := err.Error(); got != "broken open container" {
+		t.Fatalf("unexpected nil-receiver error string: %q", got)
+	}
+	if err.Unwrap() != nil {
+		t.Fatalf("expected nil-receiver Unwrap to return nil")
+	}
+}
