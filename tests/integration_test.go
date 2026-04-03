@@ -576,6 +576,11 @@ func mustRead(t *testing.T, p string) []byte {
 	return b
 }
 
+func setTestAESGCMKey(t *testing.T) {
+	t.Helper()
+	t.Setenv("COLDKEEP_KEY", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+}
+
 func itoa(i int) string {
 	// small int to string without fmt to keep output clean
 	if i == 0 {
@@ -6041,6 +6046,70 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should detect chunk data corruption but returned nil")
+	}
+}
+
+func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
+	requireDB(t)
+	setTestAESGCMKey(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_tamper.bin", 512*1024)
+
+	sgctx := newTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
+	if err != nil {
+		t.Fatalf("store aes-gcm file: %v", err)
+	}
+
+	var storedCodec string
+	var nonceLen int
+	err = dbconn.QueryRow(`
+		SELECT b.codec, OCTET_LENGTH(b.nonce)
+		FROM file_chunk fc
+		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY fc.chunk_order ASC
+		LIMIT 1
+	`, result.FileID).Scan(&storedCodec, &nonceLen)
+	if err != nil {
+		t.Fatalf("query aes-gcm block metadata: %v", err)
+	}
+	if storedCodec != string(blocks.CodecAESGCM) {
+		t.Fatalf("expected stored codec %q, got %q", blocks.CodecAESGCM, storedCodec)
+	}
+	if nonceLen == 0 {
+		t.Fatal("expected aes-gcm block nonce to be present")
+	}
+
+	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
+		t.Fatal("verify system --deep should detect aes-gcm ciphertext tampering but returned nil")
+	}
+
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	outPath := filepath.Join(restoreDir, "restored.bin")
+	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
+		t.Fatal("restore should fail after aes-gcm ciphertext tampering but returned nil")
 	}
 }
 
