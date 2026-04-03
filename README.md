@@ -19,7 +19,6 @@ coldkeep is designed to guarantee deterministic, byte-identical restore of store
 validated by end-to-end hashing and resilient across garbage collection
 and system restart/recovery under defined operating conditions.
 
-
 > coldkeep is designed as a correctness-first storage engine, prioritizing
 > determinism and recoverability over performance and feature completeness.
 
@@ -265,7 +264,7 @@ Guarantees hold only if:
 
 coldkeep now supports simulation to evaluate storage impact without writing data.
 
-### Example
+### Example simulation commands
 
 ```bash
 coldkeep simulate store-folder ./data
@@ -400,7 +399,7 @@ coldkeep supports structured output for automation.
 - `text` (default)
 - `json`
 
-### Example
+### Example JSON output commands
 
 ```bash
 coldkeep stats --output json
@@ -409,7 +408,7 @@ coldkeep list --limit 50 --offset 100 --output json
 coldkeep simulate store-folder ./data --output json
 ```
 
-### Notes
+### Output notes
 
 - JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
 - CLI exit codes are now consistent and machine-friendly
@@ -480,7 +479,7 @@ Load it into your shell:
 export $(cat .env | xargs)
 ```
 
-### Docker:
+### Docker
 
 The `/app` mount ensures the `.env` file created by `init` persists on the host.
 
@@ -533,7 +532,7 @@ export $(cat .env | xargs)
 coldkeep store file.txt
 ```
 
-#### Optional: simulate storage impact before storing
+#### Optional: simulate storage impact before storing (local)
 
 ```bash
 coldkeep simulate store file.txt
@@ -558,8 +557,7 @@ docker compose run --rm -v "$PWD:/app" app init
 ```
 
 > **Important:** This creates a `.env` file with your encryption key.  
-> You must pass this file to subsequent commands using `--env-file`.
-
+> You must pass this file to subsequent commands using `--env-file`.  
 > **Security note:** If you lose the key, data cannot be recovered.
 
 ```bash
@@ -570,7 +568,7 @@ docker compose run --rm \
   app store /samples/hello.txt
 ```
 
-#### Optional: simulate storage impact before storing
+#### Optional: simulate storage impact before storing (Docker)
 
 ```bash
 docker compose run --rm \
@@ -602,7 +600,7 @@ It runs the checks in this order:
 
 Doctor intentionally runs its own internal recovery phase and does not use the generic startup recovery event path used by commands such as `store`, `restore`, and `verify`.
 
-### Usage
+### Doctor usage
 
 ```bash
 coldkeep doctor
@@ -702,7 +700,7 @@ consistency and detect corruption across metadata and stored data.
   - Reads container data and recomputes chunk hashes
   - Detects physical data corruption at the byte level
 
-### Usage
+### Verification usage
 
 Verify the entire system:
 
@@ -730,7 +728,7 @@ CLI defaults/parsing rules:
   - `coldkeep verify file <file_id> <standard|full|deep>`
 - Do not pass both a verify-level flag and positional level token in the same invocation.
 
-### Notes
+### Verification notes
 
 Verification is a recovered-state checker, not a general online consistency checker.
 Running verification while writes are in-flight can produce transient false positives.
@@ -746,8 +744,6 @@ Mode guidance:
 Deep verification performs full reads of container files and may be slow,
 especially for large datasets.
 Recommended for periodic integrity audits rather than frequent execution.
-
-
 
 ---
 
@@ -1103,7 +1099,7 @@ bash scripts/smoke.sh
 
 This option truncates smoke tables and clears `COLDKEEP_STORAGE_DIR` before running.
 
-#### Docker
+#### Smoke in Docker
 
 ``` bash
 docker compose up -d postgres
