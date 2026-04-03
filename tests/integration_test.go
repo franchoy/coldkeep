@@ -5115,6 +5115,25 @@ func TestVerifyStandard(t *testing.T) {
 		}
 	})
 
+	t.Run("detects completed chunk missing block row", func(t *testing.T) {
+		if _, err := dbconn.Exec(`
+				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
+				VALUES ('completed_chunk_without_block_row', 2048, $1, 0, 0)
+		`, filestate.ChunkCompleted); err != nil {
+			t.Fatalf("insert completed chunk without block row: %v", err)
+		}
+		defer func() {
+			if _, err := dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'completed_chunk_without_block_row'`); err != nil {
+				t.Fatalf("delete completed chunk without block row: %v", err)
+			}
+
+		}()
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err == nil {
+			t.Fatal("RunVerify should have detected completed chunk missing block row but returned nil")
+		}
+	})
+
 	t.Run("detects pin_count on non-completed chunk", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
 				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
@@ -6022,6 +6041,95 @@ func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify after repeated stores: %v", err)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+	assertUniqueFileChunkOrders(t, dbconn)
+}
+
+// TestStoreRemoveGCRestartStoreConvergesChunkGraph validates that repeated
+// lifecycle cycles converge to the same logical chunk graph even when restart
+// recovery is interleaved between cycles.
+func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "cycle_convergence.bin", 4*1024*1024+137)
+	wantHash := sha256File(t, inPath)
+
+	ctx := newTestContext(dbconn)
+	first, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("initial store: %v", err)
+	}
+	baselineGraph := queryChunkGraph(t, dbconn, first.FileID)
+	if len(baselineGraph) < 2 {
+		t.Fatalf("expected multi-chunk baseline graph, got %d chunk(s)", len(baselineGraph))
+	}
+
+	fileID := first.FileID
+	const cycles = 8
+	for i := 0; i < cycles; i++ {
+		if err := storage.RemoveFileWithDB(dbconn, fileID); err != nil {
+			t.Fatalf("cycle %d remove: %v", i, err)
+		}
+		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+			t.Fatalf("cycle %d gc: %v", i, err)
+		}
+
+		if i%2 == 1 {
+			if err := dbconn.Close(); err != nil {
+				t.Fatalf("cycle %d close db before restart: %v", i, err)
+			}
+			if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+				t.Fatalf("cycle %d recovery: %v", i, err)
+			}
+			dbconn, err = db.ConnectDB()
+			if err != nil {
+				t.Fatalf("cycle %d reconnect db: %v", i, err)
+			}
+			ctx = newTestContext(dbconn)
+		}
+
+		result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+		if err != nil {
+			t.Fatalf("cycle %d store: %v", i, err)
+		}
+		fileID = result.FileID
+
+		graph := queryChunkGraph(t, dbconn, fileID)
+		if !slices.Equal(baselineGraph, graph) {
+			t.Fatalf("cycle %d chunk graph changed: baseline=%v current=%v", i, baselineGraph, graph)
+		}
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+			t.Fatalf("cycle %d verify standard: %v", i, err)
+		}
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "cycle_convergence.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("restore after cycles: %v", err)
+	}
+	if gotHash := sha256File(t, outPath); gotHash != wantHash {
+		t.Fatalf("restored hash mismatch after cycles: want %s got %s", wantHash, gotHash)
 	}
 
 	assertNoProcessingRows(t, dbconn)

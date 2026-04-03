@@ -68,6 +68,9 @@ eliminate remaining correctness risks before the v1.0 milestone.
   after the last completed block payload
 - Added `VALIDATION_MATRIX.md` to map v0.9 guarantees to concrete verify checks
   and integration evidence during the v0.10 trust-validation phase
+- Added lifecycle determinism integration regression
+  `TestStoreRemoveGCRestartStoreConvergesChunkGraph` to assert store/remove/GC/
+  restart cycles converge to a stable chunk graph and restorable output
 
 ### Changed
 
@@ -96,6 +99,8 @@ eliminate remaining correctness risks before the v1.0 milestone.
 
 - Standard verification now enforces pinned-chunk integrity:
   `pin_count > 0` chunks must remain `COMPLETED` and retain block metadata
+- Standard verification now also enforces completed-chunk block cardinality:
+  every `COMPLETED` chunk must have exactly one `blocks` row
 - Deep verification now fails when container tails contain trailing
   unaccounted bytes beyond the last completed block
 - PostgreSQL startup schema guard now explicitly requires
