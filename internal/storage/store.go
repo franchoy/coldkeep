@@ -217,14 +217,14 @@ func isRetryableTxAbortError(err error) bool {
 	return strings.Contains(msg, "current transaction is aborted") || strings.Contains(msg, "25p02")
 }
 
-func runWithRetryableTxAbort(ctx context.Context, fn func() error) error {
+func runWithRetryableTxAbort(ctx context.Context, fn func(attempt int) error) error {
 	var err error
 	for attempt := 0; attempt < retryableTxAbortMaxAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		err = fn()
+		err = fn(attempt)
 		if err == nil {
 			return nil
 		}
@@ -1853,7 +1853,15 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 					if ctx.Err() != nil {
 						return
 					}
-					if err := runWithRetryableTxAbort(ctx, func() error {
+					if err := runWithRetryableTxAbort(ctx, func(attempt int) error {
+						if attempt > 0 {
+							retryWriter, retryErr := newWriterFromPrototype(sgctx.Writer)
+							if retryErr != nil {
+								return retryErr
+							}
+							workerWriter = retryWriter
+							workerCtx.Writer = retryWriter
+						}
 						return StoreFileWithStorageContextAndCodec(workerCtx, p, codec)
 					}); err != nil {
 						reportErr(err)

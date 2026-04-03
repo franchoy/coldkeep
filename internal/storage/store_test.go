@@ -134,7 +134,7 @@ func TestRunWithRetryableTxAbortRetriesThenSucceeds(t *testing.T) {
 	t.Parallel()
 
 	attempts := 0
-	err := runWithRetryableTxAbort(context.Background(), func() error {
+	err := runWithRetryableTxAbort(context.Background(), func(_ int) error {
 		attempts++
 		if attempts < 3 {
 			return errors.New("pq: current transaction is aborted, commands ignored until end of transaction block (25P02)")
@@ -154,7 +154,7 @@ func TestRunWithRetryableTxAbortStopsOnNonRetryableError(t *testing.T) {
 
 	wantErr := errors.New("permanent store failure")
 	attempts := 0
-	err := runWithRetryableTxAbort(context.Background(), func() error {
+	err := runWithRetryableTxAbort(context.Background(), func(_ int) error {
 		attempts++
 		return wantErr
 	})
@@ -163,6 +163,28 @@ func TestRunWithRetryableTxAbortStopsOnNonRetryableError(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
+func TestRunWithRetryableTxAbortReportsAttemptNumbers(t *testing.T) {
+	t.Parallel()
+
+	var seen []int
+	wantErr := errors.New("pq: current transaction is aborted, commands ignored until end of transaction block (25P02)")
+	err := runWithRetryableTxAbort(context.Background(), func(attempt int) error {
+		seen = append(seen, attempt)
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+	if len(seen) != retryableTxAbortMaxAttempts {
+		t.Fatalf("expected %d attempts, got %d", retryableTxAbortMaxAttempts, len(seen))
+	}
+	for index, attempt := range seen {
+		if attempt != index {
+			t.Fatalf("expected attempt index %d, got %d", index, attempt)
+		}
 	}
 }
 
