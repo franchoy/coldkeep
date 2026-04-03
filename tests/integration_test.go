@@ -32,7 +32,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
-// NOTE:
 // These tests are integration-style (DB + filesystem).
 // They are organized into three tiers:
 //

@@ -421,6 +421,12 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return RestoreFileResult{}, fmt.Errorf("close temporary output file: %w", err)
 	}
 	outFile = nil
+	// TEST HOOK: simulate failure after temp file is written but before rename
+	if TestRestoreFailBeforeRenameHook != nil {
+		if hookErr := TestRestoreFailBeforeRenameHook(tempOutputPath, outputPath); hookErr != nil {
+			return RestoreFileResult{}, fmt.Errorf("test hook restore failure: %w", hookErr)
+		}
+	}
 	if err := os.Rename(tempOutputPath, outputPath); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
 	}
@@ -453,3 +459,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	result.RestoredHash = restoredHash
 	return result, nil
 }
+
+// testRestoreFailBeforeRenameHook is a test-only hook for simulating restore failures after temp file is written but before rename.
+// It should only be set in tests.
+var TestRestoreFailBeforeRenameHook func(tempOutputPath, outputPath string) error
