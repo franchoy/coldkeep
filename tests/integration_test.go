@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -6230,6 +6231,114 @@ func TestStoreGCRestore(t *testing.T) {
 	}
 }
 
+// TestStoreLifecycleSeededRandomizedOperationOrder exercises repeated store
+// lifecycles with deterministic random operation ordering to harden trust proof
+// coverage beyond fixed scripts.
+func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
+	requireDB(t)
+	requireStress(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(20260403))
+	const iterations = 20
+
+	for i := 0; i < iterations; i++ {
+		size := 512*1024 + rng.Intn(2*1024*1024)
+		path := filepath.Join(inputDir, fmt.Sprintf("seeded-random-%02d.bin", i))
+		data := make([]byte, size)
+		for j := range data {
+			data[j] = byte((j*17 + i*23 + 5) % 251)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("iteration %d write input: %v", i, err)
+		}
+		wantHash := sha256File(t, path)
+
+		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), path); err != nil {
+			t.Fatalf("iteration %d store: %v", i, err)
+		}
+		fileID := fetchFileIDByHash(t, dbconn, wantHash)
+
+		ops := []string{"verify_standard", "verify_full", "gc_dry", "gc_real", "restore"}
+		rng.Shuffle(len(ops), func(a, b int) {
+			ops[a], ops[b] = ops[b], ops[a]
+		})
+		runCount := 2 + rng.Intn(3)
+
+		for oi := 0; oi < runCount; oi++ {
+			switch ops[oi] {
+			case "verify_standard":
+				if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+					t.Fatalf("iteration %d verify standard: %v", i, err)
+				}
+			case "verify_full":
+				if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+					t.Fatalf("iteration %d verify full: %v", i, err)
+				}
+			case "gc_dry":
+				if _, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir); err != nil {
+					t.Fatalf("iteration %d gc dry-run: %v", i, err)
+				}
+			case "gc_real":
+				if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+					t.Fatalf("iteration %d gc real while file live: %v", i, err)
+				}
+			case "restore":
+				outPath := filepath.Join(restoreDir, fmt.Sprintf("seeded-random-%02d.restored.bin", i))
+				if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+					t.Fatalf("iteration %d restore: %v", i, err)
+				}
+				if gotHash := sha256File(t, outPath); gotHash != wantHash {
+					t.Fatalf("iteration %d restore hash mismatch: want %s got %s", i, wantHash, gotHash)
+				}
+			}
+		}
+
+		if err := storage.RemoveFileWithDB(dbconn, fileID); err != nil {
+			t.Fatalf("iteration %d remove: %v", i, err)
+		}
+
+		gcRuns := 1 + rng.Intn(2)
+		for g := 0; g < gcRuns; g++ {
+			if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+				t.Fatalf("iteration %d cleanup gc run %d: %v", i, g, err)
+			}
+		}
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+			t.Fatalf("iteration %d verify standard after cleanup: %v", i, err)
+		}
+		assertNoProcessingRows(t, dbconn)
+		assertUniqueFileChunkOrders(t, dbconn)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("final verify full after seeded randomized loop: %v", err)
+	}
+}
+
 // TestStoreGCVerifyRestoreDeleteLoopStability repeats the full file lifecycle
 // enough times to catch drift, leaked state, and cleanup regressions that do
 // not show up in one-shot roundtrip tests.
@@ -7665,6 +7774,136 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 	}
 	if afterStat.Size() <= dbSizeAfter || dbSizeAfter != dbSizeBefore {
 		t.Fatalf("expected quarantined container to show physical/db mismatch after failed rollback (physical=%d db_before=%d db_after=%d)", afterStat.Size(), dbSizeBefore, dbSizeAfter)
+	}
+}
+
+func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
+	requireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	resetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+	inPath := createTempFile(t, inputDir, "sealing-marker-failure.bin", 3*1024*1024)
+	fileHash := sha256File(t, inPath)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_container_mark_sealing_trg ON container`); err != nil {
+		t.Fatalf("drop stale container trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_container_mark_sealing()`); err != nil {
+		t.Fatalf("drop stale container trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE FUNCTION ck_fail_container_mark_sealing()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			IF NEW.sealing = TRUE AND OLD.sealing = FALSE THEN
+				RAISE EXCEPTION 'injected container sealing marker update failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$
+	`); err != nil {
+		t.Fatalf("create container trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE TRIGGER ck_fail_container_mark_sealing_trg
+		BEFORE UPDATE OF sealing ON container
+		FOR EACH ROW
+		EXECUTE FUNCTION ck_fail_container_mark_sealing()
+	`); err != nil {
+		t.Fatalf("create container trigger: %v", err)
+	}
+
+	ctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: container.ContainersDir,
+	}
+
+	_, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+	if err == nil {
+		t.Fatalf("expected store failure due to injected container sealing marker update failure")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "injected container sealing marker update failure") {
+		t.Fatalf("expected injected sealing marker failure in error, got: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&fileID); err != nil {
+		t.Fatalf("query failed logical file row: %v", err)
+	}
+
+	var status string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
+		t.Fatalf("query failed logical file status: %v", err)
+	}
+	if status != filestate.LogicalFileAborted {
+		t.Fatalf("expected logical file status ABORTED after injected sealing-marker failure, got %q", status)
+	}
+
+	var sealingRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealing = TRUE`).Scan(&sealingRows); err != nil {
+		t.Fatalf("count sealing rows after failed store: %v", err)
+	}
+	if sealingRows != 0 {
+		t.Fatalf("expected no lingering sealing=TRUE rows after rollback, got %d", sealingRows)
+	}
+
+	assertNoProcessingRows(t, dbconn)
+
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_container_mark_sealing_trg ON container`); err != nil {
+		t.Fatalf("drop container trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_container_mark_sealing()`); err != nil {
+		t.Fatalf("drop container trigger function: %v", err)
+	}
+
+	// Retry store without fault injection; operation should succeed and be restorable.
+	ctx = storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: container.ContainersDir,
+	}
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain); err != nil {
+		t.Fatalf("store retry after removing injected sealing-marker failure: %v", err)
+	}
+
+	var completedFileID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1 AND status = $2`, fileHash, filestate.LogicalFileCompleted).Scan(&completedFileID); err != nil {
+		t.Fatalf("query completed logical file after retry: %v", err)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	_ = os.MkdirAll(outDir, 0o755)
+	outPath := filepath.Join(outDir, "sealing-marker-failure.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, completedFileID, outPath); err != nil {
+		t.Fatalf("restore after successful retry: %v", err)
+	}
+	if gotHash := sha256File(t, outPath); gotHash != fileHash {
+		t.Fatalf("restored hash mismatch after successful retry: want %s got %s", fileHash, gotHash)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify full after sealing-marker failure recovery: %v", err)
 	}
 }
 

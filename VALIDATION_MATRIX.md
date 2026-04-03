@@ -15,8 +15,8 @@ during the v0.10 trust-validation phase.
 | --- | --- | --- | --- |
 | Deterministic, byte-identical restore | Deep restore path validates chunk hash and final file hash | `TestRepeatRestoreDeterminism`, `TestSameInputSameChunkGraph`, `TestStoreRemoveGCRestartStoreConvergesChunkGraph` | covered |
 | Repeat store does not drift chunk graph | Reuse and graph checks in store path, plus verify full/system checks | `TestRepeatedStorePreservesChunkGraphDeterminism` | covered |
-| No exposure of partially written or inconsistent data | Recovery + verify model excludes/processes invalid lifecycle states, including standard verify enforcement that each COMPLETED chunk has exactly one blocks row | `TestStartupRecoverySimulation`, `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`, `TestVerifyStandard/detects completed chunk missing block row` | covered |
-| Non-destructive garbage collection | GC liveness checks use `live_ref_count OR pin_count`; verify post-GC integrity | `TestStoreGCRestore`, `TestGCRestorePinRaceContainerNotDeleted` | covered |
+| No exposure of partially written or inconsistent data | Recovery + verify model excludes/processes invalid lifecycle states, including standard verify enforcement that each COMPLETED chunk has exactly one blocks row and rollback-safe sealing-marker transitions | `TestStartupRecoverySimulation`, `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`, `TestVerifyStandard/detects completed chunk missing block row`, `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers` | covered |
+| Non-destructive garbage collection | GC liveness checks use `live_ref_count OR pin_count`; verify post-GC integrity | `TestStoreGCRestore`, `TestGCRestorePinRaceContainerNotDeleted`, `TestStoreLifecycleSeededRandomizedOperationOrder` | covered |
 | Atomic restore operations | Restore path writes temp + fsync + atomic rename | `TestStoreGCRestore`, `TestSampleDatasetEndToEnd` | covered |
 | Safe concurrent storage operations | Verify catches graph/reference corruption; transactional claims/retries in write path | `TestConcurrentStoreSameFile`, `TestConcurrentStoreSameChunk`, `TestConcurrentStoreFolderStress` | covered |
 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
@@ -28,7 +28,7 @@ Use this section for branch-specific additions that are not yet fully covered.
 
 | Item | Target evidence | Owner | Status |
 | --- | --- | --- | --- |
-| Long-run randomized fault loop expansion | New long-run integration tests + repeated CI stress passes | TBD | planned |
+| Long-run randomized fault loop expansion | Seeded randomized lifecycle loop (`TestStoreLifecycleSeededRandomizedOperationOrder`) + repeated CI stress passes | TBD | in-progress |
 | Multi-process contention (non-goal for v1.0 baseline) | Separate post-v1.0 track | TBD | deferred |
 
 ## Exit Criteria

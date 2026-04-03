@@ -125,6 +125,15 @@ eliminate remaining correctness risks before the v1.0 milestone.
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
   and subsequent verify passes
+- Added integration regression
+  `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers`: injects a DB
+  failure on `container.sealing` transition, asserts store fails and marks file
+  ABORTED without lingering `sealing=TRUE` rows, then verifies clean retry,
+  restore hash equality, and full verify success
+- Added stress-tier seeded randomized lifecycle regression
+  `TestStoreLifecycleSeededRandomizedOperationOrder`: runs deterministic-random
+  operation ordering across store/verify/gc/restore/remove loops with per-step
+  integrity assertions
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious
