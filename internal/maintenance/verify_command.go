@@ -5,14 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
-
-func VerifyCommand(target string, fileID int, verifyLevel verify.VerifyLevel) error {
-	return VerifyCommandWithContainersDir(container.ContainersDir, target, fileID, verifyLevel)
-}
 
 func VerifyCommandWithContainersDir(containersDir string, target string, fileID int, verifyLevel verify.VerifyLevel) error {
 

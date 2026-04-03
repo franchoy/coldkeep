@@ -58,11 +58,6 @@ func logRecoveryEvent(action string, fields ...string) {
 	log.Println(line)
 }
 
-func SystemRecovery() error {
-	_, err := SystemRecoveryReportWithContainersDir(container.ContainersDir)
-	return err
-}
-
 func SystemRecoveryWithContainersDir(containersDir string) error {
 	_, err := SystemRecoveryReportWithContainersDir(containersDir)
 	return err
@@ -183,7 +178,7 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 	logRecoveryEvent("recover_sealing_containers_start")
 
 	// Clean up stale markers where a previous run sealed successfully but did not
-	// clear sealing (e.g., legacy code paths or manual DB edits).
+	// clear sealing (e.g., interrupted runs or manual DB edits).
 	if _, err := dbconn.ExecContext(ctx, `UPDATE container SET sealing = FALSE WHERE sealed = TRUE AND sealing = TRUE`); err != nil {
 		return fmt.Errorf("clear stale sealing markers: %w", err)
 	}

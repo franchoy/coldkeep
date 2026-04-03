@@ -42,10 +42,6 @@ func printCounters(dbconn *sql.DB) error {
 	return nil
 }
 
-func VerifySystemStandard(dbconn *sql.DB) error {
-	return VerifySystemStandardWithContainersDir(dbconn, container.ContainersDir)
-}
-
 func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	//	standard
 	//		reference count check
@@ -83,10 +79,6 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 	log.Printf("Standard system verification completed successfully.")
 
 	return nil
-}
-
-func VerifySystemFull(dbconn *sql.DB) error {
-	return VerifySystemFullWithContainersDir(dbconn, container.ContainersDir)
 }
 
 func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
@@ -141,10 +133,6 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 	log.Printf("Full system verification completed successfully.")
 
 	return nil
-}
-
-func VerifySystemDeep(dbconn *sql.DB) error {
-	return VerifySystemDeepWithContainersDir(dbconn, container.ContainersDir)
 }
 
 func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {

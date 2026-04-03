@@ -759,7 +759,7 @@ Recommended for periodic integrity audits rather than frequent execution.
 
 ---
 
-## Deterministic restore (historical note)
+## Deterministic restore
 
 Deterministic restore was introduced in v0.5 and is now part of the
 core storage guarantees defined in the Storage Guarantees section above.

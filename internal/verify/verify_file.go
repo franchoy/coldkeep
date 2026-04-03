@@ -114,10 +114,6 @@ func checkFileChunkOrdering(dbconn *sql.DB) error {
 	return nil
 }
 
-func VerifyFileStandard(dbconn *sql.DB, fileId int) error {
-	return VerifyFileStandardWithContainersDir(dbconn, fileId, container.ContainersDir)
-}
-
 func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -332,10 +328,6 @@ func verifyFileContainersAndOffsets(dbconn *sql.DB, fileID int, containersDir st
 	return nil
 }
 
-func VerifyFileFull(dbconn *sql.DB, fileId int) error {
-	return VerifyFileFullWithContainersDir(dbconn, fileId, container.ContainersDir)
-}
-
 func VerifyFileFullWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {
 	if err := VerifyFileStandardWithContainersDir(dbconn, fileId, containersDir); err != nil {
 		return fmt.Errorf("standard verification failed: %w", err)
@@ -504,10 +496,6 @@ func verifyFileChunkHashes(dbconn *sql.DB, fileID int, containersDir string) err
 	}
 
 	return nil
-}
-
-func VerifyFileDeep(dbconn *sql.DB, fileId int) error {
-	return VerifyFileDeepWithContainersDir(dbconn, fileId, container.ContainersDir)
 }
 
 func VerifyFileDeepWithContainersDir(dbconn *sql.DB, fileId int, containersDir string) error {

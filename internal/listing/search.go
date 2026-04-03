@@ -10,17 +10,6 @@ import (
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
-// SearchFilesResult returns matching records without printing them.
-func SearchFilesResult(args []string) ([]FileRecord, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to DB: %w", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	return SearchFilesResultWithDB(dbconn, args)
-}
-
 // SearchFilesResultWithDB returns matching records using a caller-managed DB connection.
 func SearchFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error) {
 	if dbconn == nil {

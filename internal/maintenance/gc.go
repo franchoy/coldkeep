@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
@@ -22,11 +21,6 @@ type GCResult struct {
 	DryRun             bool     `json:"dry_run"`
 	AffectedContainers int      `json:"affected_containers"`
 	ContainerFilenames []string `json:"container_filenames"`
-}
-
-func RunGC(dryRun bool) error {
-	_, err := RunGCWithContainersDirResult(dryRun, container.ContainersDir)
-	return err
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {

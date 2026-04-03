@@ -19,17 +19,6 @@ type FileRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// ListFilesResult returns the raw records without printing them.
-func ListFilesResult(args []string) ([]FileRecord, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to DB: %w", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	return ListFilesResultWithDB(dbconn, args)
-}
-
 // ListFilesResultWithDB returns raw records using a caller-managed DB connection.
 func ListFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error) {
 	if dbconn == nil {
