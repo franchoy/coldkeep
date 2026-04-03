@@ -6101,6 +6101,11 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should detect aes-gcm ciphertext tampering but returned nil")
+	} else {
+		errText := err.Error()
+		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
+			t.Fatalf("expected ciphertext-tamper verify error to keep deep aggregate contract, got: %v", err)
+		}
 	}
 
 	restoreDir := filepath.Join(tmp, "restore")
@@ -6110,6 +6115,8 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	outPath := filepath.Join(restoreDir, "restored.bin")
 	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
 		t.Fatal("restore should fail after aes-gcm ciphertext tampering but returned nil")
+	} else if !strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected ciphertext-tamper restore error to mention AEAD authentication failure, got: %v", err)
 	}
 }
 
@@ -6166,6 +6173,11 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
 		t.Fatal("verify system --deep should detect aes-gcm nonce tampering but returned nil")
+	} else {
+		errText := err.Error()
+		if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
+			t.Fatalf("expected nonce-tamper verify error to keep deep aggregate contract, got: %v", err)
+		}
 	}
 
 	restoreDir := filepath.Join(tmp, "restore")
@@ -6175,6 +6187,8 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 	outPath := filepath.Join(restoreDir, "restored.bin")
 	if err := storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath); err == nil {
 		t.Fatal("restore should fail after aes-gcm nonce tampering but returned nil")
+	} else if !strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected nonce-tamper restore error to mention AEAD authentication failure, got: %v", err)
 	}
 }
 
