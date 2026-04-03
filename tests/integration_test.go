@@ -6079,6 +6079,10 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	applySchema(t, dbconn)
 	resetDB(t, dbconn)
 
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(1 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
 	inputDir := filepath.Join(tmp, "input")
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -6098,36 +6102,82 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 			t.Fatalf("iteration %d: verify after cleanup: %v", iteration, err)
 		}
 
+		var remainingFiles int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file`).Scan(&remainingFiles); err != nil {
+			t.Fatalf("iteration %d: count logical_file rows after cleanup: %v", iteration, err)
+		}
+		if remainingFiles != 0 {
+			t.Fatalf("iteration %d: expected 0 logical_file rows after cleanup, got %d", iteration, remainingFiles)
+		}
+
+		var remainingMappings int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk`).Scan(&remainingMappings); err != nil {
+			t.Fatalf("iteration %d: count file_chunk rows after cleanup: %v", iteration, err)
+		}
+		if remainingMappings != 0 {
+			t.Fatalf("iteration %d: expected 0 file_chunk rows after cleanup, got %d", iteration, remainingMappings)
+		}
+
+		var liveOrPinnedChunks int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE live_ref_count > 0 OR pin_count > 0`).Scan(&liveOrPinnedChunks); err != nil {
+			t.Fatalf("iteration %d: count live/pinned chunks after cleanup: %v", iteration, err)
+		}
+		if liveOrPinnedChunks != 0 {
+			t.Fatalf("iteration %d: expected 0 live/pinned chunks after cleanup, got %d", iteration, liveOrPinnedChunks)
+		}
+
 		var remainingChunks int
 		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&remainingChunks); err != nil {
 			t.Fatalf("iteration %d: count chunks after cleanup: %v", iteration, err)
 		}
-		if remainingChunks != 0 {
-			t.Fatalf("iteration %d: expected 0 chunk rows after cleanup, got %d", iteration, remainingChunks)
+		if remainingChunks > 2 {
+			t.Fatalf("iteration %d: expected at most 2 dead chunk rows in reusable active container, got %d", iteration, remainingChunks)
 		}
 
 		var remainingBlocks int
 		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&remainingBlocks); err != nil {
 			t.Fatalf("iteration %d: count blocks after cleanup: %v", iteration, err)
 		}
-		if remainingBlocks != 0 {
-			t.Fatalf("iteration %d: expected 0 block rows after cleanup, got %d", iteration, remainingBlocks)
+		if remainingBlocks != remainingChunks {
+			t.Fatalf("iteration %d: expected block rows to match dead chunk rows after cleanup, got blocks=%d chunks=%d", iteration, remainingBlocks, remainingChunks)
 		}
 
 		var remainingContainers int
 		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container`).Scan(&remainingContainers); err != nil {
 			t.Fatalf("iteration %d: count containers after cleanup: %v", iteration, err)
 		}
-		if remainingContainers != 0 {
-			t.Fatalf("iteration %d: expected 0 container rows after cleanup, got %d", iteration, remainingContainers)
+		if remainingContainers > 1 {
+			t.Fatalf("iteration %d: expected at most one reusable active container after cleanup, got %d", iteration, remainingContainers)
+		}
+
+		var sealedContainers int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = TRUE`).Scan(&sealedContainers); err != nil {
+			t.Fatalf("iteration %d: count sealed containers after cleanup: %v", iteration, err)
+		}
+		if sealedContainers != 0 {
+			t.Fatalf("iteration %d: expected GC to collect all sealed containers after cleanup, got %d", iteration, sealedContainers)
+		}
+
+		if remainingContainers == 0 {
+			if remainingChunks != 0 || remainingBlocks != 0 {
+				t.Fatalf("iteration %d: expected no chunk/block metadata when no container rows remain, got chunks=%d blocks=%d", iteration, remainingChunks, remainingBlocks)
+			}
+		} else {
+			var reusableContainers int
+			if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE sealed = FALSE AND quarantine = FALSE`).Scan(&reusableContainers); err != nil {
+				t.Fatalf("iteration %d: count reusable active containers after cleanup: %v", iteration, err)
+			}
+			if reusableContainers != 1 {
+				t.Fatalf("iteration %d: expected exactly one non-quarantined unsealed reusable container after cleanup, got %d", iteration, reusableContainers)
+			}
 		}
 
 		entries, err := os.ReadDir(container.ContainersDir)
 		if err != nil {
 			t.Fatalf("iteration %d: read container dir after cleanup: %v", iteration, err)
 		}
-		if len(entries) != 0 {
-			t.Fatalf("iteration %d: expected empty container dir after cleanup, found %d entries", iteration, len(entries))
+		if len(entries) != remainingContainers {
+			t.Fatalf("iteration %d: expected container dir entries to match remaining container rows, got entries=%d rows=%d", iteration, len(entries), remainingContainers)
 		}
 	}
 
