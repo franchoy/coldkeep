@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type stubResult struct{}
@@ -106,6 +107,26 @@ func TestLockContainerRowNowaitWithRetryReturnsNonLockErrorImmediately(t *testin
 	}
 	if tx.execCalls != 1 {
 		t.Fatalf("expected no retries on non-lock error, got %d calls", tx.execCalls)
+	}
+}
+
+func TestLockContainerRowNowaitWithRetryUsesBackendAwareQueryWhenDBProvided(t *testing.T) {
+	tx := &stubTx{}
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	err = lockContainerRowNowaitWithRetry(tx, dbconn, 5, 1, time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected lock acquisition success, got: %v", err)
+	}
+	if len(tx.queries) != 1 {
+		t.Fatalf("expected one query, got %d", len(tx.queries))
+	}
+	if strings.Contains(tx.queries[0], "FOR UPDATE NOWAIT") {
+		t.Fatalf("expected sqlite backend query without NOWAIT suffix, got: %q", tx.queries[0])
 	}
 }
 
