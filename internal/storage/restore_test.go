@@ -514,3 +514,85 @@ func TestRestoreNonCompletedChunkMappingReturnsNoRestorableChunksError(t *testin
 		t.Fatalf("expected chunk pin_count to remain 0 when no chunk is restorable, got %d", pinCount)
 	}
 }
+
+func TestRestoreFailsWhenAESGCMTransformerKeyIsMissing(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Force transformer construction failure for schema-valid aes-gcm codec.
+	t.Setenv("COLDKEEP_KEY", "")
+
+	containersDir := t.TempDir()
+	payload := []byte("aesgcm-missing-key-restore-payload")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "aesgcm-missing-key.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash, int64(len(payload)), filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, 1, $3, $4, $5, $6, $7)`,
+		chunkID,
+		"aes-gcm",
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte("0123456789ab"),
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"aesgcm-missing-key-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID, chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	outPath := filepath.Join(t.TempDir(), "out.bin")
+	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
+	if err == nil || !strings.Contains(err.Error(), "get block transformer for codec aes-gcm") || !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
+		t.Fatalf("expected missing-key transformer error contract, got: %v", err)
+	}
+}
