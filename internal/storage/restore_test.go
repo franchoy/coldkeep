@@ -461,3 +461,56 @@ func TestRestoreFailsOnAESGCMDecodeFailure(t *testing.T) {
 		t.Fatalf("expected wrapped aes-gcm decode failure contract, got: %v", err)
 	}
 }
+
+func TestRestoreNonCompletedChunkMappingReturnsNoRestorableChunksError(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	nonEmptyHash := strings.Repeat("c", 64)
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"processing-chunk-restore.bin", int64(64), nonEmptyHash, filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		nonEmptyHash, int64(64), filestate.ChunkProcessing, int64(1),
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert processing chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)`,
+		fileID, chunkID, int64(0),
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "out.bin")
+	err = RestoreFileWithDB(dbconn, fileID, outPath)
+	if err == nil || !strings.Contains(err.Error(), "no chunks found for file") {
+		t.Fatalf("expected no-restorable-chunks error for non-completed chunk mapping, got: %v", err)
+	}
+
+	var pinCount int64
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCount); err != nil {
+		t.Fatalf("read chunk pin_count: %v", err)
+	}
+	if pinCount != 0 {
+		t.Fatalf("expected chunk pin_count to remain 0 when no chunk is restorable, got %d", pinCount)
+	}
+}
