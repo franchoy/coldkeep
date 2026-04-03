@@ -45,6 +45,27 @@ func TestParsePaginationArgsRejectsLimitAboveMaximum(t *testing.T) {
 	}
 }
 
+func TestParsePaginationArgsRejectsMissingLimitValue(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--limit"})
+	if err == nil || !strings.Contains(err.Error(), "missing argument for --limit") {
+		t.Fatalf("expected missing --limit argument contract, got: %v", err)
+	}
+}
+
+func TestParsePaginationArgsRejectsMissingOffsetValue(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--offset"})
+	if err == nil || !strings.Contains(err.Error(), "missing argument for --offset") {
+		t.Fatalf("expected missing --offset argument contract, got: %v", err)
+	}
+}
+
+func TestParsePaginationArgsRejectsNonIntegerLimitValue(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--limit", "NaN"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("expected invalid --limit parse contract, got: %v", err)
+	}
+}
+
 func TestApplyPaginationAppendsLimitThenOffset(t *testing.T) {
 	limitValue := int64(10)
 	offsetValue := int64(5)
