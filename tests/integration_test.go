@@ -5745,9 +5745,12 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep); err == nil {
-		t.Fatal("verify file --deep should detect chunk data corruption")
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep),
+		"chunk hash verification failed: found 1 errors in file chunk hash verification",
+		"verify-file deep chunk corruption",
+	)
 }
 
 func TestVerifyFileStandardPassesOnCleanStoredFile(t *testing.T) {
@@ -5793,9 +5796,12 @@ func TestVerifyFileFullDetectsContainerTruncation(t *testing.T) {
 		t.Fatalf("truncate container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err == nil {
-		t.Fatal("verify file --full should detect truncated container data")
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull),
+		"full verification failed: container and offset verification failed: container 1 size mismatch",
+		"verify-file full truncation",
+	)
 }
 
 func TestVerifyFileFullDetectsMissingContainerFile(t *testing.T) {
@@ -5809,9 +5815,12 @@ func TestVerifyFileFullDetectsMissingContainerFile(t *testing.T) {
 		t.Fatalf("remove container file: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err == nil {
-		t.Fatal("verify file --full should detect a missing container file")
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull),
+		"full verification failed: container and offset verification failed: missing container file",
+		"verify-file full missing-container",
+	)
 }
 
 func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
@@ -5832,9 +5841,12 @@ func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
 		t.Fatalf("delete chunk row: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard); err == nil {
-		t.Fatal("verify file should detect missing chunk metadata")
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard),
+		"chunk count mismatch: expected 1 but got 0",
+		"verify-file standard missing-chunk-metadata",
+	)
 }
 
 func TestVerifyFileStandardDetectsBrokenChunkOrder(t *testing.T) {
@@ -5845,9 +5857,12 @@ func TestVerifyFileStandardDetectsBrokenChunkOrder(t *testing.T) {
 		t.Fatalf("corrupt chunk ordering: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard); err == nil {
-		t.Fatal("verify file should detect broken chunk ordering")
-	}
+	assertErrorContains(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard),
+		"file chunk ordering error: expected chunk_order 0 but got 1",
+		"verify-file standard broken-order",
+	)
 }
 
 func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {

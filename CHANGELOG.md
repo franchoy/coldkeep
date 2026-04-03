@@ -155,6 +155,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   default-codec drift: `setupStoredFileForVerification`, `TestVerifyFull`, and
   `TestVerifySystemFullDetectsNonContiguousOffsets` now store with explicit
   `plain` codec selection so DB-backed runs do not depend on process defaults
+- Tightened file-level verification regressions to assert returned error
+  contracts instead of generic failure only, including deep chunk corruption,
+  full container truncation/missing-file cases, and standard missing-metadata /
+  broken-order cases
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
