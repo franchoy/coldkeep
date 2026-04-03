@@ -403,9 +403,9 @@ else
 fi
 
 echo ""
-echo "[smoke] === VERIFY MODES TEST ==="
+echo "[smoke] === VERIFY LEVELS TEST ==="
 
-# Test all three verify modes: standard, full, deep
+# Test all three verify levels: standard, full, deep
 echo "[smoke] verify system --standard (metadata-only checks)"
 if ! coldkeep verify system --standard; then
   echo "[smoke] ERROR: verify system --standard failed"
