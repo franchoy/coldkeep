@@ -254,3 +254,31 @@ func TestDefaultTimeoutAccessorsReflectCurrentGlobals(t *testing.T) {
 		t.Fatalf("expected DefaultStatementTimeout=34s, got %v", got)
 	}
 }
+
+func TestLoadMaxOpenConnsUsesPositiveOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", "33")
+	if got := loadMaxOpenConns(); got != 33 {
+		t.Fatalf("expected max open conns 33, got %d", got)
+	}
+}
+
+func TestLoadMaxIdleConnsUsesPositiveOverride(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_MAX_IDLE_CONNS", "8")
+	if got := loadMaxIdleConns(); got != 8 {
+		t.Fatalf("expected max idle conns 8, got %d", got)
+	}
+}
+
+func TestLoadConnMaxLifetimeAllowsZero(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONN_MAX_LIFETIME_MS", "0")
+	if got := loadConnMaxLifetime(); got != 0 {
+		t.Fatalf("expected conn max lifetime 0 for zero override, got %v", got)
+	}
+}
+
+func TestLoadConnMaxIdleTimeAllowsZero(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS", "0")
+	if got := loadConnMaxIdleTime(); got != 0 {
+		t.Fatalf("expected conn max idle time 0 for zero override, got %v", got)
+	}
+}
