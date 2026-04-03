@@ -22,6 +22,22 @@ and system restart/recovery under defined operating conditions.
 > coldkeep is designed as a correctness-first storage engine, prioritizing
 > determinism and recoverability over performance and feature completeness.
 
+## ⚠️ v0.10 — Trust Validation Phase
+
+v0.10 marks the transition from system construction to system validation.
+
+The core architecture, storage model, and CLI contracts are considered stable.
+This phase focuses on validating correctness under stress, failure, and adversarial conditions.
+
+During v0.10:
+
+- No major storage features are expected to be added
+- Changes focus on hardening invariants and lifecycle guarantees
+- Integration tests are expanded to include adversarial and long-run scenarios
+- The goal is to actively try to break the system and eliminate remaining correctness risks
+
+v1.0 will only be released once these guarantees are validated under real-world conditions.
+
 For v0.9, every change intended for mainline or release delivery is expected to
 pass the full GitHub Actions pipeline before merge or tag publication. The repo
 contains a synthetic required check named `CI Required Gate` that aggregates the
@@ -255,6 +271,34 @@ Guarantees hold only if:
 - the database is not externally modified
 - container files are not manually altered
 - the filesystem honors write and fsync semantics
+
+---
+
+## 🔬 Validation Strategy (v0.10)
+
+coldkeep v0.10 focuses on validating guarantees through adversarial testing.
+
+The validation approach includes:
+
+- Stress testing:
+  - repeated store / remove / gc / verify / restore cycles
+  - concurrent ingestion and deletion workloads
+- Adversarial scenarios:
+  - crash during store / gc / recovery
+  - partial container writes
+  - corrupted or missing container files
+  - inconsistent database states
+- Long-run stability:
+  - extended operation loops to detect drift and accumulation bugs
+- Invariant validation:
+  - explicit checks that core invariants hold after every operation
+
+The goal is not only to pass tests, but to demonstrate that:
+
+- recovery converges to a valid state
+- garbage collection never breaks restore
+- restore remains deterministic under all conditions
+- no silent corruption or data loss occurs
 
 ---
 
