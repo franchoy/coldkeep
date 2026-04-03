@@ -1766,6 +1766,7 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 	tests := []struct {
 		name          string
 		args          []string
+		envOverrides  map[string]string
 		wantExitCode  int
 		wantClass     string
 		messageSubstr string
@@ -1798,11 +1799,30 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 			wantClass:     "VERIFY",
 			messageSubstr: "does not exist",
 		},
+		{
+			name: "recovery_doctor_phase_failure",
+			args: []string{"doctor", "--output", "json"},
+			envOverrides: map[string]string{
+				"DB_HOST": "127.0.0.1",
+				"DB_PORT": "1",
+			},
+			wantExitCode:  4,
+			wantClass:     "RECOVERY",
+			messageSubstr: "doctor recovery phase failed",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			res := runColdkeepCommand(t, repoRoot, binPath, env, tc.args...)
+			envForTest := make(map[string]string, len(env)+len(tc.envOverrides))
+			for k, v := range env {
+				envForTest[k] = v
+			}
+			for k, v := range tc.envOverrides {
+				envForTest[k] = v
+			}
+
+			res := runColdkeepCommand(t, repoRoot, binPath, envForTest, tc.args...)
 
 			if res.exitCode != tc.wantExitCode {
 				t.Fatalf("exit code mismatch: want=%d got=%d\nstdout:\n%s\nstderr:\n%s", tc.wantExitCode, res.exitCode, res.stdout, res.stderr)
