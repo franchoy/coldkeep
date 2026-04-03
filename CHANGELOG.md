@@ -169,6 +169,11 @@ eliminate remaining correctness risks before the v1.0 milestone.
 - Tightened `TestVerifySystemDeepAggregatesChunkErrors` to assert the returned
   aggregated deep-verification error count substring instead of generic
   failure-only behavior
+- Normalized adjacent schema, seal, recovery, remove, and store failure-injection
+  regressions to use shared returned-error substring assertions instead of
+  manual non-nil checks, and fixed `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers`
+  to reach the intended rotation/sealing-marker failure path under explicit
+  container sizing
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED

@@ -3785,9 +3785,7 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		defer func() { _ = testDB.Close() }()
 
 		err := db.EnsurePostgresSchema(testDB)
-		if err == nil {
-			t.Fatal("EnsurePostgresSchema must fail for old schema version, got nil")
-		}
+		assertErrorContains(t, err, "postgres schema version too old", "postgres schema release gate old version")
 
 		// Verify failure classification and actionable operator message.
 		errMsg := err.Error()
@@ -3827,9 +3825,7 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		defer func() { _ = emptyDB.Close() }()
 
 		err := db.EnsurePostgresSchema(emptyDB)
-		if err == nil {
-			t.Fatal("EnsurePostgresSchema must fail when schema_version table is missing and auto-bootstrap is disabled, got nil")
-		}
+		assertErrorContains(t, err, "postgres schema is not initialized", "postgres schema release gate missing schema without auto-bootstrap")
 
 		// Verify failure classification and actionable operator message.
 		errMsg := err.Error()
@@ -3866,12 +3862,7 @@ func TestSchemaBootstrapEnvEvaluatedDynamically(t *testing.T) {
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 	err := db.EnsurePostgresSchema(emptyDB)
-	if err == nil {
-		t.Fatal("EnsurePostgresSchema must fail when schema is missing and COLDKEEP_DB_AUTO_BOOTSTRAP=false")
-	}
-	if !strings.Contains(err.Error(), "postgres schema is not initialized") {
-		t.Fatalf("expected missing-schema error, got: %v", err)
-	}
+	assertErrorContains(t, err, "postgres schema is not initialized", "postgres schema dynamic bootstrap disabled")
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 	if err := db.EnsurePostgresSchema(emptyDB); err != nil {
@@ -5240,12 +5231,7 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 		}
 		err = container.SealContainerInDir(tx, containerID, filename, container.ContainersDir)
 		_ = tx.Rollback()
-		if err == nil {
-			t.Fatalf("expected seal to fail for ghost-byte container")
-		}
-		if !strings.Contains(err.Error(), "ghost bytes detected") {
-			t.Fatalf("expected ghost-byte error, got: %v", err)
-		}
+		assertErrorContains(t, err, "ghost bytes detected", "seal ghost-byte container")
 	})
 
 	t.Run("truncated file", func(t *testing.T) {
@@ -5271,12 +5257,7 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 		}
 		err = container.SealContainerInDir(tx, containerID, filename, container.ContainersDir)
 		_ = tx.Rollback()
-		if err == nil {
-			t.Fatalf("expected seal to fail for truncated container")
-		}
-		if !strings.Contains(err.Error(), "truncated file detected") {
-			t.Fatalf("expected truncated-file error, got: %v", err)
-		}
+		assertErrorContains(t, err, "truncated file detected", "seal truncated container")
 	})
 }
 
@@ -5323,10 +5304,9 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 		ContainerDir: container.ContainersDir,
 	}
 
-	err = storage.StoreFileWithStorageContext(sgctx, inPath)
-	if err == nil {
-		t.Fatalf("expected store to fail when active container cannot be opened")
-	}
+	_, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
+	assertErrorContains(t, err, "ensure active container: get or create open container in", "store with missing active container file")
+	assertErrorContains(t, err, "open container", "store with missing active container file")
 
 	var quarantined bool
 	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, containerID).Scan(&quarantined)
@@ -5380,12 +5360,7 @@ func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
 	}
 
 	_, err = recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
-	if err == nil {
-		t.Fatalf("expected suspicious orphan conflict error")
-	}
-	if !strings.Contains(err.Error(), "suspicious orphan container conflict") {
-		t.Fatalf("expected suspicious orphan conflict error, got: %v", err)
-	}
+	assertErrorContains(t, err, "suspicious orphan container conflict", "startup recovery suspicious orphan conflict")
 }
 
 func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T) {
@@ -8698,17 +8673,8 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 	}
 
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(failCtx, failPath, blocks.CodecPlain)
-	if err == nil {
-		t.Fatalf("expected store to fail due to injected file_chunk insert + rollback cleanup failure")
-	}
-
-	errText := strings.ToLower(err.Error())
-	if !strings.Contains(errText, "injected file_chunk insert failure") {
-		t.Fatalf("expected surfaced transactional failure in error, got: %v", err)
-	}
-	if !strings.Contains(errText, "rollback failed") {
-		t.Fatalf("expected surfaced rollback cleanup failure in error, got: %v", err)
-	}
+	assertErrorContains(t, err, "injected file_chunk insert failure", "store rollback cleanup failure injection")
+	assertErrorContains(t, err, "rollback failed", "store rollback cleanup failure injection")
 
 	if !wrappedWriter.appendSucceeded {
 		t.Fatalf("expected append to succeed before injected failure")
@@ -8769,7 +8735,7 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	fileHash := sha256File(t, inPath)
 
 	originalMaxSize := container.GetContainerMaxSize()
-	container.SetContainerMaxSize(1 * 1024 * 1024)
+	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_container_mark_sealing_trg ON container`); err != nil {
@@ -8809,12 +8775,7 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	}
 
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
-	if err == nil {
-		t.Fatalf("expected store failure due to injected container sealing marker update failure")
-	}
-	if !strings.Contains(strings.ToLower(err.Error()), "injected container sealing marker update failure") {
-		t.Fatalf("expected injected sealing marker failure in error, got: %v", err)
-	}
+	assertErrorContains(t, err, "injected container sealing marker update failure", "store sealing marker failure injection")
 
 	var fileID int64
 	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&fileID); err != nil {
@@ -9032,16 +8993,7 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 
 	// Attempt to remove the PROCESSING file
 	err = storage.RemoveFileWithDB(dbconn, processingFileID)
-
-	// Should fail with a clear error
-	if err == nil {
-		t.Fatalf("expected remove to reject PROCESSING file, but it succeeded")
-	}
-
-	// Verify error message is clear
-	if !strings.Contains(err.Error(), "PROCESSING") {
-		t.Fatalf("expected error to mention PROCESSING state, got: %v", err)
-	}
+	assertErrorContains(t, err, "is still PROCESSING and cannot be removed", "remove PROCESSING logical file")
 
 	// Verify file state unchanged
 	var status string
@@ -11404,12 +11356,7 @@ func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
 
 	ctx := newTestContext(dbconn)
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
-	if err == nil {
-		t.Fatalf("expected store to fail at final logical-file completion phase")
-	}
-	if !strings.Contains(strings.ToLower(err.Error()), "injected logical completion failure") {
-		t.Fatalf("expected injected finalization failure to be surfaced, got: %v", err)
-	}
+	assertErrorContains(t, err, "injected logical completion failure", "store final logical-file completion failure")
 
 	fileID := fetchFileIDByHash(t, dbconn, fileHash)
 
