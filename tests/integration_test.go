@@ -5991,11 +5991,8 @@ func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_deep_clean.bin", 512*1024)
 
-	sgctx := storage.StorageContext{
-		DB:     dbconn,
-		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
-	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	sgctx := newTestContext(dbconn)
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -6025,11 +6022,9 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_deep_corruption.bin", 512*1024)
 
-	sgctx := storage.StorageContext{
-		DB:     dbconn,
-		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
-	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	sgctx := newTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
+	if err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -6065,9 +6060,23 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("corrupt chunk byte: %v", err)
 	}
 
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep); err == nil {
-		t.Fatal("verify system --deep should detect chunk data corruption but returned nil")
+	assertDeepVerifyAggregateError(
+		t,
+		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
+		"plain-chunk-corruption",
+	)
+
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
 	}
+	outPath := filepath.Join(restoreDir, "restored.bin")
+	assertErrorContains(
+		t,
+		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		"chunk hash mismatch",
+		"plain-chunk-corruption restore",
+	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
@@ -6392,11 +6401,8 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_deep_trailing_bytes.bin", 512*1024)
 
-	sgctx := storage.StorageContext{
-		DB:     dbconn,
-		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
-	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	sgctx := newTestContext(dbconn)
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
@@ -6522,11 +6528,8 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	_ = os.MkdirAll(inputDir, 0o755)
 	inPath := createTempFile(t, inputDir, "verify_system_deep_aggregate.bin", 4*1024*1024)
 
-	sgctx := storage.StorageContext{
-		DB:     dbconn,
-		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
-	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	sgctx := newTestContext(dbconn)
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 

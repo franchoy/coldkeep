@@ -147,6 +147,10 @@ eliminate remaining correctness risks before the v1.0 milestone.
   file with the `aes-gcm` codec, then sets non-hex `COLDKEEP_KEY`
   configuration and asserts both deep verify and restore fail under invalid key
   encoding
+- Tightened plain-codec deep verification regressions so they store with
+  explicit `plain` codec selection instead of relying on the process default,
+  and `TestVerifySystemDeepDetectsChunkDataCorruption` now asserts both deep
+  verify aggregate failure and restore `chunk hash mismatch` semantics
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
