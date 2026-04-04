@@ -103,10 +103,10 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_STRESS_RESULT.*!= "success"' 'required gate rejects skipped integration stress'
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job'
   require_pattern "$VALIDATION_MATRIX_FILE" '^# v1\.0 Validation Matrix$' 'validation matrix artifact'
-  require_pattern "$VALIDATION_MATRIX_FILE" '^\| Deterministic, byte-identical restore \|' 'validation matrix deterministic restore row'
-  require_pattern "$VALIDATION_MATRIX_FILE" '^\| GC is reference-safe: no reachable chunk is ever deleted \|' 'validation matrix reference-safe GC row'
-  require_pattern "$VALIDATION_MATRIX_FILE" '^\| Atomic restore replacement (within single-node local filesystem semantics) \|' 'validation matrix atomic restore replacement row'
-  require_pattern "$VALIDATION_MATRIX_FILE" '^\| Safe in-process concurrent storage operations \|' 'validation matrix safe in-process concurrency row'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G1 \|' 'validation matrix deterministic restore row (G1)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G4 \|' 'validation matrix reference-safe GC row (G4)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G5 \|' 'validation matrix atomic restore replacement row (G5)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G6 \|' 'validation matrix safe in-process concurrency row (G6)'
 }
 
 require_gh() {

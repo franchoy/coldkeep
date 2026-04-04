@@ -63,14 +63,28 @@ require_readme_guarantee_bullet '- Safe in-process concurrent storage operations
 require_pattern "$MATRIX_FILE" '^# v1\.0 Validation Matrix$' 'matrix title'
 require_pattern "$MATRIX_FILE" '^## Scope$' 'scope section'
 require_pattern "$MATRIX_FILE" '^## Guarantees to Evidence$' 'guarantees-to-evidence section'
-require_pattern "$MATRIX_FILE" '^\| Deterministic, byte-identical restore \|' 'deterministic restore row'
-require_pattern "$MATRIX_FILE" '^\| No exposure of partially written or inconsistent data \|' 'partial/inconsistent exposure row'
-require_pattern "$MATRIX_FILE" '^\| GC is reference-safe: no reachable chunk is ever deleted \|' 'reference-safe GC row'
-require_pattern "$MATRIX_FILE" '^\| Atomic restore replacement (within single-node local filesystem semantics) \|' 'atomic restore replacement row'
-require_pattern "$MATRIX_FILE" '^\| Safe in-process concurrent storage operations \|' 'safe in-process concurrency row'
-require_pattern "$MATRIX_FILE" '^\| Deep corruption detection .*\|' 'deep corruption detection row'
-require_pattern "$MATRIX_FILE" '^\| Corrective health gate contract stability \|' 'doctor/health-gate row'
+require_pattern "$MATRIX_FILE" '^| G1 |' 'G1: deterministic restore row'
+require_pattern "$MATRIX_FILE" '^| G2 |' 'G2: repeat store does not drift chunk graph row'
+require_pattern "$MATRIX_FILE" '^| G3 |' 'G3: partial/inconsistent exposure row'
+require_pattern "$MATRIX_FILE" '^| G4 |' 'G4: reference-safe GC row'
+require_pattern "$MATRIX_FILE" '^| G5 |' 'G5: atomic restore replacement row'
+require_pattern "$MATRIX_FILE" '^| G6 |' 'G6: safe in-process concurrency row'
+require_pattern "$MATRIX_FILE" '^| G7 |' 'G7: deep corruption detection row'
+require_pattern "$MATRIX_FILE" '^| G8 |' 'G8: doctor/health-gate row'
 require_pattern "$MATRIX_FILE" '^## Exit Criteria$' 'exit criteria section'
 require_pattern "$MATRIX_FILE" '^1\. Every guarantee row remains mapped to at least one automated test and/or verify check\.$' 'exit criteria mapping guard'
+
+# Coverage assertion: every G* row must have at least one test or verify evidence
+awk -F '|' '/^\| G[0-9]+ / {
+  id=$2; gsub(/^ +| +$/, "", id);
+  verify=$4; gsub(/^ +| +$/, "", verify);
+  test=$5; gsub(/^ +| +$/, "", test);
+  if (verify == "" && test == "") {
+    printf "[validation-matrix] ERROR: guarantee %s has no test or verify evidence\n", id > "/dev/stderr";
+    exit 1;
+  } else {
+    printf "[validation-matrix] ok: guarantee %s is covered by test or verify evidence\n", id;
+  }
+}' "$MATRIX_FILE"
 
 echo "[validation-matrix] validation matrix coverage checks passed"

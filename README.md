@@ -111,15 +111,26 @@ before the observational, read-only verification checks begin.
 coldkeep is designed as a **correctness-first storage engine**.  
 This section defines the guarantees provided by the system as of **v0.9**.
 
+**Guarantee IDs:**
+
+- G1: Deterministic, byte-identical restore
+- G2: Repeat store does not drift chunk graph
+- G3: No exposure of partially written or inconsistent data
+- G4: GC is reference-safe: no reachable chunk is ever deleted
+- G5: Atomic restore replacement (within single-node local filesystem semantics)
+- G6: Safe in-process concurrent storage operations
+- G7: Deep corruption detection (payload/offset/tail)
+- G8: Corrective health gate contract stability
+
 ### Summary
 
 coldkeep v0.9 guarantees:
 
-- deterministic, byte-identical restore
-- no exposure of partially written or inconsistent data
-- non-destructive garbage collection
-- atomic restore operations
-- safe concurrent storage operations
+- G1: deterministic, byte-identical restore
+- G3: no exposure of partially written or inconsistent data
+- G4: non-destructive garbage collection
+- G5: atomic restore operations
+- G6: safe concurrent storage operations
 
 ### Core invariants
 
@@ -145,7 +156,7 @@ Only files in this state are returned by `list` and `search` and are eligible fo
 
 ---
 
-### Data integrity
+### Data integrity (G1)
 
 coldkeep guarantees **end-to-end data integrity**:
 
@@ -157,7 +168,7 @@ coldkeep guarantees **end-to-end data integrity**:
 
 ---
 
-### Crash consistency
+### Crash consistency (G3)
 
 coldkeep guarantees **safe recovery after crashes or interruptions**:
 
@@ -189,7 +200,7 @@ Restore operations are **atomic and verified**:
 
 ---
 
-### Garbage collection safety
+### Garbage collection safety (G4)
 
 Garbage collection is **non-destructive**:
 
@@ -213,7 +224,7 @@ coldkeep supports **safe concurrent operations**:
 
 ---
 
-### Verification model
+### Verification model (G7, G8)
 
 coldkeep provides multiple verification levels:
 
