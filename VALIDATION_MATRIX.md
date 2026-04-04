@@ -1,3 +1,6 @@
+
+# v1.0 Validation Matrix
+
 ## Guarantee ID Stability
 
 Guarantee IDs (G1–G8) are part of the public validation contract.
@@ -7,8 +10,6 @@ Guarantee IDs (G1–G8) are part of the public validation contract.
 - New guarantees must use new IDs (G9, G10, ...)
 
 This prevents future “renumbering drift”.
-
-# v1.0 Validation Matrix
 
 All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
 
