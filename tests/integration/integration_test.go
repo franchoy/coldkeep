@@ -9362,7 +9362,7 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 		}
 	}
 
-	searchSized, err := listing.SearchFilesResultWithDB(dbconn, []string{"--min-Size", "60000", "--max-Size", "100000"})
+	searchSized, err := listing.SearchFilesResultWithDB(dbconn, []string{"--min-size", "60000", "--max-size", "100000"})
 	if err != nil {
 		t.Fatalf("search by Size range: %v", err)
 	}
