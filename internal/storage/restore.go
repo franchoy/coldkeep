@@ -417,16 +417,38 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if err := outFile.Sync(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
 	}
+
+	// Compute the final hash before closing/renaming
+	restoredHash := hex.EncodeToString(hasher.Sum(nil))
+	if restoredHash != expectedFileHash {
+		// Close and cleanup temp file before returning error
+		if outFile != nil {
+			_ = outFile.Close()
+			outFile = nil
+		}
+		// Remove temp file
+		_ = os.Remove(tempOutputPath)
+		cleanupTemp = false
+		return RestoreFileResult{}, fmt.Errorf(
+			"restore integrity check failed: expected %s got %s",
+			expectedFileHash,
+			restoredHash,
+		)
+	}
+
+	// Close temp file before rename
 	if err := outFile.Close(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("close temporary output file: %w", err)
 	}
 	outFile = nil
+
 	// TEST HOOK: simulate failure after temp file is written but before rename
 	if TestRestoreFailBeforeRenameHook != nil {
 		if hookErr := TestRestoreFailBeforeRenameHook(tempOutputPath, outputPath); hookErr != nil {
 			return RestoreFileResult{}, fmt.Errorf("test hook restore failure: %w", hookErr)
 		}
 	}
+
 	if err := os.Rename(tempOutputPath, outputPath); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("atomically replace output file %s: %w", outputPath, err)
 	}
@@ -444,18 +466,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 	cleanupTemp = false
 
-	// ------------------------------------------------------------
-	// Final Integrity Validation
-	// ------------------------------------------------------------
-	restoredHash := hex.EncodeToString(hasher.Sum(nil))
-
-	if restoredHash != expectedFileHash {
-		return RestoreFileResult{}, fmt.Errorf(
-			"restore integrity check failed: expected %s got %s",
-			expectedFileHash,
-			restoredHash,
-		)
-	}
+	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
 }
