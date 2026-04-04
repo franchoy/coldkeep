@@ -1084,7 +1084,11 @@ func RunFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
 	if err != nil {
 		t.Fatalf("query logical_file: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Fatalf("rows.Close error: %v", err)
+		}
+	}()
 
 	restoredCount := 0
 	seenHashes := make(map[string]bool, expectedUniqueCount)
