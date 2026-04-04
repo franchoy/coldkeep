@@ -977,8 +977,9 @@ func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
 	}
 }
 
+// TestRestoreFailurePreservesExistingOutput verifies that if restore fails after writing the temp file but before rename,
+// the original destination file is not modified. This test checks only destination file preservation, not temp file cleanup.
 func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
-	// Setup DB and storage context
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -994,15 +995,14 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	hash := hex.EncodeToString(sum[:])
 
 	containerFilename := "atomic-restore-test.bin"
-	containerPath := filepath.Join(containersDir, containerFilename)
-	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+	if err := writeReusableTestContainerFileWithPayload(filepath.Join(containersDir, containerFilename), payload); err != nil {
 		t.Fatalf("write test container file: %v", err)
 	}
 
 	var containerID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO container (filename, current_size, max_size, sealed)
-         VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		VALUES ($1, $2, $3, TRUE) RETURNING id`,
 		containerFilename,
 		int64(container.ContainerHdrLen+len(payload)),
 		container.GetContainerMaxSize(),
@@ -1013,7 +1013,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	var chunkID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-         VALUES ($1, $2, $3, 1) RETURNING id`,
+		VALUES ($1, $2, $3, 1) RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1021,7 +1021,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 
 	if _, err := dbconn.Exec(
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-         VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
 		chunkID,
 		int64(len(payload)),
 		int64(len(payload)),
@@ -1035,7 +1035,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	var fileID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
+		VALUES ($1, $2, $3, $4) RETURNING id`,
 		"atomic-restore-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1079,21 +1079,12 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	if string(data) != string(originalContent) {
 		t.Fatalf("destination file was modified: got %q, want %q", string(data), string(originalContent))
 	}
-
-	// no .coldkeep-restore-* temp files remain
-	files, listErr := os.ReadDir(outputDir)
-	if listErr != nil {
-		t.Fatalf("list output dir: %v", listErr)
-	}
-	for _, f := range files {
-		if strings.HasPrefix(f.Name(), ".coldkeep-restore-") {
-			t.Fatalf("temp restore file still exists: %s", f.Name())
-		}
-	}
+	// (Deliberately do not check for temp file cleanup here)
 }
 
+// TestRestoreFailureDoesNotCorruptDestination verifies that if restore fails after writing the temp file but before rename,
+// no .coldkeep-restore-* temp files remain in the output directory. This test checks only temp file cleanup, not destination file content.
 func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
-	// Setup DB and storage context
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -1109,8 +1100,7 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 	hash := hex.EncodeToString(sum[:])
 
 	containerFilename := "atomic-restore-failure-test.bin"
-	containerPath := filepath.Join(containersDir, containerFilename)
-	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+	if err := writeReusableTestContainerFileWithPayload(filepath.Join(containersDir, containerFilename), payload); err != nil {
 		t.Fatalf("write test container file: %v", err)
 	}
 
@@ -1186,16 +1176,7 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 		t.Fatalf("expected restore to fail via hook, got err=%v, hookCalled=%v", err, hookCalled)
 	}
 
-	// destination file must be untouched
-	data, readErr := os.ReadFile(destPath)
-	if readErr != nil {
-		t.Fatalf("read dest file: %v", readErr)
-	}
-	if string(data) != string(originalContent) {
-		t.Fatalf("destination file was modified: got %q, want %q", string(data), string(originalContent))
-	}
-
-	// no .coldkeep-restore-* temp files remain
+	// Only check for temp file cleanup
 	files, listErr := os.ReadDir(outputDir)
 	if listErr != nil {
 		t.Fatalf("list output dir: %v", listErr)
@@ -1205,4 +1186,5 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 			t.Fatalf("temp restore file still exists: %s", f.Name())
 		}
 	}
+	// (Deliberately do not check destination file content here)
 }
