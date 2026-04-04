@@ -126,11 +126,11 @@ This section defines the guarantees provided by the system as of **v0.9**.
 
 coldkeep v0.9 guarantees:
 
-- G1: deterministic, byte-identical restore
-- G3: no exposure of partially written or inconsistent data
-- G4: non-destructive garbage collection
-- G5: atomic restore operations
-- G6: safe concurrent storage operations
+- deterministic, byte-identical restore
+- no exposure of partially written or inconsistent data
+- GC is reference-safe: no reachable chunk is ever deleted
+- Atomic restore replacement (within single-node local filesystem semantics)
+- Safe in-process concurrent storage operations
 
 ### Core invariants
 
