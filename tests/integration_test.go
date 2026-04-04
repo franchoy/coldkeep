@@ -10149,9 +10149,10 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 	assertNoProcessingRows(t, dbconn)
 }
 
-// TestRestoreFailurePreservesExistingOutput verifies that a failed restore (e.g., from container
-// corruption mid-read) does not modify the original destination file, leaves no temp files behind,
-// and allows a subsequent restore attempt to succeed.
+// TestRestoreFailurePreservesExistingOutput verifies that if a restore fails due to container corruption,
+// the system can recover: after repairing the container, a subsequent restore attempt succeeds and the
+// restored content matches the original. This is a corruption/recoverability test, not an atomicity or
+// destination-preservation test.
 func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	requireDB(t)
 
