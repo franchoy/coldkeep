@@ -1,4 +1,7 @@
+
 # v1.0 Validation Matrix
+
+All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
 
 This document tracks v0.9 guarantees and the evidence used to validate them
 during the v0.10 trust-validation phase.
@@ -16,7 +19,7 @@ during the v0.10 trust-validation phase.
 | Deterministic, byte-identical restore | Deep restore path validates chunk hash and final file hash | `TestRepeatRestoreDeterminism`, `TestSameInputSameChunkGraph`, `TestStoreRemoveGCRestartStoreConvergesChunkGraph` | covered |
 | Repeat store does not drift chunk graph | Reuse and graph checks in store path, plus verify full/system checks | `TestRepeatedStorePreservesChunkGraphDeterminism` | covered |
 | No exposure of partially written or inconsistent data | Recovery + verify model excludes/processes invalid lifecycle states, including standard verify enforcement that each COMPLETED chunk has exactly one blocks row, rollback-safe sealing-marker transitions, quarantine of damaged active containers without harming unrelated live data, and ghost-byte sealing-container quarantine with preserved live data | `TestStartupRecoverySimulation`, `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`, `TestVerifyStandard/detects completed chunk missing block row`, `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers`, `TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData`, `TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiveData` | covered |
-| Non-destructive garbage collection | GC liveness checks use `live_ref_count OR pin_count`; verify post-GC integrity | `TestStoreGCRestore`, `TestGCRestorePinRaceContainerNotDeleted`, `TestStoreLifecycleSeededRandomizedOperationOrder` | covered |
+| GC is reference-safe: no reachable chunk is ever deleted | GC liveness checks use `live_ref_count OR pin_count`; verify post-GC integrity | `TestStoreGCRestore`, `TestGCRestorePinRaceContainerNotDeleted`, `TestStoreLifecycleSeededRandomizedOperationOrder` | covered |
 | Atomic restore replacement on the single-node local filesystem model | Restore path writes temp + fsync + atomic rename | `TestStoreGCRestore`, `TestSampleDatasetEndToEnd` (restore correctness only; does not directly test atomicity or failure-mode durability) | partially covered |
 | Atomic restore replacement (within single-node local filesystem semantics) | Restore path writes temp + fsync + atomic rename | `TestRestoreFailurePreservesExistingOutput` (explicit atomicity and cleanup), `TestRestoreAtomicityWithTestHook`, `TestRestoreAtomicityWithCorruption`, `TestStoreGCRestore`, `TestSampleDatasetEndToEnd` | covered |
 | Safe in-process concurrent storage operations | Verify catches graph/reference corruption; transactional claims/retries in write path | `TestConcurrentStoreSameFile`, `TestConcurrentStoreSameChunk`, `TestConcurrentStoreFolderStress`, `TestRepeatedJitteredStoreGCRestoreInterleaving`, `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving` (all in-process, shared DB and store path, dedup races, stress) | covered (multi-process contention and external crash overlap not covered; see open work) |
