@@ -175,7 +175,7 @@ func TestNewOperationContextWithNilParentUsesOperationTimeout(t *testing.T) {
 	t.Cleanup(func() { operationTimeout = origOperationTimeout })
 	operationTimeout = 75 * time.Millisecond
 
-	ctx, cancel := NewOperationContext(nil)
+	ctx, cancel := NewOperationContext(context.TODO())
 	defer cancel()
 
 	if ctx == nil {
@@ -192,7 +192,7 @@ func TestNewOperationContextWithNilParentUsesOperationTimeout(t *testing.T) {
 }
 
 func TestNewOperationContextCancelFuncCancelsContext(t *testing.T) {
-	ctx, cancel := NewOperationContext(nil)
+	ctx, cancel := NewOperationContext(context.TODO())
 	cancel()
 
 	if !errors.Is(ctx.Err(), context.Canceled) {

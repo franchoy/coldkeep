@@ -86,17 +86,6 @@ func storeFileWithCodecCLI(t *testing.T, repoRoot, binPath string, env map[strin
 	return testutils.JSONInt64(t, data, "file_id")
 }
 
-func restoreMustMatchHash(t *testing.T, dbconn *sql.DB, fileID int64, outPath, wantHash string) {
-	t.Helper()
-
-	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
-		t.Fatalf("restore file %d: %v", fileID, err)
-	}
-	if gotHash := testutils.SHA256File(t, outPath); gotHash != wantHash {
-		t.Fatalf("restored hash mismatch: want %s got %s", wantHash, gotHash)
-	}
-}
-
 func restoreMustMatchBytes(t *testing.T, dbconn *sql.DB, fileID int64, outPath string, want []byte, wantHash string) {
 	t.Helper()
 

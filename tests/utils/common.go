@@ -813,7 +813,11 @@ func QueryChunkGraph(t *testing.T, dbconn *sql.DB, fileID int64) []ChunkRecord {
 	if err != nil {
 		t.Fatalf("query chunk graph: %v", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Fatalf("rows.Close error: %v", err)
+		}
+	}()
 
 	var records []ChunkRecord
 	for rows.Next() {
@@ -981,7 +985,11 @@ func RunFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
 	if err != nil {
 		t.Fatalf("query logical_file for %s: %v", fixtureDir, err)
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Fatalf("rows.Close error: %v", err)
+		}
+	}()
 
 	restoredCount := 0
 	for rows.Next() {
