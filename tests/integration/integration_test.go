@@ -6,12 +6,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -30,6 +28,8 @@ import (
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
+	testutils "github.com/franchoy/coldkeep/tests/utils"
+	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
 
 // These tests are integration-style (DB + filesystem).
@@ -57,39 +57,6 @@ import (
 //
 //	COLDKEEP_TEST_DB=1 go test ./tests/... -short -v
 
-// -----------------------------------------------------------------------------
-// Helpers and test data
-// -----------------------------------------------------------------------------
-
-func requireDB(t *testing.T) {
-	t.Helper()
-	if os.Getenv("COLDKEEP_TEST_DB") == "" {
-		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
-	}
-}
-
-// requireStress gates tests that spin up many goroutines or run for an extended
-// time. They are skipped when -short is passed so that CI correctness runs
-// remain fast. Run without -short (or with a generous -timeout) to include them.
-func requireStress(t *testing.T) {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping stress test in -short mode")
-	}
-}
-
-// requireLongRun gates soak-style tests that are intentionally separated from
-// the standard stress tier so CI can enable or disable them independently.
-func requireLongRun(t *testing.T) {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping long-run test in -short mode")
-	}
-	if os.Getenv("COLDKEEP_LONG_RUN") == "" {
-		t.Skip("Set COLDKEEP_LONG_RUN=1 to run long-run integration tests")
-	}
-}
-
 func TestIntegrationHarnessSmoke(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Log("COLDKEEP_TEST_DB is not set; DB-backed integration tests may be skipped")
@@ -98,759 +65,58 @@ func TestIntegrationHarnessSmoke(t *testing.T) {
 	}
 }
 
-type cliExecResult struct {
-	stdout   string
-	stderr   string
-	exitCode int
-}
-
-func findRepoRoot(t *testing.T) string {
-	t.Helper()
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-
-	dir := cwd
-	for i := 0; i < 8; i++ {
-		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-
-	t.Fatalf("could not find repo root (go.mod) from cwd %q", cwd)
-	return ""
-}
-
-func buildColdkeepBinary(t *testing.T, repoRoot string) string {
-	t.Helper()
-
-	binPath := filepath.Join(t.TempDir(), "coldkeep-test-bin")
-	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/coldkeep")
-	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build coldkeep binary: %v\noutput:\n%s", err, string(out))
-	}
-
-	return binPath
-}
-
-func buildCommandEnv(overrides map[string]string) []string {
-	envMap := make(map[string]string)
-	for _, kv := range os.Environ() {
-		parts := strings.SplitN(kv, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		envMap[parts[0]] = parts[1]
-	}
-
-	for k, v := range overrides {
-		envMap[k] = v
-	}
-
-	env := make([]string, 0, len(envMap))
-	for k, v := range envMap {
-		env = append(env, k+"="+v)
-	}
-
-	return env
-}
-
-func runColdkeepCommand(t *testing.T, repoRoot, binPath string, env map[string]string, args ...string) cliExecResult {
-	t.Helper()
-
-	cmd := exec.Command(binPath, args...)
-	cmd.Dir = repoRoot
-	cmd.Env = buildCommandEnv(env)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err == nil {
-		return cliExecResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: 0}
-	}
-
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return cliExecResult{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitErr.ExitCode()}
-	}
-
-	t.Fatalf("run coldkeep command %v: %v", args, err)
-	return cliExecResult{}
-}
-
-func tryParseLastJSONLine(output string) (map[string]any, bool) {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(line), &payload); err == nil {
-			return payload, true
-		}
-	}
-
-	return nil, false
-}
-
-func parseJSONLines(output string) []map[string]any {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	parsed := make([]map[string]any, 0, len(lines))
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(line), &payload); err == nil {
-			parsed = append(parsed, payload)
-		}
-	}
-	return parsed
-}
-
-func jsonMap(t *testing.T, payload map[string]any, key string) map[string]any {
-	t.Helper()
-	v, ok := payload[key]
-	if !ok {
-		t.Fatalf("missing JSON key %q", key)
-	}
-	m, ok := v.(map[string]any)
-	if !ok {
-		t.Fatalf("JSON key %q is not an object: %T", key, v)
-	}
-	return m
-}
-
-func jsonInt64(t *testing.T, payload map[string]any, key string) int64 {
-	t.Helper()
-	v, ok := payload[key]
-	if !ok {
-		t.Fatalf("missing JSON key %q", key)
-	}
-	n, ok := v.(float64)
-	if !ok {
-		t.Fatalf("JSON key %q is not numeric: %T", key, v)
-	}
-	return int64(n)
-}
-
-func assertCLIJSONOK(t *testing.T, res cliExecResult, command string) map[string]any {
-	t.Helper()
-
-	if res.exitCode != 0 {
-		t.Fatalf("command %s failed with exit=%d\nstdout:\n%s\nstderr:\n%s", command, res.exitCode, res.stdout, res.stderr)
-	}
-
-	payload, ok := tryParseLastJSONLine(res.stdout)
-	if !ok {
-		payload, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
-	}
-	if !ok {
-		t.Fatalf("command %s produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", command, res.stdout, res.stderr)
-	}
-
-	if status, _ := payload["status"].(string); status != "ok" {
-		t.Fatalf("command %s did not return status=ok: payload=%v stderr=%s", command, payload, res.stderr)
-	}
-	if got, _ := payload["command"].(string); got != command {
-		t.Fatalf("command mismatch: want %s got %q payload=%v", command, got, payload)
-	}
-
-	return payload
-}
-
-func findCLIErrorPayload(output string) (map[string]any, bool) {
-	for _, payload := range parseJSONLines(output) {
-		if _, ok := payload["error_class"]; ok {
-			return payload, true
-		}
-	}
-	return nil, false
-}
-
-func defaultCLIEnv(storageDir string) map[string]string {
-	return map[string]string{
-		"COLDKEEP_TEST_DB":     "1",
-		"COLDKEEP_CODEC":       getenvOrDefault("COLDKEEP_CODEC", "plain"),
-		"COLDKEEP_STORAGE_DIR": storageDir,
-		"DB_HOST":              getenvOrDefault("DB_HOST", "127.0.0.1"),
-		"DB_PORT":              getenvOrDefault("DB_PORT", "5432"),
-		"DB_USER":              getenvOrDefault("DB_USER", "coldkeep"),
-		"DB_PASSWORD":          os.Getenv("DB_PASSWORD"),
-		"DB_NAME":              getenvOrDefault("DB_NAME", "coldkeep"),
-		"DB_SSLMODE":           getenvOrDefault("DB_SSLMODE", "disable"),
-	}
-}
-
-func getenvOrDefault(name, fallback string) string {
-	v := os.Getenv(name)
-	if strings.TrimSpace(v) == "" {
-		return fallback
-	}
-	return v
-}
-
-func applySchema(t *testing.T, dbconn *sql.DB) {
-	t.Helper()
-
-	// If schema already exists, reuse it.
-	var logicalFileTable sql.NullString
-	if err := dbconn.QueryRow(`SELECT to_regclass('public.logical_file')`).Scan(&logicalFileTable); err == nil && logicalFileTable.Valid {
-		return
-	}
-
-	if strings.TrimSpace(dbschema.PostgresSchema) == "" {
-		t.Fatalf("embedded postgres schema is empty")
-	}
-
-	if _, err := dbconn.Exec(dbschema.PostgresSchema); err != nil && !isDuplicateSchemaError(err) {
-		t.Fatalf("apply schema: %v", err)
-	}
-}
-
-func isDuplicateSchemaError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "already exists") || strings.Contains(msg, "42710")
-}
-
-func resetDB(t *testing.T, dbconn *sql.DB) {
-	t.Helper()
-	// Keep schema_version; clear the data tables and reset sequences.
-	_, err := dbconn.Exec(`
-		TRUNCATE TABLE
-			file_chunk,
-			chunk,
-			logical_file,
-			container
-		RESTART IDENTITY CASCADE
-	`)
-	if err != nil {
-		t.Fatalf("truncate tables: %v", err)
-	}
-}
-
-func resetStorage(t *testing.T) {
-	t.Helper()
-	if container.ContainersDir == "" {
-		t.Fatalf("ContainersDir is empty")
-	}
-	_ = os.RemoveAll(container.ContainersDir)
-	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
-		t.Fatalf("mkdir ContainersDir: %v", err)
-	}
-}
-
-func sha256File(t *testing.T, path string) string {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
-func createTempFile(t *testing.T, dir, name string, size int) string {
-	t.Helper()
-	p := filepath.Join(dir, name)
-	data := make([]byte, size)
-
-	// Deterministic content (repeatable).
-	for i := 0; i < size; i++ {
-		data[i] = byte((i*31 + 7) % 251)
-	}
-
-	if err := os.WriteFile(p, data, 0o644); err != nil {
-		t.Fatalf("write temp file: %v", err)
-	}
-	return p
-}
-
-func fetchFileIDByHash(t *testing.T, dbconn *sql.DB, fileHash string) int64 {
-	t.Helper()
-	var id int64
-	err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&id)
-	if err != nil {
-		t.Fatalf("query logical_file by hash: %v", err)
-	}
-	return id
-}
-
-func assertNoProcessingRows(t *testing.T, dbconn *sql.DB) {
-	t.Helper()
-
-	var logicalProcessing int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).Scan(&logicalProcessing); err != nil {
-		t.Fatalf("count processing logical_file rows: %v", err)
-	}
-	if logicalProcessing != 0 {
-		t.Fatalf("expected no PROCESSING logical_file rows, got %d", logicalProcessing)
-	}
-
-	var chunkProcessing int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = $1`, filestate.ChunkProcessing).Scan(&chunkProcessing); err != nil {
-		t.Fatalf("count processing chunk rows: %v", err)
-	}
-	if chunkProcessing != 0 {
-		t.Fatalf("expected no PROCESSING chunk rows, got %d", chunkProcessing)
-	}
-}
-
-func assertUniqueFileChunkOrders(t *testing.T, dbconn *sql.DB) {
-	t.Helper()
-
-	var duplicates int
-	if err := dbconn.QueryRow(`
-		SELECT COUNT(*)
-		FROM (
-			SELECT logical_file_id, chunk_order
-			FROM file_chunk
-			GROUP BY logical_file_id, chunk_order
-			HAVING COUNT(*) > 1
-		) dup
-	`).Scan(&duplicates); err != nil {
-		t.Fatalf("count duplicate file_chunk order rows: %v", err)
-	}
-	if duplicates != 0 {
-		t.Fatalf("expected no duplicate file_chunk order rows, got %d duplicate groups", duplicates)
-	}
-}
-
-func newTestContext(dbconn *sql.DB) storage.StorageContext {
-	return storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriterWithDir(container.ContainersDir, container.GetContainerMaxSize()),
-		ContainerDir: container.ContainersDir,
-	}
-}
-
-type fileChunkRecord struct {
-	chunkID              int64
-	containerID          int64
-	blockOffset          int64
-	storedSize           int64
-	containerFilename    string
-	containerCurrentSize int64
-}
-
-func setupStoredFileForVerification(t *testing.T, filename string, size int) (*sql.DB, string, int64) {
-	t.Helper()
-	requireDB(t)
-
-	tmp := t.TempDir()
-	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
-
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connectDB: %v", err)
-	}
-
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
-
-	inputDir := filepath.Join(tmp, "input")
-	if err := os.MkdirAll(inputDir, 0o755); err != nil {
-		_ = dbconn.Close()
-		t.Fatalf("mkdir inputDir: %v", err)
-	}
-
-	inPath := createTempFile(t, inputDir, filename, size)
-	fileHash := sha256File(t, inPath)
-
-	sgctx := newTestContext(dbconn)
-
-	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
-		t.Fatalf("store file: %v", err)
-	}
-
-	return dbconn, inPath, fetchFileIDByHash(t, dbconn, fileHash)
-}
-
-func containerPathForRecord(record fileChunkRecord) string {
-	filename := record.containerFilename
-
-	return filepath.Join(container.ContainersDir, filename)
-}
-
-func fetchFirstFileChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunkRecord {
-	t.Helper()
-
-	var record fileChunkRecord
-	err := dbconn.QueryRow(`
-		SELECT
-			fc.chunk_id,
-			b.container_id,
-			b.block_offset,
-			b.stored_size,
-			ctr.filename,
-			ctr.current_size
-		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE fc.logical_file_id = $1
-		ORDER BY fc.chunk_order ASC
-		LIMIT 1
-	`, fileID).Scan(
-		&record.chunkID,
-		&record.containerID,
-		&record.blockOffset,
-		&record.storedSize,
-		&record.containerFilename,
-		&record.containerCurrentSize,
-	)
-	if err != nil {
-		t.Fatalf("query first file chunk record: %v", err)
-	}
-
-	return record
-}
-
-func corruptFirstCompletedChunkByte(t *testing.T, dbconn *sql.DB, containersDir string) {
-	t.Helper()
-
-	var blockOffset int64
-	var storedSize int64
-	var containerFilename string
-	err := dbconn.QueryRow(`
-		SELECT b.block_offset, b.stored_size, ctr.filename
-		FROM chunk c
-		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = $1
-		ORDER BY c.id ASC
-		LIMIT 1
-	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
-	if err != nil {
-		t.Fatalf("query first completed chunk for corruption: %v", err)
-	}
-
-	containerPath := filepath.Join(containersDir, containerFilename)
-	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatalf("open container file for corruption: %v", err)
-	}
-
-	corruptionOffset := blockOffset
-	if storedSize > 10 {
-		corruptionOffset += 10
-	}
-
-	if _, err := f.WriteAt([]byte{0xAC}, corruptionOffset); err != nil {
-		_ = f.Close()
-		t.Fatalf("write corruption byte: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close container file after corruption: %v", err)
-	}
-}
-
-// Helpers (small, local)
-func mustRead(t *testing.T, p string) []byte {
-	t.Helper()
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatalf("read %s: %v", p, err)
-	}
-	return b
-}
-
-func setTestAESGCMKey(t *testing.T) {
-	t.Helper()
-	t.Setenv("COLDKEEP_KEY", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-}
-
-func assertDeepVerifyAggregateError(t *testing.T, err error, context string) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("expected %s verify error but got nil", context)
-	}
-	errText := err.Error()
-	if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "found 1 errors in deep verification of container files") {
-		t.Fatalf("expected %s verify error to keep deep aggregate contract, got: %v", context, err)
-	}
-}
-
-func assertErrorContains(t *testing.T, err error, substring string, context string) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("expected %s error but got nil", context)
-	}
-	if !strings.Contains(err.Error(), substring) {
-		t.Fatalf("expected %s error to contain %q, got: %v", context, substring, err)
-	}
-}
-
-func itoa(i int) string {
-	// small int to string without fmt to keep output clean
-	if i == 0 {
-		return "0"
-	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	var buf [32]byte
-	pos := len(buf)
-	for i > 0 {
-		pos--
-		buf[pos] = byte('0' + (i % 10))
-		i /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
-}
-
-func isRetryableTxAbortError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "current transaction is aborted") || strings.Contains(msg, "25p02")
-}
-
-// rollbackFailingWriter wraps LocalWriter and deterministically fails rollback
-// path cleanup so tests can assert error surfacing plus quarantine
-// behavior on failed cleanup.
-type rollbackFailingWriter struct {
-	base            *container.LocalWriter
-	forcedErr       error
-	appendSucceeded bool
-	lastPlacement   container.LocalPlacement
-	quarantineCalls int
-}
-
-func newRollbackFailingWriter(base *container.LocalWriter) *rollbackFailingWriter {
-	return &rollbackFailingWriter{
-		base:      base,
-		forcedErr: errors.New("injected rollback cleanup failure"),
-	}
-}
-
-func (w *rollbackFailingWriter) FinalizeContainer() error {
-	return w.base.FinalizeContainer()
-}
-
-func (w *rollbackFailingWriter) BindDB(dbconn *sql.DB) {
-	w.base.BindDB(dbconn)
-}
-
-func (w *rollbackFailingWriter) AppendPayload(tx db.DBTX, payload []byte) (container.LocalPlacement, error) {
-	placement, err := w.base.AppendPayload(tx, payload)
-	if err == nil {
-		w.appendSucceeded = true
-		w.lastPlacement = placement
-	}
-	return placement, err
-}
-
-func (w *rollbackFailingWriter) AcknowledgeAppendCommitted() {
-	w.base.AcknowledgeAppendCommitted()
-}
-
-func (w *rollbackFailingWriter) RollbackLastAppend() error {
-	if !w.appendSucceeded {
-		return nil
-	}
-	if w.forcedErr != nil {
-		return w.forcedErr
-	}
-	return errors.New("injected rollback cleanup failure")
-}
-
-func (w *rollbackFailingWriter) QuarantineActiveContainer() error {
-	w.quarantineCalls++
-	return w.base.QuarantineActiveContainer()
-}
-
-// chunkBoundarySizes returns the standard test sizes relative to CDC boundaries.
-// minChunk = 512 KiB, maxChunk = 2 MiB.
-var chunkBoundaryCases = []struct {
-	name string
-	size int
-}{
-	{"1_byte", 1},
-	{"small_64b", 64},
-	{"min_minus_1", 512*1024 - 1},
-	{"exactly_min", 512 * 1024},
-	{"min_plus_1", 512*1024 + 1},
-	{"max_minus_1", 2*1024*1024 - 1},
-	{"exactly_max", 2 * 1024 * 1024},
-	{"max_plus_1", 2*1024*1024 + 1},
-	{"multi_chunk_uneven_tail", 3*2*1024*1024 + 37},
-}
-
-type chunkRecord struct {
-	order int
-	hash  string
-	size  int64
-}
-
-func createSampleDataset(t *testing.T, dir string) map[string]string {
-	t.Helper()
-
-	paths := make(map[string]string)
-
-	// 1. Empty file
-	p := filepath.Join(dir, "empty.txt")
-	if err := os.WriteFile(p, []byte{}, 0o644); err != nil {
-		t.Fatalf("write empty file: %v", err)
-	}
-	paths["empty.txt"] = p
-
-	// 2. Small file (1 byte)
-	p = filepath.Join(dir, "small.txt")
-	if err := os.WriteFile(p, []byte{0x42}, 0o644); err != nil {
-		t.Fatalf("write small file: %v", err)
-	}
-	paths["small.txt"] = p
-
-	// 3. Config-like text
-	config := []byte("port: 8080\nhost: localhost\n")
-	p = filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(p, config, 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	paths["config.yaml"] = p
-
-	// 4. Repetitive text (good for chunking patterns)
-	lorem := bytes.Repeat([]byte("lorem ipsum\n"), 1000)
-	p = filepath.Join(dir, "lorem.txt")
-	if err := os.WriteFile(p, lorem, 0o644); err != nil {
-		t.Fatalf("write lorem: %v", err)
-	}
-	paths["lorem.txt"] = p
-
-	// 5. Binary file (deterministic pseudo-random)
-	bin := make([]byte, 128*1024)
-	for i := range bin {
-		bin[i] = byte((i*31 + 7) % 251)
-	}
-	p = filepath.Join(dir, "binary.bin")
-	if err := os.WriteFile(p, bin, 0o644); err != nil {
-		t.Fatalf("write binary: %v", err)
-	}
-	paths["binary.bin"] = p
-
-	// 6. Duplicate files
-	dup := make([]byte, 64*1024)
-	for i := range dup {
-		dup[i] = byte((i*17 + 3) % 251)
-	}
-
-	p1 := filepath.Join(dir, "dup1.bin")
-	p2 := filepath.Join(dir, "dup2.bin")
-
-	if err := os.WriteFile(p1, dup, 0o644); err != nil {
-		t.Fatalf("write dup1: %v", err)
-	}
-	if err := os.WriteFile(p2, dup, 0o644); err != nil {
-		t.Fatalf("write dup2: %v", err)
-	}
-
-	paths["dup1.bin"] = p1
-	paths["dup2.bin"] = p2
-
-	// 7. Shared-chunk hybrid files
-	prefix := make([]byte, 64*1024)
-	for i := range prefix {
-		prefix[i] = byte((i*13 + 5) % 251)
-	}
-
-	for i := 0; i < 2; i++ {
-		suffix := make([]byte, 32*1024)
-		for j := range suffix {
-			suffix[j] = byte((j*29 + i) % 251)
-		}
-
-		data := append(append([]byte{}, prefix...), suffix...)
-		name := fmt.Sprintf("hybrid_%c.bin", 'a'+i)
-		p := filepath.Join(dir, name)
-
-		if err := os.WriteFile(p, data, 0o644); err != nil {
-			t.Fatalf("write hybrid: %v", err)
-		}
-		paths[name] = p
-	}
-
-	return paths
-}
-
 func TestCLIJSONOutputContracts(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "json_contract.bin", 256*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "json_contract.bin", 256*1024)
 
-	sim := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	sim := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"simulate", "store", inPath, "--output", "json"), "simulate")
-	simData := jsonMap(t, sim, "data")
-	if got := jsonInt64(t, simData, "files"); got != 1 {
+	simData := testutils.JSONMap(t, sim, "data")
+	if got := testutils.JSONInt64(t, simData, "files"); got != 1 {
 		t.Fatalf("simulate files mismatch: want 1 got %d", got)
 	}
 
-	store := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	store := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
-	storeData := jsonMap(t, store, "data")
-	fileID := jsonInt64(t, storeData, "file_id")
+	storeData := testutils.JSONMap(t, store, "data")
+	fileID := testutils.JSONInt64(t, storeData, "file_id")
 	if fileID <= 0 {
 		t.Fatalf("expected positive file_id, got %d", fileID)
 	}
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"stats", "--output", "json"), "stats")
 
-	list := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	list := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"list", "--output", "json"), "list")
 	files, ok := list["files"].([]any)
 	if !ok || len(files) == 0 {
 		t.Fatalf("list returned no files: payload=%v", list)
 	}
 
-	search := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	search := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"search", "--name", "json_contract", "--output", "json"), "search")
 	searchFiles, ok := search["files"].([]any)
 	if !ok || len(searchFiles) == 0 {
@@ -861,20 +127,20 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatalf("mkdir out: %v", err)
 	}
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"restore", fmt.Sprintf("%d", fileID), outDir, "--output", "json"), "restore")
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"verify", "file", fmt.Sprintf("%d", fileID), "--full", "--output", "json"), "verify")
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"remove", fmt.Sprintf("%d", fileID), "--output", "json"), "remove")
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"gc", "--dry-run", "--output", "json"), "gc")
 
 	// Doctor command: operator-facing health check
-	doctor := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	doctor := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--output", "json"), "doctor")
 	doctorData, ok := doctor["data"].(map[string]any)
 	if !ok {
@@ -894,7 +160,7 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	}
 
 	// Doctor with --full flag
-	doctorFull := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	doctorFull := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--full", "--output", "json"), "doctor")
 	doctorFullData, ok := doctorFull["data"].(map[string]any)
 	if !ok {
@@ -909,87 +175,87 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 }
 
 func TestDoctorCommand(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	// Store some files first so doctor has something to report on
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_test.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_test.bin", 512*1024)
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
 	// Test doctor default quick health check (--standard level)
-	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if !strings.Contains(res.stdout, "Doctor health report") {
-		t.Fatalf("doctor text output missing heading\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Doctor health report") {
+		t.Fatalf("doctor text output missing heading\nstdout:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.stdout, "Overall status:") {
-		t.Fatalf("doctor text output missing overall status line\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Overall status:") {
+		t.Fatalf("doctor text output missing overall status line\nstdout:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.stdout, "Phase 1 - Recovery:") {
-		t.Fatalf("doctor text output missing recovery phase line\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Phase 1 - Recovery:") {
+		t.Fatalf("doctor text output missing recovery phase line\nstdout:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.stdout, "Phase 2 - Verify:") {
-		t.Fatalf("doctor text output missing verify phase line\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Phase 2 - Verify:") {
+		t.Fatalf("doctor text output missing verify phase line\nstdout:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.stdout, "Phase 3 - Schema:") {
-		t.Fatalf("doctor text output missing schema phase line\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Phase 3 - Schema:") {
+		t.Fatalf("doctor text output missing schema phase line\nstdout:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.stdout, "Recovery phase may have modified metadata") {
-		t.Fatalf("doctor text output missing corrective metadata note\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Recovery phase may have modified metadata") {
+		t.Fatalf("doctor text output missing corrective metadata note\nstdout:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.stdout, "Recommended next step:") {
-		t.Fatalf("doctor text output missing recommendation line\nstdout:\n%s", res.stdout)
+	if !strings.Contains(res.Stdout, "Recommended next step:") {
+		t.Fatalf("doctor text output missing recommendation line\nstdout:\n%s", res.Stdout)
 	}
 
 	// Test doctor --standard explicitly
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--standard")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor --standard failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--standard")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor --standard failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
 	// Test doctor --full
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor --full failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor --full failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
 	// Test doctor with JSON output and validate all required status fields
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	doctorJSON, ok := tryParseLastJSONLine(res.stdout)
+	doctorJSON, ok := testutils.TryParseLastJSONLine(res.Stdout)
 	if !ok {
-		// Fallback: check stderr if stdout parsing fails
-		doctorJSON, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
+		// Fallback: check Stderr if Stdout parsing fails
+		doctorJSON, ok = testutils.TryParseLastJSONLine(res.Stdout + "\n" + res.Stderr)
 	}
 	if !ok {
-		t.Fatalf("doctor --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 
 	if status, _ := doctorJSON["status"].(string); status != "ok" {
@@ -1061,17 +327,17 @@ func TestDoctorCommand(t *testing.T) {
 	}
 
 	// Test doctor --full --output json
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor --full --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full", "--output", "json")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor --full --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	doctorFullJSON, ok := tryParseLastJSONLine(res.stdout)
+	doctorFullJSON, ok := testutils.TryParseLastJSONLine(res.Stdout)
 	if !ok {
-		doctorFullJSON, ok = tryParseLastJSONLine(res.stdout + "\n" + res.stderr)
+		doctorFullJSON, ok = testutils.TryParseLastJSONLine(res.Stdout + "\n" + res.Stderr)
 	}
 	if !ok {
-		t.Fatalf("doctor --full --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor --full --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 
 	if status, _ := doctorFullJSON["status"].(string); status != "ok" {
@@ -1125,19 +391,19 @@ func TestDoctorCommand(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
-	if res.exitCode != 3 {
-		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
+	if res.ExitCode != 3 {
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	errPayload, ok := findCLIErrorPayload(res.stderr)
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 	if !ok {
-		errPayload, ok = findCLIErrorPayload(res.stdout + "\n" + res.stderr)
+		errPayload, ok = testutils.FindCLIErrorPayload(res.Stdout + "\n" + res.Stderr)
 	}
 	if !ok {
-		t.Fatalf("doctor --full on corrupted state produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor --full on corrupted state produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 
 	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
@@ -1154,42 +420,42 @@ func TestDoctorCommand(t *testing.T) {
 }
 
 func TestDoctorJSONContractConsistency(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_contract.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_contract.bin", 512*1024)
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
-	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor --output json failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	successPayload, ok := tryParseLastJSONLine(res.stdout)
+	successPayload, ok := testutils.TryParseLastJSONLine(res.Stdout)
 	if !ok {
-		t.Fatalf("doctor success JSON must be emitted on stdout\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor success JSON must be emitted on Stdout\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 
 	// Frozen v1.0 contract: success envelope keys are intentionally exact.
@@ -1227,14 +493,14 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 		t.Fatalf("doctor success data keys mismatch\nwant=%v\ngot=%v\npayload=%v", wantDataKeys, gotDataKeys, successPayload)
 	}
 
-	if errPayload, hasErr := findCLIErrorPayload(res.stdout); hasErr {
-		t.Fatalf("doctor success run should not emit error payload on stdout: payload=%v stdout=%s", errPayload, res.stdout)
+	if errPayload, hasErr := testutils.FindCLIErrorPayload(res.Stdout); hasErr {
+		t.Fatalf("doctor success run should not emit error payload on Stdout: payload=%v Stdout=%s", errPayload, res.Stdout)
 	}
 
-	for _, payload := range parseJSONLines(res.stderr) {
+	for _, payload := range testutils.ParseJSONLines(res.Stderr) {
 		if status, _ := payload["status"].(string); status == "ok" {
 			if command, _ := payload["command"].(string); command == "doctor" {
-				t.Fatalf("doctor success payload should not be duplicated to stderr: payload=%v stderr=%s", payload, res.stderr)
+				t.Fatalf("doctor success payload should not be duplicated to Stderr: payload=%v Stderr=%s", payload, res.Stderr)
 			}
 		}
 	}
@@ -1245,20 +511,20 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
-	if res.exitCode != 3 {
-		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
+	if res.ExitCode != 3 {
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	if errPayload, hasErr := findCLIErrorPayload(res.stdout); hasErr {
-		t.Fatalf("doctor failure run should not emit error payload on stdout: payload=%v stdout=%s", errPayload, res.stdout)
+	if errPayload, hasErr := testutils.FindCLIErrorPayload(res.Stdout); hasErr {
+		t.Fatalf("doctor failure run should not emit error payload on Stdout: payload=%v Stdout=%s", errPayload, res.Stdout)
 	}
 
-	errPayload, ok := findCLIErrorPayload(res.stderr)
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 	if !ok {
-		t.Fatalf("doctor failure JSON must be emitted on stderr\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor failure JSON must be emitted on Stderr\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
 		t.Fatalf("doctor failure error class mismatch: want VERIFY got %q payload=%v", got, errPayload)
@@ -1272,26 +538,26 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 }
 
 func TestDoctorJSONRecoveryFieldNames(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
-	payload := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	payload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--output", "json"), "doctor")
 
 	data, ok := payload["data"].(map[string]any)
@@ -1329,32 +595,32 @@ func TestDoctorJSONRecoveryFieldNames(t *testing.T) {
 }
 
 func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_failure_contract.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_failure_contract.bin", 512*1024)
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
 	dbconn, err = db.ConnectDB()
@@ -1363,23 +629,23 @@ func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
-	if res.exitCode != 3 {
-		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
+	if res.ExitCode != 3 {
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	if payload, ok := tryParseLastJSONLine(res.stdout); ok {
-		t.Fatalf("doctor failure should not emit JSON on stdout: payload=%v stdout=%s", payload, res.stdout)
+	if payload, ok := testutils.TryParseLastJSONLine(res.Stdout); ok {
+		t.Fatalf("doctor failure should not emit JSON on Stdout: payload=%v Stdout=%s", payload, res.Stdout)
 	}
-	if payload, ok := findCLIErrorPayload(res.stdout); ok {
-		t.Fatalf("doctor failure should not emit error JSON on stdout: payload=%v stdout=%s", payload, res.stdout)
+	if payload, ok := testutils.FindCLIErrorPayload(res.Stdout); ok {
+		t.Fatalf("doctor failure should not emit error JSON on Stdout: payload=%v Stdout=%s", payload, res.Stdout)
 	}
 
-	errPayload, ok := findCLIErrorPayload(res.stderr)
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 	if !ok {
-		t.Fatalf("doctor failure JSON must be emitted on stderr\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor failure JSON must be emitted on Stderr\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 
 	status, _ := errPayload["status"].(string)
@@ -1390,9 +656,9 @@ func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
 	if errorClass != "VERIFY" {
 		t.Fatalf("doctor failure error class mismatch: want VERIFY got %q payload=%v", errorClass, errPayload)
 	}
-	exitCode, _ := errPayload["exit_code"].(float64)
-	if int(exitCode) != 3 {
-		t.Fatalf("doctor failure exit_code mismatch: want 3 got %v payload=%v", exitCode, errPayload)
+	ExitCode, _ := errPayload["exit_code"].(float64)
+	if int(ExitCode) != 3 {
+		t.Fatalf("doctor failure exit_code mismatch: want 3 got %v payload=%v", ExitCode, errPayload)
 	}
 	message, _ := errPayload["message"].(string)
 	if !strings.Contains(message, "doctor verify phase failed") {
@@ -1408,49 +674,49 @@ func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
 }
 
 func TestDoctorIntegrationSmokeContract(t *testing.T) {
-	requireDB(t)
+	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_smoke_contract.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_smoke_contract.bin", 512*1024)
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
 	// Basic doctor invocation must pass.
-	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
 	// Full doctor invocation must pass.
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full")
-	if res.exitCode != 0 {
-		t.Fatalf("doctor --full failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--full")
+	if res.ExitCode != 0 {
+		t.Fatalf("doctor --full failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
 	// JSON contract must include key phase fields under data.
-	jsonRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	payload := assertCLIJSONOK(t, jsonRes, "doctor")
+	jsonRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	payload := testutils.AssertCLIJSONOK(t, jsonRes, "doctor")
 	data, ok := payload["data"].(map[string]any)
 	if !ok {
 		t.Fatalf("doctor JSON missing data object: payload=%v", payload)
@@ -1467,18 +733,18 @@ func TestDoctorIntegrationSmokeContract(t *testing.T) {
 		t.Fatalf("connectDB for corruption step: %v", err)
 	}
 	defer dbconn.Close()
-	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	res = runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
-	if res.exitCode != 3 {
-		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res = testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--deep", "--output", "json")
+	if res.ExitCode != 3 {
+		t.Fatalf("doctor --deep on corrupted state should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	errPayload, ok := findCLIErrorPayload(res.stderr)
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 	if !ok {
-		errPayload, ok = findCLIErrorPayload(res.stdout + "\n" + res.stderr)
+		errPayload, ok = testutils.FindCLIErrorPayload(res.Stdout + "\n" + res.Stderr)
 	}
 	if !ok {
-		t.Fatalf("doctor --deep corrupted-state run produced no error payload\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+		t.Fatalf("doctor --deep corrupted-state run produced no error payload\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
 	}
 	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
 		t.Fatalf("doctor --deep failure error_class mismatch: want VERIFY got %q payload=%v", got, errPayload)
@@ -1486,32 +752,32 @@ func TestDoctorIntegrationSmokeContract(t *testing.T) {
 }
 
 func TestDoctorMutatesStaleSealingStateAndVerifyPasses(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_recovery_mutation.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_recovery_mutation.bin", 512*1024)
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
 	dbconn, err = db.ConnectDB()
@@ -1520,27 +786,27 @@ func TestDoctorMutatesStaleSealingStateAndVerifyPasses(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	var containerID int64
-	if err := dbconn.QueryRow(`SELECT id FROM container ORDER BY id DESC LIMIT 1`).Scan(&containerID); err != nil {
+	var ContainerID int64
+	if err := dbconn.QueryRow(`SELECT id FROM container ORDER BY id DESC LIMIT 1`).Scan(&ContainerID); err != nil {
 		t.Fatalf("query latest container id: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE container SET sealed = TRUE, sealing = TRUE WHERE id = $1`, containerID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE container SET sealed = TRUE, sealing = TRUE WHERE id = $1`, ContainerID); err != nil {
 		t.Fatalf("inject stale sealing state: %v", err)
 	}
 
 	var isSealed, isSealing bool
-	if err := dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, containerID).Scan(&isSealed, &isSealing); err != nil {
+	if err := dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing); err != nil {
 		t.Fatalf("query stale sealing state: %v", err)
 	}
 	if !isSealed || !isSealing {
 		t.Fatalf("setup failed: expected sealed=true and sealing=true, got sealed=%v sealing=%v", isSealed, isSealing)
 	}
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--output", "json"), "doctor")
 
-	if err := dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, containerID).Scan(&isSealed, &isSealing); err != nil {
+	if err := dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing); err != nil {
 		t.Fatalf("query sealing state after doctor: %v", err)
 	}
 	if !isSealed {
@@ -1550,45 +816,41 @@ func TestDoctorMutatesStaleSealingStateAndVerifyPasses(t *testing.T) {
 		t.Fatalf("expected doctor to clear stale sealing marker")
 	}
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"verify", "system", "--output", "json"), "verify")
 }
 
-// TestDoctorAbortsProcessingLogicalFilesFromRecoverableState verifies that
-// doctor's recovery phase is corrective: it aborts dangling PROCESSING logical
-// file rows left by a crashed or interrupted write session, and subsequent
-// verification still passes.
 func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
-	requireDB(t)
+	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	// Store a real file first so the DB has valid schema content and verify has
 	// something meaningful to check after recovery.
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_recovery_base.bin", 256*1024)
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_recovery_base.bin", 256*1024)
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
 	// Inject a dangling PROCESSING logical file simulating a crashed write session.
-	// Use a hash/name that will not conflict with the real stored file.
+	// Use a Hash/name that will not conflict with the real stored file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status)
@@ -1612,8 +874,8 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	_ = dbconn.Close()
 
 	// Run doctor; it must succeed (recovery aborts dangling writes, then verify passes).
-	doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	doctorPayload := assertCLIJSONOK(t, doctorRes, "doctor")
+	doctorRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	doctorPayload := testutils.AssertCLIJSONOK(t, doctorRes, "doctor")
 	doctorData, ok := doctorPayload["data"].(map[string]any)
 	if !ok {
 		t.Fatalf("doctor JSON missing data object: payload=%v", doctorPayload)
@@ -1645,38 +907,35 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	}
 
 	// Verify the full system passes after doctor's corrective recovery.
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"verify", "system", "--output", "json"), "verify")
 }
 
-// TestDoctorAfterRecoverableCorruptionOperatorStory locks down the operator
-// sequence: recoverable corruption is present, doctor succeeds and reports
-// corrective recovery counters, and follow-up verify passes.
 func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
-	requireDB(t)
+	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "doctor_operator_story.bin", 256*1024)
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_operator_story.bin", 256*1024)
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
 
 	// Inject recoverable corruption: dangling PROCESSING logical file.
@@ -1693,11 +952,11 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	}
 	_ = dbconn.Close()
 
-	doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	if doctorRes.exitCode != 0 {
-		t.Fatalf("doctor should exit successfully on recoverable corruption, got exit=%d\nstdout:\n%s\nstderr:\n%s", doctorRes.exitCode, doctorRes.stdout, doctorRes.stderr)
+	doctorRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if doctorRes.ExitCode != 0 {
+		t.Fatalf("doctor should exit successfully on recoverable corruption, got exit=%d\nstdout:\n%s\nstderr:\n%s", doctorRes.ExitCode, doctorRes.Stdout, doctorRes.Stderr)
 	}
-	doctorPayload := assertCLIJSONOK(t, doctorRes, "doctor")
+	doctorPayload := testutils.AssertCLIJSONOK(t, doctorRes, "doctor")
 	doctorData, ok := doctorPayload["data"].(map[string]any)
 	if !ok {
 		t.Fatalf("doctor JSON missing data object: payload=%v", doctorPayload)
@@ -1707,7 +966,7 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	if !ok {
 		t.Fatalf("doctor JSON missing recovery object under data: payload=%v", doctorPayload)
 	}
-	if got := jsonInt64(t, recoveryObj, "aborted_logical_files"); got < 1 {
+	if got := testutils.JSONInt64(t, recoveryObj, "aborted_logical_files"); got < 1 {
 		t.Fatalf("expected doctor recovery counter aborted_logical_files >= 1, got %d recovery=%v", got, recoveryObj)
 	}
 	if got, _ := doctorData["verify_status"].(string); got != "ok" {
@@ -1728,42 +987,40 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 		t.Fatalf("expected doctor to abort dangling PROCESSING file, got status %q", statusAfter)
 	}
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"verify", "system", "--output", "json"), "verify")
 }
 
-// TestEndToEndTrustProof exercises the operator trust narrative end-to-end:
-// store -> crash simulation -> recovery -> doctor -> verify -> restore -> hash compare.
 func TestEndToEndTrustProof(t *testing.T) {
-	requireDB(t)
+	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "trust_proof.bin", 512*1024)
-	originalHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "trust_proof.bin", 512*1024)
+	originalHash := testutils.SHA256File(t, inPath)
 
-	storePayload := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	storePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
-	storeData := jsonMap(t, storePayload, "data")
-	fileID := jsonInt64(t, storeData, "file_id")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	fileID := testutils.JSONInt64(t, storeData, "file_id")
 
 	var danglingID int64
 	err = dbconn.QueryRow(`
@@ -1810,81 +1067,81 @@ func TestEndToEndTrustProof(t *testing.T) {
 	if danglingStatus != filestate.LogicalFileAborted {
 		t.Fatalf("expected dangling logical_file status ABORTED after recovery, got %q", danglingStatus)
 	}
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"doctor", "--output", "json"), "doctor")
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"verify", "system", "--full", "--output", "json"), "verify")
 
 	restoreDir := filepath.Join(tmp, "restore")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore: %v", err)
 	}
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"restore", fmt.Sprintf("%d", fileID), restoreDir, "--output", "json"), "restore")
 
 	restoredPath := filepath.Join(restoreDir, "trust_proof.bin")
 	if _, err := os.Stat(restoredPath); err != nil {
 		t.Fatalf("restored file not found: %v", err)
 	}
-	restoredHash := sha256File(t, restoredPath)
+	restoredHash := testutils.SHA256File(t, restoredPath)
 	if restoredHash != originalHash {
-		t.Fatalf("restored file hash mismatch: original=%s restored=%s", originalHash, restoredHash)
+		t.Fatalf("restored file Hash mismatch: original=%s restored=%s", originalHash, restoredHash)
 	}
 }
 
 func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
 	inputDir := filepath.Join(tmp, "dataset")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir dataset: %v", err)
 	}
-	createSampleDataset(t, inputDir)
+	testutils.CreateSampleDataset(t, inputDir)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
-	simRes := runColdkeepCommand(t, repoRoot, binPath, env,
+	simRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"simulate", "store-folder", "--codec", "plain", inputDir, "--output", "json")
-	if simRes.exitCode != 0 {
-		lowerErr := strings.ToLower(simRes.stderr)
+	if simRes.ExitCode != 0 {
+		lowerErr := strings.ToLower(simRes.Stderr)
 		if strings.Contains(lowerErr, "database is locked") || strings.Contains(lowerErr, "context deadline exceeded") {
-			t.Skipf("skipping flaky simulate backend contention: %s", strings.TrimSpace(simRes.stderr))
+			t.Skipf("skipping flaky simulate backend contention: %s", strings.TrimSpace(simRes.Stderr))
 		}
-		t.Fatalf("command simulate failed with exit=%d\nstdout:\n%s\nstderr:\n%s", simRes.exitCode, simRes.stdout, simRes.stderr)
+		t.Fatalf("command simulate failed with exit=%d\nstdout:\n%s\nstderr:\n%s", simRes.ExitCode, simRes.Stdout, simRes.Stderr)
 	}
-	sim := assertCLIJSONOK(t, simRes, "simulate")
-	simData := jsonMap(t, sim, "data")
-	simFiles := jsonInt64(t, simData, "files")
-	simLogical := jsonInt64(t, simData, "logical_size_bytes")
-	simPhysical := jsonInt64(t, simData, "physical_size_bytes")
+	sim := testutils.AssertCLIJSONOK(t, simRes, "simulate")
+	simData := testutils.JSONMap(t, sim, "data")
+	simFiles := testutils.JSONInt64(t, simData, "files")
+	simLogical := testutils.JSONInt64(t, simData, "logical_size_bytes")
+	simPhysical := testutils.JSONInt64(t, simData, "physical_size_bytes")
 
-	assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", "--codec", "plain", inputDir, "--output", "json"), "store-folder")
 
-	stats := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	stats := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"stats", "--output", "json"), "stats")
-	statsData := jsonMap(t, stats, "data")
-	realFiles := jsonInt64(t, statsData, "completed_files")
-	realLogical := jsonInt64(t, statsData, "completed_size_bytes")
-	realPhysical := jsonInt64(t, statsData, "live_block_bytes")
+	statsData := testutils.JSONMap(t, stats, "data")
+	realFiles := testutils.JSONInt64(t, statsData, "completed_files")
+	realLogical := testutils.JSONInt64(t, statsData, "completed_size_bytes")
+	realPhysical := testutils.JSONInt64(t, statsData, "live_block_bytes")
 
 	if simFiles != realFiles {
 		t.Fatalf("simulation files mismatch: simulated=%d real=%d", simFiles, realFiles)
@@ -1905,57 +1162,57 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 }
 
 func TestCLIJSONOutputStreamSeparation(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "stream_contract.bin", 64*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "stream_contract.bin", 64*1024)
 
-	res := runColdkeepCommand(t, repoRoot, binPath, env,
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json")
-	if res.exitCode != 0 {
-		t.Fatalf("store command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	if res.ExitCode != 0 {
+		t.Fatalf("store command failed with exit=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	stdoutJSON := parseJSONLines(res.stdout)
+	stdoutJSON := testutils.ParseJSONLines(res.Stdout)
 	if len(stdoutJSON) == 0 {
-		t.Fatalf("expected JSON payload on stdout, got:\n%s", res.stdout)
+		t.Fatalf("expected JSON payload on Stdout, got:\n%s", res.Stdout)
 	}
 
 	storeJSON := stdoutJSON[len(stdoutJSON)-1]
 	if got, _ := storeJSON["command"].(string); got != "store" {
-		t.Fatalf("expected stdout command payload for store, got: %v", storeJSON)
+		t.Fatalf("expected Stdout command payload for store, got: %v", storeJSON)
 	}
 	if status, _ := storeJSON["status"].(string); status != "ok" {
-		t.Fatalf("expected stdout status=ok, got payload: %v", storeJSON)
+		t.Fatalf("expected Stdout status=ok, got payload: %v", storeJSON)
 	}
 
-	if strings.Contains(res.stdout, "startup_recovery") {
-		t.Fatalf("startup recovery JSON must not be written to stdout:\n%s", res.stdout)
+	if strings.Contains(res.Stdout, "startup_recovery") {
+		t.Fatalf("startup recovery JSON must not be written to Stdout:\n%s", res.Stdout)
 	}
 
-	stderrJSON := parseJSONLines(res.stderr)
+	stderrJSON := testutils.ParseJSONLines(res.Stderr)
 	if len(stderrJSON) == 0 {
-		t.Fatalf("expected startup recovery JSON on stderr, got:\n%s", res.stderr)
+		t.Fatalf("expected startup recovery JSON on Stderr, got:\n%s", res.Stderr)
 	}
 
 	recoverySeen := false
@@ -1964,34 +1221,34 @@ func TestCLIJSONOutputStreamSeparation(t *testing.T) {
 			recoverySeen = true
 		}
 		if command, _ := payload["command"].(string); command == "store" {
-			t.Fatalf("command payload must not be written to stderr: %v", payload)
+			t.Fatalf("command payload must not be written to Stderr: %v", payload)
 		}
 	}
 
 	if !recoverySeen {
-		t.Fatalf("expected startup_recovery JSON event on stderr, got payloads: %v", stderrJSON)
+		t.Fatalf("expected startup_recovery JSON event on Stderr, got payloads: %v", stderrJSON)
 	}
 }
 
 func TestCLIJSONErrorContracts(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 	_ = dbconn.Close()
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	tests := []struct {
 		name          string
@@ -2052,19 +1309,19 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 				envForTest[k] = v
 			}
 
-			res := runColdkeepCommand(t, repoRoot, binPath, envForTest, tc.args...)
+			res := testutils.RunColdkeepCommand(t, repoRoot, binPath, envForTest, tc.args...)
 
-			if res.exitCode != tc.wantExitCode {
-				t.Fatalf("exit code mismatch: want=%d got=%d\nstdout:\n%s\nstderr:\n%s", tc.wantExitCode, res.exitCode, res.stdout, res.stderr)
+			if res.ExitCode != tc.wantExitCode {
+				t.Fatalf("exit code mismatch: want=%d got=%d\nstdout:\n%s\nstderr:\n%s", tc.wantExitCode, res.ExitCode, res.Stdout, res.Stderr)
 			}
 
-			if strings.TrimSpace(res.stdout) != "" {
-				t.Fatalf("expected no stdout for error case, got:\n%s", res.stdout)
+			if strings.TrimSpace(res.Stdout) != "" {
+				t.Fatalf("expected no Stdout for error case, got:\n%s", res.Stdout)
 			}
 
-			errPayload, ok := findCLIErrorPayload(res.stderr)
+			errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 			if !ok {
-				t.Fatalf("expected JSON error payload in stderr, got:\n%s", res.stderr)
+				t.Fatalf("expected JSON error payload in Stderr, got:\n%s", res.Stderr)
 			}
 
 			if got, _ := errPayload["status"].(string); got != "error" {
@@ -2073,7 +1330,7 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 			if got, _ := errPayload["error_class"].(string); got != tc.wantClass {
 				t.Fatalf("error_class mismatch: want=%s got=%q payload=%v", tc.wantClass, got, errPayload)
 			}
-			if got := jsonInt64(t, errPayload, "exit_code"); got != int64(tc.wantExitCode) {
+			if got := testutils.JSONInt64(t, errPayload, "exit_code"); got != int64(tc.wantExitCode) {
 				t.Fatalf("exit_code mismatch in payload: want=%d got=%d payload=%v", tc.wantExitCode, got, errPayload)
 			}
 
@@ -2086,33 +1343,33 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 }
 
 func TestCLIJSONErrorContractsDoctorRecoveryFailure(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	// Force doctor's recovery phase to fail at DB connect time.
 	env["DB_HOST"] = "127.0.0.1"
 	env["DB_PORT"] = "1"
 
-	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	if res.exitCode != 4 {
-		t.Fatalf("exit code mismatch: want=4 got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.ExitCode != 4 {
+		t.Fatalf("exit code mismatch: want=4 got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	if strings.TrimSpace(res.stdout) != "" {
-		t.Fatalf("expected no stdout for error case, got:\n%s", res.stdout)
+	if strings.TrimSpace(res.Stdout) != "" {
+		t.Fatalf("expected no Stdout for error case, got:\n%s", res.Stdout)
 	}
 
-	errPayload, ok := findCLIErrorPayload(res.stderr)
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 	if !ok {
-		t.Fatalf("expected JSON error payload in stderr, got:\n%s", res.stderr)
+		t.Fatalf("expected JSON error payload in Stderr, got:\n%s", res.Stderr)
 	}
 
 	if got, _ := errPayload["status"].(string); got != "error" {
@@ -2121,7 +1378,7 @@ func TestCLIJSONErrorContractsDoctorRecoveryFailure(t *testing.T) {
 	if got, _ := errPayload["error_class"].(string); got != "RECOVERY" {
 		t.Fatalf("error_class mismatch: want=RECOVERY got=%q payload=%v", got, errPayload)
 	}
-	if got := jsonInt64(t, errPayload, "exit_code"); got != 4 {
+	if got := testutils.JSONInt64(t, errPayload, "exit_code"); got != 4 {
 		t.Fatalf("exit_code mismatch in payload: want=4 got=%d payload=%v", got, errPayload)
 	}
 
@@ -2132,31 +1389,31 @@ func TestCLIJSONErrorContractsDoctorRecoveryFailure(t *testing.T) {
 }
 
 func TestDoctorJSONFailureShortPathSingleMachineReadablePayload(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	// Unrecoverable startup path for doctor: force DB connect failure.
 	env["DB_HOST"] = "127.0.0.1"
 	env["DB_PORT"] = "1"
 
-	res := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	if res.exitCode != 4 {
-		t.Fatalf("exit code mismatch: want=4 got=%d\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.ExitCode != 4 {
+		t.Fatalf("exit code mismatch: want=4 got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	if strings.TrimSpace(res.stdout) != "" {
-		t.Fatalf("expected no stdout for doctor short-path failure, got:\n%s", res.stdout)
+	if strings.TrimSpace(res.Stdout) != "" {
+		t.Fatalf("expected no Stdout for doctor short-path failure, got:\n%s", res.Stdout)
 	}
 
-	stderrPayloads := parseJSONLines(res.stderr)
+	stderrPayloads := testutils.ParseJSONLines(res.Stderr)
 	machineReadable := make([]map[string]any, 0, len(stderrPayloads))
 	for _, payload := range stderrPayloads {
 		if _, ok := payload["error_class"]; ok {
@@ -2165,7 +1422,7 @@ func TestDoctorJSONFailureShortPathSingleMachineReadablePayload(t *testing.T) {
 	}
 
 	if len(machineReadable) != 1 {
-		t.Fatalf("expected exactly one machine-readable error payload, got %d\nstderr:\n%s", len(machineReadable), res.stderr)
+		t.Fatalf("expected exactly one machine-readable error payload, got %d\nstderr:\n%s", len(machineReadable), res.Stderr)
 	}
 
 	errPayload := machineReadable[0]
@@ -2175,7 +1432,7 @@ func TestDoctorJSONFailureShortPathSingleMachineReadablePayload(t *testing.T) {
 	if got, _ := errPayload["error_class"].(string); got != "RECOVERY" {
 		t.Fatalf("error_class mismatch: want=RECOVERY got=%q payload=%v", got, errPayload)
 	}
-	if got := jsonInt64(t, errPayload, "exit_code"); got != 4 {
+	if got := testutils.JSONInt64(t, errPayload, "exit_code"); got != 4 {
 		t.Fatalf("exit_code mismatch in payload: want=4 got=%d payload=%v", got, errPayload)
 	}
 
@@ -2187,52 +1444,14 @@ func TestDoctorJSONFailureShortPathSingleMachineReadablePayload(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// test cases
-// -----------------------------------------------------------------------------
-
-func fetchFirstChunkRecord(t *testing.T, dbconn *sql.DB, fileID int64) fileChunkRecord {
-	t.Helper()
-
-	var record fileChunkRecord
-	err := dbconn.QueryRow(`
-		SELECT
-			c.id,
-			b.container_id,
-			b.block_offset,
-			b.stored_size,
-			ctr.filename,
-			ctr.current_size
-		FROM file_chunk fc
-		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE fc.logical_file_id = $1
-		ORDER BY fc.chunk_order ASC
-		LIMIT 1
-	`, fileID).Scan(
-		&record.chunkID,
-		&record.containerID,
-		&record.blockOffset,
-		&record.storedSize,
-		&record.containerFilename,
-		&record.containerCurrentSize,
-	)
-	if err != nil {
-		t.Fatalf("query first chunk record: %v", err)
-	}
-
-	return record
-}
-
 func TestRoundTripStoreRestore(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -2240,16 +1459,16 @@ func TestRoundTripStoreRestore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// 512KB file should create multiple chunks depending on CDC params.
-	inPath := createTempFile(t, inputDir, "roundtrip.bin", 512*1024)
-	want := mustRead(t, inPath)
-	wantHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "roundtrip.bin", 512*1024)
+	want := testutils.MustRead(t, inPath)
+	wantHash := testutils.SHA256File(t, inPath)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -2260,7 +1479,7 @@ func TestRoundTripStoreRestore(t *testing.T) {
 		t.Fatalf("storeFileWithStorageContext: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, wantHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -2270,24 +1489,24 @@ func TestRoundTripStoreRestore(t *testing.T) {
 		t.Fatalf("restoreFileWithDB: %v", err)
 	}
 
-	got := mustRead(t, outPath)
+	got := testutils.MustRead(t, outPath)
 	if !bytes.Equal(want, got) {
 		t.Fatalf("restored bytes differ from original")
 	}
 
-	gotHash := sha256File(t, outPath)
+	gotHash := testutils.SHA256File(t, outPath)
 	if gotHash != wantHash {
-		t.Fatalf("hash mismatch: want %s got %s", wantHash, gotHash)
+		t.Fatalf("Hash mismatch: want %s got %s", wantHash, gotHash)
 	}
 }
 
 func TestDedupSameFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -2295,13 +1514,13 @@ func TestDedupSameFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "dup.bin", 256*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "dup.bin", 256*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -2315,7 +1534,7 @@ func TestDedupSameFile(t *testing.T) {
 		t.Fatalf("second store: %v", err)
 	}
 
-	// Should still be 1 logical file for this hash
+	// Should still be 1 logical file for this Hash
 	var n int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
 		t.Fatalf("count logical_file: %v", err)
@@ -2325,19 +1544,13 @@ func TestDedupSameFile(t *testing.T) {
 	}
 }
 
-// TestStoreFolderIdempotentDedup verifies that re-storing the same folder a
-// second time leaves all key storage counters unchanged: file-level and
-// chunk-level deduplication must absorb the entire second pass without writing
-// new logical files, new chunks, new physical blocks, or new containers.
-// This complements TestDedupSameFile (single-file) by exercising the folder
-// pipeline, concurrent workers, and shared-chunk routing.
 func TestStoreFolderIdempotentDedup(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -2345,16 +1558,16 @@ func TestStoreFolderIdempotentDedup(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
-	createSampleDataset(t, inputDir)
+	testutils.CreateSampleDataset(t, inputDir)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 
 	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
 		t.Fatalf("first store-folder: %v", err)
@@ -2419,17 +1632,13 @@ func TestStoreFolderIdempotentDedup(t *testing.T) {
 	}
 }
 
-// TestStoreFolderIdempotentDedupEdgeCases applies the same idempotent re-store
-// guarantee as TestStoreFolderIdempotentDedup but against the samples_edge_cases
-// fixture: many small files plus a repeating-pattern file. This exercises
-// deduplication under high file-count workloads and compressible-data patterns.
 func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -2437,14 +1646,14 @@ func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	fixturePath := findRepoFixtureDir(t, "samples_edge_cases")
+	fixturePath := testutils.FindRepoFixtureDir(t, "samples_edge_cases")
 	inputDir := filepath.Join(tmp, "input")
-	copyDirTree(t, fixturePath, inputDir)
+	testutils.CopyDirTree(t, fixturePath, inputDir)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 
 	if err := storage.StoreFolderWithStorageContext(sgctx, inputDir); err != nil {
 		t.Fatalf("first store-folder: %v", err)
@@ -2510,20 +1719,20 @@ func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
 }
 
 func TestStoreFolderParallelSmoke(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
 	defer dbconn.Close()
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	// Build folder with duplicates + shared-chunk variants
 	inputDir := filepath.Join(tmp, "folder")
@@ -2533,14 +1742,14 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 
 	// 1) Base unique-ish files
 	for i := 0; i < 10; i++ {
-		paths = append(paths, createTempFile(t, inputDir, "file_"+itoa(i)+".bin", 64*1024))
+		paths = append(paths, testutils.CreateTempFile(t, inputDir, "file_"+testutils.Itoa(i)+".bin", 64*1024))
 	}
 
 	// 2) Exact duplicates (file-level dedupe)
 	for i := 0; i < 3; i++ {
 		src := paths[i]
-		dst := filepath.Join(inputDir, "dup_"+itoa(i)+".bin")
-		b := mustRead(t, src)
+		dst := filepath.Join(inputDir, "dup_"+testutils.Itoa(i)+".bin")
+		b := testutils.MustRead(t, src)
 		if err := os.WriteFile(dst, b, 0o644); err != nil {
 			t.Fatalf("write dup: %v", err)
 		}
@@ -2562,7 +1771,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 		}
 
 		hybrid := append(append([]byte{}, sharedPrefix...), suffix...)
-		dst := filepath.Join(inputDir, "hybrid_"+itoa(i)+".bin")
+		dst := filepath.Join(inputDir, "hybrid_"+testutils.Itoa(i)+".bin")
 		if err := os.WriteFile(dst, hybrid, 0o644); err != nil {
 			t.Fatalf("write hybrid: %v", err)
 		}
@@ -2571,7 +1780,7 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 
 	// Run storeFolder with timeout to catch deadlocks/hangs.
 	done := make(chan error, 1)
-	go func() { done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir) }()
+	go func() { done <- storage.StoreFolderWithStorageContext(testutils.NewTestContext(dbconn), inputDir) }()
 
 	select {
 	case err := <-done:
@@ -2602,9 +1811,9 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
 			t.Fatalf("restore %d: %v", id, err)
 		}
-		gotHash := sha256File(t, outPath)
+		gotHash := testutils.SHA256File(t, outPath)
 		if gotHash != expectHash {
-			t.Fatalf("hash mismatch for restored id=%d want=%s got=%s", id, expectHash, gotHash)
+			t.Fatalf("Hash mismatch for restored id=%d want=%s got=%s", id, expectHash, gotHash)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -2613,31 +1822,31 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 }
 
 func TestStoreEdgeCasesFolder(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
 	defer dbconn.Close()
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	// Use the repository's edge case samples folder.
 	// It contains:
 	// - samples_edge_cases/pattern.txt (one file with a pattern)
 	// - samples_edge_cases/many_small/ (50 small files)
-	edgeCasesDir := findRepoFixtureDir(t, "samples_edge_cases")
+	edgeCasesDir := testutils.FindRepoFixtureDir(t, "samples_edge_cases")
 
 	// Store edge cases folder with timeout to catch deadlocks.
 	done := make(chan error, 1)
 	go func() {
-		done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), edgeCasesDir)
+		done <- storage.StoreFolderWithStorageContext(testutils.NewTestContext(dbconn), edgeCasesDir)
 	}()
 
 	select {
@@ -2687,9 +1896,9 @@ func TestStoreEdgeCasesFolder(t *testing.T) {
 				t.Fatalf("restore id=%d: %v", id, err)
 			}
 
-			gotHash := sha256File(t, outPath)
+			gotHash := testutils.SHA256File(t, outPath)
 			if gotHash != fileHash {
-				t.Fatalf("edge case hash mismatch for id=%d want=%s got=%s", id, fileHash, gotHash)
+				t.Fatalf("edge case Hash mismatch for id=%d want=%s got=%s", id, fileHash, gotHash)
 			}
 		}
 	}
@@ -2707,30 +1916,30 @@ func TestStoreEdgeCasesFolder(t *testing.T) {
 	}
 
 	// Ensure no processing rows stuck behind.
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
 func TestGCRemovesUnusedContainers(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
 	defer dbconn.Close()
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Create two different files large enough to likely create separate containers
-	fileA := createTempFile(t, inputDir, "fileA.bin", 512*1024)
+	fileA := testutils.CreateTempFile(t, inputDir, "fileA.bin", 512*1024)
 
 	// Create fileB with slightly different deterministic pattern
 	fileBPath := filepath.Join(inputDir, "fileB.bin")
@@ -2766,7 +1975,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 
 	// Fetch fileA ID
 	var fileAID int64
-	hashA := sha256File(t, fileA)
+	hashA := testutils.SHA256File(t, fileA)
 	if err := dbconn.QueryRow(
 		`SELECT id FROM logical_file WHERE file_hash = $1`,
 		hashA,
@@ -2817,7 +2026,7 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 
 	// Ensure fileB still restores correctly
 	var fileBID int64
-	hashB := sha256File(t, fileB)
+	hashB := testutils.SHA256File(t, fileB)
 	if err := dbconn.QueryRow(
 		`SELECT id FROM logical_file WHERE file_hash = $1`,
 		hashB,
@@ -2833,9 +2042,9 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 		t.Fatalf("restore fileB after GC: %v", err)
 	}
 
-	gotHash := sha256File(t, outPath)
+	gotHash := testutils.SHA256File(t, outPath)
 	if gotHash != hashB {
-		t.Fatalf("hash mismatch after GC: want %s got %s", hashB, gotHash)
+		t.Fatalf("Hash mismatch after GC: want %s got %s", hashB, gotHash)
 	}
 
 	// Ensure no chunk has negative live_ref_count
@@ -2849,12 +2058,12 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 }
 
 func TestConcurrentStoreSameFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -2862,13 +2071,13 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "concurrent.bin", 256*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "concurrent.bin", 256*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
 	// Start two goroutines trying to store the same file
 	done := make(chan error, 2)
@@ -2898,7 +2107,7 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 		t.Fatalf("second store failed: %v", err2)
 	}
 
-	// Should still be 1 logical file for this hash
+	// Should still be 1 logical file for this Hash
 	var n int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&n); err != nil {
 		t.Fatalf("count logical_file: %v", err)
@@ -2909,12 +2118,12 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 }
 
 func TestConcurrentStoreSameChunk(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -2922,8 +2131,8 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -2978,8 +2187,8 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	}
 
 	// Verify both files are stored
-	hashA := sha256File(t, fileAPath)
-	hashB := sha256File(t, fileBPath)
+	hashA := testutils.SHA256File(t, fileAPath)
+	hashB := testutils.SHA256File(t, fileBPath)
 
 	var countA, countB int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hashA).Scan(&countA); err != nil {
@@ -2995,13 +2204,13 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 }
 
 func TestConcurrentStoreSameFileStress(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -3009,13 +2218,13 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "same-file-stress.bin", 768*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "same-file-stress.bin", 768*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
 	const workers = 12
 	start := make(chan struct{})
@@ -3051,8 +2260,8 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	if logicalFiles != 1 {
 		t.Fatalf("expected 1 logical_file row, got %d", logicalFiles)
 	}
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
 	var status string
 	var retryCount int
@@ -3066,26 +2275,26 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 		t.Fatalf("retry_count should never be negative, got %d", retryCount)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "same-file-stress.restored.bin")
 	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 		t.Fatalf("restore stored file: %v", err)
 	}
-	if gotHash := sha256File(t, outPath); gotHash != fileHash {
-		t.Fatalf("restored hash mismatch: want %s got %s", fileHash, gotHash)
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != fileHash {
+		t.Fatalf("restored Hash mismatch: want %s got %s", fileHash, gotHash)
 	}
 }
 
 func TestConcurrentStoreFolderStress(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -3093,24 +2302,24 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "folder-stress")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir inputDir: %v", err)
 	}
 
-	expectedHashes := createSampleDataset(t, inputDir)
+	expectedHashes := testutils.CreateSampleDataset(t, inputDir)
 	for i := 0; i < 8; i++ {
 		src := expectedHashes["binary.bin"]
-		dupPath := filepath.Join(inputDir, "dup_stress_"+itoa(i)+".bin")
-		if err := os.WriteFile(dupPath, mustRead(t, src), 0o644); err != nil {
+		dupPath := filepath.Join(inputDir, "dup_stress_"+testutils.Itoa(i)+".bin")
+		if err := os.WriteFile(dupPath, testutils.MustRead(t, src), 0o644); err != nil {
 			t.Fatalf("write duplicate stress file: %v", err)
 		}
 	}
 
-	expectedUnique := collectFileHashesByCount(t, inputDir)
+	expectedUnique := testutils.CollectFileHashesByCount(t, inputDir)
 
 	const workers = 4
 	start := make(chan struct{})
@@ -3119,7 +2328,7 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			<-start
-			done <- storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir)
+			done <- storage.StoreFolderWithStorageContext(testutils.NewTestContext(dbconn), inputDir)
 		}()
 	}
 	close(start)
@@ -3150,8 +2359,8 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	if nonCompleted != 0 {
 		t.Fatalf("expected no non-completed logical files, got %d", nonCompleted)
 	}
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
 	outDir := filepath.Join(tmp, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -3167,8 +2376,8 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	restored := 0
 	for rows.Next() {
 		var id int64
-		var hash string
-		if err := rows.Scan(&id, &hash); err != nil {
+		var Hash string
+		if err := rows.Scan(&id, &Hash); err != nil {
 			t.Fatalf("scan logical_file row: %v", err)
 		}
 
@@ -3176,8 +2385,8 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
 			t.Fatalf("restore file %d: %v", id, err)
 		}
-		if gotHash := sha256File(t, outPath); gotHash != hash {
-			t.Fatalf("restored hash mismatch for file %d: want %s got %s", id, hash, gotHash)
+		if gotHash := testutils.SHA256File(t, outPath); gotHash != Hash {
+			t.Fatalf("restored Hash mismatch for file %d: want %s got %s", id, Hash, gotHash)
 		}
 		restored++
 	}
@@ -3190,13 +2399,13 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 }
 
 func TestConcurrentStoreStressForcesRotation(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -3204,11 +2413,11 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
-	// Keep max size above max chunk payload to force rotation without rejecting chunks.
+	// Keep max Size above max chunk payload to force rotation without rejecting chunks.
 	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
@@ -3217,8 +2426,8 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 		t.Fatalf("mkdir inputDir: %v", err)
 	}
 
-	inPath := createTempFile(t, inputDir, "rotation-stress.bin", 6*1024*1024+123)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "rotation-stress.bin", 6*1024*1024+123)
+	fileHash := testutils.SHA256File(t, inPath)
 
 	const workers = 12
 	start := make(chan struct{})
@@ -3271,10 +2480,10 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 		t.Fatalf("expected at least 1 sealed container after rotation, got %d", sealedCount)
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 	outDir := filepath.Join(tmp, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatalf("mkdir outDir: %v", err)
@@ -3283,18 +2492,18 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 		t.Fatalf("restore stored file: %v", err)
 	}
-	if gotHash := sha256File(t, outPath); gotHash != fileHash {
-		t.Fatalf("restored hash mismatch: want %s got %s", fileHash, gotHash)
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != fileHash {
+		t.Fatalf("restored Hash mismatch: want %s got %s", fileHash, gotHash)
 	}
 }
 
 func TestRetryAfterAbortedFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -3302,13 +2511,13 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "retry_file.bin", 256*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "retry_file.bin", 256*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
 		Writer: container.NewLocalWriter(container.GetContainerMaxSize()),
@@ -3320,7 +2529,7 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	}
 
 	// Manually set the file status to ABORTED to simulate a failed store
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 	if _, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID); err != nil {
 		t.Fatalf("set status to ABORTED: %v", err)
 	}
@@ -3341,12 +2550,12 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 }
 
 func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -3354,20 +2563,20 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "rebuild_corrupt_completed.bin", 768*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "rebuild_corrupt_completed.bin", 768*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
-	initialCtx := newTestContext(dbconn)
+	initialCtx := testutils.NewTestContext(dbconn)
 	if err := storage.StoreFileWithStorageContext(initialCtx, inPath); err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	// Simulate silent metadata corruption on a COMPLETED file graph.
 	if _, err := dbconn.Exec(`DELETE FROM file_chunk WHERE logical_file_id = $1`, fileID); err != nil {
@@ -3382,7 +2591,7 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 		t.Fatalf("expected corrupted graph to have 0 file_chunk rows, got %d", fileChunkCount)
 	}
 
-	restoreCtx := newTestContext(dbconn)
+	restoreCtx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextResult(restoreCtx, inPath)
 	if err != nil {
 		t.Fatalf("re-store after graph corruption: %v", err)
@@ -3413,28 +2622,28 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 		t.Fatalf("expected rebuilt graph to recreate file_chunk rows")
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
 
 func TestDoctorMutatesRecoverableState(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connectDB: %v", err)
 	}
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -3442,11 +2651,11 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 	}
 
 	// Store a file to create baseline good state
-	inPath := createTempFile(t, inputDir, "recoverable_test.bin", 256*1024)
-	storeRes := assertCLIJSONOK(t, runColdkeepCommand(t, repoRoot, binPath, env,
+	inPath := testutils.CreateTempFile(t, inputDir, "recoverable_test.bin", 256*1024)
+	storeRes := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", inPath, "--output", "json"), "store")
-	storeData := jsonMap(t, storeRes, "data")
-	fileID := jsonInt64(t, storeData, "file_id")
+	storeData := testutils.JSONMap(t, storeRes, "data")
+	fileID := testutils.JSONInt64(t, storeData, "file_id")
 
 	// Seed a PROCESSING logical_file to simulate incomplete store (crash during store)
 	_, err = dbconn.Exec(`
@@ -3470,17 +2679,17 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 	dbconn.Close()
 
 	// Run doctor on recoverable state - recovery should abort incomplete file
-	doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-	if doctorRes.exitCode != 0 {
-		t.Fatalf("doctor failed with exit=%d\nstdout:\n%s\nstderr:\n%s", doctorRes.exitCode, doctorRes.stdout, doctorRes.stderr)
+	doctorRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if doctorRes.ExitCode != 0 {
+		t.Fatalf("doctor failed with exit=%d\nstdout:\n%s\nstderr:\n%s", doctorRes.ExitCode, doctorRes.Stdout, doctorRes.Stderr)
 	}
 
-	doctorPayload, ok := tryParseLastJSONLine(doctorRes.stdout)
+	doctorPayload, ok := testutils.TryParseLastJSONLine(doctorRes.Stdout)
 	if !ok {
-		doctorPayload, ok = tryParseLastJSONLine(doctorRes.stdout + "\n" + doctorRes.stderr)
+		doctorPayload, ok = testutils.TryParseLastJSONLine(doctorRes.Stdout + "\n" + doctorRes.Stderr)
 	}
 	if !ok {
-		t.Fatalf("doctor --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", doctorRes.stdout, doctorRes.stderr)
+		t.Fatalf("doctor --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", doctorRes.Stdout, doctorRes.Stderr)
 	}
 
 	if status, _ := doctorPayload["status"].(string); status != "ok" {
@@ -3509,17 +2718,17 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 	t.Logf("doctor recovery corrected: aborted %d incomplete logical file(s)", abortedLogicalFiles)
 
 	// Assert verify now passes - recovery should have fixed the state
-	verifyRes := runColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--full", "--output", "json")
-	if verifyRes.exitCode != 0 {
-		t.Fatalf("verify system --full failed after doctor recovery\nexit=%d\nstdout:\n%s\nstderr:\n%s", verifyRes.exitCode, verifyRes.stdout, verifyRes.stderr)
+	verifyRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--full", "--output", "json")
+	if verifyRes.ExitCode != 0 {
+		t.Fatalf("verify system --full failed after doctor recovery\nexit=%d\nstdout:\n%s\nstderr:\n%s", verifyRes.ExitCode, verifyRes.Stdout, verifyRes.Stderr)
 	}
 
-	verifyPayload, ok := tryParseLastJSONLine(verifyRes.stdout)
+	verifyPayload, ok := testutils.TryParseLastJSONLine(verifyRes.Stdout)
 	if !ok {
-		verifyPayload, ok = tryParseLastJSONLine(verifyRes.stdout + "\n" + verifyRes.stderr)
+		verifyPayload, ok = testutils.TryParseLastJSONLine(verifyRes.Stdout + "\n" + verifyRes.Stderr)
 	}
 	if !ok {
-		t.Fatalf("verify system --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", verifyRes.stdout, verifyRes.stderr)
+		t.Fatalf("verify system --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", verifyRes.Stdout, verifyRes.Stderr)
 	}
 
 	if status, _ := verifyPayload["status"].(string); status != "ok" {
@@ -3532,18 +2741,18 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 		t.Fatalf("mkdir restore: %v", err)
 	}
 
-	restoreRes := runColdkeepCommand(t, repoRoot, binPath, env,
+	restoreRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"restore", fmt.Sprintf("%d", fileID), restoreDir, "--output", "json")
-	if restoreRes.exitCode != 0 {
-		t.Fatalf("restore failed after doctor: exit=%d\nstdout:\n%s\nstderr:\n%s", restoreRes.exitCode, restoreRes.stdout, restoreRes.stderr)
+	if restoreRes.ExitCode != 0 {
+		t.Fatalf("restore failed after doctor: exit=%d\nstdout:\n%s\nstderr:\n%s", restoreRes.ExitCode, restoreRes.Stdout, restoreRes.Stderr)
 	}
 
-	restorePayload, ok := tryParseLastJSONLine(restoreRes.stdout)
+	restorePayload, ok := testutils.TryParseLastJSONLine(restoreRes.Stdout)
 	if !ok {
-		restorePayload, ok = tryParseLastJSONLine(restoreRes.stdout + "\n" + restoreRes.stderr)
+		restorePayload, ok = testutils.TryParseLastJSONLine(restoreRes.Stdout + "\n" + restoreRes.Stderr)
 	}
 	if !ok {
-		t.Fatalf("restore --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", restoreRes.stdout, restoreRes.stderr)
+		t.Fatalf("restore --output json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", restoreRes.Stdout, restoreRes.Stderr)
 	}
 
 	if status, _ := restorePayload["status"].(string); status != "ok" {
@@ -3556,22 +2765,22 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 		t.Fatalf("restored file not found: %v", err)
 	}
 
-	originalHash := sha256File(t, inPath)
-	restoredHash := sha256File(t, restoredFile)
+	originalHash := testutils.SHA256File(t, inPath)
+	restoredHash := testutils.SHA256File(t, restoredFile)
 	if originalHash != restoredHash {
-		t.Fatalf("restored file hash mismatch: original=%s restored=%s", originalHash, restoredHash)
+		t.Fatalf("restored file Hash mismatch: original=%s restored=%s", originalHash, restoredHash)
 	}
 
 	t.Logf("TestDoctorMutatesRecoverableState PASSED: recovery corrected incomplete file, verify passed, originally stored file restored successfully")
 }
 
 func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -3579,12 +2788,12 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
-	env := defaultCLIEnv(container.ContainersDir)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
 	inputDir := filepath.Join(tmp, "input")
 	restoreDir := filepath.Join(tmp, "restore")
@@ -3595,21 +2804,21 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 		t.Fatalf("mkdir restore: %v", err)
 	}
 
-	anchorPath := createTempFile(t, inputDir, "doctor_anchor.bin", 512*1024)
-	anchorHash := sha256File(t, anchorPath)
-	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), anchorPath); err != nil {
+	anchorPath := testutils.CreateTempFile(t, inputDir, "doctor_anchor.bin", 512*1024)
+	anchorHash := testutils.SHA256File(t, anchorPath)
+	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), anchorPath); err != nil {
 		t.Fatalf("store anchor file: %v", err)
 	}
-	anchorID := fetchFileIDByHash(t, dbconn, anchorHash)
+	anchorID := testutils.FetchFileIDByHash(t, dbconn, anchorHash)
 
 	const rounds = 6
 	for round := 0; round < rounds; round++ {
-		roundPath := createTempFile(t, inputDir, fmt.Sprintf("doctor_round_%02d.bin", round), 256*1024+round*65537)
-		roundHash := sha256File(t, roundPath)
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), roundPath); err != nil {
+		roundPath := testutils.CreateTempFile(t, inputDir, fmt.Sprintf("doctor_round_%02d.bin", round), 256*1024+round*65537)
+		roundHash := testutils.SHA256File(t, roundPath)
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), roundPath); err != nil {
 			t.Fatalf("round %d store live file: %v", round, err)
 		}
-		roundFileID := fetchFileIDByHash(t, dbconn, roundHash)
+		roundFileID := testutils.FetchFileIDByHash(t, dbconn, roundHash)
 
 		var danglingLogicalID int64
 		err = dbconn.QueryRow(`
@@ -3626,7 +2835,7 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 
 		var danglingChunkID int64
 		err = dbconn.QueryRow(`
-			INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
+			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
 			VALUES ($1, $2, $3, 0, 0, 0) RETURNING id`,
 			fmt.Sprintf("doctor-processing-chunk-%02d", round),
 			int64(4096+round),
@@ -3640,15 +2849,15 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 			t.Fatalf("round %d close db before doctor: %v", round, err)
 		}
 
-		doctorRes := runColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
-		doctorPayload := assertCLIJSONOK(t, doctorRes, "doctor")
-		doctorData := jsonMap(t, doctorPayload, "data")
-		recoveryData := jsonMap(t, doctorData, "recovery")
+		doctorRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+		doctorPayload := testutils.AssertCLIJSONOK(t, doctorRes, "doctor")
+		doctorData := testutils.JSONMap(t, doctorPayload, "data")
+		recoveryData := testutils.JSONMap(t, doctorData, "recovery")
 
-		if got := jsonInt64(t, recoveryData, "aborted_logical_files"); got < 1 {
+		if got := testutils.JSONInt64(t, recoveryData, "aborted_logical_files"); got < 1 {
 			t.Fatalf("round %d expected aborted_logical_files >= 1, got %d recovery=%v", round, got, recoveryData)
 		}
-		if got := jsonInt64(t, recoveryData, "aborted_chunks"); got < 1 {
+		if got := testutils.JSONInt64(t, recoveryData, "aborted_chunks"); got < 1 {
 			t.Fatalf("round %d expected aborted_chunks >= 1, got %d recovery=%v", round, got, recoveryData)
 		}
 		if got, _ := doctorData["verify_status"].(string); got != "ok" {
@@ -3680,16 +2889,16 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 		if err := storage.RestoreFileWithDB(dbconn, anchorID, anchorOut); err != nil {
 			t.Fatalf("round %d restore anchor after doctor: %v", round, err)
 		}
-		if gotHash := sha256File(t, anchorOut); gotHash != anchorHash {
-			t.Fatalf("round %d anchor hash mismatch after doctor: want %s got %s", round, anchorHash, gotHash)
+		if gotHash := testutils.SHA256File(t, anchorOut); gotHash != anchorHash {
+			t.Fatalf("round %d anchor Hash mismatch after doctor: want %s got %s", round, anchorHash, gotHash)
 		}
 
 		roundOut := filepath.Join(restoreDir, fmt.Sprintf("doctor-live-%02d.restored.bin", round))
 		if err := storage.RestoreFileWithDB(dbconn, roundFileID, roundOut); err != nil {
 			t.Fatalf("round %d restore live file after doctor: %v", round, err)
 		}
-		if gotHash := sha256File(t, roundOut); gotHash != roundHash {
-			t.Fatalf("round %d live file hash mismatch after doctor: want %s got %s", round, roundHash, gotHash)
+		if gotHash := testutils.SHA256File(t, roundOut); gotHash != roundHash {
+			t.Fatalf("round %d live file Hash mismatch after doctor: want %s got %s", round, roundHash, gotHash)
 		}
 
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
@@ -3702,61 +2911,25 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
 			t.Fatalf("round %d cleanup gc: %v", round, err)
 		}
-		assertNoProcessingRows(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
 	}
 
 	finalAnchorOut := filepath.Join(restoreDir, "doctor-anchor.final.restored.bin")
 	if err := storage.RestoreFileWithDB(dbconn, anchorID, finalAnchorOut); err != nil {
 		t.Fatalf("restore anchor after repeated doctor convergence: %v", err)
 	}
-	if gotHash := sha256File(t, finalAnchorOut); gotHash != anchorHash {
-		t.Fatalf("anchor hash mismatch after repeated doctor convergence: want %s got %s", anchorHash, gotHash)
+	if gotHash := testutils.SHA256File(t, finalAnchorOut); gotHash != anchorHash {
+		t.Fatalf("anchor Hash mismatch after repeated doctor convergence: want %s got %s", anchorHash, gotHash)
 	}
 }
 
-// openRawPostgresDB opens a raw PostgreSQL connection WITHOUT calling
-// EnsurePostgresSchema or any other startup guards. Pass an empty dbName to use
-// the env-configured database. The caller is responsible for closing the returned
-// connection.
-func openRawPostgresDB(t *testing.T, dbName string) *sql.DB {
-	t.Helper()
-	if dbName == "" {
-		dbName = getenvOrDefault("DB_NAME", "coldkeep")
-	}
-	connStr := "host=" + getenvOrDefault("DB_HOST", "127.0.0.1") +
-		" port=" + getenvOrDefault("DB_PORT", "5432") +
-		" user=" + getenvOrDefault("DB_USER", "coldkeep") +
-		" password=" + os.Getenv("DB_PASSWORD") +
-		" dbname=" + dbName +
-		" sslmode=" + getenvOrDefault("DB_SSLMODE", "disable") +
-		" connect_timeout=5"
-	rawDB, err := sql.Open("postgres", connStr)
-	if err != nil {
-		t.Fatalf("open raw postgres DB (%s): %v", dbName, err)
-	}
-	if err := rawDB.Ping(); err != nil {
-		_ = rawDB.Close()
-		t.Fatalf("ping raw postgres DB (%s): %v", dbName, err)
-	}
-	return rawDB
-}
-
-// TestSchemaBootstrapVersionReleaseGate is a focused release-gate test that
-// freezes startup/operator behavior for the two highest-friction schema failure
-// modes:
-//
-//   - missing schema_version table with auto-bootstrap disabled
-//   - schema version below the required minimum
-//
-// Each subtest verifies the expected error classification and actionable message
-// so operator and tooling integrations receive stable, testable signal.
 func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	// --- Subtest 1: old schema version is rejected with actionable message ---
 	t.Run("old_schema_version_rejected", func(t *testing.T) {
 		// Connect raw; bypass EnsurePostgresSchema so we can manipulate schema_version.
-		mainDB := openRawPostgresDB(t, "")
+		mainDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = mainDB.Close() }()
 
 		// Save the current live schema version.
@@ -3767,7 +2940,7 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 
 		// Register cleanup BEFORE mutating — guarantees restoration even on panic.
 		t.Cleanup(func() {
-			restoreDB := openRawPostgresDB(t, "")
+			restoreDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = restoreDB.Close() }()
 			if _, err := restoreDB.Exec(`UPDATE schema_version SET version = $1`, savedVersion); err != nil {
 				t.Errorf("CRITICAL: restore schema_version to %d failed: %v", savedVersion, err)
@@ -3780,11 +2953,11 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		}
 
 		// A fresh connection sees the committed downgrade.
-		testDB := openRawPostgresDB(t, "")
+		testDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = testDB.Close() }()
 
 		err := db.EnsurePostgresSchema(testDB)
-		assertErrorContains(t, err, "postgres schema version too old", "postgres schema release gate old version")
+		testutils.AssertErrorContains(t, err, "postgres schema version too old", "postgres schema release gate old version")
 
 		// Verify failure classification and actionable operator message.
 		errMsg := err.Error()
@@ -3805,7 +2978,7 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 
 		// Create an isolated, empty database with no schema applied.
 		// Requires CREATEDB or superuser privilege (always true in the Docker dev stack).
-		adminDB := openRawPostgresDB(t, "")
+		adminDB := testutils.OpenRawPostgresDB(t, "")
 		tempDBName := fmt.Sprintf("coldkeep_sgate_%d", time.Now().UnixNano())
 		_, createErr := adminDB.Exec("CREATE DATABASE " + tempDBName)
 		_ = adminDB.Close()
@@ -3814,17 +2987,17 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		}
 
 		t.Cleanup(func() {
-			cleanupDB := openRawPostgresDB(t, "")
+			cleanupDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = cleanupDB.Close() }()
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + tempDBName)
 		})
 
 		// Connect to the fresh, schema-less database.
-		emptyDB := openRawPostgresDB(t, tempDBName)
+		emptyDB := testutils.OpenRawPostgresDB(t, tempDBName)
 		defer func() { _ = emptyDB.Close() }()
 
 		err := db.EnsurePostgresSchema(emptyDB)
-		assertErrorContains(t, err, "postgres schema is not initialized", "postgres schema release gate missing schema without auto-bootstrap")
+		testutils.AssertErrorContains(t, err, "postgres schema is not initialized", "postgres schema release gate missing schema without auto-bootstrap")
 
 		// Verify failure classification and actionable operator message.
 		errMsg := err.Error()
@@ -3840,9 +3013,9 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 }
 
 func TestSchemaBootstrapEnvEvaluatedDynamically(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
-	adminDB := openRawPostgresDB(t, "")
+	adminDB := testutils.OpenRawPostgresDB(t, "")
 	tempDBName := fmt.Sprintf("coldkeep_dyn_bootstrap_%d", time.Now().UnixNano())
 	_, createErr := adminDB.Exec("CREATE DATABASE " + tempDBName)
 	_ = adminDB.Close()
@@ -3851,17 +3024,17 @@ func TestSchemaBootstrapEnvEvaluatedDynamically(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		cleanupDB := openRawPostgresDB(t, "")
+		cleanupDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = cleanupDB.Close() }()
 		_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + tempDBName)
 	})
 
-	emptyDB := openRawPostgresDB(t, tempDBName)
+	emptyDB := testutils.OpenRawPostgresDB(t, tempDBName)
 	defer func() { _ = emptyDB.Close() }()
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 	err := db.EnsurePostgresSchema(emptyDB)
-	assertErrorContains(t, err, "postgres schema is not initialized", "postgres schema dynamic bootstrap disabled")
+	testutils.AssertErrorContains(t, err, "postgres schema is not initialized", "postgres schema dynamic bootstrap disabled")
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
 	if err := db.EnsurePostgresSchema(emptyDB); err != nil {
@@ -3869,14 +3042,11 @@ func TestSchemaBootstrapEnvEvaluatedDynamically(t *testing.T) {
 	}
 }
 
-// TestSchemaStartupOperatorMessagingReleaseGate is a narrow CLI-level guard
-// that freezes operator-facing startup messages for the two most common schema
-// setup/support failures.
 func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
-	repoRoot := findRepoRoot(t)
-	binPath := buildColdkeepBinary(t, repoRoot)
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	tempDBName := func(prefix string) string {
 		return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
 	}
@@ -3884,7 +3054,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 	t.Run("missing_schema_message", func(t *testing.T) {
 		dbName := tempDBName("coldkeep_cli_missing_schema")
 
-		adminDB := openRawPostgresDB(t, "")
+		adminDB := testutils.OpenRawPostgresDB(t, "")
 		if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
 			_ = adminDB.Close()
 			t.Skipf("CREATE DATABASE not available (%v); skipping missing-schema CLI message subtest", err)
@@ -3892,21 +3062,21 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 		_ = adminDB.Close()
 
 		t.Cleanup(func() {
-			cleanupDB := openRawPostgresDB(t, "")
+			cleanupDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = cleanupDB.Close() }()
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		env := defaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(container.ContainersDir)
 		env["DB_NAME"] = dbName
 		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "false"
 
-		res := runColdkeepCommand(t, repoRoot, binPath, env, "stats")
-		if res.exitCode == 0 {
-			t.Fatalf("stats must fail for missing schema when auto-bootstrap disabled; stdout=%q stderr=%q", res.stdout, res.stderr)
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats")
+		if res.ExitCode == 0 {
+			t.Fatalf("stats must fail for missing schema when auto-bootstrap disabled; Stdout=%q Stderr=%q", res.Stdout, res.Stderr)
 		}
 
-		errText := strings.TrimSpace(res.stderr)
+		errText := strings.TrimSpace(res.Stderr)
 		for _, want := range []string{
 			"ERROR[GENERAL]:",
 			"failed to connect to DB:",
@@ -3922,7 +3092,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 	t.Run("outdated_schema_version_message", func(t *testing.T) {
 		dbName := tempDBName("coldkeep_cli_old_schema")
 
-		adminDB := openRawPostgresDB(t, "")
+		adminDB := testutils.OpenRawPostgresDB(t, "")
 		if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
 			_ = adminDB.Close()
 			t.Skipf("CREATE DATABASE not available (%v); skipping old-schema CLI message subtest", err)
@@ -3930,12 +3100,12 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 		_ = adminDB.Close()
 
 		t.Cleanup(func() {
-			cleanupDB := openRawPostgresDB(t, "")
+			cleanupDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = cleanupDB.Close() }()
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		testDB := openRawPostgresDB(t, dbName)
+		testDB := testutils.OpenRawPostgresDB(t, dbName)
 		defer func() { _ = testDB.Close() }()
 		if strings.TrimSpace(dbschema.PostgresSchema) == "" {
 			t.Fatal("dbschema.PostgresSchema is empty")
@@ -3947,15 +3117,15 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 			t.Fatalf("downgrade schema_version in temp DB: %v", err)
 		}
 
-		env := defaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(container.ContainersDir)
 		env["DB_NAME"] = dbName
 
-		res := runColdkeepCommand(t, repoRoot, binPath, env, "stats")
-		if res.exitCode == 0 {
-			t.Fatalf("stats must fail for outdated schema version; stdout=%q stderr=%q", res.stdout, res.stderr)
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats")
+		if res.ExitCode == 0 {
+			t.Fatalf("stats must fail for outdated schema version; Stdout=%q Stderr=%q", res.Stdout, res.Stderr)
 		}
 
-		errText := strings.TrimSpace(res.stderr)
+		errText := strings.TrimSpace(res.Stderr)
 		for _, want := range []string{
 			"ERROR[GENERAL]:",
 			"failed to connect to DB:",
@@ -3971,7 +3141,7 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 	t.Run("missing_schema_with_auto_bootstrap_enabled", func(t *testing.T) {
 		dbName := tempDBName("coldkeep_cli_bootstrap_success")
 
-		adminDB := openRawPostgresDB(t, "")
+		adminDB := testutils.OpenRawPostgresDB(t, "")
 		if _, err := adminDB.Exec("CREATE DATABASE " + dbName); err != nil {
 			_ = adminDB.Close()
 			t.Skipf("CREATE DATABASE not available (%v); skipping bootstrap-enabled CLI message subtest", err)
@@ -3979,35 +3149,35 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 		_ = adminDB.Close()
 
 		t.Cleanup(func() {
-			cleanupDB := openRawPostgresDB(t, "")
+			cleanupDB := testutils.OpenRawPostgresDB(t, "")
 			defer func() { _ = cleanupDB.Close() }()
 			_, _ = cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
 		})
 
-		env := defaultCLIEnv(container.ContainersDir)
+		env := testutils.DefaultCLIEnv(container.ContainersDir)
 		env["DB_NAME"] = dbName
 		env["COLDKEEP_DB_AUTO_BOOTSTRAP"] = "true"
 
-		res := runColdkeepCommand(t, repoRoot, binPath, env, "stats")
-		if res.exitCode != 0 {
-			t.Fatalf("stats must succeed when auto-bootstrap is enabled and schema is missing; exitCode=%d stdout=%q stderr=%q", res.exitCode, res.stdout, res.stderr)
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats")
+		if res.ExitCode != 0 {
+			t.Fatalf("stats must succeed when auto-bootstrap is enabled and schema is missing; ExitCode=%d Stdout=%q Stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
 		}
 
 		// Verify that schema initialization happened silently (no error output).
-		errText := strings.TrimSpace(res.stderr)
+		errText := strings.TrimSpace(res.Stderr)
 		if strings.Contains(errText, "schema is not initialized") {
-			t.Errorf("expected bootstrap to succeed silently, but got schema error in stderr: %q", errText)
+			t.Errorf("expected bootstrap to succeed silently, but got schema error in Stderr: %q", errText)
 		}
 	})
 }
 
 func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4015,8 +3185,8 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -4039,7 +3209,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
 		VALUES ($1, $2, $3, 0)
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
@@ -4047,7 +3217,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 		t.Fatalf("insert malformed completed chunk: %v", err)
 	}
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
 	if err != nil {
 		t.Fatalf("store file with malformed completed chunk seed: %v", err)
@@ -4056,19 +3226,19 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 		t.Fatalf("expected store path (not already-stored shortcut) for malformed completed chunk rebuild")
 	}
 
-	var chunkID int64
+	var ChunkID int64
 	var status string
 	var retryCount int
 	err = dbconn.QueryRow(`
 		SELECT id, status, retry_count
 		FROM chunk
-		WHERE chunk_hash = $1 AND size = $2
-	`, chunkHash, chunkSize).Scan(&chunkID, &status, &retryCount)
+		WHERE chunk_hash = $1 AND Size = $2
+	`, chunkHash, chunkSize).Scan(&ChunkID, &status, &retryCount)
 	if err != nil {
 		t.Fatalf("query rebuilt chunk row: %v", err)
 	}
-	if chunkID != malformedChunkID {
-		t.Fatalf("expected rebuild to reclaim malformed chunk id %d, got %d", malformedChunkID, chunkID)
+	if ChunkID != malformedChunkID {
+		t.Fatalf("expected rebuild to reclaim malformed chunk id %d, got %d", malformedChunkID, ChunkID)
 	}
 	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected rebuilt chunk status COMPLETED, got %s", status)
@@ -4078,7 +3248,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	}
 
 	var blockRows int
-	err = dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE chunk_id = $1`, chunkID).Scan(&blockRows)
+	err = dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE chunk_id = $1`, ChunkID).Scan(&blockRows)
 	if err != nil {
 		t.Fatalf("count chunk blocks: %v", err)
 	}
@@ -4088,12 +3258,12 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 }
 
 func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4101,8 +3271,8 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -4136,7 +3306,7 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
 		VALUES ($1, $2, $3, 0)
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
@@ -4151,7 +3321,7 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		t.Fatalf("insert block row pointing to quarantined container: %v", err)
 	}
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
 	if err != nil {
 		t.Fatalf("store file with completed chunk in quarantined container: %v", err)
@@ -4160,19 +3330,19 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		t.Fatalf("expected store path (not already-stored shortcut) when chunk container is quarantined")
 	}
 
-	var chunkID int64
+	var ChunkID int64
 	var chunkStatus string
 	var retryCount int
 	err = dbconn.QueryRow(`
 		SELECT id, status, retry_count
 		FROM chunk
-		WHERE chunk_hash = $1 AND size = $2
-	`, chunkHash, chunkSize).Scan(&chunkID, &chunkStatus, &retryCount)
+		WHERE chunk_hash = $1 AND Size = $2
+	`, chunkHash, chunkSize).Scan(&ChunkID, &chunkStatus, &retryCount)
 	if err != nil {
 		t.Fatalf("query rebuilt chunk row: %v", err)
 	}
-	if chunkID != malformedChunkID {
-		t.Fatalf("expected rebuild to reclaim chunk id %d, got %d", malformedChunkID, chunkID)
+	if ChunkID != malformedChunkID {
+		t.Fatalf("expected rebuild to reclaim chunk id %d, got %d", malformedChunkID, ChunkID)
 	}
 	if chunkStatus != filestate.ChunkCompleted {
 		t.Fatalf("expected rebuilt chunk status COMPLETED, got %s", chunkStatus)
@@ -4189,7 +3359,7 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		FROM blocks b
 		JOIN container ctr ON ctr.id = b.container_id
 		WHERE b.chunk_id = $1
-	`, chunkID).Scan(&rebuiltContainerID, &rebuiltQuarantined)
+	`, ChunkID).Scan(&rebuiltContainerID, &rebuiltQuarantined)
 	if err != nil {
 		t.Fatalf("query rebuilt chunk container: %v", err)
 	}
@@ -4202,13 +3372,13 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 }
 
 func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4216,13 +3386,13 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "retry_file_stress.bin", 384*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "retry_file_stress.bin", 384*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
 	initialSgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -4233,7 +3403,7 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 		t.Fatalf("initial store: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 	if _, err := dbconn.Exec(`UPDATE logical_file SET status = $1 WHERE id = $2`, filestate.LogicalFileAborted, fileID); err != nil {
 		t.Fatalf("set logical file ABORTED: %v", err)
 	}
@@ -4276,17 +3446,17 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	if status != filestate.LogicalFileCompleted {
 		t.Fatalf("expected logical file status COMPLETED after concurrent retry, got %s", status)
 	}
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
 
 func TestRetryAfterAbortedChunk(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4294,12 +3464,12 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "retry_chunk.bin", 256*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "retry_chunk.bin", 256*1024)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -4312,7 +3482,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	}
 
 	// Find a chunk from this file and set it to ABORTED
-	var chunkID int64
+	var ChunkID int64
 	var chunkHash string
 	if err := dbconn.QueryRow(`
 		SELECT c.id, c.chunk_hash
@@ -4321,12 +3491,12 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 		JOIN logical_file lf ON fc.logical_file_id = lf.id
 		WHERE lf.file_hash = $1
 		LIMIT 1
-	`, sha256File(t, inPath)).Scan(&chunkID, &chunkHash); err != nil {
+	`, testutils.SHA256File(t, inPath)).Scan(&ChunkID, &chunkHash); err != nil {
 		t.Fatalf("find chunk: %v", err)
 	}
 
 	// Set the chunk status to ABORTED
-	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, ChunkID); err != nil {
 		t.Fatalf("set chunk status to ABORTED: %v", err)
 	}
 
@@ -4337,7 +3507,7 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 
 	// Verify the chunk is now marked as COMPLETED
 	var status string
-	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, ChunkID).Scan(&status); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
 	if status != filestate.ChunkCompleted {
@@ -4346,13 +3516,13 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 }
 
 func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4360,8 +3530,8 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -4389,7 +3559,7 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 		t.Fatalf("initial store fileA: %v", err)
 	}
 
-	var chunkID int64
+	var ChunkID int64
 	var chunkHash string
 	if err := dbconn.QueryRow(`
 		SELECT c.id, c.chunk_hash
@@ -4399,11 +3569,11 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 		WHERE lf.file_hash = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
-	`, sha256File(t, fileAPath)).Scan(&chunkID, &chunkHash); err != nil {
+	`, testutils.SHA256File(t, fileAPath)).Scan(&ChunkID, &chunkHash); err != nil {
 		t.Fatalf("find shared chunk: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkAborted, ChunkID); err != nil {
 		t.Fatalf("set chunk ABORTED: %v", err)
 	}
 
@@ -4437,19 +3607,19 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	}
 
 	var status string
-	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&status); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, ChunkID).Scan(&status); err != nil {
 		t.Fatalf("query chunk status: %v", err)
 	}
 	if status != filestate.ChunkCompleted {
 		t.Fatalf("expected chunk status COMPLETED after concurrent retry, got %s", status)
 	}
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
 	for _, p := range paths {
-		hash := sha256File(t, p)
+		Hash := testutils.SHA256File(t, p)
 		var count int
-		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, hash).Scan(&count); err != nil {
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE file_hash = $1`, Hash).Scan(&count); err != nil {
 			t.Fatalf("count logical files for %s: %v", filepath.Base(p), err)
 		}
 		if count != 1 {
@@ -4459,13 +3629,13 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 }
 
 func TestContainerRollover(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4473,10 +3643,10 @@ func TestContainerRollover(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	// Set small container size for testing rollover
+	// Set small container Size for testing rollover
 	originalMaxSize := container.GetContainerMaxSize()
 	container.SetContainerMaxSize(1 * 1024 * 1024)       // 1MB for quick test
 	defer container.SetContainerMaxSize(originalMaxSize) // restore
@@ -4484,13 +3654,13 @@ func TestContainerRollover(t *testing.T) {
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	// Create files that will exceed container size
+	// Create files that will exceed container Size
 	files := []string{
-		createTempFile(t, inputDir, "file1.bin", 600*1024), // 600KB
-		createTempFile(t, inputDir, "file2.bin", 600*1024), // 600KB, should trigger rollover
+		testutils.CreateTempFile(t, inputDir, "file1.bin", 600*1024), // 600KB
+		testutils.CreateTempFile(t, inputDir, "file2.bin", 600*1024), // 600KB, should trigger rollover
 	}
 	// Ensure file2 is distinct so logical-file dedupe does not bypass rollover assertions.
-	file2Data := mustRead(t, files[1])
+	file2Data := testutils.MustRead(t, files[1])
 	file2Data[0] ^= 0xFF
 	if err := os.WriteFile(files[1], file2Data, 0o644); err != nil {
 		t.Fatalf("rewrite file2 with distinct content: %v", err)
@@ -4538,8 +3708,8 @@ func TestContainerRollover(t *testing.T) {
 
 	// Verify both files can be restored
 	for i, file := range files {
-		hash := sha256File(t, file)
-		fileID := fetchFileIDByHash(t, dbconn, hash)
+		Hash := testutils.SHA256File(t, file)
+		fileID := testutils.FetchFileIDByHash(t, dbconn, Hash)
 
 		outDir := filepath.Join(tmp, "out")
 		_ = os.MkdirAll(outDir, 0o755)
@@ -4550,8 +3720,8 @@ func TestContainerRollover(t *testing.T) {
 		}
 
 		// Verify content
-		original := mustRead(t, file)
-		restored := mustRead(t, outPath)
+		original := testutils.MustRead(t, file)
+		restored := testutils.MustRead(t, outPath)
 		if !bytes.Equal(original, restored) {
 			t.Fatalf("file %d content mismatch", i)
 		}
@@ -4559,12 +3729,12 @@ func TestContainerRollover(t *testing.T) {
 }
 
 func TestRotationSealsAllPreviousContainers(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4572,17 +3742,17 @@ func TestRotationSealsAllPreviousContainers(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
-	// Keep max size above max chunk payload so forced rotations happen without payload rejection.
+	// Keep max Size above max chunk payload so forced rotations happen without payload rejection.
 	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "rotation-seal.bin", 8*1024*1024+137)
+	inPath := testutils.CreateTempFile(t, inputDir, "rotation-seal.bin", 8*1024*1024+137)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -4623,13 +3793,13 @@ func TestRotationSealsAllPreviousContainers(t *testing.T) {
 }
 
 func TestStartupRecoverySimulation(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4637,23 +3807,23 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Create and start storing a file, but simulate it getting stuck
-	inPath := createTempFile(t, inputDir, "stuck_file.bin", 256*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "stuck_file.bin", 256*1024)
 
 	// Manually insert a processing logical file (simulating stuck store)
-	hash := sha256File(t, inPath)
-	size := int64(256 * 1024)
+	Hash := testutils.SHA256File(t, inPath)
+	Size := int64(256 * 1024)
 
 	_, err = dbconn.Exec(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
 		VALUES ($1, $2, $3, $4, 0)
-	`, filepath.Base(inPath), size, hash, filestate.LogicalFileProcessing)
+	`, filepath.Base(inPath), Size, Hash, filestate.LogicalFileProcessing)
 	if err != nil {
 		t.Fatalf("insert processing logical file: %v", err)
 	}
@@ -4663,14 +3833,14 @@ func TestStartupRecoverySimulation(t *testing.T) {
 		UPDATE logical_file
 		SET updated_at = NOW() - INTERVAL '15 minutes'
 		WHERE file_hash = $1
-	`, hash)
+	`, Hash)
 	if err != nil {
 		t.Fatalf("update logical file timestamp: %v", err)
 	}
 
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
-		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
 		VALUES ($1, $2, $3, 0, 0)
 	`, "dummy_chunk_hash", int64(128*1024), filestate.ChunkProcessing)
 	if err != nil {
@@ -4678,8 +3848,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	}
 
 	// Get chunk ID
-	var chunkID int64
-	if err := dbconn.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1`, "dummy_chunk_hash").Scan(&chunkID); err != nil {
+	var ChunkID int64
+	if err := dbconn.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1`, "dummy_chunk_hash").Scan(&ChunkID); err != nil {
 		t.Fatalf("get chunk ID: %v", err)
 	}
 
@@ -4688,7 +3858,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 		UPDATE chunk
 		SET updated_at = NOW() - INTERVAL '15 minutes'
 		WHERE id = $1
-	`, chunkID)
+	`, ChunkID)
 	if err != nil {
 		t.Fatalf("update chunk timestamp: %v", err)
 	}
@@ -4719,7 +3889,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Verify that processing logical file was aborted
 	var fileStatus string
-	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, hash).Scan(&fileStatus); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE file_hash = $1`, Hash).Scan(&fileStatus); err != nil {
 		t.Fatalf("check logical file status: %v", err)
 	}
 	if fileStatus != filestate.LogicalFileAborted {
@@ -4728,7 +3898,7 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Verify that processing chunk was aborted
 	var chunkStatus string
-	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, chunkID).Scan(&chunkStatus); err != nil {
+	if err := dbconn.QueryRow(`SELECT status FROM chunk WHERE id = $1`, ChunkID).Scan(&chunkStatus); err != nil {
 		t.Fatalf("check chunk status: %v", err)
 	}
 	if chunkStatus != filestate.ChunkAborted {
@@ -4746,12 +3916,12 @@ func TestStartupRecoverySimulation(t *testing.T) {
 }
 
 func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4759,12 +3929,12 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "truncated-active-tail.bin", 256*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "truncated-active-tail.bin", 256*1024)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -4774,7 +3944,7 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 		t.Fatalf("store file: %v", err)
 	}
 
-	var containerID int64
+	var ContainerID int64
 	var filename string
 	var dbCurrentSize int64
 	var sealed bool
@@ -4783,7 +3953,7 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 		FROM container
 		ORDER BY id DESC
 		LIMIT 1
-	`).Scan(&containerID, &filename, &dbCurrentSize, &sealed)
+	`).Scan(&ContainerID, &filename, &dbCurrentSize, &sealed)
 	if err != nil {
 		t.Fatalf("select active container: %v", err)
 	}
@@ -4794,7 +3964,7 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	containerPath := filepath.Join(container.ContainersDir, filename)
 	truncatedSize := dbCurrentSize - 32
 	if truncatedSize <= 0 {
-		t.Fatalf("invalid truncation target for container size %d", dbCurrentSize)
+		t.Fatalf("invalid truncation target for container Size %d", dbCurrentSize)
 	}
 	if err := os.Truncate(containerPath, truncatedSize); err != nil {
 		t.Fatalf("truncate active container tail: %v", err)
@@ -4809,7 +3979,7 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	}
 
 	var quarantine bool
-	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, containerID).Scan(&quarantine)
+	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, ContainerID).Scan(&quarantine)
 	if err != nil {
 		t.Fatalf("query container quarantine: %v", err)
 	}
@@ -4819,12 +3989,12 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 }
 
 func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4832,8 +4002,8 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
 	container.SetContainerMaxSize(1 * 1024 * 1024)
@@ -4848,19 +4018,19 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 		t.Fatalf("mkdir restore: %v", err)
 	}
 
-	anchorPath := createTempFile(t, inputDir, "recovery-anchor.bin", 600*1024)
-	anchorHash := sha256File(t, anchorPath)
-	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), anchorPath); err != nil {
+	anchorPath := testutils.CreateTempFile(t, inputDir, "recovery-anchor.bin", 600*1024)
+	anchorHash := testutils.SHA256File(t, anchorPath)
+	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), anchorPath); err != nil {
 		t.Fatalf("store anchor file: %v", err)
 	}
-	anchorID := fetchFileIDByHash(t, dbconn, anchorHash)
+	anchorID := testutils.FetchFileIDByHash(t, dbconn, anchorHash)
 
-	spacerPath := createTempFile(t, inputDir, "recovery-spacer.bin", 600*1024)
-	spacerHash := sha256File(t, spacerPath)
-	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), spacerPath); err != nil {
+	spacerPath := testutils.CreateTempFile(t, inputDir, "recovery-spacer.bin", 600*1024)
+	spacerHash := testutils.SHA256File(t, spacerPath)
+	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), spacerPath); err != nil {
 		t.Fatalf("store spacer file: %v", err)
 	}
-	spacerID := fetchFileIDByHash(t, dbconn, spacerHash)
+	spacerID := testutils.FetchFileIDByHash(t, dbconn, spacerHash)
 
 	if err := storage.RemoveFileWithDB(dbconn, spacerID); err != nil {
 		t.Fatalf("remove spacer file before recovery damage: %v", err)
@@ -4886,7 +4056,7 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 	damagedPath := filepath.Join(container.ContainersDir, damagedFilename)
 	truncatedSize := dbCurrentSize - 32
 	if truncatedSize <= 0 {
-		t.Fatalf("invalid truncation target for container size %d", dbCurrentSize)
+		t.Fatalf("invalid truncation target for container Size %d", dbCurrentSize)
 	}
 	if err := os.Truncate(damagedPath, truncatedSize); err != nil {
 		t.Fatalf("truncate active container tail: %v", err)
@@ -4913,16 +4083,16 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 	if err := storage.RestoreFileWithDB(dbconn, anchorID, anchorOut); err != nil {
 		t.Fatalf("restore anchor after recovery quarantine: %v", err)
 	}
-	if gotHash := sha256File(t, anchorOut); gotHash != anchorHash {
-		t.Fatalf("anchor hash mismatch after recovery quarantine: want %s got %s", anchorHash, gotHash)
+	if gotHash := testutils.SHA256File(t, anchorOut); gotHash != anchorHash {
+		t.Fatalf("anchor Hash mismatch after recovery quarantine: want %s got %s", anchorHash, gotHash)
 	}
 
-	newPath := createTempFile(t, inputDir, "recovery-after-quarantine.bin", 320*1024)
-	newHash := sha256File(t, newPath)
-	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), newPath); err != nil {
+	newPath := testutils.CreateTempFile(t, inputDir, "recovery-after-quarantine.bin", 320*1024)
+	newHash := testutils.SHA256File(t, newPath)
+	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), newPath); err != nil {
 		t.Fatalf("store after quarantining damaged active container: %v", err)
 	}
-	newID := fetchFileIDByHash(t, dbconn, newHash)
+	newID := testutils.FetchFileIDByHash(t, dbconn, newHash)
 
 	var restoredNewContainerID int64
 	err = dbconn.QueryRow(`
@@ -4944,23 +4114,23 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 	if err := storage.RestoreFileWithDB(dbconn, newID, newOut); err != nil {
 		t.Fatalf("restore new file after quarantining damaged container: %v", err)
 	}
-	if gotHash := sha256File(t, newOut); gotHash != newHash {
-		t.Fatalf("new file hash mismatch after post-recovery store: want %s got %s", newHash, gotHash)
+	if gotHash := testutils.SHA256File(t, newOut); gotHash != newHash {
+		t.Fatalf("new file Hash mismatch after post-recovery store: want %s got %s", newHash, gotHash)
 	}
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify full after quarantining damaged active container: %v", err)
 	}
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
 func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -4968,8 +4138,8 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers dir: %v", err)
@@ -4985,12 +4155,12 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 		t.Fatalf("write sealing container file: %v", err)
 	}
 
-	var containerID int64
+	var ContainerID int64
 	err = dbconn.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 		VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
 		RETURNING id
-	`, filename, dbCurrentSize, container.GetContainerMaxSize()).Scan(&containerID)
+	`, filename, dbCurrentSize, container.GetContainerMaxSize()).Scan(&ContainerID)
 	if err != nil {
 		t.Fatalf("insert sealing container: %v", err)
 	}
@@ -5009,7 +4179,7 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 	var sealed bool
 	var sealing bool
 	var quarantine bool
-	err = dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, containerID).Scan(&sealed, &sealing, &quarantine)
+	err = dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, ContainerID).Scan(&sealed, &sealing, &quarantine)
 	if err != nil {
 		t.Fatalf("query sealing container state: %v", err)
 	}
@@ -5050,7 +4220,7 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 	}
 
 	var remainingRows int
-	err = dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&remainingRows)
+	err = dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, ContainerID).Scan(&remainingRows)
 	if err != nil {
 		t.Fatalf("count container row after gc: %v", err)
 	}
@@ -5060,12 +4230,12 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 }
 
 func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiveData(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5073,8 +4243,8 @@ func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiv
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	restoreDir := filepath.Join(tmp, "restore")
@@ -5085,12 +4255,12 @@ func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiv
 		t.Fatalf("mkdir restore: %v", err)
 	}
 
-	anchorPath := createTempFile(t, inputDir, "ghost-anchor.bin", 512*1024)
-	anchorHash := sha256File(t, anchorPath)
-	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), anchorPath); err != nil {
+	anchorPath := testutils.CreateTempFile(t, inputDir, "ghost-anchor.bin", 512*1024)
+	anchorHash := testutils.SHA256File(t, anchorPath)
+	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), anchorPath); err != nil {
 		t.Fatalf("store anchor file: %v", err)
 	}
-	anchorID := fetchFileIDByHash(t, dbconn, anchorHash)
+	anchorID := testutils.FetchFileIDByHash(t, dbconn, anchorHash)
 
 	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers dir: %v", err)
@@ -5145,16 +4315,16 @@ func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiv
 	if err := storage.RestoreFileWithDB(dbconn, anchorID, anchorOut); err != nil {
 		t.Fatalf("restore anchor after ghost-byte quarantine: %v", err)
 	}
-	if gotHash := sha256File(t, anchorOut); gotHash != anchorHash {
-		t.Fatalf("anchor hash mismatch after ghost-byte quarantine: want %s got %s", anchorHash, gotHash)
+	if gotHash := testutils.SHA256File(t, anchorOut); gotHash != anchorHash {
+		t.Fatalf("anchor Hash mismatch after ghost-byte quarantine: want %s got %s", anchorHash, gotHash)
 	}
 
-	postRecoveryPath := createTempFile(t, inputDir, "ghost-post-recovery.bin", 320*1024)
-	postRecoveryHash := sha256File(t, postRecoveryPath)
-	if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), postRecoveryPath); err != nil {
+	postRecoveryPath := testutils.CreateTempFile(t, inputDir, "ghost-post-recovery.bin", 320*1024)
+	postRecoveryHash := testutils.SHA256File(t, postRecoveryPath)
+	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), postRecoveryPath); err != nil {
 		t.Fatalf("store after ghost-byte quarantine: %v", err)
 	}
-	postRecoveryID := fetchFileIDByHash(t, dbconn, postRecoveryHash)
+	postRecoveryID := testutils.FetchFileIDByHash(t, dbconn, postRecoveryHash)
 
 	var usedContainerID int64
 	err = dbconn.QueryRow(`
@@ -5176,23 +4346,23 @@ func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiv
 	if err := storage.RestoreFileWithDB(dbconn, postRecoveryID, postRecoveryOut); err != nil {
 		t.Fatalf("restore post-recovery file after ghost-byte quarantine: %v", err)
 	}
-	if gotHash := sha256File(t, postRecoveryOut); gotHash != postRecoveryHash {
-		t.Fatalf("post-recovery file hash mismatch after ghost-byte quarantine: want %s got %s", postRecoveryHash, gotHash)
+	if gotHash := testutils.SHA256File(t, postRecoveryOut); gotHash != postRecoveryHash {
+		t.Fatalf("post-recovery file Hash mismatch after ghost-byte quarantine: want %s got %s", postRecoveryHash, gotHash)
 	}
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
 		t.Fatalf("verify full after ghost-byte quarantine preservation: %v", err)
 	}
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
 func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5200,8 +4370,8 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers dir: %v", err)
@@ -5214,12 +4384,12 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 			t.Fatalf("write container file: %v", err)
 		}
 
-		var containerID int64
+		var ContainerID int64
 		err := dbconn.QueryRow(`
 			INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 			VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
 			RETURNING id
-		`, filename, int64(container.ContainerHdrLen+128), container.GetContainerMaxSize()).Scan(&containerID)
+		`, filename, int64(container.ContainerHdrLen+128), container.GetContainerMaxSize()).Scan(&ContainerID)
 		if err != nil {
 			t.Fatalf("insert container row: %v", err)
 		}
@@ -5228,9 +4398,9 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("begin tx: %v", err)
 		}
-		err = container.SealContainerInDir(tx, containerID, filename, container.ContainersDir)
+		err = container.SealContainerInDir(tx, ContainerID, filename, container.ContainersDir)
 		_ = tx.Rollback()
-		assertErrorContains(t, err, "ghost bytes detected", "seal ghost-byte container")
+		testutils.AssertErrorContains(t, err, "ghost bytes detected", "seal ghost-byte container")
 	})
 
 	t.Run("truncated file", func(t *testing.T) {
@@ -5240,12 +4410,12 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 			t.Fatalf("write container file: %v", err)
 		}
 
-		var containerID int64
+		var ContainerID int64
 		err := dbconn.QueryRow(`
 			INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 			VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
 			RETURNING id
-		`, filename, int64(container.ContainerHdrLen+160), container.GetContainerMaxSize()).Scan(&containerID)
+		`, filename, int64(container.ContainerHdrLen+160), container.GetContainerMaxSize()).Scan(&ContainerID)
 		if err != nil {
 			t.Fatalf("insert container row: %v", err)
 		}
@@ -5254,19 +4424,19 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("begin tx: %v", err)
 		}
-		err = container.SealContainerInDir(tx, containerID, filename, container.ContainersDir)
+		err = container.SealContainerInDir(tx, ContainerID, filename, container.ContainersDir)
 		_ = tx.Rollback()
-		assertErrorContains(t, err, "truncated file detected", "seal truncated container")
+		testutils.AssertErrorContains(t, err, "truncated file detected", "seal truncated container")
 	})
 }
 
 func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5274,19 +4444,19 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers dir: %v", err)
 	}
 
-	var containerID int64
+	var ContainerID int64
 	err = dbconn.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
 		VALUES ($1, $2, $3, FALSE, FALSE)
 		RETURNING id
-	`, "missing-active.bin", int64(container.ContainerHdrLen), container.GetContainerMaxSize()).Scan(&containerID)
+	`, "missing-active.bin", int64(container.ContainerHdrLen), container.GetContainerMaxSize()).Scan(&ContainerID)
 	if err != nil {
 		t.Fatalf("insert missing active container: %v", err)
 	}
@@ -5295,7 +4465,7 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatalf("mkdir input dir: %v", err)
 	}
-	inPath := createTempFile(t, inputDir, "open-failure.txt", 4096)
+	inPath := testutils.CreateTempFile(t, inputDir, "open-failure.txt", 4096)
 
 	sgctx := storage.StorageContext{
 		DB:           dbconn,
@@ -5304,11 +4474,11 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 	}
 
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
-	assertErrorContains(t, err, "ensure active container: get or create open container in", "store with missing active container file")
-	assertErrorContains(t, err, "open container", "store with missing active container file")
+	testutils.AssertErrorContains(t, err, "ensure active container: get or create open container in", "store with missing active container file")
+	testutils.AssertErrorContains(t, err, "open container", "store with missing active container file")
 
 	var quarantined bool
-	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, containerID).Scan(&quarantined)
+	err = dbconn.QueryRow(`SELECT quarantine FROM container WHERE id = $1`, ContainerID).Scan(&quarantined)
 	if err != nil {
 		t.Fatalf("query missing active container quarantine: %v", err)
 	}
@@ -5326,12 +4496,12 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 }
 
 func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5339,8 +4509,8 @@ func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	orphanFilename := "orphan_conflict_mismatch.bin"
 	orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
@@ -5359,16 +4529,16 @@ func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
 	}
 
 	_, err = recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
-	assertErrorContains(t, err, "suspicious orphan container conflict", "startup recovery suspicious orphan conflict")
+	testutils.AssertErrorContains(t, err, "suspicious orphan container conflict", "startup recovery suspicious orphan conflict")
 }
 
 func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5376,8 +4546,8 @@ func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T)
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	orphanFilename := "orphan_conflict_duplicate_retrier.bin"
 	orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
@@ -5414,14 +4584,14 @@ func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T)
 }
 
 func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	_ = os.Setenv("COLDKEEP_STRICT_RECOVERY", "false")
 	defer os.Unsetenv("COLDKEEP_STRICT_RECOVERY")
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5429,8 +4599,8 @@ func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *tes
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	orphanFilename := "orphan_conflict_non_strict.bin"
 	orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
@@ -5455,12 +4625,12 @@ func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *tes
 }
 
 func TestVerifyStandard(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5468,12 +4638,12 @@ func TestVerifyStandard(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_standard.bin", 256*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_standard.bin", 256*1024)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -5503,7 +4673,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
 			"found 1 errors in checkReferenceCounts checks",
@@ -5514,7 +4684,7 @@ func TestVerifyStandard(t *testing.T) {
 	t.Run("detects orphan chunk", func(t *testing.T) {
 		// Insert a chunk with live_ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
 				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0)
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
@@ -5526,7 +4696,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
 			"found 1 errors in checkReferenceCounts checks",
@@ -5536,7 +4706,7 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects completed chunk missing block row", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
 				VALUES ('completed_chunk_without_block_row', 2048, $1, 0, 0)
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert completed chunk without block row: %v", err)
@@ -5548,7 +4718,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
 			"found 1 errors in checkCompletedChunkBlockCardinality checks",
@@ -5558,7 +4728,7 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects pin_count on non-completed chunk", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
 				VALUES ('invalid_pinned_processing_chunk', 1024, $1, 0, 1, 0)
 		`, filestate.ChunkProcessing); err != nil {
 			t.Fatalf("insert invalid pinned processing chunk: %v", err)
@@ -5570,7 +4740,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
 			"found 2 errors in checkPinnedChunkStatus checks",
@@ -5580,7 +4750,7 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects pinned chunk missing block metadata", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
 				VALUES ('invalid_pinned_unplaced_chunk', 1024, $1, 0, 1, 0)
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert invalid pinned unplaced chunk: %v", err)
@@ -5592,7 +4762,7 @@ func TestVerifyStandard(t *testing.T) {
 
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
 			"found 1 errors in checkCompletedChunkBlockCardinality checks",
@@ -5615,7 +4785,7 @@ func TestVerifyStandard(t *testing.T) {
 			}
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
 			"found 1 errors in checkFileChunkOrdering checks",
@@ -5637,7 +4807,7 @@ func TestVerifyStandard(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
 			"found 1 errors in checkContainersFileExistence checks",
@@ -5647,12 +4817,12 @@ func TestVerifyStandard(t *testing.T) {
 }
 
 func TestVerifyFull(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5660,14 +4830,14 @@ func TestVerifyFull(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_full.bin", 256*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_full.bin", 256*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 
 	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
@@ -5681,7 +4851,7 @@ func TestVerifyFull(t *testing.T) {
 
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count)
+			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
 			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0)
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
@@ -5690,7 +4860,7 @@ func TestVerifyFull(t *testing.T) {
 			dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'verify_full_bad_chunk'`)
 		}()
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
 			"found 1 errors in checkCompletedChunkBlockCardinality checks",
@@ -5712,7 +4882,7 @@ func TestVerifyFull(t *testing.T) {
 			t.Fatalf("remove container file: %v", err)
 		}
 
-		assertErrorContains(
+		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
 			"found 1 errors in checkContainersFileExistence checks",
@@ -5722,19 +4892,19 @@ func TestVerifyFull(t *testing.T) {
 }
 
 func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_deep_corruption.bin", 512*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_deep_corruption.bin", 512*1024)
 	defer dbconn.Close()
 
-	record := fetchFirstChunkRecord(t, dbconn, fileID)
-	containerPath := containerPathForRecord(record)
+	record := testutils.FetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := testutils.ContainerPathForRecord(record)
 
 	file, err := os.OpenFile(containerPath, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("open container file: %v", err)
 	}
 
-	corruptionOffset := record.blockOffset
-	if record.storedSize > 10 {
+	corruptionOffset := record.BlockOffset
+	if record.StoredSize > 10 {
 		corruptionOffset += 10
 	}
 
@@ -5746,16 +4916,16 @@ func TestVerifyFileDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep),
-		"chunk hash verification failed: found 1 errors in file chunk hash verification",
+		"chunk Hash verification failed: found 1 errors in file chunk Hash verification",
 		"verify-file deep chunk corruption",
 	)
 }
 
 func TestVerifyFileStandardPassesOnCleanStoredFile(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_clean.bin", 256*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_standard_clean.bin", 256*1024)
 	defer dbconn.Close()
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard); err != nil {
@@ -5764,7 +4934,7 @@ func TestVerifyFileStandardPassesOnCleanStoredFile(t *testing.T) {
 }
 
 func TestVerifyFileFullPassesOnCleanStoredFile(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_clean.bin", 256*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_full_clean.bin", 256*1024)
 	defer dbconn.Close()
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err != nil {
@@ -5773,7 +4943,7 @@ func TestVerifyFileFullPassesOnCleanStoredFile(t *testing.T) {
 }
 
 func TestVerifyFileDeepPassesOnCleanStoredFile(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_deep_clean.bin", 256*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_deep_clean.bin", 256*1024)
 	defer dbconn.Close()
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyDeep); err != nil {
@@ -5782,41 +4952,41 @@ func TestVerifyFileDeepPassesOnCleanStoredFile(t *testing.T) {
 }
 
 func TestVerifyFileFullDetectsContainerTruncation(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_truncation.bin", 512*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_full_truncation.bin", 512*1024)
 	defer dbconn.Close()
 
-	record := fetchFirstChunkRecord(t, dbconn, fileID)
-	containerPath := containerPathForRecord(record)
+	record := testutils.FetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := testutils.ContainerPathForRecord(record)
 
-	truncatedSize := record.containerCurrentSize - 100
+	truncatedSize := record.ContainerCurrentSize - 100
 	if truncatedSize <= 0 {
-		t.Fatalf("invalid truncated size derived from container size %d", record.containerCurrentSize)
+		t.Fatalf("invalid truncated Size derived from container Size %d", record.ContainerCurrentSize)
 	}
 
 	if err := os.Truncate(containerPath, truncatedSize); err != nil {
 		t.Fatalf("truncate container file: %v", err)
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull),
-		"full verification failed: container and offset verification failed: container 1 size mismatch",
+		"full verification failed: container and offset verification failed: container 1 Size mismatch",
 		"verify-file full truncation",
 	)
 }
 
 func TestVerifyFileFullDetectsMissingContainerFile(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_full_missing_container.bin", 256*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_full_missing_container.bin", 256*1024)
 	defer dbconn.Close()
 
-	record := fetchFirstChunkRecord(t, dbconn, fileID)
-	containerPath := containerPathForRecord(record)
+	record := testutils.FetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := testutils.ContainerPathForRecord(record)
 
 	if err := os.Remove(containerPath); err != nil {
 		t.Fatalf("remove container file: %v", err)
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull),
 		"full verification failed: container and offset verification failed: missing container file",
@@ -5825,24 +4995,24 @@ func TestVerifyFileFullDetectsMissingContainerFile(t *testing.T) {
 }
 
 func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_missing_chunk.bin", 512*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_standard_missing_chunk.bin", 512*1024)
 	defer dbconn.Close()
 
-	record := fetchFirstChunkRecord(t, dbconn, fileID)
+	record := testutils.FetchFirstChunkRecord(t, dbconn, fileID)
 
 	if _, err := dbconn.Exec(`ALTER TABLE file_chunk DROP CONSTRAINT IF EXISTS file_chunk_chunk_id_fkey`); err != nil {
 		t.Fatalf("drop file_chunk foreign key: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, record.chunkID); err != nil {
+	if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, record.ChunkID); err != nil {
 		t.Fatalf("delete block row: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`DELETE FROM chunk WHERE id = $1`, record.chunkID); err != nil {
+	if _, err := dbconn.Exec(`DELETE FROM chunk WHERE id = $1`, record.ChunkID); err != nil {
 		t.Fatalf("delete chunk row: %v", err)
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard),
 		"chunk count mismatch: expected 1 but got 0",
@@ -5851,34 +5021,34 @@ func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
 }
 
 func TestVerifyFileStandardDetectsBrokenChunkOrder(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_file_standard_chunk_order.bin", 512*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_standard_chunk_order.bin", 512*1024)
 	defer dbconn.Close()
 
 	if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order + 1 WHERE logical_file_id = $1`, fileID); err != nil {
 		t.Fatalf("corrupt chunk ordering: %v", err)
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard),
 		"file chunk ordering error: expected chunk_order 0 but got 1",
-		"verify-file standard broken-order",
+		"verify-file standard broken-Order",
 	)
 }
 
 func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
-	dbconn, _, fileID := setupStoredFileForVerification(t, "verify_system_full_container_hash.bin", 256*1024)
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_system_full_container_hash.bin", 256*1024)
 	defer dbconn.Close()
 
-	record := fetchFirstChunkRecord(t, dbconn, fileID)
-	containerPath := containerPathForRecord(record)
+	record := testutils.FetchFirstChunkRecord(t, dbconn, fileID)
+	containerPath := testutils.ContainerPathForRecord(record)
 
 	file, err := os.OpenFile(containerPath, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("open container file: %v", err)
 	}
-	corruptionOffset := record.blockOffset
-	if record.storedSize > 10 {
+	corruptionOffset := record.BlockOffset
+	if record.StoredSize > 10 {
 		corruptionOffset += 10
 	}
 	if _, err := file.WriteAt([]byte{0xAB}, corruptionOffset); err != nil {
@@ -5889,22 +5059,22 @@ func TestVerifySystemFullDetectsContainerHashMismatch(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
-		"system-container-hash-mismatch",
+		"system-container-Hash-mismatch",
 	)
 }
 
 func TestSharedChunkSafety(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5912,8 +5082,8 @@ func TestSharedChunkSafety(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -5921,7 +5091,7 @@ func TestSharedChunkSafety(t *testing.T) {
 	}
 
 	// Create one file
-	fileA := createTempFile(t, inputDir, "fileA.bin", 512*1024)
+	fileA := testutils.CreateTempFile(t, inputDir, "fileA.bin", 512*1024)
 
 	// Copy to create identical file
 	fileB := filepath.Join(inputDir, "fileB.bin")
@@ -5949,8 +5119,8 @@ func TestSharedChunkSafety(t *testing.T) {
 		t.Fatalf("store fileB: %v", err)
 	}
 
-	fileAHash := sha256File(t, fileA)
-	fileAID := fetchFileIDByHash(t, dbconn, fileAHash)
+	fileAHash := testutils.SHA256File(t, fileA)
+	fileAID := testutils.FetchFileIDByHash(t, dbconn, fileAHash)
 
 	// Remove file A
 	if err := storage.RemoveFileWithDB(dbconn, fileAID); err != nil {
@@ -5969,29 +5139,29 @@ func TestSharedChunkSafety(t *testing.T) {
 	}
 
 	outPath := filepath.Join(restoreDir, "fileB.bin")
-	fileBHash := sha256File(t, fileB)
-	fileBID := fetchFileIDByHash(t, dbconn, fileBHash)
+	fileBHash := testutils.SHA256File(t, fileB)
+	fileBID := testutils.FetchFileIDByHash(t, dbconn, fileBHash)
 
 	if err := storage.RestoreFileWithDB(dbconn, fileBID, outPath); err != nil {
 		t.Fatalf("restore fileB: %v", err)
 	}
 
 	// Compare hashes
-	origHash := sha256File(t, fileB)
-	restoreHash := sha256File(t, outPath)
+	origHash := testutils.SHA256File(t, fileB)
+	restoreHash := testutils.SHA256File(t, outPath)
 
 	if origHash != restoreHash {
-		t.Fatalf("hash mismatch: expected %s, got %s", origHash, restoreHash)
+		t.Fatalf("Hash mismatch: expected %s, got %s", origHash, restoreHash)
 	}
 }
 
 func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -5999,14 +5169,14 @@ func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_clean.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_clean.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
@@ -6017,12 +5187,12 @@ func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
 }
 
 func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6030,23 +5200,23 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_corruption.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_corruption.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
 	if err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
 	// Fetch first chunk record to find where to corrupt
-	var blockOffset int64
-	var storedSize int64
-	var containerFilename string
+	var BlockOffset int64
+	var StoredSize int64
+	var ContainerFilename string
 	err = dbconn.QueryRow(`
 		SELECT b.block_offset, b.stored_size, ctr.filename
 		FROM chunk c
@@ -6055,12 +5225,12 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		WHERE c.status = $1
 		ORDER BY b.block_offset ASC
 		LIMIT 1
-	`, filestate.ChunkCompleted).Scan(&blockOffset, &storedSize, &containerFilename)
+	`, filestate.ChunkCompleted).Scan(&BlockOffset, &StoredSize, &ContainerFilename)
 	if err != nil {
 		t.Fatalf("query first chunk: %v", err)
 	}
 
-	containerPath := filepath.Join(container.ContainersDir, containerFilename)
+	containerPath := filepath.Join(container.ContainersDir, ContainerFilename)
 
 	// Open container and corrupt a byte in the first chunk's data
 	// Skip past the header to reach the actual chunk data
@@ -6070,12 +5240,12 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	}
 	defer f.Close()
 
-	corruptionOffset := blockOffset + 10
+	corruptionOffset := BlockOffset + 10
 	if _, err := f.WriteAt([]byte{0xFF}, corruptionOffset); err != nil {
 		t.Fatalf("corrupt chunk byte: %v", err)
 	}
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"plain-chunk-corruption",
@@ -6086,22 +5256,22 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
-		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
-		"chunk hash mismatch",
+		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
+		"chunk Hash mismatch",
 		"plain-chunk-corruption restore",
 	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
-	requireDB(t)
-	setTestAESGCMKey(t)
+	testgate.RequireDB(t)
+	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6109,14 +5279,14 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_tamper.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_aesgcm_tamper.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
 		t.Fatalf("store aes-gcm file: %v", err)
@@ -6142,9 +5312,9 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 		t.Fatal("expected aes-gcm block nonce to be present")
 	}
 
-	corruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
+	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"ciphertext-tamper",
@@ -6155,22 +5325,22 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
-		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
 		"cipher: message authentication failed",
 		"ciphertext-tamper restore",
 	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
-	requireDB(t)
-	setTestAESGCMKey(t)
+	testgate.RequireDB(t)
+	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6178,20 +5348,20 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_nonce_tamper.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_aesgcm_nonce_tamper.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
-	var chunkID int64
+	var ChunkID int64
 	var nonce []byte
 	err = dbconn.QueryRow(`
 		SELECT b.chunk_id, b.nonce
@@ -6200,7 +5370,7 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
-	`, result.FileID).Scan(&chunkID, &nonce)
+	`, result.FileID).Scan(&ChunkID, &nonce)
 	if err != nil {
 		t.Fatalf("query aes-gcm nonce metadata: %v", err)
 	}
@@ -6210,11 +5380,11 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 
 	tamperedNonce := append([]byte(nil), nonce...)
 	tamperedNonce[0] ^= 0x7F
-	if _, err := dbconn.Exec(`UPDATE blocks SET nonce = $1 WHERE chunk_id = $2`, tamperedNonce, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE blocks SET nonce = $1 WHERE chunk_id = $2`, tamperedNonce, ChunkID); err != nil {
 		t.Fatalf("tamper nonce metadata: %v", err)
 	}
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"nonce-tamper",
@@ -6225,22 +5395,22 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
-		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
 		"cipher: message authentication failed",
 		"nonce-tamper restore",
 	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
-	requireDB(t)
-	setTestAESGCMKey(t)
+	testgate.RequireDB(t)
+	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6248,14 +5418,14 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_wrong_key.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_aesgcm_wrong_key.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
 		t.Fatalf("store aes-gcm file: %v", err)
@@ -6268,7 +5438,7 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 	// Switch to a different valid AES-256 key to simulate operator key mismatch.
 	t.Setenv("COLDKEEP_KEY", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"wrong-key",
@@ -6279,22 +5449,22 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
-		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
 		"cipher: message authentication failed",
 		"wrong-key restore",
 	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
-	requireDB(t)
-	setTestAESGCMKey(t)
+	testgate.RequireDB(t)
+	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6302,14 +5472,14 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_invalid_key.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_aesgcm_invalid_key.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
 		t.Fatalf("store aes-gcm file: %v", err)
@@ -6322,7 +5492,7 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	// Simulate malformed operator key configuration (invalid AES-256 key length).
 	t.Setenv("COLDKEEP_KEY", "abcd")
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"malformed-key",
@@ -6333,22 +5503,22 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
-		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
 		"aes-gcm requires COLDKEEP_KEY",
 		"malformed-key restore",
 	)
 }
 
 func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
-	requireDB(t)
-	setTestAESGCMKey(t)
+	testgate.RequireDB(t)
+	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6356,14 +5526,14 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_aesgcm_invalid_hex_key.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_aesgcm_invalid_hex_key.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
 		t.Fatalf("store aes-gcm file: %v", err)
@@ -6376,7 +5546,7 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 	// Simulate malformed operator key configuration (non-hex value).
 	t.Setenv("COLDKEEP_KEY", "this-is-not-hex")
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"non-hex-key",
@@ -6387,21 +5557,21 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
-		storage.RestoreFileWithStorageContext(newTestContext(dbconn), result.FileID, outPath),
+		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
 		"aes-gcm requires COLDKEEP_KEY",
 		"non-hex-key restore",
 	)
 }
 
 func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6409,20 +5579,20 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_trailing_bytes.bin", 512*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_trailing_bytes.bin", 512*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
 
-	var containerID int64
-	var containerFilename string
+	var ContainerID int64
+	var ContainerFilename string
 	var currentSize int64
 	err = dbconn.QueryRow(`
 		SELECT ctr.id, ctr.filename, ctr.current_size
@@ -6437,12 +5607,12 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 		)
 		ORDER BY ctr.id ASC
 		LIMIT 1
-	`, filestate.ChunkCompleted).Scan(&containerID, &containerFilename, &currentSize)
+	`, filestate.ChunkCompleted).Scan(&ContainerID, &ContainerFilename, &currentSize)
 	if err != nil {
 		t.Fatalf("query target container: %v", err)
 	}
 
-	containerPath := filepath.Join(container.ContainersDir, containerFilename)
+	containerPath := filepath.Join(container.ContainersDir, ContainerFilename)
 	trail := []byte("trailing-garbage-after-last-block")
 	f, err := os.OpenFile(containerPath, os.O_RDWR|os.O_APPEND, 0)
 	if err != nil {
@@ -6456,12 +5626,12 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 		t.Fatalf("close container file: %v", err)
 	}
 
-	// Keep full verify size checks green so deep-mode tail accounting is what fails.
-	if _, err := dbconn.Exec(`UPDATE container SET current_size = $1 WHERE id = $2`, currentSize+int64(len(trail)), containerID); err != nil {
+	// Keep full verify Size checks green so deep-mode tail accounting is what fails.
+	if _, err := dbconn.Exec(`UPDATE container SET current_size = $1 WHERE id = $2`, currentSize+int64(len(trail)), ContainerID); err != nil {
 		t.Fatalf("update container current_size for trailing-byte simulation: %v", err)
 	}
 
-	assertDeepVerifyAggregateError(
+	testutils.AssertDeepVerifyAggregateError(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"trailing-bytes",
@@ -6469,12 +5639,12 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 }
 
 func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6482,14 +5652,14 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_full_non_contiguous.bin", 4*1024*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_full_non_contiguous.bin", 4*1024*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
@@ -6516,7 +5686,7 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		t.Fatalf("corrupt block offset continuity: %v", err)
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
 		"found 2 errors in checkChunkOffsetValidity checks",
@@ -6525,12 +5695,12 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 }
 
 func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6538,14 +5708,14 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "verify_system_deep_aggregate.bin", 4*1024*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "verify_system_deep_aggregate.bin", 4*1024*1024)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
@@ -6565,14 +5735,14 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	defer rows.Close()
 
 	type chunkToCorrupt struct {
-		blockOffset int64
-		storedSize  int64
+		BlockOffset int64
+		StoredSize  int64
 		filename    string
 	}
 	var chunksToCorrupt []chunkToCorrupt
 	for rows.Next() {
 		var c chunkToCorrupt
-		if err := rows.Scan(&c.blockOffset, &c.storedSize, &c.filename); err != nil {
+		if err := rows.Scan(&c.BlockOffset, &c.StoredSize, &c.filename); err != nil {
 			t.Fatalf("scan chunk for corruption: %v", err)
 		}
 		chunksToCorrupt = append(chunksToCorrupt, c)
@@ -6591,8 +5761,8 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 			t.Fatalf("open container file: %v", err)
 		}
 
-		corruptionOffset := c.blockOffset
-		if c.storedSize > 1 {
+		corruptionOffset := c.BlockOffset
+		if c.StoredSize > 1 {
 			corruptionOffset++
 		}
 		if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
@@ -6604,7 +5774,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 		}
 	}
 
-	assertErrorContains(
+	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
 		"found 2 errors in deep verification of container files",
@@ -6612,19 +5782,13 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	)
 }
 
-// ---------------------------------------------------------------------------
-// v0.5 deterministic-restore guarantee tests
-// ---------------------------------------------------------------------------
-
-// TestZeroByteFile verifies that a zero-byte file can be stored, restored,
-// has size 0, and its SHA-256 matches the well-known hash of empty content.
 func TestZeroByteFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6632,8 +5796,8 @@ func TestZeroByteFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -6647,8 +5811,8 @@ func TestZeroByteFile(t *testing.T) {
 	// SHA-256("") = e3b0c44298fc1c149afbf4c8996fb924...
 	const emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-	if gotHash := sha256File(t, inPath); gotHash != emptyHash {
-		t.Fatalf("unexpected hash for empty file: %s", gotHash)
+	if gotHash := testutils.SHA256File(t, inPath); gotHash != emptyHash {
+		t.Fatalf("unexpected Hash for empty file: %s", gotHash)
 	}
 
 	sgctx := storage.StorageContext{
@@ -6659,7 +5823,7 @@ func TestZeroByteFile(t *testing.T) {
 		t.Fatalf("store empty file: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, emptyHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, emptyHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -6674,23 +5838,21 @@ func TestZeroByteFile(t *testing.T) {
 		t.Fatalf("stat restored file: %v", err)
 	}
 	if info.Size() != 0 {
-		t.Fatalf("restored file size: expected 0, got %d", info.Size())
+		t.Fatalf("restored file Size: expected 0, got %d", info.Size())
 	}
 
-	if gotHash := sha256File(t, outPath); gotHash != emptyHash {
-		t.Fatalf("restored hash mismatch: want %s got %s", emptyHash, gotHash)
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != emptyHash {
+		t.Fatalf("restored Hash mismatch: want %s got %s", emptyHash, gotHash)
 	}
 }
 
-// TestRepeatRestoreDeterminism restores the same file three times and asserts
-// that all three results are byte-for-byte identical and match the original.
 func TestRepeatRestoreDeterminism(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6698,15 +5860,15 @@ func TestRepeatRestoreDeterminism(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	inPath := createTempFile(t, inputDir, "determinism.bin", 512*1024)
-	wantHash := sha256File(t, inPath)
-	wantBytes := mustRead(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "determinism.bin", 512*1024)
+	wantHash := testutils.SHA256File(t, inPath)
+	wantBytes := testutils.MustRead(t, inPath)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -6716,7 +5878,7 @@ func TestRepeatRestoreDeterminism(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, wantHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -6728,28 +5890,25 @@ func TestRepeatRestoreDeterminism(t *testing.T) {
 			t.Fatalf("restore run %d: %v", i, err)
 		}
 
-		gotBytes := mustRead(t, outPath)
+		gotBytes := testutils.MustRead(t, outPath)
 		if !bytes.Equal(wantBytes, gotBytes) {
 			t.Fatalf("run %d: restored bytes differ from original", i)
 		}
 
-		gotHash := sha256File(t, outPath)
+		gotHash := testutils.SHA256File(t, outPath)
 		if gotHash != wantHash {
-			t.Fatalf("run %d: hash mismatch: want %s got %s", i, wantHash, gotHash)
+			t.Fatalf("run %d: Hash mismatch: want %s got %s", i, wantHash, gotHash)
 		}
 	}
 }
 
-// TestRepeatedStorePreservesChunkGraphDeterminism stores the same multi-chunk
-// file repeatedly in one environment and asserts that chunk graph structure
-// stays stable while store reports AlreadyStored after the first ingest.
 func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6757,15 +5916,15 @@ func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	inPath := createTempFile(t, inputDir, "repeated_store_determinism.bin", 5*1024*1024)
+	inPath := testutils.CreateTempFile(t, inputDir, "repeated_store_determinism.bin", 5*1024*1024)
 
-	ctx := newTestContext(dbconn)
+	ctx := testutils.NewTestContext(dbconn)
 	first, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
 	if err != nil {
 		t.Fatalf("first store: %v", err)
@@ -6774,7 +5933,7 @@ func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
 		t.Fatal("first store unexpectedly reported AlreadyStored=true")
 	}
 
-	baselineGraph := queryChunkGraph(t, dbconn, first.FileID)
+	baselineGraph := testutils.QueryChunkGraph(t, dbconn, first.FileID)
 	if len(baselineGraph) < 2 {
 		t.Fatalf("expected multi-chunk baseline graph, got %d chunk(s)", len(baselineGraph))
 	}
@@ -6792,7 +5951,7 @@ func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
 			t.Fatalf("rerun %d file ID changed: want %d got %d", i, first.FileID, result.FileID)
 		}
 
-		graph := queryChunkGraph(t, dbconn, result.FileID)
+		graph := testutils.QueryChunkGraph(t, dbconn, result.FileID)
 		if !slices.Equal(baselineGraph, graph) {
 			t.Fatalf("rerun %d chunk graph changed: baseline=%v current=%v", i, baselineGraph, graph)
 		}
@@ -6802,20 +5961,17 @@ func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
 		t.Fatalf("verify after repeated stores: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
 
-// TestStoreRemoveGCRestartStoreConvergesChunkGraph validates that repeated
-// lifecycle cycles converge to the same logical chunk graph even when restart
-// recovery is interleaved between cycles.
 func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6823,20 +5979,20 @@ func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "cycle_convergence.bin", 4*1024*1024+137)
-	wantHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "cycle_convergence.bin", 4*1024*1024+137)
+	wantHash := testutils.SHA256File(t, inPath)
 
-	ctx := newTestContext(dbconn)
+	ctx := testutils.NewTestContext(dbconn)
 	first, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
 	if err != nil {
 		t.Fatalf("initial store: %v", err)
 	}
-	baselineGraph := queryChunkGraph(t, dbconn, first.FileID)
+	baselineGraph := testutils.QueryChunkGraph(t, dbconn, first.FileID)
 	if len(baselineGraph) < 2 {
 		t.Fatalf("expected multi-chunk baseline graph, got %d chunk(s)", len(baselineGraph))
 	}
@@ -6862,7 +6018,7 @@ func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
 			if err != nil {
 				t.Fatalf("cycle %d reconnect db: %v", i, err)
 			}
-			ctx = newTestContext(dbconn)
+			ctx = testutils.NewTestContext(dbconn)
 		}
 
 		result, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
@@ -6871,7 +6027,7 @@ func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
 		}
 		fileID = result.FileID
 
-		graph := queryChunkGraph(t, dbconn, fileID)
+		graph := testutils.QueryChunkGraph(t, dbconn, fileID)
 		if !slices.Equal(baselineGraph, graph) {
 			t.Fatalf("cycle %d chunk graph changed: baseline=%v current=%v", i, baselineGraph, graph)
 		}
@@ -6887,23 +6043,21 @@ func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
 	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 		t.Fatalf("restore after cycles: %v", err)
 	}
-	if gotHash := sha256File(t, outPath); gotHash != wantHash {
-		t.Fatalf("restored hash mismatch after cycles: want %s got %s", wantHash, gotHash)
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != wantHash {
+		t.Fatalf("restored Hash mismatch after cycles: want %s got %s", wantHash, gotHash)
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
 
-// TestStoreGCRestore is the v0.5 headline guarantee: a stored file remains
-// fully restorable after GC runs (even in the presence of other deleted files).
 func TestStoreGCRestore(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -6911,16 +6065,16 @@ func TestStoreGCRestore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Store the "keeper" file that must survive GC.
-	keeperPath := createTempFile(t, inputDir, "keeper.bin", 512*1024)
-	keeperHash := sha256File(t, keeperPath)
-	keeperBytes := mustRead(t, keeperPath)
+	keeperPath := testutils.CreateTempFile(t, inputDir, "keeper.bin", 512*1024)
+	keeperHash := testutils.SHA256File(t, keeperPath)
+	keeperBytes := testutils.MustRead(t, keeperPath)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -6929,22 +6083,22 @@ func TestStoreGCRestore(t *testing.T) {
 	if err := storage.StoreFileWithStorageContext(sgctx, keeperPath); err != nil {
 		t.Fatalf("store keeper: %v", err)
 	}
-	keeperID := fetchFileIDByHash(t, dbconn, keeperHash)
+	keeperID := testutils.FetchFileIDByHash(t, dbconn, keeperHash)
 
 	// Store a second file, then remove it so GC has something to collect.
-	noisePath := createTempFile(t, inputDir, "noise.bin", 512*1024)
+	noisePath := testutils.CreateTempFile(t, inputDir, "noise.bin", 512*1024)
 	// Ensure noise differs from keeper to avoid same-logical-file dedupe aliasing.
-	noiseBytes := mustRead(t, noisePath)
+	noiseBytes := testutils.MustRead(t, noisePath)
 	noiseBytes[0] ^= 0xFF
 	if err := os.WriteFile(noisePath, noiseBytes, 0o644); err != nil {
 		t.Fatalf("rewrite noise file with distinct content: %v", err)
 	}
-	noiseHash := sha256File(t, noisePath)
+	noiseHash := testutils.SHA256File(t, noisePath)
 
 	if err := storage.StoreFileWithStorageContext(sgctx, noisePath); err != nil {
 		t.Fatalf("store noise: %v", err)
 	}
-	noiseID := fetchFileIDByHash(t, dbconn, noiseHash)
+	noiseID := testutils.FetchFileIDByHash(t, dbconn, noiseHash)
 
 	if err := storage.RemoveFileWithDB(dbconn, noiseID); err != nil {
 		t.Fatalf("remove noise: %v", err)
@@ -6978,28 +6132,25 @@ func TestStoreGCRestore(t *testing.T) {
 		t.Fatalf("restore keeper after GC: %v", err)
 	}
 
-	gotBytes := mustRead(t, outPath)
+	gotBytes := testutils.MustRead(t, outPath)
 	if !bytes.Equal(keeperBytes, gotBytes) {
 		t.Fatalf("restored bytes differ from original after GC")
 	}
 
-	gotHash := sha256File(t, outPath)
+	gotHash := testutils.SHA256File(t, outPath)
 	if gotHash != keeperHash {
-		t.Fatalf("hash mismatch after GC: want %s got %s", keeperHash, gotHash)
+		t.Fatalf("Hash mismatch after GC: want %s got %s", keeperHash, gotHash)
 	}
 }
 
-// TestStoreLifecycleSeededRandomizedOperationOrder exercises repeated store
-// lifecycles with deterministic random operation ordering to harden trust proof
-// coverage beyond fixed scripts.
 func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -7007,8 +6158,8 @@ func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -7023,21 +6174,21 @@ func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
 	const iterations = 20
 
 	for i := 0; i < iterations; i++ {
-		size := 512*1024 + rng.Intn(2*1024*1024)
+		Size := 512*1024 + rng.Intn(2*1024*1024)
 		path := filepath.Join(inputDir, fmt.Sprintf("seeded-random-%02d.bin", i))
-		data := make([]byte, size)
+		data := make([]byte, Size)
 		for j := range data {
 			data[j] = byte((j*17 + i*23 + 5) % 251)
 		}
 		if err := os.WriteFile(path, data, 0o644); err != nil {
 			t.Fatalf("iteration %d write input: %v", i, err)
 		}
-		wantHash := sha256File(t, path)
+		wantHash := testutils.SHA256File(t, path)
 
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), path); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), path); err != nil {
 			t.Fatalf("iteration %d store: %v", i, err)
 		}
-		fileID := fetchFileIDByHash(t, dbconn, wantHash)
+		fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 		ops := []string{"verify_standard", "verify_full", "gc_dry", "gc_real", "restore"}
 		rng.Shuffle(len(ops), func(a, b int) {
@@ -7068,8 +6219,8 @@ func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
 				if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 					t.Fatalf("iteration %d restore: %v", i, err)
 				}
-				if gotHash := sha256File(t, outPath); gotHash != wantHash {
-					t.Fatalf("iteration %d restore hash mismatch: want %s got %s", i, wantHash, gotHash)
+				if gotHash := testutils.SHA256File(t, outPath); gotHash != wantHash {
+					t.Fatalf("iteration %d restore Hash mismatch: want %s got %s", i, wantHash, gotHash)
 				}
 			}
 		}
@@ -7088,8 +6239,8 @@ func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 			t.Fatalf("iteration %d verify standard after cleanup: %v", i, err)
 		}
-		assertNoProcessingRows(t, dbconn)
-		assertUniqueFileChunkOrders(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
 	}
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
@@ -7097,19 +6248,16 @@ func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
 	}
 }
 
-// TestStoreGCVerifyRestoreDeleteLoopStability repeats the full file lifecycle
-// enough times to catch drift, leaked state, and cleanup regressions that do
-// not show up in one-shot roundtrip tests.
 func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
-	requireDB(t)
-	requireLongRun(t)
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
 
 	const iterations = 50
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -7117,8 +6265,8 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
 	container.SetContainerMaxSize(1 * 1024 * 1024)
@@ -7136,8 +6284,8 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	assertCleanedUp := func(iteration int) {
 		t.Helper()
 
-		assertNoProcessingRows(t, dbconn)
-		assertUniqueFileChunkOrders(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 			t.Fatalf("iteration %d: verify after cleanup: %v", iteration, err)
@@ -7223,22 +6371,22 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	}
 
 	for i := 0; i < iterations; i++ {
-		size := 640*1024 + (i%7)*8192 + i*37
+		Size := 640*1024 + (i%7)*8192 + i*37
 		path := filepath.Join(inputDir, fmt.Sprintf("stability-%02d.bin", i))
-		wantBytes := make([]byte, size)
+		wantBytes := make([]byte, Size)
 		for j := range wantBytes {
 			wantBytes[j] = byte((j*31 + 7 + i*17 + j/1024) % 251)
 		}
 		if err := os.WriteFile(path, wantBytes, 0o644); err != nil {
 			t.Fatalf("iteration %d: write input file: %v", i, err)
 		}
-		wantHash := sha256File(t, path)
+		wantHash := testutils.SHA256File(t, path)
 
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), path); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), path); err != nil {
 			t.Fatalf("iteration %d: store: %v", i, err)
 		}
 
-		fileID := fetchFileIDByHash(t, dbconn, wantHash)
+		fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 		if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
 			t.Fatalf("iteration %d: GC while file is live: %v", i, err)
@@ -7247,20 +6395,20 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 			t.Fatalf("iteration %d: verify after store+gc: %v", i, err)
 		}
-		assertNoProcessingRows(t, dbconn)
-		assertUniqueFileChunkOrders(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
 		outPath := filepath.Join(restoreDir, fmt.Sprintf("stability-%02d.restored.bin", i))
 		if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 			t.Fatalf("iteration %d: restore: %v", i, err)
 		}
 
-		gotBytes := mustRead(t, outPath)
+		gotBytes := testutils.MustRead(t, outPath)
 		if !bytes.Equal(wantBytes, gotBytes) {
 			t.Fatalf("iteration %d: restored bytes differ from original", i)
 		}
-		if gotHash := sha256File(t, outPath); gotHash != wantHash {
-			t.Fatalf("iteration %d: restored hash mismatch: want %s got %s", i, wantHash, gotHash)
+		if gotHash := testutils.SHA256File(t, outPath); gotHash != wantHash {
+			t.Fatalf("iteration %d: restored Hash mismatch: want %s got %s", i, wantHash, gotHash)
 		}
 
 		if err := storage.RemoveFileWithDB(dbconn, fileID); err != nil {
@@ -7280,20 +6428,16 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	assertCleanedUp(iterations)
 }
 
-// TestRandomizedLongRunLifecycleSoak expands the dedicated long-run tier with a
-// deterministic-random lifecycle program: store, verify, GC, repeated restore,
-// occasional restart/recovery, remove, and cleanup. The system must keep
-// converging to a bounded clean state with correct restored bytes.
 func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
-	requireDB(t)
-	requireLongRun(t)
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
 
 	const iterations = 30
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -7301,8 +6445,8 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	originalMaxSize := container.GetContainerMaxSize()
 	container.SetContainerMaxSize(1 * 1024 * 1024)
@@ -7322,8 +6466,8 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 	assertBoundedCleanup := func(label string) {
 		t.Helper()
 
-		assertNoProcessingRows(t, dbconn)
-		assertUniqueFileChunkOrders(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
 
 		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 			t.Fatalf("%s: verify after cleanup: %v", label, err)
@@ -7379,21 +6523,21 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 	}
 
 	for i := 0; i < iterations; i++ {
-		size := 256*1024 + rng.Intn(3*1024*1024)
+		Size := 256*1024 + rng.Intn(3*1024*1024)
 		path := filepath.Join(inputDir, fmt.Sprintf("longrun-random-%02d.bin", i))
-		wantBytes := make([]byte, size)
+		wantBytes := make([]byte, Size)
 		for j := range wantBytes {
 			wantBytes[j] = byte((j*17 + i*31 + j/2048 + 9) % 251)
 		}
 		if err := os.WriteFile(path, wantBytes, 0o644); err != nil {
 			t.Fatalf("iteration %d: write input file: %v", i, err)
 		}
-		wantHash := sha256File(t, path)
+		wantHash := testutils.SHA256File(t, path)
 
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), path); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), path); err != nil {
 			t.Fatalf("iteration %d: store: %v", i, err)
 		}
-		fileID := fetchFileIDByHash(t, dbconn, wantHash)
+		fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 		ops := []string{"verify_standard", "verify_full", "gc_dry", "gc_real", "restore_twice"}
 		rng.Shuffle(len(ops), func(a, b int) {
@@ -7425,7 +6569,7 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 					if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 						t.Fatalf("iteration %d: restore run %d: %v", i, restoreRun, err)
 					}
-					if gotBytes := mustRead(t, outPath); !bytes.Equal(gotBytes, wantBytes) {
+					if gotBytes := testutils.MustRead(t, outPath); !bytes.Equal(gotBytes, wantBytes) {
 						t.Fatalf("iteration %d: restore run %d bytes differ from original", i, restoreRun)
 					}
 				}
@@ -7465,15 +6609,13 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 	assertBoundedCleanup("final")
 }
 
-// TestGCRestorePinRaceContainerNotDeleted validates that GC cannot delete a
-// sealed container while a restore-style chunk pin is in-flight.
 func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -7481,8 +6623,8 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	containerFile := "gc-restore-race.bin"
 	containerPath := filepath.Join(container.ContainersDir, containerFile)
@@ -7490,7 +6632,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 		t.Fatalf("write container file: %v", err)
 	}
 
-	var containerID int64
+	var ContainerID int64
 	err = dbconn.QueryRow(
 		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
 		 VALUES ($1, $2, $3, TRUE, FALSE)
@@ -7498,21 +6640,21 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 		containerFile,
 		int64(len("race-test-container")),
 		container.GetContainerMaxSize(),
-	).Scan(&containerID)
+	).Scan(&ContainerID)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
 	}
 
-	var chunkID int64
+	var ChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"gc-restore-race-chunk",
 		int64(16),
 		filestate.ChunkCompleted,
 		int64(0),
-	).Scan(&chunkID)
+	).Scan(&ChunkID)
 	if err != nil {
 		t.Fatalf("insert chunk: %v", err)
 	}
@@ -7520,13 +6662,13 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	if _, err := dbconn.Exec(
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		chunkID,
+		ChunkID,
 		"plain",
 		1,
 		int64(16),
 		int64(16),
 		[]byte{},
-		containerID,
+		ContainerID,
 		int64(0),
 	); err != nil {
 		t.Fatalf("insert block: %v", err)
@@ -7540,7 +6682,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin pin tx: %v", err)
 	}
-	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, chunkID); err != nil {
+	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, ChunkID); err != nil {
 		_ = pinTx.Rollback()
 		t.Fatalf("pin chunk in tx: %v", err)
 	}
@@ -7572,7 +6714,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	}
 
 	var remainingContainers int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&remainingContainers); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, ContainerID).Scan(&remainingContainers); err != nil {
 		t.Fatalf("count container rows: %v", err)
 	}
 	if remainingContainers != 1 {
@@ -7580,7 +6722,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	}
 
 	var remainingBlocks int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE container_id = $1`, containerID).Scan(&remainingBlocks); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks WHERE container_id = $1`, ContainerID).Scan(&remainingBlocks); err != nil {
 		t.Fatalf("count block rows: %v", err)
 	}
 	if remainingBlocks != 1 {
@@ -7588,7 +6730,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	}
 
 	var pinnedPinCount int64
-	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinnedPinCount); err != nil {
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, ChunkID).Scan(&pinnedPinCount); err != nil {
 		t.Fatalf("query chunk pin_count: %v", err)
 	}
 	if pinnedPinCount != 1 {
@@ -7600,15 +6742,13 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	}
 }
 
-// TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned exercises a
-// three-way race where restore pinning, remove, and GC overlap.
 func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -7616,8 +6756,8 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	containerFile := "gc-remove-restore-interleaving.bin"
 	containerPath := filepath.Join(container.ContainersDir, containerFile)
@@ -7625,7 +6765,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		t.Fatalf("write container file: %v", err)
 	}
 
-	var containerID int64
+	var ContainerID int64
 	err = dbconn.QueryRow(
 		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
 		 VALUES ($1, $2, $3, TRUE, FALSE)
@@ -7633,21 +6773,21 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		containerFile,
 		int64(len("interleaving-container")),
 		container.GetContainerMaxSize(),
-	).Scan(&containerID)
+	).Scan(&ContainerID)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
 	}
 
-	var chunkID int64
+	var ChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
 		"gc-remove-restore-race-chunk",
 		int64(22),
 		filestate.ChunkCompleted,
 		int64(1),
-	).Scan(&chunkID)
+	).Scan(&ChunkID)
 	if err != nil {
 		t.Fatalf("insert chunk: %v", err)
 	}
@@ -7655,13 +6795,13 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	if _, err := dbconn.Exec(
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		chunkID,
+		ChunkID,
 		"plain",
 		1,
 		int64(22),
 		int64(22),
 		[]byte{},
-		containerID,
+		ContainerID,
 		int64(0),
 	); err != nil {
 		t.Fatalf("insert block: %v", err)
@@ -7674,7 +6814,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		 RETURNING id`,
 		"interleaving.txt",
 		int64(22),
-		"gc-remove-restore-race-file-hash",
+		"gc-remove-restore-race-file-Hash",
 		filestate.LogicalFileCompleted,
 	).Scan(&fileID)
 	if err != nil {
@@ -7685,7 +6825,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
 		 VALUES ($1, $2, $3)`,
 		fileID,
-		chunkID,
+		ChunkID,
 		int64(0),
 	); err != nil {
 		t.Fatalf("insert file_chunk: %v", err)
@@ -7698,7 +6838,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	if err != nil {
 		t.Fatalf("begin pin tx: %v", err)
 	}
-	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, chunkID); err != nil {
+	if _, err := pinTx.ExecContext(ctx, `UPDATE chunk SET pin_count = pin_count + 1 WHERE id = $1`, ChunkID); err != nil {
 		_ = pinTx.Rollback()
 		t.Fatalf("pin chunk in tx: %v", err)
 	}
@@ -7752,7 +6892,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	}
 
 	var containerCountAfterInterleave int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&containerCountAfterInterleave); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, ContainerID).Scan(&containerCountAfterInterleave); err != nil {
 		t.Fatalf("count container rows after interleave: %v", err)
 	}
 	if containerCountAfterInterleave != 1 {
@@ -7760,14 +6900,14 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	}
 
 	var pinCountBeforeUnpin int64
-	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCountBeforeUnpin); err != nil {
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, ChunkID).Scan(&pinCountBeforeUnpin); err != nil {
 		t.Fatalf("query chunk pin_count before unpin: %v", err)
 	}
 	if pinCountBeforeUnpin != 1 {
 		t.Fatalf("expected pin_count=1 before restore unpin, got %d", pinCountBeforeUnpin)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE chunk SET pin_count = pin_count - 1 WHERE id = $1 AND pin_count > 0`, chunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE chunk SET pin_count = pin_count - 1 WHERE id = $1 AND pin_count > 0`, ChunkID); err != nil {
 		t.Fatalf("unpin restore chunk: %v", err)
 	}
 
@@ -7776,7 +6916,7 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	}
 
 	var containerCountAfterFinalGC int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&containerCountAfterFinalGC); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, ContainerID).Scan(&containerCountAfterFinalGC); err != nil {
 		t.Fatalf("count container rows after final gc: %v", err)
 	}
 	if containerCountAfterFinalGC != 0 {
@@ -7788,18 +6928,16 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	}
 }
 
-// TestChunkBoundaryMatrix stores and restores files at classic CDC boundary sizes,
-// verifying byte-perfect restoration for each case.
 func TestChunkBoundaryMatrix(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
-	for _, tc := range chunkBoundaryCases {
+	for _, tc := range testutils.ChunkBoundaryCases {
 		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.Name, func(t *testing.T) {
 			tmp := t.TempDir()
 			container.ContainersDir = filepath.Join(tmp, "containers")
 			_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-			resetStorage(t)
+			testutils.ResetStorage(t)
 
 			dbconn, err := db.ConnectDB()
 			if err != nil {
@@ -7807,15 +6945,15 @@ func TestChunkBoundaryMatrix(t *testing.T) {
 			}
 			defer dbconn.Close()
 
-			applySchema(t, dbconn)
-			resetDB(t, dbconn)
+			testutils.ApplySchema(t, dbconn)
+			testutils.ResetDB(t, dbconn)
 
 			inputDir := filepath.Join(tmp, "input")
 			_ = os.MkdirAll(inputDir, 0o755)
 
-			inPath := createTempFile(t, inputDir, tc.name+".bin", tc.size)
-			wantHash := sha256File(t, inPath)
-			wantBytes := mustRead(t, inPath)
+			inPath := testutils.CreateTempFile(t, inputDir, tc.Name+".bin", tc.Size)
+			wantHash := testutils.SHA256File(t, inPath)
+			wantBytes := testutils.MustRead(t, inPath)
 
 			sgctx := storage.StorageContext{
 				DB:     dbconn,
@@ -7825,262 +6963,40 @@ func TestChunkBoundaryMatrix(t *testing.T) {
 				t.Fatalf("store: %v", err)
 			}
 
-			fileID := fetchFileIDByHash(t, dbconn, wantHash)
+			fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 			outDir := filepath.Join(tmp, "out")
 			_ = os.MkdirAll(outDir, 0o755)
-			outPath := filepath.Join(outDir, tc.name+".restored.bin")
+			outPath := filepath.Join(outDir, tc.Name+".restored.bin")
 
 			if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
 				t.Fatalf("restore: %v", err)
 			}
 
-			gotBytes := mustRead(t, outPath)
+			gotBytes := testutils.MustRead(t, outPath)
 			if !bytes.Equal(wantBytes, gotBytes) {
-				t.Fatalf("restored bytes differ for size %d", tc.size)
+				t.Fatalf("restored bytes differ for Size %d", tc.Size)
 			}
 
-			gotHash := sha256File(t, outPath)
+			gotHash := testutils.SHA256File(t, outPath)
 			if gotHash != wantHash {
-				t.Fatalf("hash mismatch: want %s got %s", wantHash, gotHash)
+				t.Fatalf("Hash mismatch: want %s got %s", wantHash, gotHash)
 			}
 
-			// Confirm the restored file size matches the input exactly.
+			// Confirm the restored file Size matches the input exactly.
 			info, err := os.Stat(outPath)
 			if err != nil {
 				t.Fatalf("stat: %v", err)
 			}
-			if int(info.Size()) != tc.size {
-				t.Fatalf("size mismatch: want %d got %d", tc.size, info.Size())
+			if int(info.Size()) != tc.Size {
+				t.Fatalf("Size mismatch: want %d got %d", tc.Size, info.Size())
 			}
 		})
 	}
 }
 
-func queryChunkGraph(t *testing.T, dbconn *sql.DB, fileID int64) []chunkRecord {
-	t.Helper()
-	rows, err := dbconn.Query(`
-		SELECT fc.chunk_order, c.chunk_hash, c.size
-		FROM file_chunk fc
-		JOIN chunk c ON fc.chunk_id = c.id
-		WHERE fc.logical_file_id = $1
-		ORDER BY fc.chunk_order ASC
-	`, fileID)
-	if err != nil {
-		t.Fatalf("query chunk graph: %v", err)
-	}
-	defer rows.Close()
-
-	var records []chunkRecord
-	for rows.Next() {
-		var r chunkRecord
-		if err := rows.Scan(&r.order, &r.hash, &r.size); err != nil {
-			t.Fatalf("scan chunk graph row: %v", err)
-		}
-		records = append(records, r)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate chunk graph: %v", err)
-	}
-	return records
-}
-
-func findRepoFixtureDir(t *testing.T, fixtureDir string) string {
-	t.Helper()
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-
-	dir := cwd
-	for i := 0; i < 8; i++ {
-		candidate := filepath.Join(dir, fixtureDir)
-		info, statErr := os.Stat(candidate)
-		if statErr == nil && info.IsDir() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-
-	t.Fatalf("could not find fixture directory %q from cwd %q", fixtureDir, cwd)
-	return ""
-}
-
-func copyDirTree(t *testing.T, srcDir, dstDir string) {
-	t.Helper()
-
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		t.Fatalf("mkdir dstDir %s: %v", dstDir, err)
-	}
-
-	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-
-		target := filepath.Join(dstDir, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
-	})
-	if err != nil {
-		t.Fatalf("copy fixture %s -> %s: %v", srcDir, dstDir, err)
-	}
-}
-
-func collectFileHashesByCount(t *testing.T, root string) map[string]int {
-	t.Helper()
-
-	hashCount := make(map[string]int)
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		hashCount[sha256File(t, path)]++
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("collect file hashes from %s: %v", root, err)
-	}
-
-	return hashCount
-}
-
-func runFixtureFolderEndToEnd(t *testing.T, fixtureDir string) {
-	t.Helper()
-	requireDB(t)
-
-	tmp := t.TempDir()
-	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
-
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connectDB: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
-
-	fixturePath := findRepoFixtureDir(t, fixtureDir)
-	inputDir := filepath.Join(tmp, "input")
-	copyDirTree(t, fixturePath, inputDir)
-
-	expectedHashCounts := collectFileHashesByCount(t, inputDir)
-	expectedUniqueCount := len(expectedHashCounts)
-	expectedUniqueHashes := make(map[string]bool, len(expectedHashCounts))
-	for hash := range expectedHashCounts {
-		expectedUniqueHashes[hash] = true
-	}
-
-	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
-		t.Fatalf("store folder %s: %v", fixtureDir, err)
-	}
-
-	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
-		t.Fatalf("verify after store for %s: %v", fixtureDir, err)
-	}
-
-	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
-		t.Fatalf("gc dry-run for %s: %v", fixtureDir, err)
-	}
-	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
-		t.Fatalf("gc real for %s: %v", fixtureDir, err)
-	}
-
-	if err := dbconn.Close(); err != nil {
-		t.Fatalf("close db before restart for %s: %v", fixtureDir, err)
-	}
-	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
-		t.Fatalf("system recovery for %s: %v", fixtureDir, err)
-	}
-	dbconn, err = db.ConnectDB()
-	if err != nil {
-		t.Fatalf("reconnect DB after restart for %s: %v", fixtureDir, err)
-	}
-
-	outDir := filepath.Join(tmp, "out")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir out for %s: %v", fixtureDir, err)
-	}
-
-	rows, err := dbconn.Query(`
-		SELECT id, file_hash
-		FROM logical_file
-		WHERE status = $1
-		ORDER BY id ASC
-	`, filestate.LogicalFileCompleted)
-	if err != nil {
-		t.Fatalf("query logical_file for %s: %v", fixtureDir, err)
-	}
-	defer rows.Close()
-
-	restoredCount := 0
-	for rows.Next() {
-		var id int64
-		var hash string
-		if err := rows.Scan(&id, &hash); err != nil {
-			t.Fatalf("scan logical_file row for %s: %v", fixtureDir, err)
-		}
-
-		outPath := filepath.Join(outDir, fmt.Sprintf("%d.restore.bin", id))
-		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
-			t.Fatalf("restore file id %d for %s: %v", id, fixtureDir, err)
-		}
-
-		gotHash := sha256File(t, outPath)
-		if gotHash != hash {
-			t.Fatalf("restored hash mismatch for file id %d in %s: want %s got %s", id, fixtureDir, hash, gotHash)
-		}
-
-		if !expectedUniqueHashes[gotHash] {
-			t.Fatalf("unexpected restored hash %s for %s", gotHash, fixtureDir)
-		}
-		delete(expectedUniqueHashes, gotHash)
-		restoredCount++
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("rows error for %s: %v", fixtureDir, err)
-	}
-
-	if restoredCount != expectedUniqueCount {
-		t.Fatalf("restored file count mismatch for %s: want %d got %d", fixtureDir, expectedUniqueCount, restoredCount)
-	}
-
-	for hash := range expectedUniqueHashes {
-		t.Fatalf("missing restored file for hash %s in %s", hash, fixtureDir)
-	}
-}
-
-// TestSameInputSameChunkGraph verifies that storing identical file content in
-// two separate fresh environments yields the same chunk count, chunk hashes,
-// and chunk order — confirming cross-run CDC determinism.
 func TestSameInputSameChunkGraph(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	// Generate a fixed data blob (deterministic, cross-run stable).
 	const fileSize = 3*512*1024 + 77 // spans multiple chunks with uneven tail
@@ -8089,11 +7005,11 @@ func TestSameInputSameChunkGraph(t *testing.T) {
 		data[i] = byte((i*31 + 7) % 251)
 	}
 
-	storeAndQuery := func(label string) []chunkRecord {
+	storeAndQuery := func(label string) []testutils.ChunkRecord {
 		tmp := t.TempDir()
 		container.ContainersDir = filepath.Join(tmp, "containers")
 		_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-		resetStorage(t)
+		testutils.ResetStorage(t)
 
 		dbconn, err := db.ConnectDB()
 		if err != nil {
@@ -8101,8 +7017,8 @@ func TestSameInputSameChunkGraph(t *testing.T) {
 		}
 		defer dbconn.Close()
 
-		applySchema(t, dbconn)
-		resetDB(t, dbconn)
+		testutils.ApplySchema(t, dbconn)
+		testutils.ResetDB(t, dbconn)
 
 		inputDir := filepath.Join(tmp, "input")
 		_ = os.MkdirAll(inputDir, 0o755)
@@ -8122,9 +7038,9 @@ func TestSameInputSameChunkGraph(t *testing.T) {
 
 		sum := sha256.Sum256(data)
 		fileHash := hex.EncodeToString(sum[:])
-		fileID := fetchFileIDByHash(t, dbconn, fileHash)
+		fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
-		return queryChunkGraph(t, dbconn, fileID)
+		return testutils.QueryChunkGraph(t, dbconn, fileID)
 	}
 
 	run1 := storeAndQuery("run1")
@@ -8134,29 +7050,29 @@ func TestSameInputSameChunkGraph(t *testing.T) {
 		t.Fatalf("chunk count mismatch: run1=%d run2=%d", len(run1), len(run2))
 	}
 	if len(run1) == 0 {
-		t.Fatalf("expected at least one chunk (file size %d)", fileSize)
+		t.Fatalf("expected at least one chunk (file Size %d)", fileSize)
 	}
 
 	for i := range run1 {
-		if run1[i].order != run2[i].order {
-			t.Errorf("chunk %d: order mismatch: run1=%d run2=%d", i, run1[i].order, run2[i].order)
+		if run1[i].Order != run2[i].Order {
+			t.Errorf("chunk %d: Order mismatch: run1=%d run2=%d", i, run1[i].Order, run2[i].Order)
 		}
-		if run1[i].hash != run2[i].hash {
-			t.Errorf("chunk %d: hash mismatch: run1=%s run2=%s", i, run1[i].hash, run2[i].hash)
+		if run1[i].Hash != run2[i].Hash {
+			t.Errorf("chunk %d: Hash mismatch: run1=%s run2=%s", i, run1[i].Hash, run2[i].Hash)
 		}
-		if run1[i].size != run2[i].size {
-			t.Errorf("chunk %d: size mismatch: run1=%d run2=%d", i, run1[i].size, run2[i].size)
+		if run1[i].Size != run2[i].Size {
+			t.Errorf("chunk %d: Size mismatch: run1=%d run2=%d", i, run1[i].Size, run2[i].Size)
 		}
 	}
 }
 
 func TestSampleDatasetEndToEnd(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -8164,8 +7080,8 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	// -----------------------------
 	// Create dataset
@@ -8175,18 +7091,18 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 		t.Fatalf("mkdir input: %v", err)
 	}
 
-	paths := createSampleDataset(t, inputDir)
+	paths := testutils.CreateSampleDataset(t, inputDir)
 
 	// Precompute hashes
 	expectedHashes := make(map[string]string)
 	for name, p := range paths {
-		expectedHashes[name] = sha256File(t, p)
+		expectedHashes[name] = testutils.SHA256File(t, p)
 	}
 
 	// -----------------------------
 	// Store folder
 	// -----------------------------
-	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
+	if err := storage.StoreFolderWithStorageContext(testutils.NewTestContext(dbconn), inputDir); err != nil {
 		t.Fatalf("store folder: %v", err)
 	}
 
@@ -8223,9 +7139,9 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 
 	for rows.Next() {
 		var id int64
-		var name, hash string
+		var name, Hash string
 
-		if err := rows.Scan(&id, &name, &hash); err != nil {
+		if err := rows.Scan(&id, &name, &Hash); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
 
@@ -8235,10 +7151,10 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 			t.Fatalf("restore %s: %v", name, err)
 		}
 
-		gotHash := sha256File(t, outPath)
+		gotHash := testutils.SHA256File(t, outPath)
 
-		if gotHash != hash {
-			t.Fatalf("hash mismatch for %s: want %s got %s", name, hash, gotHash)
+		if gotHash != Hash {
+			t.Fatalf("Hash mismatch for %s: want %s got %s", name, Hash, gotHash)
 		}
 
 		// Extra: compare with original file
@@ -8253,173 +7169,28 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 }
 
 func TestSamplesFolderEndToEnd(t *testing.T) {
-	runFixtureFolderEndToEnd(t, "samples")
+	testutils.RunFixtureFolderEndToEnd(t, "samples")
 }
 
 func TestSamplesEdgeCasesFolderEndToEnd(t *testing.T) {
-	runFixtureFolderEndToEnd(t, "samples_edge_cases")
+	testutils.RunFixtureFolderEndToEnd(t, "samples_edge_cases")
 }
 
-// runFixtureFolderRestoreAll stores every file in the given fixture directory
-// tree, then restores each logical file by name and compares it byte-for-byte
-// against the original file found in the source tree.
-//
-// This is stricter than runFixtureFolderEndToEnd in two ways:
-//  1. It maps each restored logical file back to a representative fixture file
-//     by SHA-256 and diffs the raw bytes, avoiding basename collisions while
-//     still catching systematic encode/decode bugs.
-//  2. It counts every unique content hash in the fixture and verifies that the
-//     completed logical_file row count matches that deduplicated total.
-func runFixtureFolderRestoreAll(t *testing.T, fixtureDir string) {
-	t.Helper()
-	requireDB(t)
-
-	tmp := t.TempDir()
-	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
-
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connectDB: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
-
-	fixturePath := findRepoFixtureDir(t, fixtureDir)
-	inputDir := filepath.Join(tmp, "input")
-	copyDirTree(t, fixturePath, inputDir)
-
-	expectedHashCounts := collectFileHashesByCount(t, inputDir)
-	expectedUniqueCount := len(expectedHashCounts)
-	hashToPath := make(map[string]string, expectedUniqueCount)
-	if walkErr := filepath.WalkDir(inputDir, func(path string, d os.DirEntry, e error) error {
-		if e != nil || d.IsDir() {
-			return e
-		}
-		hash := sha256File(t, path)
-		if _, exists := hashToPath[hash]; !exists {
-			hashToPath[hash] = path
-		}
-		return nil
-	}); walkErr != nil {
-		t.Fatalf("walk input dir: %v", walkErr)
-	}
-
-	if err := storage.StoreFolderWithStorageContext(newTestContext(dbconn), inputDir); err != nil {
-		t.Fatalf("store folder %s: %v", fixtureDir, err)
-	}
-
-	outDir := filepath.Join(tmp, "out")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir out: %v", err)
-	}
-
-	rows, err := dbconn.Query(`
-		SELECT id, original_name, file_hash
-		FROM logical_file
-		WHERE status = $1
-		ORDER BY id ASC
-	`, filestate.LogicalFileCompleted)
-	if err != nil {
-		t.Fatalf("query logical_file: %v", err)
-	}
-	defer rows.Close()
-
-	restoredCount := 0
-	seenHashes := make(map[string]bool, expectedUniqueCount)
-	for rows.Next() {
-		var id int64
-		var origName, storedHash string
-		if err := rows.Scan(&id, &origName, &storedHash); err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-
-		outPath := filepath.Join(outDir, fmt.Sprintf("%d_%s", id, origName))
-		if err := storage.RestoreFileWithDB(dbconn, id, outPath); err != nil {
-			t.Errorf("restore id=%d name=%s: %v", id, origName, err)
-			continue
-		}
-
-		// Verify restored hash matches what the DB recorded.
-		gotHash := sha256File(t, outPath)
-		if gotHash != storedHash {
-			t.Errorf("restored hash mismatch for id=%d name=%s: db_hash=%s restored_hash=%s",
-				id, origName, storedHash, gotHash)
-		}
-
-		if _, found := expectedHashCounts[storedHash]; !found {
-			t.Errorf("unexpected stored hash for id=%d name=%s: %s", id, origName, storedHash)
-			continue
-		}
-		if seenHashes[storedHash] {
-			t.Errorf("duplicate logical_file row for hash %s (id=%d name=%s)", storedHash, id, origName)
-			continue
-		}
-
-		// Verify restored bytes match a representative source file for this hash.
-		srcPath, found := hashToPath[storedHash]
-		if !found {
-			t.Errorf("original source not found for hash=%s id=%d name=%s", storedHash, id, origName)
-			continue
-		}
-		orig, readErr := os.ReadFile(srcPath)
-		if readErr != nil {
-			t.Fatalf("read original %s: %v", srcPath, readErr)
-		}
-		restored, readErr := os.ReadFile(outPath)
-		if readErr != nil {
-			t.Fatalf("read restored %s: %v", outPath, readErr)
-		}
-		if !bytes.Equal(orig, restored) {
-			t.Errorf("byte mismatch for id=%d name=%s: original %d bytes, restored %d bytes",
-				id, origName, len(orig), len(restored))
-		}
-
-		seenHashes[storedHash] = true
-		restoredCount++
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("rows: %v", err)
-	}
-
-	if restoredCount == 0 {
-		t.Fatalf("no files were restored for fixture %s", fixtureDir)
-	}
-	if restoredCount != expectedUniqueCount {
-		t.Fatalf("restored logical file count mismatch for fixture %s: got=%d want=%d", fixtureDir, restoredCount, expectedUniqueCount)
-	}
-}
-
-// TestSamplesFolderRestoreAll stores the samples/ fixture and restores every
-// logical file, verifying byte-perfect fidelity against the original source
-// file. Complements TestSamplesFolderEndToEnd (hash-set check) by comparing
-// each restored file directly against its original on disk.
 func TestSamplesFolderRestoreAll(t *testing.T) {
-	runFixtureFolderRestoreAll(t, "samples")
+	testutils.RunFixtureFolderRestoreAll(t, "samples")
 }
 
-// TestSamplesEdgeCasesFolderRestoreAll applies the same full restore-all check
-// to samples_edge_cases/, including the multi-chunk binaries, the deeply-nested
-// leaf file, all 50 small files, and the repeating-pattern file.
 func TestSamplesEdgeCasesFolderRestoreAll(t *testing.T) {
-	runFixtureFolderRestoreAll(t, "samples_edge_cases")
+	testutils.RunFixtureFolderRestoreAll(t, "samples_edge_cases")
 }
 
-// TestRollbackAfterAppendContamination simulates an unresolved append outcome:
-// payload append to the active container succeeds and is fsynced, but the
-// transaction never reaches the commit acknowledgment path because block insert
-// or DB commit fails. After restart, recovery should quarantine or truncate the
-// contaminated active container to prevent future stores from reusing it.
 func TestRollbackAfterAppendContamination(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -8427,8 +7198,8 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -8484,7 +7255,7 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 
 	// Insert a simulated appended payload to the container file
 	ghostBytes := []byte("contaminated-append-after-failed-commit")
-	existingContent := mustRead(t, contaminatedPath)
+	existingContent := testutils.MustRead(t, contaminatedPath)
 	contaminatedContent := append(existingContent, ghostBytes...)
 	if err := os.WriteFile(contaminatedPath, contaminatedContent, 0o644); err != nil {
 		t.Fatalf("write contaminated container: %v", err)
@@ -8561,7 +7332,7 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 		JOIN file_chunk fc ON fc.chunk_id = c.id
 		JOIN logical_file lf ON lf.id = fc.logical_file_id
 		WHERE lf.file_hash = $1
-	`, sha256File(t, inPath2)).Scan(&newlyUsedContainerID)
+	`, testutils.SHA256File(t, inPath2)).Scan(&newlyUsedContainerID)
 	if err != nil && err != sql.ErrNoRows {
 		t.Fatalf("query container used for post-recovery store: %v", err)
 	}
@@ -8575,16 +7346,16 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 		t.Fatalf("verify after rollback recovery: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
 func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -8592,15 +7363,15 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Seed one successful store so we have a committed active container row that
 	// can be explicitly quarantined on rollback path cleanup failure.
-	seedPath := createTempFile(t, inputDir, "seed.bin", 128*1024)
+	seedPath := testutils.CreateTempFile(t, inputDir, "seed.bin", 128*1024)
 	seedCtx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
@@ -8661,8 +7432,8 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_file_chunk_insert()`)
 	}()
 
-	failPath := createTempFile(t, inputDir, "rollback_fail_surface.bin", 320*1024)
-	wrappedWriter := newRollbackFailingWriter(
+	failPath := testutils.CreateTempFile(t, inputDir, "rollback_fail_surface.bin", 320*1024)
+	wrappedWriter := testutils.NewRollbackFailingWriter(
 		container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
 	)
 	failCtx := storage.StorageContext{
@@ -8672,17 +7443,17 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 	}
 
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(failCtx, failPath, blocks.CodecPlain)
-	assertErrorContains(t, err, "injected file_chunk insert failure", "store rollback cleanup failure injection")
-	assertErrorContains(t, err, "rollback failed", "store rollback cleanup failure injection")
+	testutils.AssertErrorContains(t, err, "injected file_chunk insert failure", "store rollback cleanup failure injection")
+	testutils.AssertErrorContains(t, err, "rollback failed", "store rollback cleanup failure injection")
 
-	if !wrappedWriter.appendSucceeded {
+	if !wrappedWriter.AppendSucceeded {
 		t.Fatalf("expected append to succeed before injected failure")
 	}
-	if wrappedWriter.quarantineCalls == 0 {
+	if wrappedWriter.QuarantineCalls == 0 {
 		t.Fatalf("expected rollback cleanup failure path to trigger quarantine of active container")
 	}
 
-	quarantinedID := wrappedWriter.lastPlacement.ContainerID
+	quarantinedID := wrappedWriter.LastPlacement.ContainerID
 	if quarantinedID <= 0 {
 		t.Fatalf("expected valid quarantined container id, got %d", quarantinedID)
 	}
@@ -8704,7 +7475,7 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 		t.Fatalf("stat active container after injected failure: %v", err)
 	}
 	if afterStat.Size() <= beforeStat.Size() {
-		t.Fatalf("expected physical append to persist before rollback failure (size %d -> %d)", beforeStat.Size(), afterStat.Size())
+		t.Fatalf("expected physical append to persist before rollback failure (Size %d -> %d)", beforeStat.Size(), afterStat.Size())
 	}
 	if afterStat.Size() <= dbSizeAfter || dbSizeAfter != dbSizeBefore {
 		t.Fatalf("expected quarantined container to show physical/db mismatch after failed rollback (physical=%d db_before=%d db_after=%d)", afterStat.Size(), dbSizeBefore, dbSizeAfter)
@@ -8712,12 +7483,12 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 }
 
 func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -8725,13 +7496,13 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "sealing-marker-failure.bin", 3*1024*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "sealing-marker-failure.bin", 3*1024*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
 	originalMaxSize := container.GetContainerMaxSize()
 	container.SetContainerMaxSize(3 * 1024 * 1024)
@@ -8774,7 +7545,7 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	}
 
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
-	assertErrorContains(t, err, "injected container sealing marker update failure", "store sealing marker failure injection")
+	testutils.AssertErrorContains(t, err, "injected container sealing marker update failure", "store sealing marker failure injection")
 
 	var fileID int64
 	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1`, fileHash).Scan(&fileID); err != nil {
@@ -8797,7 +7568,7 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 		t.Fatalf("expected no lingering sealing=TRUE rows after rollback, got %d", sealingRows)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 
 	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_container_mark_sealing_trg ON container`); err != nil {
 		t.Fatalf("drop container trigger: %v", err)
@@ -8827,8 +7598,8 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	if err := storage.RestoreFileWithDB(dbconn, completedFileID, outPath); err != nil {
 		t.Fatalf("restore after successful retry: %v", err)
 	}
-	if gotHash := sha256File(t, outPath); gotHash != fileHash {
-		t.Fatalf("restored hash mismatch after successful retry: want %s got %s", fileHash, gotHash)
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != fileHash {
+		t.Fatalf("restored Hash mismatch after successful retry: want %s got %s", fileHash, gotHash)
 	}
 
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
@@ -8836,17 +7607,13 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	}
 }
 
-// TestSealFailureAfterPhysicalFinalize simulates a scenario where a container is
-// physically finalized (rotation completed, file truncated to final size) but the
-// DB seal update fails (marked.sealing=TRUE but sealed=FALSE). The next store
-// attempt must not reopen this container as active.
 func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -8854,8 +7621,8 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers: %v", err)
@@ -8876,19 +7643,19 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 	}
 
 	// Insert into DB with sealing=TRUE, sealed=FALSE to simulate failed seal update
-	var containerID int64
+	var ContainerID int64
 	err = dbconn.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 		VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
 		RETURNING id
-	`, filename, finalSize, container.GetContainerMaxSize()).Scan(&containerID)
+	`, filename, finalSize, container.GetContainerMaxSize()).Scan(&ContainerID)
 	if err != nil {
 		t.Fatalf("insert sealing container: %v", err)
 	}
 
 	// Verify the container is marked sealing but not sealed
 	var isSealing, isSealed bool
-	err = dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, containerID).Scan(&isSealed, &isSealing)
+	err = dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing)
 	if err != nil {
 		t.Fatalf("query container sealing state: %v", err)
 	}
@@ -8929,7 +7696,7 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 		t.Fatalf("query used container: %v", err)
 	}
 
-	if usedContainerID == containerID {
+	if usedContainerID == ContainerID {
 		t.Fatalf("new store reopened the sealing/unsealed container instead of creating/using a different one")
 	}
 
@@ -8940,7 +7707,7 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 	}
 
 	// After recovery, the sealing container should be either sealed or quarantined
-	err = dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, containerID).Scan(&isSealed, &isSealing)
+	err = dbconn.QueryRow(`SELECT sealed, sealing FROM container WHERE id = $1`, ContainerID).Scan(&isSealed, &isSealing)
 	if err != nil {
 		t.Fatalf("query container state after recovery: %v", err)
 	}
@@ -8954,18 +7721,16 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 		t.Fatalf("verify after seal failure: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestRemoveRejectsProcessingLogicalFile verifies that the remove operation explicitly
-// rejects files in PROCESSING state and provides a clear error message.
 func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -8973,8 +7738,8 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	// Insert a logical file in PROCESSING state
 	processingHash := "test-processing-file-for-remove-check"
@@ -8992,7 +7757,7 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 
 	// Attempt to remove the PROCESSING file
 	err = storage.RemoveFileWithDB(dbconn, processingFileID)
-	assertErrorContains(t, err, "is still PROCESSING and cannot be removed", "remove PROCESSING logical file")
+	testutils.AssertErrorContains(t, err, "is still PROCESSING and cannot be removed", "remove PROCESSING logical file")
 
 	// Verify file state unchanged
 	var status string
@@ -9015,16 +7780,13 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 	}
 }
 
-// TestReuseRefusesStructurallyBrokenCompletedFile verifies that the store operation
-// detects and refuses to reuse a completed file with a structurally broken file_chunk
-// graph (non-contiguous orders, missing chunks, etc.).
 func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9032,15 +7794,15 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// Store a file normally to get a valid state
-	testFile := createTempFile(t, inputDir, "broken-graph-test.bin", 4*1024*1024)
-	fileHash := sha256File(t, testFile)
+	testFile := testutils.CreateTempFile(t, inputDir, "broken-graph-test.bin", 4*1024*1024)
+	fileHash := testutils.SHA256File(t, testFile)
 
 	sgctx := storage.StorageContext{
 		DB:     dbconn,
@@ -9050,7 +7812,7 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 		t.Fatalf("initial store: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	// Now corrupt the file_chunk graph by deleting a chunk in the middle
 	// and leaving a gap in chunk_order values
@@ -9081,16 +7843,16 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 		DELETE FROM file_chunk WHERE logical_file_id = $1 AND chunk_id = $2
 	`, fileID, allChunkIDs[middleIdx])
 	if err != nil {
-		t.Fatalf("corrupt file_chunk order: %v", err)
+		t.Fatalf("corrupt file_chunk Order: %v", err)
 	}
 
 	// Try to store the same file again - should detect the broken graph and not reuse
 	inputDir2 := filepath.Join(tmp, "input2")
 	_ = os.MkdirAll(inputDir2, 0o755)
 
-	testFile2 := createTempFile(t, inputDir2, "broken-graph-test-again.bin", 256*1024)
-	// Write exact same content to get same hash
-	originalContent := mustRead(t, testFile)
+	testFile2 := testutils.CreateTempFile(t, inputDir2, "broken-graph-test-again.bin", 256*1024)
+	// Write exact same content to get same Hash
+	originalContent := testutils.MustRead(t, testFile)
 	if err := os.WriteFile(testFile2, originalContent, 0o644); err != nil {
 		t.Fatalf("write duplicate test file: %v", err)
 	}
@@ -9117,11 +7879,8 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 	}
 }
 
-// TestReuseRefusesStructurallyBrokenCompletedChunk verifies that the store operation
-// detects and refuses to reuse a completed chunk that is missing block metadata,
-// references a quarantined container, or has a missing container file.
 func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	testModes := []string{"suspicious", "always"}
 	for _, mode := range testModes {
@@ -9131,7 +7890,7 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			tmp := t.TempDir()
 			container.ContainersDir = filepath.Join(tmp, "containers")
 			_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-			resetStorage(t)
+			testutils.ResetStorage(t)
 
 			dbconn, err := db.ConnectDB()
 			if err != nil {
@@ -9139,32 +7898,32 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 			}
 			defer dbconn.Close()
 
-			applySchema(t, dbconn)
-			resetDB(t, dbconn)
+			testutils.ApplySchema(t, dbconn)
+			testutils.ResetDB(t, dbconn)
 
 			inputDir := filepath.Join(tmp, "input")
 			_ = os.MkdirAll(inputDir, 0o755)
-			inPath := createTempFile(t, inputDir, "semantic-reuse-corruption.bin", 1024*1024)
-			fileHash := sha256File(t, inPath)
+			inPath := testutils.CreateTempFile(t, inputDir, "semantic-reuse-corruption.bin", 1024*1024)
+			fileHash := testutils.SHA256File(t, inPath)
 
-			initialCtx := newTestContext(dbconn)
+			initialCtx := testutils.NewTestContext(dbconn)
 			if err := storage.StoreFileWithStorageContext(initialCtx, inPath); err != nil {
 				t.Fatalf("initial store: %v", err)
 			}
 
-			fileID := fetchFileIDByHash(t, dbconn, fileHash)
-			record := fetchFirstFileChunkRecord(t, dbconn, fileID)
-			if record.storedSize <= 0 {
-				t.Fatalf("expected first stored block size > 0, got %d", record.storedSize)
+			fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
+			record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
+			if record.StoredSize <= 0 {
+				t.Fatalf("expected first stored block Size > 0, got %d", record.StoredSize)
 			}
 
-			containerPath := containerPathForRecord(record)
+			containerPath := testutils.ContainerPathForRecord(record)
 			f, err := os.OpenFile(containerPath, os.O_RDWR, 0o644)
 			if err != nil {
 				t.Fatalf("open container for corruption: %v", err)
 			}
-			corruptionOffset := record.blockOffset
-			if record.storedSize > 1 {
+			corruptionOffset := record.BlockOffset
+			if record.StoredSize > 1 {
 				corruptionOffset++
 			}
 			if _, err := f.WriteAt([]byte{0xEE}, corruptionOffset); err != nil {
@@ -9175,7 +7934,7 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 				t.Fatalf("close corrupted container: %v", err)
 			}
 
-			restoreCtx := newTestContext(dbconn)
+			restoreCtx := testutils.NewTestContext(dbconn)
 			result, err := storage.StoreFileWithStorageContextResult(restoreCtx, inPath)
 			if err != nil {
 				t.Fatalf("store after semantic corruption (mode=%s): %v", mode, err)
@@ -9203,12 +7962,12 @@ func TestReuseRefusesSemanticallyCorruptedCompletedFile(t *testing.T) {
 }
 
 func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9216,8 +7975,8 @@ func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -9242,33 +8001,33 @@ func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 	}
 
 	// Get the first chunk and its container
-	var chunkID, containerID int64
-	var containerFilename string
+	var ChunkID, ContainerID int64
+	var ContainerFilename string
 	err = dbconn.QueryRow(`
 		SELECT DISTINCT c.id, b.container_id, ctr.filename
 		FROM chunk c
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container ctr ON ctr.id = b.container_id
 		LIMIT 1
-	`).Scan(&chunkID, &containerID, &containerFilename)
+	`).Scan(&ChunkID, &ContainerID, &ContainerFilename)
 	if err != nil {
 		t.Fatalf("query chunk and container: %v", err)
 	}
 
 	// Test scenario: Quarantine the container
-	_, err = dbconn.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, containerID)
+	_, err = dbconn.Exec(`UPDATE container SET quarantine = TRUE WHERE id = $1`, ContainerID)
 	if err != nil {
 		t.Fatalf("quarantine container: %v", err)
 	}
 
 	// Try to reuse that chunk by creating a new file that would use it
-	// We simulate this by trying to store a file with content that should hash to
+	// We simulate this by trying to store a file with content that should Hash to
 	// the same chunks. For now, we verify that the chunk reuse validation catches it.
 
 	// Mark the chunk as ABORTED to simulate failure
 	_, err = dbconn.Exec(`
 		UPDATE chunk SET status = $1 WHERE id = $2
-	`, filestate.ChunkAborted, chunkID)
+	`, filestate.ChunkAborted, ChunkID)
 	if err != nil {
 		t.Fatalf("mark chunk aborted: %v", err)
 	}
@@ -9302,7 +8061,7 @@ func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 		SELECT DISTINCT ctr.id, ctr.filename FROM container ctr
 		JOIN blocks b ON b.container_id = ctr.id
 		WHERE ctr.id != $1 LIMIT 1
-	`, containerID).Scan(&delContainerID, &delFilename)
+	`, ContainerID).Scan(&delContainerID, &delFilename)
 	if err != nil && err != sql.ErrNoRows {
 		delPath := filepath.Join(container.ContainersDir, delFilename)
 		if err := os.Remove(delPath); err == nil || !strings.Contains(err.Error(), "no such file") {
@@ -9317,16 +8076,13 @@ func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 	}
 }
 
-// TestConcurrentRemoveAndRestore verifies that remove and restore operations racing
-// on the same file do not cause partial/corrupted data or state corruption. Either
-// restore completes with full correct content, or remove succeeds and prevents restore.
 func TestConcurrentRemoveAndRestore(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9334,8 +8090,8 @@ func TestConcurrentRemoveAndRestore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -9358,7 +8114,7 @@ func TestConcurrentRemoveAndRestore(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 
-	fileID := fetchFileIDByHash(t, dbconn, sha256File(t, testFile))
+	fileID := testutils.FetchFileIDByHash(t, dbconn, testutils.SHA256File(t, testFile))
 
 	// Race remove and restore
 	outDir := filepath.Join(tmp, "out")
@@ -9395,9 +8151,9 @@ func TestConcurrentRemoveAndRestore(t *testing.T) {
 	// If restore succeeded, verify output file integrity
 	if !outcomeRestoreFailed {
 		if info, err := os.Stat(outPath); err != nil || info.Size() != int64(len(testContent)) {
-			t.Fatalf("restore output size mismatch or missing: size=%v err=%v", info.Size(), err)
+			t.Fatalf("restore output Size mismatch or missing: Size=%v err=%v", info.Size(), err)
 		}
-		got := mustRead(t, outPath)
+		got := testutils.MustRead(t, outPath)
 		if !bytes.Equal(got, testContent) {
 			t.Fatalf("restored content differs from original")
 		}
@@ -9416,7 +8172,7 @@ func TestConcurrentRemoveAndRestore(t *testing.T) {
 	}
 
 	// Verify system integrity - no orphaned PROCESSING rows
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 
 	// Verify no partial/corrupted state
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
@@ -9424,17 +8180,14 @@ func TestConcurrentRemoveAndRestore(t *testing.T) {
 	}
 }
 
-// TestGCDuringActiveStore verifies that GC does not delete containers or chunks
-// while store is actively appending to them. GC must respect live_ref_count and
-// sealing markers to prevent data loss.
 func TestGCDuringActiveStore(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9442,8 +8195,8 @@ func TestGCDuringActiveStore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -9508,8 +8261,8 @@ func TestGCDuringActiveStore(t *testing.T) {
 	}
 
 	// Verify the stored file is still retrievable and passes verification
-	fileHash := sha256File(t, testFile)
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileHash := testutils.SHA256File(t, testFile)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -9519,7 +8272,7 @@ func TestGCDuringActiveStore(t *testing.T) {
 		t.Fatalf("restore after concurrent GC: %v", err)
 	}
 
-	got := mustRead(t, outPath)
+	got := testutils.MustRead(t, outPath)
 	if !bytes.Equal(got, testContent) {
 		t.Fatalf("restored content differs after concurrent GC")
 	}
@@ -9529,17 +8282,17 @@ func TestGCDuringActiveStore(t *testing.T) {
 		t.Fatalf("verify after concurrent store+gc: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
 func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9547,8 +8300,8 @@ func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -9572,8 +8325,8 @@ func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
 		t.Fatalf("store large file: %v", err)
 	}
 
-	fileHash := sha256File(t, inPath)
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileHash := testutils.SHA256File(t, inPath)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -9586,18 +8339,16 @@ func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
 		t.Fatalf("deep verify large dataset: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestContainerOverflowProtection verifies that the store operation rotates
-// containers before they overflow, preventing corruption and unrecoverable states.
 func TestContainerOverflowProtection(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9605,19 +8356,19 @@ func TestContainerOverflowProtection(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	// Reduce container max size to force frequent rotation
+	// Reduce container max Size to force frequent rotation
 	originalMaxSize := container.GetContainerMaxSize()
-	// Set above the largest single payload size so the writer can still rotate safely.
+	// Set above the largest single payload Size so the writer can still rotate safely.
 	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	// Create a file larger than max container size (will require rotation).
+	// Create a file larger than max container Size (will require rotation).
 	fileSize := 9 * 1024 * 1024 // 9MiB, requires multiple containers at 3MiB max
 	testContent := make([]byte, fileSize)
 	for i := range testContent {
@@ -9638,7 +8389,7 @@ func TestContainerOverflowProtection(t *testing.T) {
 		t.Fatalf("store large file: %v", err)
 	}
 
-	// Verify no container exceeded max size
+	// Verify no container exceeded max Size
 	var containers []struct {
 		id          int64
 		filename    string
@@ -9664,12 +8415,12 @@ func TestContainerOverflowProtection(t *testing.T) {
 		}
 		containers = append(containers, c)
 
-		// Check DB size doesn't exceed max
+		// Check DB Size doesn't exceed max
 		if c.currentSize > c.maxSize {
-			t.Fatalf("container %d exceeded max size: current=%d max=%d", c.id, c.currentSize, c.maxSize)
+			t.Fatalf("container %d exceeded max Size: current=%d max=%d", c.id, c.currentSize, c.maxSize)
 		}
 
-		// Check physical file size doesn't exceed DB claimed size significantly
+		// Check physical file Size doesn't exceed DB claimed Size significantly
 		// (may be slightly larger due to header, but not much)
 		containerPath := filepath.Join(container.ContainersDir, c.filename)
 		stat, err := os.Stat(containerPath)
@@ -9679,7 +8430,7 @@ func TestContainerOverflowProtection(t *testing.T) {
 
 		// Allow for small header but not overflow
 		if stat.Size() > c.currentSize+int64(container.ContainerHdrLen)*2 {
-			t.Fatalf("container %d file size exceeds DB current_size: file=%d db=%d", c.id, stat.Size(), c.currentSize)
+			t.Fatalf("container %d file Size exceeds DB current_size: file=%d db=%d", c.id, stat.Size(), c.currentSize)
 		}
 	}
 
@@ -9697,8 +8448,8 @@ func TestContainerOverflowProtection(t *testing.T) {
 	}
 
 	// Verify file restores correctly
-	fileHash := sha256File(t, testFile)
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileHash := testutils.SHA256File(t, testFile)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -9708,7 +8459,7 @@ func TestContainerOverflowProtection(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 
-	got := mustRead(t, outPath)
+	got := testutils.MustRead(t, outPath)
 	if !bytes.Equal(got, testContent) {
 		t.Fatalf("restored content differs from original")
 	}
@@ -9718,19 +8469,16 @@ func TestContainerOverflowProtection(t *testing.T) {
 		t.Fatalf("verify after overflow protection test: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestBlockOffsetContinuityValidation verifies that the system detects and
-// prevents non-contiguous or overlapping block offsets within containers,
-// which could cause silent data loss or corruption during restore.
 func TestBlockOffsetContinuityValidation(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9738,8 +8486,8 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -9764,12 +8512,12 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 
 	// Now corrupt block offsets in a container to create a gap
 	// Find first container and its blocks
-	var containerID int64
+	var ContainerID int64
 	var blocks []struct {
 		id      int64
 		offset  int64
-		size    int64
-		chunkID int64
+		Size    int64
+		ChunkID int64
 	}
 
 	rows, err := dbconn.Query(`
@@ -9787,16 +8535,16 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 		var b struct {
 			id      int64
 			offset  int64
-			size    int64
-			chunkID int64
+			Size    int64
+			ChunkID int64
 		}
-		if err := rows.Scan(&b.id, &b.offset, &b.size, &b.chunkID); err != nil {
+		if err := rows.Scan(&b.id, &b.offset, &b.Size, &b.ChunkID); err != nil {
 			t.Fatalf("scan block: %v", err)
 		}
 		blocks = append(blocks, b)
-		if containerID == 0 {
+		if ContainerID == 0 {
 			// Get container from first block
-			if err := dbconn.QueryRow(`SELECT container_id FROM blocks WHERE id = $1`, b.id).Scan(&containerID); err != nil {
+			if err := dbconn.QueryRow(`SELECT container_id FROM blocks WHERE id = $1`, b.id).Scan(&ContainerID); err != nil {
 				t.Fatalf("get container from block: %v", err)
 			}
 		}
@@ -9811,7 +8559,7 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 		// Corrupt second block to create gap: shift its offset forward by 1000 bytes
 		// This creates a hole: [0-B1_size] HOLE [B1_size+1000...]
 		if len(blocks) >= 2 {
-			newOffset := blocks[0].offset + blocks[0].size + 1000 // Create 1000-byte gap
+			newOffset := blocks[0].offset + blocks[0].Size + 1000 // Create 1000-byte gap
 			_, err := dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE id = $2`, newOffset, blocks[1].id)
 			if err != nil {
 				t.Fatalf("corrupt block offset: %v", err)
@@ -9860,8 +8608,8 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 		}
 
 		// Also verify restore still works
-		fileHash := sha256File(t, testFile)
-		fileID := fetchFileIDByHash(t, dbconn, fileHash)
+		fileHash := testutils.SHA256File(t, testFile)
+		fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 		outDir := filepath.Join(tmp, "out")
 		_ = os.MkdirAll(outDir, 0o755)
@@ -9871,24 +8619,20 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 			t.Fatalf("restore after offset tests: %v", err)
 		}
 
-		got := mustRead(t, outPath)
+		got := testutils.MustRead(t, outPath)
 		if !bytes.Equal(got, testContent) {
 			t.Fatalf("restored content differs")
 		}
 	})
 }
 
-// TestRemoveWithSharedChunksRefCount verifies that removing a file with shared
-// chunks correctly decrements live_ref_count without affecting other files still
-// referencing those chunks. This tests the atomicity and correctness of dedup
-// ref counting under file removal.
 func TestRemoveWithSharedChunksRefCount(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -9896,8 +8640,8 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -9930,8 +8674,8 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		t.Fatalf("write fileB: %v", err)
 	}
 
-	hashA := sha256File(t, fileAPath)
-	hashB := sha256File(t, fileBPath)
+	hashA := testutils.SHA256File(t, fileAPath)
+	hashB := testutils.SHA256File(t, fileBPath)
 
 	// Store both files
 	sgctx := storage.StorageContext{
@@ -9945,8 +8689,8 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		t.Fatalf("store fileB: %v", err)
 	}
 
-	fileAID := fetchFileIDByHash(t, dbconn, hashA)
-	fileBID := fetchFileIDByHash(t, dbconn, hashB)
+	fileAID := testutils.FetchFileIDByHash(t, dbconn, hashA)
+	fileBID := testutils.FetchFileIDByHash(t, dbconn, hashB)
 
 	// Count shared chunks before removal
 	var sharedChunkCount int
@@ -10028,7 +8772,7 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		t.Fatalf("restore fileB after fileA removed: %v", err)
 	}
 
-	got := mustRead(t, outPath)
+	got := testutils.MustRead(t, outPath)
 	if !bytes.Equal(got, fileBContent) {
 		t.Fatalf("fileB content differs after fileA removal")
 	}
@@ -10038,20 +8782,17 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 		t.Fatalf("verify after file removal: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestMultiFileOpenConcurrentRestore verifies that multiple threads can safely
-// restore different files concurrently without cross-contamination, especially
-// when files share chunks. Tests verify-time safety of concurrent block reads.
 func TestMultiFileOpenConcurrentRestore(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10059,8 +8800,8 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -10069,7 +8810,7 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 	type testFile struct {
 		path    string
 		content []byte
-		hash    string
+		Hash    string
 		id      int64
 	}
 	var files []testFile
@@ -10080,7 +8821,7 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		// Each file: base pattern + unique footer
+		// Each file: Base pattern + unique footer
 		footer := make([]byte, 64*1024)
 		for j := range footer {
 			footer[j] = byte((j*37 + i) % 251)
@@ -10092,11 +8833,11 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 			t.Fatalf("write file %d: %v", i, err)
 		}
 
-		hash := sha256File(t, path)
+		Hash := testutils.SHA256File(t, path)
 		files = append(files, testFile{
 			path:    path,
 			content: content,
-			hash:    hash,
+			Hash:    Hash,
 		})
 	}
 
@@ -10109,7 +8850,7 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 		if err := storage.StoreFileWithStorageContext(sgctx, files[i].path); err != nil {
 			t.Fatalf("store file %d: %v", i, err)
 		}
-		files[i].id = fetchFileIDByHash(t, dbconn, files[i].hash)
+		files[i].id = testutils.FetchFileIDByHash(t, dbconn, files[i].Hash)
 	}
 
 	// Concurrently restore all files
@@ -10135,7 +8876,7 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 	// Verify all restored files match originals (no cross-contamination)
 	for i := range files {
 		outPath := filepath.Join(outDir, fmt.Sprintf("restored-%d.bin", i))
-		got := mustRead(t, outPath)
+		got := testutils.MustRead(t, outPath)
 		if !bytes.Equal(got, files[i].content) {
 			t.Fatalf("restored file %d content differs from original", i)
 		}
@@ -10146,20 +8887,16 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 		t.Fatalf("verify after concurrent restores: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestRestoreFailurePreservesExistingOutput verifies that if a restore fails due to container corruption,
-// the system can recover: after repairing the container, a subsequent restore attempt succeeds and the
-// restored content matches the original. This is a corruption/recoverability test, not an atomicity or
-// destination-preservation test.
 func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10167,8 +8904,8 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -10191,8 +8928,8 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 
-	fileHash := sha256File(t, testFile)
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileHash := testutils.SHA256File(t, testFile)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	// Find a container file and corrupt it mid-range (not at edges to cause read failure)
 	var corruptContainerPath string
@@ -10216,7 +8953,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	}
 
 	// Corrupt the container by zeroing out a chunk in the middle.
-	originalContainerBytes := mustRead(t, corruptContainerPath)
+	originalContainerBytes := testutils.MustRead(t, corruptContainerPath)
 	corrupted := append([]byte{}, originalContainerBytes...)
 	if len(corrupted) > 1024 {
 		// Zero out 512 bytes starting at 512 bytes into the file
@@ -10250,7 +8987,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 		t.Fatalf("second restore attempt failed: %v", err)
 	}
 
-	got := mustRead(t, outPath2)
+	got := testutils.MustRead(t, outPath2)
 	if !bytes.Equal(got, testContent) {
 		t.Fatalf("restored content differs from original after recovery")
 	}
@@ -10262,19 +8999,16 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 		t.Fatalf("verify after restore failure recovery: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestImplicitContainerFinalizationDuringStore verifies that as containers fill
-// during a large store operation, they are properly sealed/finalized without
-// leaving any in an inconsistent sealing state or with ghost bytes.
 func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10282,10 +9016,10 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
-	// Reduce container max size, but keep it above the largest single payload.
+	// Reduce container max Size, but keep it above the largest single payload.
 	originalMaxSize := container.GetContainerMaxSize()
 	container.SetContainerMaxSize(3 * 1024 * 1024)
 	defer container.SetContainerMaxSize(originalMaxSize)
@@ -10379,8 +9113,8 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 	}
 
 	// Verify restore works correctly across all containers
-	fileHash := sha256File(t, testFile)
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileHash := testutils.SHA256File(t, testFile)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -10390,7 +9124,7 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 
-	got := mustRead(t, outPath)
+	got := testutils.MustRead(t, outPath)
 	if !bytes.Equal(got, testContent) {
 		t.Fatalf("restored content differs from original")
 	}
@@ -10400,18 +9134,16 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 		t.Fatalf("verify after finalization: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestGCDryRunAccuracyMatchesRealRun verifies that GC dry-run reports exactly
-// the same target containers that a subsequent real GC run deletes.
 func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10419,8 +9151,8 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	deadName := "dry-run-dead.bin"
 	liveName := "dry-run-live.bin"
@@ -10448,7 +9180,7 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 
 	var deadChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
 		"dry-run-dead-chunk",
@@ -10491,7 +9223,7 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 
 	var liveChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
 		"dry-run-live-chunk",
@@ -10558,15 +9290,13 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 	}
 }
 
-// TestSearchListConsistencyWithFilters verifies that list and search views stay
-// consistent for completed files, including name and size filters.
 func TestSearchListConsistencyWithFilters(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10574,32 +9304,32 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	type fileDef struct {
 		name string
-		size int
+		Size int
 	}
 	files := []fileDef{
-		{name: "alpha-one.txt", size: 48 * 1024},
-		{name: "alpha-two.bin", size: 80 * 1024},
-		{name: "beta-only.txt", size: 64 * 1024},
-		{name: "gamma-alpha.log", size: 120 * 1024},
+		{name: "alpha-one.txt", Size: 48 * 1024},
+		{name: "alpha-two.bin", Size: 80 * 1024},
+		{name: "beta-only.txt", Size: 64 * 1024},
+		{name: "gamma-alpha.log", Size: 120 * 1024},
 	}
 
 	stored := make(map[int64]fileDef)
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	for _, f := range files {
-		inPath := createTempFile(t, inputDir, f.name, f.size)
+		inPath := testutils.CreateTempFile(t, inputDir, f.name, f.Size)
 		if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 			t.Fatalf("store %s: %v", f.name, err)
 		}
-		h := sha256File(t, inPath)
-		id := fetchFileIDByHash(t, dbconn, h)
+		h := testutils.SHA256File(t, inPath)
+		id := testutils.FetchFileIDByHash(t, dbconn, h)
 		stored[id] = f
 	}
 
@@ -10632,30 +9362,28 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 		}
 	}
 
-	searchSized, err := listing.SearchFilesResultWithDB(dbconn, []string{"--min-size", "60000", "--max-size", "100000"})
+	searchSized, err := listing.SearchFilesResultWithDB(dbconn, []string{"--min-Size", "60000", "--max-Size", "100000"})
 	if err != nil {
-		t.Fatalf("search by size range: %v", err)
+		t.Fatalf("search by Size range: %v", err)
 	}
 	if len(searchSized) != 2 {
-		t.Fatalf("expected 2 files in size range, got %d", len(searchSized))
+		t.Fatalf("expected 2 files in Size range, got %d", len(searchSized))
 	}
 	for _, row := range searchSized {
 		if row.SizeBytes < 60000 || row.SizeBytes > 100000 {
-			t.Fatalf("search size filter violated for id=%d size=%d", row.ID, row.SizeBytes)
+			t.Fatalf("search Size filter violated for id=%d Size=%d", row.ID, row.SizeBytes)
 		}
 	}
 }
 
-// TestPinCountAtomicityConcurrentRestore verifies that concurrent restores do
-// not leave stuck or negative pin_count values after unpin cleanup.
 func TestPinCountAtomicityConcurrentRestore(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10663,21 +9391,21 @@ func TestPinCountAtomicityConcurrentRestore(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	inPath := createTempFile(t, inputDir, "pin-atomicity.bin", 4*1024*1024)
-	wantHash := sha256File(t, inPath)
-	wantBytes := mustRead(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "pin-atomicity.bin", 4*1024*1024)
+	wantHash := testutils.SHA256File(t, inPath)
+	wantBytes := testutils.MustRead(t, inPath)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
 		t.Fatalf("store file: %v", err)
 	}
-	fileID := fetchFileIDByHash(t, dbconn, wantHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -10695,7 +9423,7 @@ func TestPinCountAtomicityConcurrentRestore(t *testing.T) {
 				done <- fmt.Errorf("restore worker %d: %w", idx, err)
 				return
 			}
-			got := mustRead(t, outPath)
+			got := testutils.MustRead(t, outPath)
 			if !bytes.Equal(got, wantBytes) {
 				done <- fmt.Errorf("restore worker %d content mismatch", idx)
 				return
@@ -10727,20 +9455,17 @@ func TestPinCountAtomicityConcurrentRestore(t *testing.T) {
 		t.Fatalf("found %d chunks with non-zero pin_count after concurrent restore", stuckPins)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestEndToEndGCRestoreRemoveInterleaving runs restore, remove, and GC in
-// parallel against real stored files and verifies no corruption or invalid
-// reference state remains.
 func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10748,8 +9473,8 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -10780,7 +9505,7 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 		t.Fatalf("write victim file: %v", err)
 	}
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 	if err := storage.StoreFileWithStorageContext(sgctx, keepPath); err != nil {
 		t.Fatalf("store keep file: %v", err)
 	}
@@ -10788,8 +9513,8 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 		t.Fatalf("store victim file: %v", err)
 	}
 
-	keepID := fetchFileIDByHash(t, dbconn, sha256File(t, keepPath))
-	victimID := fetchFileIDByHash(t, dbconn, sha256File(t, victimPath))
+	keepID := testutils.FetchFileIDByHash(t, dbconn, testutils.SHA256File(t, keepPath))
+	victimID := testutils.FetchFileIDByHash(t, dbconn, testutils.SHA256File(t, victimPath))
 
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
@@ -10813,7 +9538,7 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 		}
 	}
 
-	got := mustRead(t, outPath)
+	got := testutils.MustRead(t, outPath)
 	if !bytes.Equal(got, keepBytes) {
 		t.Fatalf("restored keep file differs after interleaving")
 	}
@@ -10838,21 +9563,17 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 		t.Fatalf("verify after interleaving: %v", err)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestRepeatedJitteredStoreGCRestoreInterleaving extends the one-shot
-// interleaving coverage into multiple deterministic-random rounds where store,
-// restore, and GC start with different jitters. The system must converge with
-// correct restored bytes and no invalid metadata drift.
 func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -10860,8 +9581,8 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -10910,17 +9631,17 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 			t.Fatalf("round %d write newcomer file: %v", round, err)
 		}
 
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), keepPath); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), keepPath); err != nil {
 			t.Fatalf("round %d store keep file: %v", round, err)
 		}
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), victimPath); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), victimPath); err != nil {
 			t.Fatalf("round %d store victim file: %v", round, err)
 		}
 
-		keepHash := sha256File(t, keepPath)
-		newcomerHash := sha256File(t, newcomerPath)
-		keepID := fetchFileIDByHash(t, dbconn, keepHash)
-		victimID := fetchFileIDByHash(t, dbconn, sha256File(t, victimPath))
+		keepHash := testutils.SHA256File(t, keepPath)
+		newcomerHash := testutils.SHA256File(t, newcomerPath)
+		keepID := testutils.FetchFileIDByHash(t, dbconn, keepHash)
+		victimID := testutils.FetchFileIDByHash(t, dbconn, testutils.SHA256File(t, victimPath))
 
 		if err := storage.RemoveFileWithDB(dbconn, victimID); err != nil {
 			t.Fatalf("round %d remove victim file: %v", round, err)
@@ -10939,7 +9660,7 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 		}()
 		go func() {
 			time.Sleep(storeDelay)
-			results <- storage.StoreFileWithStorageContext(newTestContext(dbconn), newcomerPath)
+			results <- storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), newcomerPath)
 		}()
 		go func() {
 			time.Sleep(gcDelay)
@@ -10953,17 +9674,17 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 			}
 		}
 
-		if got := mustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
+		if got := testutils.MustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
 			t.Fatalf("round %d restored keep file differs after jittered interleaving", round)
 		}
 
-		newcomerID := fetchFileIDByHash(t, dbconn, newcomerHash)
+		newcomerID := testutils.FetchFileIDByHash(t, dbconn, newcomerHash)
 		newcomerOut := filepath.Join(outDir, fmt.Sprintf("jitter-newcomer-%02d.restored.bin", round))
 		if err := storage.RestoreFileWithDB(dbconn, newcomerID, newcomerOut); err != nil {
 			t.Fatalf("round %d restore newcomer after interleaving: %v", round, err)
 		}
-		if got := sha256File(t, newcomerOut); got != newcomerHash {
-			t.Fatalf("round %d newcomer hash mismatch after interleaving: want %s got %s", round, newcomerHash, got)
+		if got := testutils.SHA256File(t, newcomerOut); got != newcomerHash {
+			t.Fatalf("round %d newcomer Hash mismatch after interleaving: want %s got %s", round, newcomerHash, got)
 		}
 
 		var negativeRefs int
@@ -10996,23 +9717,19 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 			t.Fatalf("round %d cleanup gc: %v", round, err)
 		}
 
-		assertNoProcessingRows(t, dbconn)
-		assertUniqueFileChunkOrders(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
 	}
 }
 
-// TestRepeatedJitteredStoreGCRestoreRemoveInterleaving runs a four-way
-// interleaving across store, GC, restore, and remove with deterministic
-// randomized start offsets. The system must preserve restorable data, admit new
-// writes, fully remove the victim file, and converge without metadata drift.
 func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -11020,8 +9737,8 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
@@ -11070,18 +9787,18 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 			t.Fatalf("round %d write newcomer file: %v", round, err)
 		}
 
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), keepPath); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), keepPath); err != nil {
 			t.Fatalf("round %d store keep file: %v", round, err)
 		}
-		if err := storage.StoreFileWithStorageContext(newTestContext(dbconn), victimPath); err != nil {
+		if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), victimPath); err != nil {
 			t.Fatalf("round %d store victim file: %v", round, err)
 		}
 
-		keepHash := sha256File(t, keepPath)
-		victimHash := sha256File(t, victimPath)
-		newcomerHash := sha256File(t, newcomerPath)
-		keepID := fetchFileIDByHash(t, dbconn, keepHash)
-		victimID := fetchFileIDByHash(t, dbconn, victimHash)
+		keepHash := testutils.SHA256File(t, keepPath)
+		victimHash := testutils.SHA256File(t, victimPath)
+		newcomerHash := testutils.SHA256File(t, newcomerPath)
+		keepID := testutils.FetchFileIDByHash(t, dbconn, keepHash)
+		victimID := testutils.FetchFileIDByHash(t, dbconn, victimHash)
 
 		restoreDelay := time.Duration(rng.Intn(10)) * time.Millisecond
 		storeDelay := time.Duration(rng.Intn(10)) * time.Millisecond
@@ -11097,7 +9814,7 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 		}()
 		go func() {
 			time.Sleep(storeDelay)
-			results <- storage.StoreFileWithStorageContext(newTestContext(dbconn), newcomerPath)
+			results <- storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), newcomerPath)
 		}()
 		go func() {
 			time.Sleep(gcDelay)
@@ -11115,17 +9832,17 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 			}
 		}
 
-		if got := mustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
+		if got := testutils.MustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
 			t.Fatalf("round %d restored keep file differs after four-way interleaving", round)
 		}
 
-		newcomerID := fetchFileIDByHash(t, dbconn, newcomerHash)
+		newcomerID := testutils.FetchFileIDByHash(t, dbconn, newcomerHash)
 		newcomerOut := filepath.Join(outDir, fmt.Sprintf("quad-newcomer-%02d.restored.bin", round))
 		if err := storage.RestoreFileWithDB(dbconn, newcomerID, newcomerOut); err != nil {
 			t.Fatalf("round %d restore newcomer after four-way interleaving: %v", round, err)
 		}
-		if got := sha256File(t, newcomerOut); got != newcomerHash {
-			t.Fatalf("round %d newcomer hash mismatch after four-way interleaving: want %s got %s", round, newcomerHash, got)
+		if got := testutils.SHA256File(t, newcomerOut); got != newcomerHash {
+			t.Fatalf("round %d newcomer Hash mismatch after four-way interleaving: want %s got %s", round, newcomerHash, got)
 		}
 
 		var removedVictimRows int
@@ -11166,24 +9883,18 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 			t.Fatalf("round %d cleanup gc: %v", round, err)
 		}
 
-		assertNoProcessingRows(t, dbconn)
-		assertUniqueFileChunkOrders(t, dbconn)
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
 	}
 }
 
-// TestStoreMultiChunkFileVerifiesAtomicFinalization stores a multi-chunk file
-// and verifies that the atomic finalization boundary works correctly:
-// - File is marked COMPLETED
-// - All file_chunk rows exist with contiguous chunk_order [0, 1, 2, ...]
-// - File can be restored successfully
-// - Re-store recognizes file as already stored
 func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -11191,17 +9902,17 @@ func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
 	// 3MB file will span multiple chunks via CDC (min chunk ~512KB, max ~2MB)
-	inPath := createTempFile(t, inputDir, "multi_chunk_finalize.bin", 3*1024*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "multi_chunk_finalize.bin", 3*1024*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 
 	// Store the multi-chunk file
 	codec, err := blocks.ParseCodec("plain")
@@ -11269,15 +9980,15 @@ func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
 	restoreDir := filepath.Join(tmp, "restore")
 	_ = os.MkdirAll(restoreDir, 0o755)
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	restoreCtx := newTestContext(dbconn)
+	restoreCtx := testutils.NewTestContext(dbconn)
 
 	if err := storage.RestoreFileWithStorageContext(restoreCtx, fileID, outPath); err != nil {
 		t.Fatalf("restore multi-chunk file: %v", err)
 	}
 
-	restoredHash := sha256File(t, outPath)
+	restoredHash := testutils.SHA256File(t, outPath)
 	if restoredHash != fileHash {
-		t.Fatalf("restored file hash mismatch: original %s, restored %s", fileHash, restoredHash)
+		t.Fatalf("restored file Hash mismatch: original %s, restored %s", fileHash, restoredHash)
 	}
 
 	// Re-store the same file and verify it's recognized as already stored
@@ -11292,17 +10003,17 @@ func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
 		t.Fatalf("expected same file ID on re-store, original %d got %d", fileID, result2.FileID)
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
 
 func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -11310,8 +10021,8 @@ func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	// Fail only the final logical-file completion status transition.
 	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_logical_complete_trg ON logical_file`); err != nil {
@@ -11351,14 +10062,14 @@ func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
-	inPath := createTempFile(t, inputDir, "finalize-fail.bin", 3*1024*1024)
-	fileHash := sha256File(t, inPath)
+	inPath := testutils.CreateTempFile(t, inputDir, "finalize-fail.bin", 3*1024*1024)
+	fileHash := testutils.SHA256File(t, inPath)
 
-	ctx := newTestContext(dbconn)
+	ctx := testutils.NewTestContext(dbconn)
 	_, err = storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
-	assertErrorContains(t, err, "injected logical completion failure", "store final logical-file completion failure")
+	testutils.AssertErrorContains(t, err, "injected logical completion failure", "store final logical-file completion failure")
 
-	fileID := fetchFileIDByHash(t, dbconn, fileHash)
+	fileID := testutils.FetchFileIDByHash(t, dbconn, fileHash)
 
 	var status string
 	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&status); err != nil {
@@ -11401,20 +10112,16 @@ func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
 		t.Fatalf("expected linked chunks to remain COMPLETED when final logical completion fails, found %d non-completed refs", nonCompletedRefs)
 	}
 
-	assertNoProcessingRows(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
-// TestStoreVerifiesFileChunkContiguityOnCompletion stores multiple files
-// of various sizes and explicitly verifies that each completed file has
-// perfectly contiguous chunk_order sequences, validating the atomic
-// finalization boundary verification logic.
 func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
-	requireDB(t)
+	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -11422,17 +10129,17 @@ func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
 
-	sgctx := newTestContext(dbconn)
+	sgctx := testutils.NewTestContext(dbconn)
 
 	testCases := []struct {
 		name string
-		size int
+		Size int
 	}{
 		{"small", 256 * 1024},       // Single or small multi-chunk
 		{"medium", 2 * 1024 * 1024}, // Multi-chunk
@@ -11441,7 +10148,7 @@ func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			inPath := createTempFile(t, inputDir, "contiguity_"+tc.name+".bin", tc.size)
+			inPath := testutils.CreateTempFile(t, inputDir, "contiguity_"+tc.name+".bin", tc.Size)
 
 			codec, err := blocks.ParseCodec("plain")
 			if err != nil {
@@ -11466,13 +10173,13 @@ func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
 			expectedOrder := 0
 			rowCount := 0
 			for rows.Next() {
-				var order int
-				if err := rows.Scan(&order); err != nil {
+				var Order int
+				if err := rows.Scan(&Order); err != nil {
 					t.Fatalf("scan chunk_order: %v", err)
 				}
 
-				if order != expectedOrder {
-					t.Errorf("file %s: expected chunk_order %d, got %d (non-contiguous)", tc.name, expectedOrder, order)
+				if Order != expectedOrder {
+					t.Errorf("file %s: expected chunk_order %d, got %d (non-contiguous)", tc.name, expectedOrder, Order)
 				}
 
 				expectedOrder++
@@ -11497,22 +10204,18 @@ func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
 		})
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
 
-// TestConcurrentStoreMultiChunkFilesAtomicCompletion concurrently stores
-// many large multi-chunk files and verifies that the atomic finalization
-// boundary works correctly under concurrent load. All files should complete
-// successfully with valid contiguous chunk_order sequences.
 func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
-	requireDB(t)
-	requireStress(t)
+	testgate.RequireDB(t)
+	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
-	resetStorage(t)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -11520,8 +10223,8 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	applySchema(t, dbconn)
-	resetDB(t, dbconn)
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	inputDir := filepath.Join(tmp, "input")
 	_ = os.MkdirAll(inputDir, 0o755)
@@ -11532,11 +10235,11 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 	fileHashes := make([]string, fileCount)
 
 	for i := 0; i < fileCount; i++ {
-		size := 3*1024*1024 + int64(i)*512*1024 // 3MB to 12MB
+		Size := 3*1024*1024 + int64(i)*512*1024 // 3MB to 12MB
 		filename := fmt.Sprintf("concurrent_multi_%d.bin", i)
-		path := createTempFile(t, inputDir, filename, int(size))
+		path := testutils.CreateTempFile(t, inputDir, filename, int(Size))
 		filePaths[i] = path
-		fileHashes[i] = sha256File(t, path)
+		fileHashes[i] = testutils.SHA256File(t, path)
 	}
 
 	// Store files concurrently using 5 worker goroutines
@@ -11553,7 +10256,7 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 				var err error
 
 				for attempt := 0; attempt < maxStoreAttempts; attempt++ {
-					ctx := newTestContext(dbconn)
+					ctx := testutils.NewTestContext(dbconn)
 					codec, parseErr := blocks.ParseCodec("plain")
 					if parseErr != nil {
 						errChan <- fmt.Errorf("parse codec: %w", parseErr)
@@ -11564,7 +10267,7 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 					if err == nil {
 						break
 					}
-					if !isRetryableTxAbortError(err) || attempt == maxStoreAttempts-1 {
+					if !testutils.IsRetryableTxAbortError(err) || attempt == maxStoreAttempts-1 {
 						errChan <- fmt.Errorf("worker %d file %d store: %w", workerID, i, err)
 						return
 					}
@@ -11630,18 +10333,18 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 		fileIDsMutex.Unlock()
 
 		outPath := filepath.Join(restoreDir, fmt.Sprintf("restored_%d.bin", i))
-		ctx := newTestContext(dbconn)
+		ctx := testutils.NewTestContext(dbconn)
 
 		if err := storage.RestoreFileWithStorageContext(ctx, fileID, outPath); err != nil {
 			t.Fatalf("restore file %d: %v", i, err)
 		}
 
-		restoredHash := sha256File(t, outPath)
+		restoredHash := testutils.SHA256File(t, outPath)
 		if restoredHash != fileHashes[i] {
-			t.Fatalf("file %d: hash mismatch after restore", i)
+			t.Fatalf("file %d: Hash mismatch after restore", i)
 		}
 	}
 
-	assertNoProcessingRows(t, dbconn)
-	assertUniqueFileChunkOrders(t, dbconn)
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
