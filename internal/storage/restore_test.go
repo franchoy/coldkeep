@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -973,5 +974,120 @@ func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
 	err = RestoreFileWithStorageContext(sgctx, fileID, outputTarget)
 	if err == nil || !strings.Contains(err.Error(), "create temporary output file for") {
 		t.Fatalf("expected create-temp-file error contract, got: %v", err)
+	}
+}
+
+func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
+	// Setup DB and storage context
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("RESTORED")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "atomic-restore-test.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+         VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+         VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash, int64(len(payload)), filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+         VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+		"atomic-restore-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID, chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	// Create destination file with known content
+	outputDir := t.TempDir()
+	destPath := filepath.Join(outputDir, "restored.bin")
+	originalContent := []byte("ORIGINAL_CONTENT")
+	if err := os.WriteFile(destPath, originalContent, 0644); err != nil {
+		t.Fatalf("write original dest file: %v", err)
+	}
+
+	// Set test hook to simulate failure after temp file is written but before rename
+	hookCalled := false
+	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+		hookCalled = true
+		return fmt.Errorf("simulated failure before rename")
+	}
+	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	err = RestoreFileWithStorageContext(sgctx, fileID, destPath)
+	// restore should fail
+	if err == nil || !hookCalled {
+		t.Fatalf("expected restore to fail via hook, got err=%v, hookCalled=%v", err, hookCalled)
+	}
+
+	// destination file must be untouched
+	data, readErr := os.ReadFile(destPath)
+	if readErr != nil {
+		t.Fatalf("read dest file: %v", readErr)
+	}
+	if string(data) != string(originalContent) {
+		t.Fatalf("destination file was modified: got %q, want %q", string(data), string(originalContent))
+	}
+
+	// no .coldkeep-restore-* temp files remain
+	files, listErr := os.ReadDir(outputDir)
+	if listErr != nil {
+		t.Fatalf("list output dir: %v", listErr)
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), ".coldkeep-restore-") {
+			t.Fatalf("temp restore file still exists: %s", f.Name())
+		}
 	}
 }
