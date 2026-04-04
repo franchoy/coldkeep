@@ -33,6 +33,7 @@ Use this section for branch-specific additions that are not yet fully covered.
 | Multi-process contention (non-goal for v1.0 baseline) | Separate post-v1.0 track | TBD | deferred |
 
 | Atomic restore failure-mode tests | Simulate restore failures before/after rename; verify original output file is preserved, no partial/corrupt final file is visible, and temp files are cleaned up | `TestRestoreFailurePreservesExistingOutput`, `TestRestoreAtomicityWithTestHook`, `TestRestoreAtomicityWithCorruption` | completed |
+| Explicit atomicity: restore failure before rename leaves destination file untouched | Simulate restore failure after temp file is written but before rename; assert destination file is byte-identical and no temp files remain | `TestRestoreFailureDoesNotCorruptDestination` | completed |
 
 ## Exit Criteria
 
