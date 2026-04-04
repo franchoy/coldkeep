@@ -202,13 +202,9 @@ Restore operations are **atomic and verified**:
 
 ### Garbage collection safety (G4)
 
-Garbage collection is **non-destructive**:
+GC is reference-safe: no reachable chunk is ever deleted
 
-- Only chunks with no live file references and no active restore pins are removed
-- Containers are deleted only when all their chunks are unreferenced
-- Referenced data is never removed
 
-> GC cannot delete data required to restore a valid logical file.
 
 ---
 
