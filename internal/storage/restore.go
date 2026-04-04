@@ -413,12 +413,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// else: empty file, no chunks, valid
 	}
 
-	// Fsync ensures data is written to disk before returning
-	if err := outFile.Sync(); err != nil {
-		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
-	}
-
-	// Compute the final hash before closing/renaming
+	// Compute the final hash before fsync/close/rename
 	restoredHash := hex.EncodeToString(hasher.Sum(nil))
 	if restoredHash != expectedFileHash {
 		// Close and cleanup temp file before returning error
@@ -434,6 +429,11 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			expectedFileHash,
 			restoredHash,
 		)
+	}
+
+	// Fsync ensures data is written to disk before returning
+	if err := outFile.Sync(); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
 	}
 
 	// Close temp file before rename
