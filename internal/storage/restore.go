@@ -316,6 +316,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// ------------------------------------------------------------
 	var expectedOrder int64 = 0
 	validChunks := 0
+	var firstRestoreError error
 	for _, chunkRow := range chunkRows {
 		if err := ctx.Err(); err != nil {
 			return RestoreFileResult{}, err
@@ -371,6 +372,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			transformer, err = blocks.GetBlockTransformer(codec)
 			if err != nil {
 				log.Printf("event=restore_skip_chunk action=transformer_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunkRow.chunkID, chunkRow.blocksCodec, err)
+				if firstRestoreError == nil {
+					firstRestoreError = err
+				}
 				continue
 			}
 			transformerCache[codec] = transformer
@@ -392,12 +396,19 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		})
 		if err != nil {
 			log.Printf("event=restore_skip_chunk action=decode_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunkRow.chunkID, chunkRow.blocksCodec, err)
+			if firstRestoreError == nil {
+				firstRestoreError = err
+			}
 			continue
 		}
 
 		// Validate plaintext size
 		if int64(len(plaintext)) != chunkRow.plaintextSize {
+			sizeErr := fmt.Errorf("plaintext size mismatch for chunk %d: expected %d got %d", chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
 			log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
+			if firstRestoreError == nil {
+				firstRestoreError = sizeErr
+			}
 			continue
 		}
 
@@ -405,7 +416,11 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		sum := sha256.Sum256(plaintext)
 		gotHash := hex.EncodeToString(sum[:])
 		if gotHash != chunkRow.expectedChunkHash {
+			hashErr := fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunkRow.expectedChunkHash, gotHash)
 			log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunkRow.chunkID, chunkRow.expectedChunkHash, gotHash)
+			if firstRestoreError == nil {
+				firstRestoreError = hashErr
+			}
 			continue
 		}
 
@@ -424,6 +439,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 
 	if validChunks == 0 {
+		if firstRestoreError != nil {
+			return RestoreFileResult{}, firstRestoreError
+		}
 		return RestoreFileResult{}, fmt.Errorf("no restorable chunks found for file %d (all referenced containers missing or quarantined)", fileID)
 	}
 
