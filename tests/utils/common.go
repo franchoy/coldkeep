@@ -512,7 +512,13 @@ func CorruptFirstCompletedChunkByte(t *testing.T, dbconn *sql.DB, containersDir 
 		corruptionOffset += 10
 	}
 
-	if _, err := f.WriteAt([]byte{0xAC}, corruptionOffset); err != nil {
+	orig := make([]byte, 1)
+	if _, err := f.ReadAt(orig, corruptionOffset); err != nil {
+		_ = f.Close()
+		t.Fatalf("read original corruption byte: %v", err)
+	}
+	mutated := []byte{orig[0] ^ 0xFF}
+	if _, err := f.WriteAt(mutated, corruptionOffset); err != nil {
 		_ = f.Close()
 		t.Fatalf("write corruption byte: %v", err)
 	}
