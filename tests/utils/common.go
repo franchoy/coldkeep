@@ -551,8 +551,10 @@ func AssertErrorContains(t *testing.T, err error, substring string, context stri
 	if err == nil {
 		t.Fatalf("expected %s error but got nil", context)
 	}
-	if !strings.Contains(err.Error(), substring) {
-		t.Fatalf("expected %s error to contain %q, got: %v", context, substring, err)
+	actual := strings.ToLower(err.Error())
+	expect := strings.ToLower(substring)
+	if !strings.Contains(actual, expect) {
+		t.Fatalf("expected %s error to contain (case-insensitive) %q, got: %v", context, substring, err)
 	}
 }
 

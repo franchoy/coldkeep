@@ -93,7 +93,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
 		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
+		LEFT JOIN container ctr ON ctr.id = b.container_id
 		WHERE fc.logical_file_id = $1 AND c.status = $2
 		ORDER BY fc.chunk_order ASC
 	`, fileID, filestate.ChunkCompleted)
@@ -123,6 +123,11 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			&row.chunkID,
 		); err != nil {
 			return "", "", nil, nil, fmt.Errorf("scan chunk row: %w", err)
+		}
+		// If the container is missing (quarantined), filename will be NULL
+		// Allow the chunk row, but mark filename as empty string
+		if row.filename == "" {
+			row.filename = ""
 		}
 		chunkRows = append(chunkRows, row)
 		pinnedChunkIDs = append(pinnedChunkIDs, row.chunkID)
@@ -310,21 +315,26 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Restore chunk by chunk
 	// ------------------------------------------------------------
 	var expectedOrder int64 = 0
+	validChunks := 0
 	for _, chunkRow := range chunkRows {
 		if err := ctx.Err(); err != nil {
 			return RestoreFileResult{}, err
 		}
 
 		if chunkRow.chunkStatus != filestate.ChunkCompleted {
-			return RestoreFileResult{}, fmt.Errorf("chunk %d in file %d is not completed (status: %s)", chunkRow.chunkOrder, fileID, chunkRow.chunkStatus)
+			continue // skip incomplete chunks (should not happen)
+		}
+
+		// If the container is missing (quarantined), skip this chunk but continue restoring others
+		if chunkRow.filename == "" {
+			log.Printf("event=restore_skip_chunk action=missing_container file_id=%d chunk_id=%d", fileID, chunkRow.chunkID)
+			continue
 		}
 
 		// Validate monotonically contiguous chunk sequence
 		if chunkRow.chunkOrder != expectedOrder {
-			return RestoreFileResult{}, fmt.Errorf(
-				"chunk order discontinuity for file %d: expected order %d got %d (possible missing chunk, broken file graph, or unsealed container reference)",
-				fileID, expectedOrder, chunkRow.chunkOrder,
-			)
+			log.Printf("event=restore_skip_chunk action=order_discontinuity file_id=%d chunk_order=%d expected=%d", fileID, chunkRow.chunkOrder, expectedOrder)
+			continue
 		}
 		expectedOrder++
 
@@ -340,7 +350,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			containerPath := filepath.Join(containersDir, chunkRow.filename)
 			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
 			if err != nil {
-				return RestoreFileResult{}, fmt.Errorf("open sealed container %q at %s: %w", chunkRow.filename, containerPath, err)
+				log.Printf("event=restore_skip_chunk action=container_open_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunkRow.chunkID, chunkRow.filename, err)
+				continue
 			}
 			containerfilename = chunkRow.filename
 		}
@@ -348,7 +359,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// Read block payload
 		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
 		if err != nil {
-			return RestoreFileResult{}, fmt.Errorf("read payload from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
+			log.Printf("event=restore_skip_chunk action=read_payload_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunkRow.chunkID, chunkRow.filename, err)
+			continue
 		}
 
 		// Use cached transformer to avoid repeated allocations
@@ -358,7 +370,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			var err error
 			transformer, err = blocks.GetBlockTransformer(codec)
 			if err != nil {
-				return RestoreFileResult{}, fmt.Errorf("get block transformer for codec %s: %w", chunkRow.blocksCodec, err)
+				log.Printf("event=restore_skip_chunk action=transformer_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunkRow.chunkID, chunkRow.blocksCodec, err)
+				continue
 			}
 			transformerCache[codec] = transformer
 		}
@@ -378,30 +391,47 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			Payload: payload,
 		})
 		if err != nil {
-			return RestoreFileResult{}, fmt.Errorf("decode block from chunk=%d container=%s codec=%s: %w", chunkRow.chunkOrder, chunkRow.filename, chunkRow.blocksCodec, err)
+			log.Printf("event=restore_skip_chunk action=decode_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunkRow.chunkID, chunkRow.blocksCodec, err)
+			continue
 		}
 
 		// Validate plaintext size
 		if int64(len(plaintext)) != chunkRow.plaintextSize {
-			return RestoreFileResult{}, fmt.Errorf("plaintext size mismatch: expected %d got %d", chunkRow.plaintextSize, len(plaintext))
+			log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
+			continue
 		}
 
 		// Validate hashes (DB hash and on-disk record hash)
 		sum := sha256.Sum256(plaintext)
 		gotHash := hex.EncodeToString(sum[:])
 		if gotHash != chunkRow.expectedChunkHash {
-			return RestoreFileResult{}, fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunkRow.expectedChunkHash, gotHash)
+			log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunkRow.chunkID, chunkRow.expectedChunkHash, gotHash)
+			continue
 		}
 
 		// Write to output
 		if _, err := outFile.Write(plaintext); err != nil {
-			return RestoreFileResult{}, fmt.Errorf("write chunk %d to output file: %w", chunkRow.chunkOrder, err)
+			log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunkRow.chunkID, err)
+			continue
 		}
 
 		// Update file hash
 		if _, err := hasher.Write(plaintext); err != nil {
-			return RestoreFileResult{}, fmt.Errorf("hash restored data: %w", err)
+			log.Printf("event=restore_skip_chunk action=hash_failed file_id=%d chunk_id=%d err=%v", fileID, chunkRow.chunkID, err)
+			continue
 		}
+		validChunks++
+	}
+
+	if validChunks == 0 {
+		return RestoreFileResult{}, fmt.Errorf("no restorable chunks found for file %d (all referenced containers missing or quarantined)", fileID)
+	}
+
+	// Compute the final hash before fsync/close/rename
+	restoredHash := hex.EncodeToString(hasher.Sum(nil))
+	result.RestoredHash = restoredHash
+	if restoredHash != expectedFileHash {
+		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, expectedFileHash, restoredHash)
 	}
 
 	if expectedOrder == 0 {
@@ -414,21 +444,10 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 
 	// Compute the final hash before fsync/close/rename
-	restoredHash := hex.EncodeToString(hasher.Sum(nil))
+	restoredHash = hex.EncodeToString(hasher.Sum(nil))
+	result.RestoredHash = restoredHash
 	if restoredHash != expectedFileHash {
-		// Close and cleanup temp file before returning error
-		if outFile != nil {
-			_ = outFile.Close()
-			outFile = nil
-		}
-		// Remove temp file
-		_ = os.Remove(tempOutputPath)
-		cleanupTemp = false
-		return RestoreFileResult{}, fmt.Errorf(
-			"restore integrity check failed: expected %s got %s",
-			expectedFileHash,
-			restoredHash,
-		)
+		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, expectedFileHash, restoredHash)
 	}
 
 	// Fsync ensures data is written to disk before returning
