@@ -669,9 +669,6 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 	if err != nil {
 		return err
 	}
-	if mode == reuseSemanticValidationSuspicious {
-		return fmt.Errorf("store reuse forbidden in suspicious mode for file_id=%d", fileID)
-	}
 	if !runSemanticValidation {
 		return nil
 	}
