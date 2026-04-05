@@ -456,6 +456,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	result.RestoredHash = restoredHash
 	if restoredHash != expectedFileHash {
 		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, expectedFileHash, restoredHash)
+		return RestoreFileResult{}, fmt.Errorf("restored file hash mismatch: expected %s got %s", expectedFileHash, restoredHash)
 	}
 
 	// Fsync ensures data is written to disk before returning
