@@ -214,6 +214,62 @@ func checkPinnedChunkStatus(dbconn *sql.DB) error {
 	return nil
 }
 
+func checkCompletedChunkBlockCardinality(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	// Every COMPLETED chunk must map to exactly one blocks row.
+	log.Printf("Checking completed chunk block cardinality...")
+	var errorList []error
+	var errorCount int
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT c.id, COUNT(b.chunk_id) AS block_rows
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		WHERE c.status = $1
+		GROUP BY c.id
+		HAVING COUNT(b.chunk_id) != 1
+	`, filestate.ChunkCompleted)
+	if err != nil {
+		log.Println(" ERROR ")
+		log.Printf("Failed to query completed chunk block cardinality: %v", err)
+		return fmt.Errorf("failed to query completed chunk block cardinality: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var blockRows int64
+		if err := rows.Scan(&id, &blockRows); err != nil {
+			errorCount++
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan completed chunk block cardinality inconsistency: %w", err))
+			continue
+		}
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid completed chunk metadata: chunk ID %d has blocks row count=%d", id, blockRows))
+	}
+
+	if err := rows.Err(); err != nil {
+		errorCount++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("row iteration failed: %w", err))
+	}
+
+	if len(errorList) > 0 {
+		log.Println(" ERROR ")
+		log.Printf("Found %d errors in checkCompletedChunkBlockCardinality checks:", errorCount)
+		if errorCount > utils_print.MaxErrorsToPrint {
+			log.Printf("showing only first %d:", len(errorList))
+		}
+		for _, err := range errorList {
+			log.Printf(" - %v", err)
+		}
+		return fmt.Errorf("found %d errors in checkCompletedChunkBlockCardinality checks", errorCount)
+	}
+
+	log.Println(" SUCCESS ")
+	return nil
+}
+
 func checkChunkOffsets(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -330,6 +386,7 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container cont ON b.container_id = cont.id
 		WHERE c.status = $1
+		  AND cont.quarantine = FALSE
 		ORDER BY b.container_id, b.block_offset;`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +85,93 @@ func TestReadAndValidateContainerHeader_RejectsInvalidMagic(t *testing.T) {
 
 	if _, err := readAndValidateContainerHeader(tmp); err == nil {
 		t.Fatalf("expected invalid magic error")
+	}
+}
+
+func TestReadAndValidateContainerHeader_RejectsTooSmallFile(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "too-small-*.bin")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer func() { _ = tmp.Close() }()
+
+	// Write less than ContainerHdrLen bytes.
+	if _, err := tmp.Write([]byte("short")); err != nil {
+		t.Fatalf("write short file: %v", err)
+	}
+
+	_, err = readAndValidateContainerHeader(tmp)
+	if err == nil || !strings.Contains(err.Error(), "container too small") {
+		t.Fatalf("expected container-too-small error contract, got: %v", err)
+	}
+}
+
+func TestReadAndValidateContainerHeader_RejectsWrongHeaderLength(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "bad-hdrlen-*.bin")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer func() { _ = tmp.Close() }()
+
+	hdr := make([]byte, ContainerHdrLen)
+	copy(hdr[0:8], []byte(ContainerMagic))
+	binary.LittleEndian.PutUint16(hdr[8:10], ContainerFormatVersionMajor)
+	binary.LittleEndian.PutUint16(hdr[10:12], ContainerFormatVersionMinor)
+	binary.LittleEndian.PutUint32(hdr[12:16], 32) // wrong: should be ContainerHdrLen (64)
+
+	if _, err := tmp.Write(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+
+	_, err = readAndValidateContainerHeader(tmp)
+	if err == nil || !strings.Contains(err.Error(), "unsupported container header length") {
+		t.Fatalf("expected header-length error contract, got: %v", err)
+	}
+}
+
+func TestReadAndValidateContainerHeader_RejectsUnknownFormatVersion(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "bad-version-*.bin")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer func() { _ = tmp.Close() }()
+
+	hdr := make([]byte, ContainerHdrLen)
+	copy(hdr[0:8], []byte(ContainerMagic))
+	binary.LittleEndian.PutUint16(hdr[8:10], 99) // unsupported major version
+	binary.LittleEndian.PutUint16(hdr[10:12], 0)
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(ContainerHdrLen))
+
+	if _, err := tmp.Write(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+
+	_, err = readAndValidateContainerHeader(tmp)
+	if err == nil || !strings.Contains(err.Error(), "unsupported container format version") {
+		t.Fatalf("expected format-version error contract, got: %v", err)
+	}
+}
+
+func TestReadAndValidateContainerHeader_RejectsCRCMismatch(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "bad-crc-*.bin")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer func() { _ = tmp.Close() }()
+
+	hdr := make([]byte, ContainerHdrLen)
+	copy(hdr[0:8], []byte(ContainerMagic))
+	binary.LittleEndian.PutUint16(hdr[8:10], ContainerFormatVersionMajor)
+	binary.LittleEndian.PutUint16(hdr[10:12], ContainerFormatVersionMinor)
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(ContainerHdrLen))
+	// CRC field left as zero — will not match the computed CRC.
+
+	if _, err := tmp.Write(hdr); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+
+	_, err = readAndValidateContainerHeader(tmp)
+	if err == nil || !strings.Contains(err.Error(), "container header crc mismatch") {
+		t.Fatalf("expected crc-mismatch error contract, got: %v", err)
 	}
 }

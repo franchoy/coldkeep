@@ -61,6 +61,7 @@ fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 WORKFLOW_FILE="$REPO_ROOT/.github/workflows/ci.yml"
+VALIDATION_MATRIX_FILE="$REPO_ROOT/VALIDATION_MATRIX.md"
 
 require_pattern() {
   local file="$1"
@@ -82,24 +83,38 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger'
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job'
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness\]' 'smoke job depends on quality and integration-correctness'
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, smoke\]' 'required gate depends on all upstream jobs'
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke\]' 'required gate depends on all upstream jobs including long-run and adversarial'
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check shell script syntax' 'shell script syntax validation step'
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Audit validation matrix coverage' 'validation matrix CI audit step'
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_SMOKE_RESET_DB:\s*1' 'isolated smoke reset toggle'
-  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/\.\.\.' 'integration correctness race run'
+  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/integration/\.\.\.' 'integration correctness race run (integration only)'
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
   require_pattern "$WORKFLOW_FILE" '^  integration-long-run:$' 'integration long-run job'
+  require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists'
+  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite'
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step'
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only'
   require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v4' 'smoke artifact upload action'
-  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/\.\.\.' 'integration stress race run'
+  require_pattern "$WORKFLOW_FILE" './tests/integration/\.\.\.' 'integration stress race run (integration only)'
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_LONG_RUN:\s*1' 'long-run env gate in CI'
-  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability' 'dedicated long-run test command'
+  require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability\\|TestRandomizedLongRunLifecycleSoak'" 'dedicated long-run test command'
   require_pattern "$WORKFLOW_FILE" 'QUALITY_RESULT.*!= "success"' 'required gate rejects skipped quality job'
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_CORRECTNESS_RESULT.*!= "success"' 'required gate rejects skipped integration correctness'
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_STRESS_RESULT.*!= "success"' 'required gate rejects skipped integration stress'
+  require_pattern "$WORKFLOW_FILE" 'INTEGRATION_LONG_RUN_RESULT.*!= "success"' 'required gate rejects skipped integration long-run job'
+  require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job'
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job'
+  require_pattern "$VALIDATION_MATRIX_FILE" '^# v1\.0 Validation Matrix$' 'validation matrix artifact'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G1 \|' 'validation matrix deterministic restore row (G1)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G2 \|' 'validation matrix repeat store does not drift chunk graph row (G2)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G3 \|' 'validation matrix partial/inconsistent exposure row (G3)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G4 \|' 'validation matrix reference-safe GC row (G4)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G5 \|' 'validation matrix atomic restore replacement row (G5)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G6 \|' 'validation matrix safe in-process concurrency row (G6)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G7 \|' 'validation matrix deep corruption detection row (G7)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G8 \|' 'validation matrix doctor/health-gate row (G8)'
 }
 
 require_gh() {

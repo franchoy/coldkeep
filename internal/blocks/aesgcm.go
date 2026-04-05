@@ -46,7 +46,14 @@ func (t *AESGCMTransformer) Encode(_ context.Context, in EncodeInput) (*EncodedB
 	}, nil
 }
 
-func (t *AESGCMTransformer) Decode(_ context.Context, in DecodeInput) ([]byte, error) {
+func (t *AESGCMTransformer) Decode(_ context.Context, in DecodeInput) (data []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("aes-gcm decode panic (invalid input or corruption): %v", r)
+			data = nil
+		}
+	}()
+
 	block, err := aes.NewCipher(t.Key)
 	if err != nil {
 		return nil, fmt.Errorf("create cipher: %w", err)

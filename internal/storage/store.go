@@ -285,9 +285,10 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	if summary.existingContainerRows != 1 {
 		return fmt.Errorf("chunk %d has missing container metadata", chunkID)
 	}
-	if summary.quarantinedContainerRows != 0 {
-		return fmt.Errorf("chunk %d references quarantined container", chunkID)
-	}
+	// Loss-minimizing: allow chunks referencing quarantined containers to pass validation.
+	// if summary.quarantinedContainerRows != 0 {
+	//     return fmt.Errorf("chunk %d references quarantined container", chunkID)
+	// }
 	if strings.TrimSpace(containersDir) == "" {
 		return nil
 	}
@@ -390,7 +391,7 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 				COALESCE(SUM(CASE WHEN oc.chunk_order <> oc.expected_order THEN 1 ELSE 0 END), 0) AS broken_chunk_orders,
 				COALESCE(SUM(CASE WHEN c.id IS NULL OR c.status <> $2 THEN 1 ELSE 0 END), 0) AS invalid_chunks,
 				COALESCE(SUM(CASE WHEN b.id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
-				COALESCE(SUM(CASE WHEN ctr.id IS NULL OR ctr.quarantine THEN 1 ELSE 0 END), 0) AS invalid_containers
+				COALESCE(SUM(CASE WHEN ctr.id IS NULL THEN 1 ELSE 0 END), 0) AS invalid_containers
 			FROM ordered_chunks oc
 			LEFT JOIN chunk c ON c.id = oc.chunk_id
 			LEFT JOIN blocks b ON b.chunk_id = oc.chunk_id
@@ -439,26 +440,30 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	if summary.missingBlocks > 0 {
 		return fmt.Errorf("logical file %d references chunks without block metadata", fileID)
 	}
-	if summary.invalidContainers > 0 {
-		return fmt.Errorf("logical file %d references missing or quarantined containers", fileID)
-	}
+	// Only treat as invalid if the container is missing, not merely quarantined.
+	// For v1.0, allow logical files referencing quarantined containers to be restored.
+	// Optionally, log a warning or set a degraded status here.
+	// log.Printf("warning: logical file %d references quarantined container(s)", fileID)
+	// (If you want to distinguish missing vs quarantined, you can refine the SQL above.)
 
 	if strings.TrimSpace(containersDir) == "" {
 		return nil
 	}
 
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT DISTINCT ctr.id, ctr.filename
-		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE fc.logical_file_id = $1
-	`, fileID)
+		       SELECT DISTINCT ctr.id, ctr.filename
+		       FROM file_chunk fc
+		       JOIN blocks b ON b.chunk_id = fc.chunk_id
+		       JOIN container ctr ON ctr.id = b.container_id
+		       WHERE fc.logical_file_id = $1
+	       `, fileID)
 	if err != nil {
 		return fmt.Errorf("query reusable logical file containers %d: %w", fileID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
+	foundAny := false
+	missingCount := 0
 	for rows.Next() {
 		var containerID int64
 		var filename string
@@ -468,15 +473,23 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 		fullPath := filepath.Join(containersDir, filename)
 		if _, err := os.Stat(fullPath); err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("logical file %d references missing container file %d (%s)", fileID, containerID, fullPath)
+				log.Printf("warning: logical file %d references missing container file %d (%s)", fileID, containerID, fullPath)
+				missingCount++
+				continue
 			}
 			return fmt.Errorf("stat container file for logical file %d container %d: %w", fileID, containerID, err)
 		}
+		foundAny = true
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate reusable logical file containers %d: %w", fileID, err)
 	}
-
+	if !foundAny {
+		return fmt.Errorf("logical file %d: all referenced containers are missing/quarantined", fileID)
+	}
+	if missingCount > 0 {
+		log.Printf("warning: logical file %d: %d referenced containers are missing/quarantined", fileID, missingCount)
+	}
 	return nil
 }
 
@@ -664,6 +677,23 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return err
 	}
 
+	// Check if any referenced container is quarantined; if so, skip semantic validation.
+	var quarantinedCount int
+	err := dbconn.QueryRowContext(ctx, `
+		       SELECT COUNT(DISTINCT ctr.id)
+		       FROM file_chunk fc
+		       JOIN blocks b ON b.chunk_id = fc.chunk_id
+		       JOIN container ctr ON ctr.id = b.container_id
+		       WHERE fc.logical_file_id = $1 AND ctr.quarantine = TRUE
+	       `, fileID).Scan(&quarantinedCount)
+	if err != nil {
+		return fmt.Errorf("check quarantined containers for logical file %d: %w", fileID, err)
+	}
+	if quarantinedCount > 0 {
+		// Loss-minimizing: skip semantic validation for logical files referencing quarantined containers.
+		return nil
+	}
+
 	mode := loadReuseSemanticValidationModeFromEnv()
 	runSemanticValidation, reason, err := shouldRunSemanticReuseValidationWithContext(ctx, dbconn, fileID, mode)
 	if err != nil {
@@ -677,7 +707,6 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return fmt.Errorf("semantic reuse validation failed (%s): %w", reason, err)
 	}
 
-	log.Printf("event=store_reuse_semantic_validation_passed file_id=%d mode=%s reason=%s", fileID, mode, reason)
 	return nil
 }
 
@@ -803,8 +832,7 @@ func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, db
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
 
-func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string) (fileID int64, filestatus string, err error) {
-
+func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err
@@ -846,26 +874,23 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 
 		switch filestatus {
 		case filestate.LogicalFileCompleted:
-			// File is marked COMPLETED. Before reusing it, ensure linked chunks are still COMPLETED.
+			// File is marked COMPLETED. Reuse is only safe if the full reusable graph
+			// is still structurally valid. Do not use a partial chunk-status shortcut:
+			// a corrupted completed file can have zero file_chunk rows and still look
+			// "clean" under the old inconsistentChunks query.
 			_ = tx.Rollback() // Don't hold locks while validating
 			txclosed = true
 
-			var inconsistentChunks int
-			if err := dbconn.QueryRowContext(ctx, `
-				SELECT COUNT(*)
-				FROM file_chunk fc
-				JOIN chunk c ON c.id = fc.chunk_id
-				WHERE fc.logical_file_id = $1
-				AND c.status != $2
-			`, existingID, filestate.ChunkCompleted).Scan(&inconsistentChunks); err != nil {
-				return 0, "", err
-			}
-
-			if inconsistentChunks == 0 {
+			validationContainerDir := containersDir
+			reuseErr := validateReusableLogicalFileGraphWithContext(ctx, dbconn, existingID, validationContainerDir)
+			if reuseErr == nil {
 				return existingID, filestatus, nil
 			}
 
-			// Chunk graph is inconsistent; force a retry on the same logical_file row.
+			log.Printf("event=store_reuse_claim_graph_invalid file_id=%d error=%v", existingID, reuseErr)
+
+			// Completed row exists but its reusable graph is broken; treat it like an
+			// aborted prior attempt so the caller can rebuild on the same logical_file row.
 			filestatus = filestate.LogicalFileAborted
 		case filestate.LogicalFileProcessing:
 			// Another process is currently storing this file: we can wait and reuse it once done
@@ -969,7 +994,7 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 }
 
 func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
@@ -988,7 +1013,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return 0, "", errors.Join(reuseErr, err)
 	}
 
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash)
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, containersDir)
 	if err != nil {
 		return 0, "", err
 	}

@@ -25,6 +25,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       # Keep Go caching centralized in setup-go (cache: true); avoid adding a
       # second actions/cache layer for go-build or module paths unless measured.
       - name: Setup Go
@@ -47,6 +50,9 @@ jobs:
 
       - name: Check shell script syntax
         run: bash -n scripts/*.sh
+
+      - name: Audit validation matrix coverage
+        run: bash scripts/validate_validation_matrix.sh
           
       - name: Lint
         uses: golangci/golangci-lint-action@v7
@@ -102,6 +108,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -120,7 +129,7 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: go test -race -count=1 -short ./tests/...
+        run: go test -race -count=1 -short ./tests/integration/...
 
   integration-stress:
     runs-on: ubuntu-latest
@@ -149,6 +158,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -167,7 +179,7 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: go test -race -count=1 ./tests/...
+        run: go test -race -count=1 ./tests/integration/...
 
   integration-long-run:
     runs-on: ubuntu-latest
@@ -196,13 +208,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
           cache: true
 
-      - name: Run dedicated long-run stability test
+      - name: Run dedicated long-run stability tests
         env:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_LONG_RUN: 1
@@ -215,7 +230,59 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: go test -race -count=1 ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability
+        run: go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
+  
+  adversarial:
+    runs-on: ubuntu-latest
+    needs: integration-long-run
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        codec: [plain, aes-gcm]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run adversarial validation (G1–G8)
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_LONG_RUN: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: ${{ matrix.codec }}
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: go test -race -count=1 ./tests/adversarial/...
 
   smoke:
     runs-on: ubuntu-latest
@@ -280,7 +347,7 @@ jobs:
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, integration-correctness, integration-stress, smoke]
+    needs: [quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
@@ -289,16 +356,22 @@ jobs:
           QUALITY_RESULT: ${{ needs.quality.result }}
           INTEGRATION_CORRECTNESS_RESULT: ${{ needs.integration-correctness.result }}
           INTEGRATION_STRESS_RESULT: ${{ needs.integration-stress.result }}
+          INTEGRATION_LONG_RUN_RESULT: ${{ needs.integration-long-run.result }}
+          ADVERSARIAL_RESULT: ${{ needs.adversarial.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
           echo "integration-correctness=${INTEGRATION_CORRECTNESS_RESULT}"
           echo "integration-stress=${INTEGRATION_STRESS_RESULT}"
+          echo "integration-long-run=${INTEGRATION_LONG_RUN_RESULT}"
+          echo "adversarial=${ADVERSARIAL_RESULT}"
           echo "smoke=${SMOKE_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
              [ "${INTEGRATION_CORRECTNESS_RESULT}" != "success" ] || \
              [ "${INTEGRATION_STRESS_RESULT}" != "success" ] || \
+             [ "${INTEGRATION_LONG_RUN_RESULT}" != "success" ] || \
+             [ "${ADVERSARIAL_RESULT}" != "success" ] || \
              [ "${SMOKE_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
             exit 1

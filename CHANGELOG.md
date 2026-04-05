@@ -66,11 +66,20 @@ eliminate remaining correctness risks before the v1.0 milestone.
   interleavings
 - Added integration regression for deep verification trailing-byte detection
   after the last completed block payload
+- Added `VALIDATION_MATRIX.md` to map v0.9 guarantees to concrete verify checks
+  and integration evidence during the v0.10 trust-validation phase
+- Added lifecycle determinism integration regression
+  `TestStoreRemoveGCRestartStoreConvergesChunkGraph` to assert store/remove/GC/
+  restart cycles converge to a stable chunk graph and restorable output
 
 ### Changed
 
 - Clarified verification operational contract as a recovered-state checker,
   not a live online-consistency checker during in-flight writes
+- Documented `VALIDATION_MATRIX.md` in README as the maintained v0.10/v1.0
+  guarantee-to-evidence contract, audited locally and enforced in CI
+- Tightened validation-matrix auditing so README v0.9 guarantee summary bullets
+  are counted and checked against the maintained validation contract surface
 - Clarified verification mode trade-offs (`standard`, `full`, `deep`) with
   explicit cost/coverage guidance
 - Elevated `coldkeep doctor` in docs/help/smoke as the recommended
@@ -94,6 +103,8 @@ eliminate remaining correctness risks before the v1.0 milestone.
 
 - Standard verification now enforces pinned-chunk integrity:
   `pin_count > 0` chunks must remain `COMPLETED` and retain block metadata
+- Standard verification now also enforces completed-chunk block cardinality:
+  every `COMPLETED` chunk must have exactly one `blocks` row
 - Deep verification now fails when container tails contain trailing
   unaccounted bytes beyond the last completed block
 - PostgreSQL startup schema guard now explicitly requires
@@ -114,10 +125,93 @@ eliminate remaining correctness risks before the v1.0 milestone.
 
 ### Tests
 
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMTamperedCiphertext`: stores a file with
+  the `aes-gcm` codec, flips on-disk ciphertext bytes, and asserts both deep
+  verify and restore reject the tampered payload
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`: stores a file
+  with the `aes-gcm` codec, mutates `blocks.nonce` metadata in DB, and asserts
+  both deep verify and restore reject the tampered authenticated context
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`: stores a file with the
+  `aes-gcm` codec, verifies baseline success under the original key, then
+  switches to a different valid key and asserts both deep verify and restore
+  reject the mismatched-key read path
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`: stores a file
+  with the `aes-gcm` codec, then sets malformed `COLDKEEP_KEY` configuration
+  and asserts both deep verify and restore fail under invalid key setup
+- Added integration regression
+  `TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration`: stores a
+  file with the `aes-gcm` codec, then sets non-hex `COLDKEEP_KEY`
+  configuration and asserts both deep verify and restore fail under invalid key
+  encoding
+- Tightened plain-codec deep verification regressions so they store with
+  explicit `plain` codec selection instead of relying on the process default,
+  and `TestVerifySystemDeepDetectsChunkDataCorruption` now asserts both deep
+  verify aggregate failure and restore `chunk hash mismatch` semantics
+- Hardened verification fixtures and nearby full-mode regressions against
+  default-codec drift: `setupStoredFileForVerification`, `TestVerifyFull`, and
+  `TestVerifySystemFullDetectsNonContiguousOffsets` now store with explicit
+  `plain` codec selection so DB-backed runs do not depend on process defaults
+- Tightened file-level verification regressions to assert returned error
+  contracts instead of generic failure only, including deep chunk corruption,
+  full container truncation/missing-file cases, and standard missing-metadata /
+  broken-order cases
+- Tightened remaining system-level verification regressions to assert returned
+  error contracts, including deep container-content mismatch aggregation and
+  full-mode non-contiguous offset detection
+- Tightened the remaining local verify-block regressions in `TestVerifyFull`
+  and `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock` so malformed
+  completed chunks, missing container files, and deep trailing-byte failures
+  assert returned error-contract substrings instead of generic failure only
+- Tightened `TestVerifySystemDeepAggregatesChunkErrors` to assert the returned
+  aggregated deep-verification error count substring instead of generic
+  failure-only behavior
+- Normalized adjacent schema, seal, recovery, remove, and store failure-injection
+  regressions to use shared returned-error substring assertions instead of
+  manual non-nil checks, and fixed `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers`
+  to reach the intended rotation/sealing-marker failure path under explicit
+  container sizing
 - Added integration regression `TestDoctorAbortsProcessingLogicalFilesFromRecoverableState`:
   injects a dangling PROCESSING logical file, runs doctor, asserts recovery aborted
   it (`aborted_logical_files >= 1`), and confirms the PROCESSING row is now ABORTED
   and subsequent verify passes
+- Added integration regression
+  `TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers`: injects a DB
+  failure on `container.sealing` transition, asserts store fails and marks file
+  ABORTED without lingering `sealing=TRUE` rows, then verifies clean retry,
+  restore hash equality, and full verify success
+- Added stress-tier seeded randomized lifecycle regression
+  `TestStoreLifecycleSeededRandomizedOperationOrder`: runs deterministic-random
+  operation ordering across store/verify/gc/restore/remove loops with per-step
+  integrity assertions
+- Added stress-tier repeated jittered interleaving regression
+  `TestRepeatedJitteredStoreGCRestoreInterleaving`: runs multi-round
+  store/restore/gc interleavings with deterministic randomized start offsets and
+  asserts restore correctness plus post-run invariant stability
+- Added stress-tier four-way repeated interleaving regression
+  `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving`: runs multi-round
+  store/gc/restore/remove interleavings with deterministic randomized start
+  offsets and asserts victim removal plus restore/invariant stability
+- Added dedicated long-run randomized soak regression
+  `TestRandomizedLongRunLifecycleSoak`: runs repeated store/verify/gc/restore/
+  recovery/remove cycles under deterministic randomization and is included in
+  the CI long-run gate alongside `TestStoreGCVerifyRestoreDeleteLoopStability`
+- Added repeated doctor convergence regression
+  `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData`: injects
+  recoverable PROCESSING logical-file and chunk rows during live workload,
+  runs `doctor`, and asserts corrective counters plus preserved restore/verify
+  behavior for valid data across repeated rounds
+- Added recovery preservation regression
+  `TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveData`:
+  quarantines a truncated active container, proves unrelated live data remains
+  restorable, and verifies new writes avoid the quarantined container
+- Added ghost-byte recovery preservation regression
+  `TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiveData`:
+  quarantines a sealing container with ghost bytes, proves unrelated live data
+  remains restorable, and verifies new writes avoid the quarantined container
 - Added integration assertions for GC/restore pinning under remove/GC/restore
   interleavings
 - Added integration assertion that non-strict recovery continues on suspicious

@@ -30,6 +30,69 @@ func TestBackendFromDBNil(t *testing.T) {
 	if SupportsSelectForUpdate(nil) {
 		t.Fatalf("expected nil DB to report no SELECT FOR UPDATE support")
 	}
+	if SupportsSelectForUpdateSkipLocked(nil) {
+		t.Fatalf("expected nil DB to report no SKIP LOCKED support")
+	}
+	if SupportsSelectForUpdateNowait(nil) {
+		t.Fatalf("expected nil DB to report no NOWAIT support")
+	}
+}
+
+func TestSupportsSelectForUpdateVariantsSQLite(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if SupportsSelectForUpdateSkipLocked(dbconn) {
+		t.Fatalf("expected sqlite to report no SKIP LOCKED support")
+	}
+	if SupportsSelectForUpdateNowait(dbconn) {
+		t.Fatalf("expected sqlite to report no NOWAIT support")
+	}
+}
+
+func TestBackendFromDBUnknownDriver(t *testing.T) {
+	registerDummyDriver()
+	dbconn, err := sql.Open("dummy", "")
+	if err != nil {
+		t.Fatalf("open dummy db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if got := BackendFromDB(dbconn); got != BackendUnknown {
+		t.Fatalf("expected backend %q, got %q", BackendUnknown, got)
+	}
+	if SupportsSelectForUpdate(dbconn) {
+		t.Fatalf("expected unknown backend to report no SELECT FOR UPDATE support")
+	}
+	if SupportsSelectForUpdateSkipLocked(dbconn) {
+		t.Fatalf("expected unknown backend to report no SKIP LOCKED support")
+	}
+	if SupportsSelectForUpdateNowait(dbconn) {
+		t.Fatalf("expected unknown backend to report no NOWAIT support")
+	}
+}
+
+func TestQueryWithOptionalForUpdateHelpersUnknownDriverNoop(t *testing.T) {
+	registerDummyDriver()
+	dbconn, err := sql.Open("dummy", "")
+	if err != nil {
+		t.Fatalf("open dummy db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	const query = "SELECT id FROM container WHERE id = $1"
+	if got := QueryWithOptionalForUpdate(dbconn, query); got != query {
+		t.Fatalf("expected QueryWithOptionalForUpdate no-op for unknown backend, got %q", got)
+	}
+	if got := QueryWithOptionalForUpdateSkipLocked(dbconn, query); got != query {
+		t.Fatalf("expected QueryWithOptionalForUpdateSkipLocked no-op for unknown backend, got %q", got)
+	}
+	if got := QueryWithOptionalForUpdateNowait(dbconn, query); got != query {
+		t.Fatalf("expected QueryWithOptionalForUpdateNowait no-op for unknown backend, got %q", got)
+	}
 }
 
 func TestQueryWithOptionalForUpdateSQLite(t *testing.T) {

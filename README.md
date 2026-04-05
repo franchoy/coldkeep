@@ -36,8 +36,20 @@ During v0.10:
 - Changes focus on hardening invariants and lifecycle guarantees
 - Integration tests are expanded for stress and adversarial validation, including long-run scenarios
 - The goal is to actively try to break the system and eliminate remaining correctness risks
+- Validation scope and guarantee-to-evidence mapping are tracked in `VALIDATION_MATRIX.md`
 
 v1.0 will only be released once these guarantees are validated under real-world conditions.
+
+### Validation Matrix
+
+`VALIDATION_MATRIX.md` is the branch-level contract for the v0.10 trust-validation phase.
+
+- It maps each v0.9 guarantee to concrete evidence in verify checks, integration tests, or both.
+- It is maintained alongside code changes so new trust claims do not drift ahead of evidence.
+- It is audited locally via `scripts/validate_validation_matrix.sh` and enforced in CI.
+- It includes explicit long-run validation evidence for the v1.0 trust phase, not only one-shot correctness tests.
+
+This keeps the validation branch grounded in explicit proof obligations rather than informal release notes.
 
 For v0.9, every change intended for mainline or release delivery is expected to
 pass the full GitHub Actions pipeline before merge or tag publication. The repo
@@ -67,7 +79,7 @@ The goal is not maximum performance, but maximum confidence in stored data.
 - Store files or folders by splitting them into content-defined chunks.
 - Deduplicate chunks using SHA-256 (content-addressed storage).
 - Pack chunks into container files up to a configurable maximum size.
-- Restore files by reconstructing them from stored chunks.
+- Restore files by reconstructing them from stored chunks. If some containers are damaged or quarantined, any logical file with at least one restorable chunk will survive recovery (loss-minimizing recovery).
 - Guarantee byte-identical restore outputs (verified by SHA-256).
 - Use an append-only container model for deterministic and safe writes.
 - Remove logical files (decrementing chunk reference counts).
@@ -99,15 +111,29 @@ before the observational, read-only verification checks begin.
 coldkeep is designed as a **correctness-first storage engine**.  
 This section defines the guarantees provided by the system as of **v0.9**.
 
+**Loss-minimizing recovery:**
+If a container is damaged or quarantined, logical files referencing it are only lost if all their chunks are unrecoverable. Otherwise, any logical file with at least one restorable chunk will survive recovery. This ensures that recovery is loss-minimizing, not panic-destructive.
+
+**Guarantee IDs:**
+
+- G1: Deterministic, byte-identical restore
+- G2: Repeat store does not drift chunk graph
+- G3: No exposure of partially written or inconsistent data
+- G4: GC is reference-safe: no reachable chunk is ever deleted
+- G5: Atomic restore replacement (within single-node local filesystem semantics)
+- G6: Safe in-process concurrent storage operations
+- G7: Deep corruption detection (payload/offset/tail)
+- G8: Corrective health gate contract stability
+
 ### Summary
 
 coldkeep v0.9 guarantees:
 
 - deterministic, byte-identical restore
 - no exposure of partially written or inconsistent data
-- non-destructive garbage collection
-- atomic restore operations
-- safe concurrent storage operations
+- GC is reference-safe: no reachable chunk is ever deleted
+- Atomic restore replacement (within single-node local filesystem semantics)
+- Safe in-process concurrent storage operations
 
 ### Core invariants
 
@@ -115,7 +141,7 @@ The system relies on a small set of invariants that should stay true across stor
 restore, verification, garbage collection, and recovery:
 
 - every `COMPLETED` chunk has exactly one valid block record
-- every block record references a valid container
+- every block record references a valid container (or is marked as referencing a quarantined/missing container; see loss-minimizing recovery)
 - every `COMPLETED` logical file has a complete, contiguous, ordered `file_chunk` graph
 - `live_ref_count > 0` protects a chunk from garbage collection
 - `pin_count > 0` protects a chunk from concurrent deletion during restore-like operations
@@ -123,17 +149,18 @@ restore, verification, garbage collection, and recovery:
 
 ### Core validity model
 
-A logical file is considered **valid and restorable** only when:
+
+A logical file is considered **valid and restorable** when:
 
 - its status is `COMPLETED`
 - all referenced chunks are `COMPLETED`
-- all referenced blocks exist and are readable
+- at least one referenced block exists and is readable (loss-minimizing recovery)
 
-Only files in this state are returned by `list` and `search` and are eligible for restore.
+Logical files referencing only unrecoverable or missing containers are not restorable and will be omitted from `list` and `search`. If at least one chunk is restorable, the logical file survives recovery and is eligible for restore.
 
 ---
 
-### Data integrity
+### Data integrity (G1)
 
 coldkeep guarantees **end-to-end data integrity**:
 
@@ -145,7 +172,7 @@ coldkeep guarantees **end-to-end data integrity**:
 
 ---
 
-### Crash consistency
+### Crash consistency (G3)
 
 coldkeep guarantees **safe recovery after crashes or interruptions**:
 
@@ -153,8 +180,9 @@ coldkeep guarantees **safe recovery after crashes or interruptions**:
 - On startup:
   - incomplete operations are marked as `ABORTED`
   - inconsistent containers may be quarantined
+  - logical files referencing quarantined containers are preserved if any chunk is restorable (loss-minimizing recovery)
 
-> No partially written or inconsistent data is exposed as valid.
+> No partially written or inconsistent data is exposed as valid. Recovery is loss-minimizing: only logical files with no restorable chunks are lost.
 
 ### Contributor note (append lifecycle contract)
 
@@ -173,19 +201,22 @@ Restore operations are **atomic and verified**:
 - It is atomically renamed into place
 - The parent directory is fsynced for durability
 
-> A restore either produces a complete valid file, or no file at all.
+> A restore either produces a complete valid file, or no file at all. If some chunks are missing due to damaged containers, restore will fail for that file, but other logical files with restorable chunks will succeed (loss-minimizing, partial restore).
 
 ---
 
-### Garbage collection safety
+### Garbage collection safety (G4)
 
-Garbage collection is **non-destructive**:
+
+Garbage collection is **reference-safe**:
 
 - Only chunks with no live file references and no active restore pins are removed
 - Containers are deleted only when all their chunks are unreferenced
 - Referenced data is never removed
 
 > GC cannot delete data required to restore a valid logical file.
+
+
 
 ---
 
@@ -201,7 +232,7 @@ coldkeep supports **safe concurrent operations**:
 
 ---
 
-### Verification model
+### Verification model (G7, G8)
 
 coldkeep provides multiple verification levels:
 
@@ -293,12 +324,14 @@ The validation approach includes:
 - Invariant validation:
   - explicit checks that core invariants hold after every operation
 
+
 The goal is not only to pass tests, but to demonstrate that:
 
 - recovery converges to a valid state
 - garbage collection never breaks restore
 - restore remains deterministic under all conditions
 - no silent corruption or data loss occurs
+- recovery is loss-minimizing: only logical files with no restorable chunks are lost, and error contracts reflect this
 
 ---
 

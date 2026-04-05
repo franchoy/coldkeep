@@ -285,14 +285,11 @@ func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
 	}
 
 	err := runDoctorCommand(parsedCommandLine{method: "doctor", flags: map[string][]string{}}, outputModeText)
-	if err == nil {
-		t.Fatal("expected error")
+	if err == nil || !strings.Contains(err.Error(), "doctor recovery phase failed") {
+		t.Fatalf("expected doctor recovery phase failure, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitRecovery {
 		t.Fatalf("expected recovery exit code %d, got %d", exitRecovery, got)
-	}
-	if !strings.Contains(err.Error(), "doctor recovery phase failed") {
-		t.Fatalf("expected recovery phase failure message, got: %v", err)
 	}
 	if schemaCalled {
 		t.Fatal("schema phase should not run after recovery failure")
@@ -326,14 +323,11 @@ func TestRunDoctorCommandShortCircuitsAfterSchemaFailure(t *testing.T) {
 	}
 
 	err := runDoctorCommand(parsedCommandLine{method: "doctor", flags: map[string][]string{}}, outputModeText)
-	if err == nil {
-		t.Fatal("expected error")
+	if err == nil || !strings.Contains(err.Error(), "doctor schema/version check failed") {
+		t.Fatalf("expected doctor schema/version check failure, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitGeneral {
 		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
-	}
-	if !strings.Contains(err.Error(), "doctor schema/version check failed") {
-		t.Fatalf("expected schema failure message, got: %v", err)
 	}
 	if verifyCalled {
 		t.Fatal("verify phase should not run after schema failure")
@@ -480,8 +474,8 @@ func TestResolveOutputModeInvalidValueClassifiesAsUsage(t *testing.T) {
 	}
 
 	_, err := resolveOutputMode(parsed)
-	if err == nil {
-		t.Fatal("expected error for invalid output mode")
+	if err == nil || !strings.Contains(err.Error(), "invalid --output value") {
+		t.Fatalf("expected invalid output mode error, got: %v", err)
 	}
 
 	if got := classifyExitCode(err); got != exitUsage {
@@ -496,8 +490,8 @@ func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 		flags:       map[string][]string{},
 	}, outputModeText)
 
-	if err == nil {
-		t.Fatal("expected error for missing simulate args")
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep simulate") {
+		t.Fatalf("expected simulate usage error, got: %v", err)
 	}
 
 	if got := classifyExitCode(err); got != exitUsage {
@@ -512,8 +506,8 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 		flags:       map[string][]string{},
 	}, outputModeText)
 
-	if err == nil {
-		t.Fatal("expected error for unknown simulate subcommand")
+	if err == nil || !strings.Contains(err.Error(), "unknown simulate subcommand") {
+		t.Fatalf("expected unknown simulate subcommand error, got: %v", err)
 	}
 
 	if got := classifyExitCode(err); got != exitUsage {
@@ -529,8 +523,8 @@ func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 		},
 	}, outputModeText)
 
-	if err == nil {
-		t.Fatal("expected error for invalid list limit")
+	if err == nil || !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("expected invalid list limit error, got: %v", err)
 	}
 
 	if got := classifyExitCode(err); got != exitUsage {
@@ -546,8 +540,8 @@ func TestRunSearchCommandInvalidOffsetClassifiesAsUsage(t *testing.T) {
 		},
 	}, outputModeText)
 
-	if err == nil {
-		t.Fatal("expected error for invalid search offset")
+	if err == nil || !strings.Contains(err.Error(), "invalid --offset") {
+		t.Fatalf("expected invalid search offset error, got: %v", err)
 	}
 
 	if got := classifyExitCode(err); got != exitUsage {
@@ -595,8 +589,8 @@ func TestValidateNonNegativeIntegerFlagUsesLastValue(t *testing.T) {
 			"limit": {"25", "invalid"},
 		},
 	}, "limit")
-	if err == nil {
-		t.Fatal("expected invalid final limit value to fail validation")
+	if err == nil || !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("expected invalid limit value error, got: %v", err)
 	}
 }
 
@@ -607,14 +601,11 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 			"limit": {"10001"},
 		},
 	}, "limit")
-	if err == nil {
-		t.Fatal("expected error for limit above maximum")
+	if err == nil || !strings.Contains(err.Error(), "must be <= 10000") {
+		t.Fatalf("expected limit-above-maximum error containing \"must be <= 10000\", got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
-	}
-	if !strings.Contains(err.Error(), "must be <= 10000") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

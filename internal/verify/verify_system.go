@@ -66,6 +66,11 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 		return err
 	}
 
+	//check that all completed chunks have exactly one location mapping row
+	if err = checkCompletedChunkBlockCardinality(dbconn); err != nil {
+		return err
+	}
+
 	//check that temporary restore pins remain on COMPLETED chunks only
 	if err = checkPinnedChunkStatus(dbconn); err != nil {
 		return err

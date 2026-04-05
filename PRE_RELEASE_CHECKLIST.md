@@ -34,7 +34,15 @@ go test ./tests -count=1 -v -timeout 20m
 
 Expected: both succeed and JSON output is machine-readable.
 
-## 4) Test bootstrap on and off
+## 4) Validate guarantee matrix
+
+```bash
+scripts/validate_validation_matrix.sh
+```
+
+Expected: required v1.0 guarantee rows and exit criteria are present in `VALIDATION_MATRIX.md`.
+
+## 5) Test bootstrap on and off
 
 Bootstrap ON (clean schema bootstrap path):
 
@@ -53,7 +61,7 @@ unset COLDKEEP_DB_AUTO_BOOTSTRAP
 
 Expected: bootstrap on creates/validates schema path successfully; bootstrap off fails fast on missing schema.
 
-## 5) Test clean install path
+## 6) Test clean install path
 
 From a clean machine/container flow:
 
@@ -67,7 +75,7 @@ docker compose run --rm app doctor
 
 Expected: no manual local state is required beyond documented setup, and basic commands succeed.
 
-## 6) PostgreSQL assumptions note
+## 7) PostgreSQL assumptions note
 
 Operator expectation surface for supported PostgreSQL deployments:
 
@@ -80,5 +88,6 @@ Operator expectation surface for supported PostgreSQL deployments:
 - [ ] Smoke passed
 - [ ] Integration suite passed
 - [ ] Doctor checks passed
+- [ ] Validation matrix audit passed
 - [ ] Bootstrap on/off behavior verified
 - [ ] Clean install path verified

@@ -33,21 +33,36 @@ func TestParsePaginationArgsUsesLastValue(t *testing.T) {
 
 func TestParsePaginationArgsRejectsNegativeValues(t *testing.T) {
 	_, _, err := parsePaginationArgs([]string{"--offset", "-1"})
-	if err == nil {
-		t.Fatal("expected error for negative offset")
-	}
-	if !strings.Contains(err.Error(), "invalid --offset") {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid --offset") {
+		t.Fatalf("expected error containing \"invalid --offset\", got: %v", err)
 	}
 }
 
 func TestParsePaginationArgsRejectsLimitAboveMaximum(t *testing.T) {
 	_, _, err := parsePaginationArgs([]string{"--limit", "10001"})
-	if err == nil {
-		t.Fatal("expected error for limit above maximum")
+	if err == nil || !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("expected error containing \"invalid --limit\", got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "invalid --limit") {
-		t.Fatalf("unexpected error: %v", err)
+}
+
+func TestParsePaginationArgsRejectsMissingLimitValue(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--limit"})
+	if err == nil || !strings.Contains(err.Error(), "missing argument for --limit") {
+		t.Fatalf("expected missing --limit argument contract, got: %v", err)
+	}
+}
+
+func TestParsePaginationArgsRejectsMissingOffsetValue(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--offset"})
+	if err == nil || !strings.Contains(err.Error(), "missing argument for --offset") {
+		t.Fatalf("expected missing --offset argument contract, got: %v", err)
+	}
+}
+
+func TestParsePaginationArgsRejectsNonIntegerLimitValue(t *testing.T) {
+	_, _, err := parsePaginationArgs([]string{"--limit", "NaN"})
+	if err == nil || !strings.Contains(err.Error(), "invalid --limit") {
+		t.Fatalf("expected invalid --limit parse contract, got: %v", err)
 	}
 }
 
@@ -68,5 +83,51 @@ func TestApplyPaginationAppendsLimitThenOffset(t *testing.T) {
 	}
 	if got := params[3]; got != int64(5) {
 		t.Fatalf("expected offset param 5, got %v", got)
+	}
+}
+
+func TestApplyPaginationWithLimitOnly(t *testing.T) {
+	limitValue := int64(7)
+
+	query, params := applyPagination("SELECT * FROM logical_file", []interface{}{"completed"}, 2, &limitValue, nil)
+
+	if !strings.Contains(query, "LIMIT $2") || strings.Contains(query, "OFFSET") {
+		t.Fatalf("unexpected query for limit-only case: %s", query)
+	}
+	if len(params) != 2 {
+		t.Fatalf("expected 2 params, got %d", len(params))
+	}
+	if got := params[1]; got != int64(7) {
+		t.Fatalf("expected limit param 7, got %v", got)
+	}
+}
+
+func TestApplyPaginationWithOffsetOnly(t *testing.T) {
+	offsetValue := int64(12)
+
+	query, params := applyPagination("SELECT * FROM logical_file", []interface{}{"completed"}, 2, nil, &offsetValue)
+
+	if strings.Contains(query, "LIMIT") || !strings.Contains(query, "OFFSET $2") {
+		t.Fatalf("unexpected query for offset-only case: %s", query)
+	}
+	if len(params) != 2 {
+		t.Fatalf("expected 2 params, got %d", len(params))
+	}
+	if got := params[1]; got != int64(12) {
+		t.Fatalf("expected offset param 12, got %v", got)
+	}
+}
+
+func TestApplyPaginationWithNoPaginationLeavesQueryUnchanged(t *testing.T) {
+	baseQuery := "SELECT * FROM logical_file ORDER BY created_at DESC"
+	baseParams := []interface{}{"completed"}
+
+	query, params := applyPagination(baseQuery, baseParams, 2, nil, nil)
+
+	if query != baseQuery {
+		t.Fatalf("expected query unchanged, got: %s", query)
+	}
+	if len(params) != 1 || params[0] != "completed" {
+		t.Fatalf("expected params unchanged, got: %#v", params)
 	}
 }
