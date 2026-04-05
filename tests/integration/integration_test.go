@@ -69,6 +69,7 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
@@ -178,6 +179,7 @@ func TestDoctorCommand(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)

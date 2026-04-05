@@ -25,6 +25,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       # Keep Go caching centralized in setup-go (cache: true); avoid adding a
       # second actions/cache layer for go-build or module paths unless measured.
       - name: Setup Go
@@ -105,6 +108,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -152,6 +158,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -198,6 +207,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -247,6 +259,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
 
       - name: Setup Go
         uses: actions/setup-go@v5

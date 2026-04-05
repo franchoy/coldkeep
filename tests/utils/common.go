@@ -233,9 +233,10 @@ func FindCLIErrorPayload(output string) (map[string]any, bool) {
 }
 
 func DefaultCLIEnv(storageDir string) map[string]string {
-	return map[string]string{
+	codec := GetenvOrDefault("COLDKEEP_CODEC", "plain")
+	env := map[string]string{
 		"COLDKEEP_TEST_DB":     "1",
-		"COLDKEEP_CODEC":       GetenvOrDefault("COLDKEEP_CODEC", "plain"),
+		"COLDKEEP_CODEC":       codec,
 		"COLDKEEP_STORAGE_DIR": storageDir,
 		"DB_HOST":              GetenvOrDefault("DB_HOST", "127.0.0.1"),
 		"DB_PORT":              GetenvOrDefault("DB_PORT", "5432"),
@@ -244,6 +245,10 @@ func DefaultCLIEnv(storageDir string) map[string]string {
 		"DB_NAME":              GetenvOrDefault("DB_NAME", "coldkeep"),
 		"DB_SSLMODE":           GetenvOrDefault("DB_SSLMODE", "disable"),
 	}
+	if codec == "aes-gcm" {
+		env["COLDKEEP_KEY"] = GetenvOrDefault("COLDKEEP_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	}
+	return env
 }
 
 func GetenvOrDefault(name, fallback string) string {
