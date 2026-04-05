@@ -4028,6 +4028,17 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 	anchorID := testutils.FetchFileIDByHash(t, dbconn, anchorHash)
 
 	spacerPath := testutils.CreateTempFile(t, inputDir, "recovery-spacer.bin", 600*1024)
+	spacerBytes, err := os.ReadFile(spacerPath)
+	if err != nil {
+		t.Fatalf("read spacer file: %v", err)
+	}
+	if len(spacerBytes) == 0 {
+		t.Fatalf("expected non-empty spacer file")
+	}
+	spacerBytes[0] ^= 0x7f
+	if err := os.WriteFile(spacerPath, spacerBytes, 0o644); err != nil {
+		t.Fatalf("rewrite spacer file: %v", err)
+	}
 	spacerHash := testutils.SHA256File(t, spacerPath)
 	if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), spacerPath); err != nil {
 		t.Fatalf("store spacer file: %v", err)

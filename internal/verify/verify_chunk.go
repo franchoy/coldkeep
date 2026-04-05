@@ -386,6 +386,7 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container cont ON b.container_id = cont.id
 		WHERE c.status = $1
+		  AND cont.quarantine = FALSE
 		ORDER BY b.container_id, b.block_offset;`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")

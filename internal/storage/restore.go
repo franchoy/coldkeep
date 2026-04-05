@@ -317,6 +317,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	var expectedOrder int64 = 0
 	validChunks := 0
 	var firstRestoreError error
+	const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	isExpectedEmptyFile := len(chunkRows) == 0 && expectedFileHash == emptyFileSHA256
 	for _, chunkRow := range chunkRows {
 		if err := ctx.Err(); err != nil {
 			return RestoreFileResult{}, err
@@ -439,30 +441,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 
 	if validChunks == 0 {
-		if firstRestoreError != nil {
+		if isExpectedEmptyFile {
+			// Valid completed empty file: restore emits an empty output file.
+			result.RestoredHash = emptyFileSHA256
+		} else if firstRestoreError != nil {
 			return RestoreFileResult{}, firstRestoreError
+		} else {
+			return RestoreFileResult{}, fmt.Errorf("no restorable chunks found for file %d (all referenced containers missing or quarantined)", fileID)
 		}
-		return RestoreFileResult{}, fmt.Errorf("no restorable chunks found for file %d (all referenced containers missing or quarantined)", fileID)
 	}
 
 	// Compute the final hash before fsync/close/rename
 	restoredHash := hex.EncodeToString(hasher.Sum(nil))
-	result.RestoredHash = restoredHash
-	if restoredHash != expectedFileHash {
-		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, expectedFileHash, restoredHash)
-	}
-
-	if expectedOrder == 0 {
-		// valid ONLY if expectedFileHash == sha256("")
-		const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-		if expectedFileHash != emptyFileSHA256 {
-			return RestoreFileResult{}, fmt.Errorf("no chunks found for file %d but expected hash is not empty", fileID)
-		}
-		// else: empty file, no chunks, valid
-	}
-
-	// Compute the final hash before fsync/close/rename
-	restoredHash = hex.EncodeToString(hasher.Sum(nil))
 	result.RestoredHash = restoredHash
 	if restoredHash != expectedFileHash {
 		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, expectedFileHash, restoredHash)
