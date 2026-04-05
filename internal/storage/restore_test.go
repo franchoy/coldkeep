@@ -712,9 +712,12 @@ func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
-	// Accept nil (no error) as valid: loss-minimizing recovery may treat this as a no-op.
-	if err != nil && !strings.Contains(err.Error(), "no restorable chunks found for file") {
-		t.Fatalf("expected no-restorable-chunks error or nil, got: %v", err)
+	if err == nil {
+		t.Fatalf("expected restore to fail for chunk-order discontinuity")
+	}
+	if !strings.Contains(err.Error(), "no restorable chunks found for file") &&
+		!strings.Contains(err.Error(), "restored file hash mismatch") {
+		t.Fatalf("expected no-restorable-chunks or hash-mismatch error, got: %v", err)
 	}
 }
 
