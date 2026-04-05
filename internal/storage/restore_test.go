@@ -276,8 +276,8 @@ func TestRestoreFailsOnChunkHashMismatch(t *testing.T) {
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
-	if err == nil || !strings.Contains(err.Error(), "no restorable chunks found for file") {
-		t.Fatalf("expected no-restorable-chunks error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "restored chunk hash mismatch") {
+		t.Fatalf("expected chunk hash mismatch error, got: %v", err)
 	}
 }
 
@@ -377,8 +377,8 @@ func TestRestoreFailsOnPlaintextSizeMismatch(t *testing.T) {
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
-	if err == nil || !strings.Contains(err.Error(), "no restorable chunks found for file") {
-		t.Fatalf("expected no-restorable-chunks error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "plaintext size mismatch") {
+		t.Fatalf("expected plaintext size mismatch error, got: %v", err)
 	}
 }
 
@@ -459,8 +459,8 @@ func TestRestoreFailsOnAESGCMDecodeFailure(t *testing.T) {
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
-	if err == nil || !strings.Contains(err.Error(), "no restorable chunks found for file") {
-		t.Fatalf("expected no-restorable-chunks error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected cipher: message authentication failed error, got: %v", err)
 	}
 }
 
@@ -594,8 +594,8 @@ func TestRestoreFailsWhenAESGCMTransformerKeyIsMissing(t *testing.T) {
 	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err = RestoreFileWithStorageContext(sgctx, fileID, outPath)
-	if err == nil || !strings.Contains(err.Error(), "no restorable chunks found for file") {
-		t.Fatalf("expected no-restorable-chunks error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
+		t.Fatalf("expected aes-gcm requires COLDKEEP_KEY error, got: %v", err)
 	}
 }
 
