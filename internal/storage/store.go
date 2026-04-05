@@ -440,13 +440,11 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	if summary.missingBlocks > 0 {
 		return fmt.Errorf("logical file %d references chunks without block metadata", fileID)
 	}
-	if summary.invalidContainers > 0 {
-		// Only treat as invalid if the container is missing, not merely quarantined.
-		// For v1.0, allow logical files referencing quarantined containers to be restored.
-		// Optionally, log a warning or set a degraded status here.
-		// log.Printf("warning: logical file %d references quarantined container(s)", fileID)
-		// (If you want to distinguish missing vs quarantined, you can refine the SQL above.)
-	}
+	// Only treat as invalid if the container is missing, not merely quarantined.
+	// For v1.0, allow logical files referencing quarantined containers to be restored.
+	// Optionally, log a warning or set a degraded status here.
+	// log.Printf("warning: logical file %d references quarantined container(s)", fileID)
+	// (If you want to distinguish missing vs quarantined, you can refine the SQL above.)
 
 	if strings.TrimSpace(containersDir) == "" {
 		return nil
