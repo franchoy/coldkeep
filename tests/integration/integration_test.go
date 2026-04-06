@@ -8635,15 +8635,114 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 			"remove", "--input", emptyInput, "--output", "json")
-		if res.ExitCode != 2 {
-			t.Fatalf("expected usage exit code 2 for empty input file, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		if res.ExitCode != 1 {
+			t.Fatalf("expected general exit code 1 for empty effective input, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
 		}
 		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 		if !ok {
 			t.Fatalf("expected JSON error payload on stderr for empty input file, stderr=%s", res.Stderr)
 		}
+		if got, _ := errPayload["error_class"].(string); got != "GENERAL" {
+			t.Fatalf("expected GENERAL error class, got payload=%v", errPayload)
+		}
 		if msg, _ := errPayload["message"].(string); !strings.Contains(strings.ToLower(msg), "no valid file ids") {
 			t.Fatalf("expected no-valid-file-ids message, got payload=%v", errPayload)
+		}
+	})
+
+	t.Run("remove failure isolation", func(t *testing.T) {
+		fileC := filepath.Join(inputDir, "batch_flags_c.txt")
+		if err := os.WriteFile(fileC, []byte("batch-flags-file-c"), 0o644); err != nil {
+			t.Fatalf("write fileC: %v", err)
+		}
+
+		storeC := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileC, "--output", "json"), "store")
+		idC := testutils.JSONInt64(t, testutils.JSONMap(t, storeC, "data"), "file_id")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idA), "999999", fmt.Sprintf("%d", idC), "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove failure isolation should return non-zero due to failed item: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove failure isolation produced no JSON stdout: %s", res.Stdout)
+		}
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 2 || int(summary["failed"].(float64)) != 1 {
+			t.Fatalf("unexpected failure isolation summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected results payload: %v", payload)
+		}
+
+		first, _ := results[0].(map[string]any)
+		middle, _ := results[1].(map[string]any)
+		last, _ := results[2].(map[string]any)
+		if first["status"] != "success" || middle["status"] != "failed" || last["status"] != "success" {
+			t.Fatalf("unexpected per-item statuses for failure isolation: results=%v", results)
+		}
+	})
+
+	t.Run("restore dry-run and real parity", func(t *testing.T) {
+		fileParity := filepath.Join(inputDir, "batch_flags_parity.txt")
+		if err := os.WriteFile(fileParity, []byte("batch-flags-parity"), 0o644); err != nil {
+			t.Fatalf("write parity file: %v", err)
+		}
+
+		storeParity := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileParity, "--output", "json"), "store")
+		idParity := testutils.JSONInt64(t, testutils.JSONMap(t, storeParity, "data"), "file_id")
+
+		outDir := filepath.Join(tmp, "restore_parity")
+		dryRunRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idParity), outDir, "--dry-run", "--output", "json")
+		if dryRunRes.ExitCode != 0 {
+			t.Fatalf("restore parity dry-run failed: exit=%d stdout=%s stderr=%s", dryRunRes.ExitCode, dryRunRes.Stdout, dryRunRes.Stderr)
+		}
+		realRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idParity), outDir, "--overwrite", "--output", "json")
+		if realRes.ExitCode != 0 {
+			t.Fatalf("restore parity real execution failed: exit=%d stdout=%s stderr=%s", realRes.ExitCode, realRes.Stdout, realRes.Stderr)
+		}
+
+		dryPayload, ok := testutils.TryParseLastJSONLine(dryRunRes.Stdout)
+		if !ok {
+			t.Fatalf("restore parity dry-run JSON missing: stdout=%s", dryRunRes.Stdout)
+		}
+		realPayload, ok := testutils.TryParseLastJSONLine(realRes.Stdout)
+		if !ok {
+			t.Fatalf("restore parity real JSON missing: stdout=%s", realRes.Stdout)
+		}
+
+		drySummary, _ := dryPayload["summary"].(map[string]any)
+		realSummary, _ := realPayload["summary"].(map[string]any)
+		if int(drySummary["planned"].(float64)) != 1 || int(drySummary["failed"].(float64)) != 0 {
+			t.Fatalf("unexpected dry-run parity summary: %v", drySummary)
+		}
+		if int(realSummary["success"].(float64)) != 1 || int(realSummary["failed"].(float64)) != 0 {
+			t.Fatalf("unexpected real parity summary: %v", realSummary)
+		}
+
+		dryResults, _ := dryPayload["results"].([]any)
+		realResults, _ := realPayload["results"].([]any)
+		if len(dryResults) != 1 || len(realResults) != 1 {
+			t.Fatalf("unexpected parity results length: dry=%v real=%v", dryResults, realResults)
+		}
+		dryItem, _ := dryResults[0].(map[string]any)
+		realItem, _ := realResults[0].(map[string]any)
+		if dryItem["id"] != realItem["id"] {
+			t.Fatalf("dry-run vs real id mismatch: dry=%v real=%v", dryItem, realItem)
+		}
+		if dryItem["output_path"] != realItem["output_path"] {
+			t.Fatalf("dry-run vs real output_path mismatch: dry=%v real=%v", dryItem, realItem)
 		}
 	})
 }

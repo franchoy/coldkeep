@@ -169,6 +169,33 @@ Confirm:
 
 Expected: no drift in CLI JSON structure, error classification, or frozen exit-code mapping.
 
+## 11) Verify batch CLI contract stability (v1.1)
+
+Run targeted tests that lock batch parser, reporting, and integration behavior:
+
+```bash
+go test ./cmd/coldkeep -run 'TestParseFileIDs|TestDeduplicateIDs|TestLoadIDsFromFile|TestPrintBatchHumanReportSymbolsAndAlignment|TestPrintBatchHumanReportDryRunPlannedNoIcon|TestEmitBatchCommandReportJSONSchema'
+go test ./internal/batch -run 'TestLoadRawTargets|TestResolveTargets|TestDeduplicateTargets'
+go test ./tests/integration -run TestBatchFlagsEndToEnd
+```
+
+Manual spot-checks (text mode):
+
+```bash
+./coldkeep restore 12 ./out --dry-run
+./coldkeep remove 12 999 13
+```
+
+Confirm:
+
+- Human symbols remain stable: `✔` success, `✖` failed, `↷` skipped, no icon for planned dry-run rows
+- ID column remains aligned (`id=%-6d` style)
+- JSON batch envelope remains `status + command + dry_run + summary + results`
+- Failed item JSON uses `error` field (not `message`)
+- `--fail-fast` stops further execution but still emits partial report
+- Empty effective ID set returns `no valid file IDs provided` with exit code `1`
+- Restore overwrite default is safe (requires `--overwrite` to replace files)
+
 ## Sign-off
 
 - [ ] Quality parity checks passed
@@ -180,3 +207,4 @@ Expected: no drift in CLI JSON structure, error classification, or frozen exit-c
 - [ ] Bootstrap on/off behavior verified
 - [ ] Clean install path verified
 - [ ] CLI contract stability verified
+- [ ] Batch CLI contract stability verified

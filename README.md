@@ -617,6 +617,101 @@ coldkeep simulate store-folder ./data --output json
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
 - `startup_recovery` JSON is an event-style diagnostic emitted on stderr (preflight stream), while `doctor --output json` emits a command-style result payload on stdout (`status + command + data`).
 
+### Batch restore/remove output contract (v1.1)
+
+Batch restore/remove output is a strict extension of single-item command behavior.
+
+Human mode:
+
+- `✔` means success
+- `✖` means failed
+- `↷` means skipped
+- planned dry-run entries intentionally have no icon
+
+Examples:
+
+```text
+[RESTORE]
+✔ id=12     -> ./out/report.pdf
+✔ id=18     -> ./out/archive.zip
+✖ id=24     error=file not found
+↷ id=18     skipped duplicate target
+
+Summary:
+  total:   4
+  success: 2
+  failed:  1
+  skipped: 1
+```
+
+```text
+[REMOVE]
+✔ id=12     removed mappings=8
+✖ id=18     error=file not found
+✔ id=24     removed mappings=3
+
+Summary:
+  total:   3
+  success: 2
+  failed:  1
+  skipped: 0
+```
+
+```text
+[RESTORE DRY-RUN]
+  id=12     would restore -> ./out/report.pdf
+✖ id=99     error=file not found
+
+Summary:
+  total:   2
+  planned: 1
+  failed:  1
+```
+
+JSON mode (`--output json`) for batch commands uses this envelope:
+
+```json
+{
+  "status": "partial_failure",
+  "command": "restore",
+  "dry_run": false,
+  "summary": {
+    "total": 3,
+    "success": 2,
+    "failed": 1,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "id": 12,
+      "status": "success",
+      "output_path": "./out/a.txt",
+      "original_name": "a.txt"
+    },
+    {
+      "id": 18,
+      "status": "failed",
+      "error": "file not found"
+    }
+  ]
+}
+```
+
+Top-level `status` logic:
+
+- `ok` when `failed == 0`
+- `partial_failure` when `failed > 0` and at least one entry succeeded or was planned
+- `error` when all executed/planned entries failed
+
+Validation and edge-case rules:
+
+- `restore` requires an output directory and rejects missing/ambiguous positional forms.
+- `remove` requires at least one effective ID source (CLI IDs or `--input`).
+- `--input` can be used alone or merged with positional IDs.
+- If effective valid IDs are empty after parsing, command fails with `no valid file IDs provided` and exit code `1`.
+- `--fail-fast` stops execution at first failure while still printing/emitting partial report data.
+- `restore` does not overwrite destination files unless `--overwrite` is explicitly set.
+
 ### Frozen v1.0 JSON surface
 
 The following JSON fields are frozen for v1.0 and should not change without a

@@ -686,13 +686,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
-	rawTargets, err := batch.LoadRawTargets(targetArgs, inputFile)
+	rawTargets, err := collectRawTargets(targetArgs, inputFile)
 	if err != nil {
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	ids, initialResults := buildBatchTargets(rawTargets)
 	if len(ids) == 0 && len(initialResults) == 0 {
-		return usageErrorf("no valid file IDs provided")
+		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -724,13 +724,13 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
 	failFast := parsed.hasFlag("fail-fast", "failFast")
 
-	rawTargets, err := batch.LoadRawTargets(parsed.positionals, inputFile)
+	rawTargets, err := collectRawTargets(parsed.positionals, inputFile)
 	if err != nil {
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	ids, initialResults := buildBatchTargets(rawTargets)
 	if len(ids) == 0 && len(initialResults) == 0 {
-		return usageErrorf("no valid file IDs provided")
+		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -779,7 +779,7 @@ func batchOverallStatus(report batch.Report) string {
 	if report.Summary.Failed == 0 {
 		return "ok"
 	}
-	if report.Summary.Success > 0 || report.Summary.Planned > 0 || report.Summary.Skipped > 0 {
+	if report.Summary.Success > 0 || report.Summary.Planned > 0 {
 		return "partial_failure"
 	}
 	return "error"
@@ -794,27 +794,80 @@ func printBatchHumanReport(label string, report batch.Report) {
 	for _, item := range report.Results {
 		switch item.Status {
 		case batch.ResultSuccess:
-			fmt.Printf("OK id=%d %s\n", item.ID, item.Message)
+			if item.OutputPath != "" {
+				fmt.Printf("✔ id=%-6d -> %s\n", item.ID, item.OutputPath)
+			} else if item.Message != "" {
+				fmt.Printf("✔ id=%-6d %s\n", item.ID, item.Message)
+			} else {
+				fmt.Printf("✔ id=%-6d success\n", item.ID)
+			}
 		case batch.ResultFailed:
-			fmt.Printf("FAIL id=%d error=%s\n", item.ID, item.Message)
+			fmt.Printf("✖ id=%-6d error=%s\n", item.ID, item.Message)
 		case batch.ResultSkipped:
-			fmt.Printf("SKIP id=%d reason=%s\n", item.ID, item.Message)
+			fmt.Printf("↷ id=%-6d skipped %s\n", item.ID, item.Message)
 		case batch.ResultPlanned:
-			fmt.Printf("PLAN id=%d %s\n", item.ID, item.Message)
+			fmt.Printf("  id=%-6d %s\n", item.ID, item.Message)
 		}
 	}
 	fmt.Println("Summary:")
-	fmt.Printf("  total: %d\n", report.Summary.Total)
-	fmt.Printf("  planned: %d\n", report.Summary.Planned)
-	fmt.Printf("  success: %d\n", report.Summary.Success)
-	fmt.Printf("  failed: %d\n", report.Summary.Failed)
-	fmt.Printf("  skipped: %d\n", report.Summary.Skipped)
+	fmt.Printf("  total:   %d\n", report.Summary.Total)
+	if report.DryRun {
+		fmt.Printf("  planned: %d\n", report.Summary.Planned)
+		fmt.Printf("  failed:  %d\n", report.Summary.Failed)
+	} else {
+		fmt.Printf("  success: %d\n", report.Summary.Success)
+		fmt.Printf("  failed:  %d\n", report.Summary.Failed)
+		fmt.Printf("  skipped: %d\n", report.Summary.Skipped)
+	}
+}
+
+func collectRawTargets(cliIDs []string, inputFile string) ([]batch.RawTarget, error) {
+	raw := make([]batch.RawTarget, 0, len(cliIDs))
+	for _, id := range cliIDs {
+		raw = append(raw, batch.RawTarget{Value: id, Source: "args"})
+	}
+
+	if strings.TrimSpace(inputFile) == "" {
+		return raw, nil
+	}
+
+	inputIDs, err := loadIDsFromFile(inputFile)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range inputIDs {
+		raw = append(raw, batch.RawTarget{Value: id, Source: "input"})
+	}
+
+	return raw, nil
+}
+
+func loadIDsFromFile(inputFile string) ([]string, error) {
+	rawTargets, err := batch.LoadRawTargets(nil, inputFile)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rawTargets))
+	for _, raw := range rawTargets {
+		ids = append(ids, raw.Value)
+	}
+	return ids, nil
 }
 
 func buildBatchTargets(rawTargets []batch.RawTarget) ([]int64, []batch.ItemResult) {
+	parsedIDs, parseResults := parseFileIDs(rawTargets)
+	ids, dedupResults := deduplicateIDs(parsedIDs)
+
+	results := make([]batch.ItemResult, 0, len(parseResults)+len(dedupResults))
+	results = append(results, parseResults...)
+	results = append(results, dedupResults...)
+
+	return ids, results
+}
+
+func parseFileIDs(rawTargets []batch.RawTarget) ([]int64, []batch.ItemResult) {
 	ids := make([]int64, 0, len(rawTargets))
 	results := make([]batch.ItemResult, 0)
-	seen := make(map[int64]struct{}, len(rawTargets))
 
 	for _, raw := range rawTargets {
 		value := strings.TrimSpace(raw.Value)
@@ -827,20 +880,32 @@ func buildBatchTargets(rawTargets []batch.RawTarget) ([]int64, []batch.ItemResul
 			continue
 		}
 
-		if _, exists := seen[parsedID]; exists {
+		ids = append(ids, parsedID)
+	}
+
+	return ids, results
+}
+
+func deduplicateIDs(ids []int64) ([]int64, []batch.ItemResult) {
+	seen := make(map[int64]struct{}, len(ids))
+	unique := make([]int64, 0, len(ids))
+	results := make([]batch.ItemResult, 0)
+
+	for _, id := range ids {
+		if _, exists := seen[id]; exists {
 			results = append(results, batch.ItemResult{
-				ID:      parsedID,
+				ID:      id,
 				Status:  batch.ResultSkipped,
 				Message: "duplicate target",
 			})
 			continue
 		}
 
-		seen[parsedID] = struct{}{}
-		ids = append(ids, parsedID)
+		seen[id] = struct{}{}
+		unique = append(unique, id)
 	}
 
-	return ids, results
+	return unique, results
 }
 
 func executeBatch(ids []int64, initialResults []batch.ItemResult, execFunc func(id int64) batch.ItemResult, failFast bool, op batch.OperationType, dryRun bool) batch.Report {
@@ -928,13 +993,30 @@ func executeRemoveItem(sgctx *storage.StorageContext, fileID int64) batch.ItemRe
 
 func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode) error {
 	if outputMode == outputModeJSON {
+		jsonResults := make([]map[string]any, 0, len(report.Results))
+		for _, item := range report.Results {
+			encoded := map[string]any{
+				"id":     item.ID,
+				"status": item.Status,
+			}
+			if item.OutputPath != "" {
+				encoded["output_path"] = item.OutputPath
+			}
+			if item.OriginalName != "" {
+				encoded["original_name"] = item.OriginalName
+			}
+			if item.Status == batch.ResultFailed && item.Message != "" {
+				encoded["error"] = item.Message
+			}
+			jsonResults = append(jsonResults, encoded)
+		}
+
 		payload := map[string]any{
 			"status":  batchOverallStatus(report),
 			"command": command,
 			"dry_run": report.DryRun,
-			"data":    report,
 			"summary": report.Summary,
-			"results": report.Results,
+			"results": jsonResults,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
