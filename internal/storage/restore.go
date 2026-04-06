@@ -25,6 +25,11 @@ type RestoreFileResult struct {
 	RestoredHash string `json:"restored_hash"`
 }
 
+// RestoreOptions controls restore-file behavior.
+type RestoreOptions struct {
+	Overwrite bool
+}
+
 type restoreChunkRow struct {
 	chunkOrder          int64
 	blockOffset         int64
@@ -228,7 +233,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 }
 
 func RestoreFileWithDBResult(dbconn *sql.DB, fileID int64, outputPath string) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir)
+	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir, RestoreOptions{Overwrite: true})
 }
 
 func RestoreFileWithStorageContext(sgctx StorageContext, fileID int64, outputPath string) error {
@@ -237,10 +242,14 @@ func RestoreFileWithStorageContext(sgctx StorageContext, fileID int64, outputPat
 }
 
 func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, outputPath string) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir())
+	return RestoreFileWithStorageContextResultOptions(sgctx, fileID, outputPath, RestoreOptions{Overwrite: true})
 }
 
-func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string) (result RestoreFileResult, err error) {
+func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
+}
+
+func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
 	result.FileID = fileID
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -275,6 +284,13 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		outputPath = filepath.Join(outputPath, originalName)
 	}
 	result.OutputPath = outputPath
+	if !opts.Overwrite {
+		if _, statErr := os.Stat(outputPath); statErr == nil {
+			return RestoreFileResult{}, fmt.Errorf("output file already exists: %s (use --overwrite)", outputPath)
+		} else if !os.IsNotExist(statErr) {
+			return RestoreFileResult{}, fmt.Errorf("check output path %s: %w", outputPath, statErr)
+		}
+	}
 
 	// Create parent directories if they don't exist
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
@@ -474,6 +490,13 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if TestRestoreFailBeforeRenameHook != nil {
 		if hookErr := TestRestoreFailBeforeRenameHook(tempOutputPath, outputPath); hookErr != nil {
 			return RestoreFileResult{}, fmt.Errorf("test hook restore failure: %w", hookErr)
+		}
+	}
+	if !opts.Overwrite {
+		if _, statErr := os.Stat(outputPath); statErr == nil {
+			return RestoreFileResult{}, fmt.Errorf("output file already exists: %s (use --overwrite)", outputPath)
+		} else if !os.IsNotExist(statErr) {
+			return RestoreFileResult{}, fmt.Errorf("check output path %s before rename: %w", outputPath, statErr)
 		}
 	}
 
