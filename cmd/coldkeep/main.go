@@ -665,10 +665,15 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) < 2 {
+	inputFile, _ := parsed.lastFlagValue("input")
+	hasInput := strings.TrimSpace(inputFile) != ""
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+	}
+	if !hasInput && len(parsed.positionals) < 2 {
 		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
 	}
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
@@ -681,11 +686,14 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
-	rawTargets, err := batch.LoadRawTargets(targetArgs, "")
+	rawTargets, err := batch.LoadRawTargets(targetArgs, inputFile)
 	if err != nil {
-		return err
+		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	ids, initialResults := buildBatchTargets(rawTargets)
+	if len(ids) == 0 && len(initialResults) == 0 {
+		return usageErrorf("no valid file IDs provided")
+	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -705,20 +713,25 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "dry-run", "dryRun", "fail-fast", "failFast"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) < 1 {
+	inputFile, _ := parsed.lastFlagValue("input")
+	hasInput := strings.TrimSpace(inputFile) != ""
+	if !hasInput && len(parsed.positionals) < 1 {
 		return usageErrorf("Usage: coldkeep remove <fileID> [fileID ...]")
 	}
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
 	failFast := parsed.hasFlag("fail-fast", "failFast")
 
-	rawTargets, err := batch.LoadRawTargets(parsed.positionals, "")
+	rawTargets, err := batch.LoadRawTargets(parsed.positionals, inputFile)
 	if err != nil {
-		return err
+		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	ids, initialResults := buildBatchTargets(rawTargets)
+	if len(ids) == 0 && len(initialResults) == 0 {
+		return usageErrorf("no valid file IDs provided")
+	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -1536,8 +1549,8 @@ func printHelp() {
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
-		{"  restore <fileID> [<fileID> ...] <outputDir> [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
-		{"  remove <fileID> [<fileID> ...] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs"},
+		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
+		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},

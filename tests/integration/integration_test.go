@@ -8556,6 +8556,96 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 			t.Fatalf("idA should still exist after remove --fail-fast first-item failure: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
 		}
 	})
+
+	t.Run("restore --input only", func(t *testing.T) {
+		inputFile := filepath.Join(tmp, "restore_ids.txt")
+		if err := os.WriteFile(inputFile, []byte(fmt.Sprintf("# restore ids\n%d\n\n", idA)), 0o644); err != nil {
+			t.Fatalf("write restore input file: %v", err)
+		}
+
+		outDir := filepath.Join(tmp, "restore_input_only")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", outDir, "--input", inputFile, "--dry-run", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("restore with --input only failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("restore with --input only produced no JSON stdout: %s", res.Stdout)
+		}
+		if dryRun, _ := payload["dry_run"].(bool); !dryRun {
+			t.Fatalf("expected dry_run=true payload for restore --input: %v", payload)
+		}
+	})
+
+	t.Run("remove merge cli+input dedup and invalid", func(t *testing.T) {
+		inputFile := filepath.Join(tmp, "remove_ids_merge.txt")
+		content := fmt.Sprintf("# remove ids\n%d\n%d\ninvalid-id\n", idA, idB)
+		if err := os.WriteFile(inputFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("write remove merge input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idA), "--input", inputFile, "--dry-run", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove merge dry-run should report invalid entry as failure: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove merge dry-run produced no JSON stdout: %s", res.Stdout)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary in payload: %v", payload)
+		}
+		if int(summary["planned"].(float64)) < 2 {
+			t.Fatalf("expected at least two planned items from merged IDs, got summary=%v", summary)
+		}
+		if int(summary["skipped"].(float64)) < 1 {
+			t.Fatalf("expected duplicate skip from merged IDs, got summary=%v", summary)
+		}
+		if int(summary["failed"].(float64)) < 1 {
+			t.Fatalf("expected invalid input failure from merged IDs, got summary=%v", summary)
+		}
+	})
+
+	t.Run("--input missing file usage error", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--input", filepath.Join(tmp, "missing_ids.txt"), "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("expected usage exit code 2 for missing input file, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+		if !ok {
+			t.Fatalf("expected JSON error payload on stderr for missing input file, stderr=%s", res.Stderr)
+		}
+		if got, _ := errPayload["error_class"].(string); got != "USAGE" {
+			t.Fatalf("expected USAGE error class, got payload=%v", errPayload)
+		}
+	})
+
+	t.Run("--input empty file usage error", func(t *testing.T) {
+		emptyInput := filepath.Join(tmp, "empty_ids.txt")
+		if err := os.WriteFile(emptyInput, []byte("# empty\n\n"), 0o644); err != nil {
+			t.Fatalf("write empty input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--input", emptyInput, "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("expected usage exit code 2 for empty input file, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+		if !ok {
+			t.Fatalf("expected JSON error payload on stderr for empty input file, stderr=%s", res.Stderr)
+		}
+		if msg, _ := errPayload["message"].(string); !strings.Contains(strings.ToLower(msg), "no valid file ids") {
+			t.Fatalf("expected no-valid-file-ids message, got payload=%v", errPayload)
+		}
+	})
 }
 
 func TestContainerOverflowProtection(t *testing.T) {
