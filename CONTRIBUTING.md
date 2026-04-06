@@ -2,15 +2,18 @@
 
 Thank you for your interest in contributing to coldkeep.
 
-coldkeep V0 is an experimental deduplicated storage engine prototype. We
-welcome improvements, bug reports, architectural discussions, and
+coldkeep v1.0 is a correctness-first storage engine.
+
+The project originated as a research prototype, and continues to
+prioritize correctness, determinism, and clarity over feature velocity.
+We welcome improvements, bug reports, architectural discussions, and
 thoughtful critiques.
 
 ------------------------------------------------------------------------
 
-## Project Philosophy (V0)
+## Project Philosophy
 
-coldkeep V0 prioritizes:
+coldkeep v1.0 prioritizes:
 
 -   Correctness over performance
 -   Deterministic storage behavior
@@ -18,14 +21,14 @@ coldkeep V0 prioritizes:
 -   Clear and readable code
 -   Simplicity over abstraction
 
-This is a research prototype. Stability and conceptual clarity are more
-important than feature velocity.
+Stability and conceptual clarity remain more important than feature velocity.
 
 Major architectural changes should be discussed before implementation.
 
-## v0.10 Focus: Validation Over Features
+## v1.0 Philosophy: Correctness Over Features
 
-During the v0.10 phase, contributions should prioritize:
+The v0.10 validation phase established a contribution posture that remains important in v1.0.
+Contributions should prioritize:
 
 -   strengthening invariants and correctness guarantees
 -   improving stress and adversarial validation coverage, including long-run tests
@@ -38,7 +41,7 @@ a demonstrated correctness issue.
 Changes that alter storage invariants or lifecycle semantics must include
 adversarial or long-run test coverage demonstrating correctness.
 
-This phase is focused on proving system reliability before v1.0.
+This focus preserves system reliability as the primary delivery criterion.
 
 ------------------------------------------------------------------------
 
@@ -55,7 +58,7 @@ This phase is focused on proving system reliability before v1.0.
 Start PostgreSQL:
 
 ``` bash
-docker compose up -d postgres
+docker compose up -d coldkeep_postgres
 ```
 
 Build the application image:
@@ -67,8 +70,8 @@ docker compose build
 Run commands:
 
 ``` bash
-docker compose run --rm app stats
-docker compose run --rm app store-folder samples
+docker compose run --rm coldkeep stats
+docker compose run --rm coldkeep store-folder samples
 ```
 
 ------------------------------------------------------------------------
@@ -169,7 +172,7 @@ If unsure, open a discussion before implementing changes.
 -   Avoid flaky timing-based tests
 -   Prefer deterministic inputs
 
-For v0.9, changes that affect storage, restore, verification, recovery, GC,
+For v1.0, changes that affect storage, restore, verification, recovery, GC,
 or CLI contracts are expected to pass the full GitHub Actions pipeline:
 
 -   quality
@@ -188,51 +191,102 @@ If adding storage logic, include at least one restore verification test.
 Maintainers preparing a release should also run the
 [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) flow.
 
-### Quick Start: Local Test Runs For New Contributors
+### New Contributor Path: Before You Open a PR
 
-Use this sequence to run tests with the same DB-backed setup used by integration checks.
+Most CI failures for first-time contributors come from only running a subset of checks locally.
+Use the flow below to mirror the required GitHub CI jobs before opening a PR.
 
-1. Start Postgres:
+1. Start PostgreSQL and clean local test artifacts:
 
 ``` bash
-docker compose up -d postgres
+docker compose up -d coldkeep_postgres
+bash scripts/clean_test_storage.sh
 ```
 
-1. Export integration environment once in your shell:
+2. Export shared test environment:
 
 ``` bash
 export COLDKEEP_TEST_DB=1
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
-export COLDKEEP_CODEC=plain
 export DB_HOST=127.0.0.1
 export DB_PORT=5432
 export DB_USER=coldkeep
 export DB_PASSWORD=coldkeep
 export DB_NAME=coldkeep
 export DB_SSLMODE=disable
+export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
-If you prefer not to use auto-bootstrap, apply `db/schema_postgres.sql` before running integration tests.
+`COLDKEEP_CODEC` is intentionally not exported globally here because the local CI
+simulation loop sets it per run (`plain` then `aes-gcm`).
+`COLDKEEP_KEY` is only required when codec is `aes-gcm`; it is ignored by `plain`.
 
-1. Run correctness tier first (fast signal, stress tests skipped):
+If you do not want auto-bootstrap, apply `db/schema_postgres.sql` manually first.
+
+3. Run the quality job equivalent (same intent as CI `quality`):
+
+Run this block from a clean working tree when possible.
+If `go mod tidy && git diff --exit-code` fails while you have local edits,
+that indicates uncommitted diff in your workspace, not necessarily a test failure.
 
 ``` bash
-go test ./tests -short -count=1 -v -timeout 20m
+go mod tidy && git diff --exit-code
+
+unformatted=$(gofmt -l $(git ls-files '*.go'))
+if [ -n "$unformatted" ]; then
+    echo "Unformatted Go files detected:"
+    echo "$unformatted"
+    exit 1
+fi
+
+bash -n scripts/*.sh
+bash scripts/validate_validation_matrix.sh
+
+# Requires golangci-lint in PATH (same linter family as CI)
+golangci-lint run ./...
+
+go vet ./...
+
+COLDKEEP_CODEC=plain go test -race -count=1 ./cmd/... ./internal/...
+COLDKEEP_CODEC=aes-gcm COLDKEEP_KEY="$COLDKEEP_KEY" go test -race -count=1 ./cmd/... ./internal/...
+
+go build ./...
+bash scripts/audit_ci_enforcement.sh --local-only
+go build -o coldkeep ./cmd/coldkeep
 ```
 
-1. Run full integration suite (includes stress-tier coverage):
+4. Run full required CI matrix locally (all required gate jobs, both codecs):
 
 ``` bash
-go test ./tests -count=1 -v -timeout 20m
+for codec in plain aes-gcm; do
+    echo "=== Codec: ${codec} ==="
+    export COLDKEEP_CODEC="$codec"
+
+    # integration-correctness
+    go test -race -count=1 -short ./tests/integration/...
+
+    # integration-stress
+    go test -race -count=1 ./tests/integration/...
+
+    # integration-long-run
+    COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
+
+    # adversarial
+    COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
+
+    # smoke
+    COLDKEEP_SMOKE_RESET_DB=1 \
+    COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql \
+    COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/${codec}" \
+    COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1 \
+    PATH="$PWD:$PATH" \
+    bash scripts/smoke.sh
+done
 ```
 
-1. Run the dedicated long-run stability tier when you need soak coverage:
+This is the closest local approximation of what must pass for `CI Required Gate`.
 
-``` bash
-COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -count=1 -v -timeout 20m
-```
-
-1. Run full repository suite before opening a PR:
+5. Optional but recommended full sweep before pushing:
 
 ``` bash
 go test ./... -count=1 -timeout 25m
@@ -244,7 +298,7 @@ Optional focused run while working on doctor behavior:
 go test ./tests -run 'TestDoctor(Command|JSONContractConsistency|FailureJSONContractAndStreams)$' -count=1 -v
 ```
 
-Recommended focused runs for v0.10 lifecycle/reuse hardening changes:
+Recommended focused runs for lifecycle/reuse hardening changes:
 
 ``` bash
 go test ./tests -run 'TestReuseRefusesSemanticallyCorruptedCompletedFile|TestGCRestorePinRaceContainerNotDeleted|TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock|TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt' -count=1 -v
@@ -254,7 +308,7 @@ If you modify startup recovery, semantic reuse validation, verify semantics, res
 pinning, or GC locking behavior, include at least one targeted regression test
 for the changed contract in your PR.
 
-If your shell does not keep exported variables between commands, prefix each test command with the environment variables directly.
+If your shell does not keep exported variables between commands, prefix each command with the needed environment variables.
 
 ------------------------------------------------------------------------
 
@@ -311,19 +365,19 @@ background compaction, resumable uploads):
 
 Please open a design discussion issue first.
 
-coldkeep is evolving toward:
+coldkeep continues to evolve in areas such as:
 
--   Block-based container layout
+-   Block-layout refinements and format hardening
 -   Authenticated metadata
--   Encryption support
+-   Key rotation and encryption lifecycle hardening
 -   Background verification / compaction
 -   Cloud backend experimentation
 
 ------------------------------------------------------------------------
 
-## Not in Scope for V0
+## Not in Scope for v1.0
 
-The following are unlikely to be accepted in V0:
+The following are unlikely to be accepted in v1.0:
 
 -   Large framework rewrites
 -   ORM introduction

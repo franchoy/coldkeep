@@ -1,6 +1,9 @@
 
 # v1.0 Validation Matrix
 
+This document is the authoritative mapping between public guarantees (README)
+and enforced evidence (tests and verify checks).
+
 ## Guarantee ID Stability
 
 Guarantee IDs (G1–G8) are part of the public validation contract.
@@ -13,12 +16,12 @@ This prevents future “renumbering drift”.
 
 All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
 
-This document tracks v0.9 guarantees and the evidence used to validate them
-during the v0.10 trust-validation phase.
+This document originated from the v0.9/v0.10 trust-validation work and is now
+the maintained v1.0 guarantee-to-evidence contract.
 
 ## Scope
 
-- Target: single-node trust proof before v1.0
+- Target: single-node trust model for v1.0 and ongoing maintenance
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 

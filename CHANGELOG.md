@@ -10,9 +10,9 @@ production stability.
 
 ------------------------------------------------------------------------
 
-## [0.10.0] - Unreleased
+## [0.10.0] - Pre-v1.0 Validation Phase
 
-Validation and adversarial testing phase before v1.0.
+Validation and adversarial testing phase leading into v1.0.
 
 This release focuses on validating coldkeep's correctness guarantees under stress,
 failure, and adversarial lifecycle interleavings.

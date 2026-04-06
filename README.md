@@ -1,19 +1,51 @@
+<p align="center">
+  <img src="assets/logo/coldkeep-logo.png" alt="Coldkeep Logo" width="500"/>
+</p>
+
+<p align="center">
+  Secure, deterministic, content-addressed cold storage engine.
+</p>
+
+<p align="center">
+  Crash-safe • GC-safe • Deterministic restore • Verifiable integrity
+</p>
+
+## 🧊 Branding
+
+<p align="left">
+  <img src="assets/logo/coldkeep-icon.png" alt="Coldkeep Icon" width="120"/>
+</p>
+
+Coldkeep uses a visual identity based on an **ice cube vault**:
+
+- ❄️ cold storage (ice cube)
+- 🔐 secure data (vault door)
+- 📦 structured containers (internal shelves)
+
+The icon will be used for:
+
+- CLI integrations
+- GitHub/social previews
+- future UI or dashboards
+
 # coldkeep
 
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-research%20experimental-orange)
+![Status](https://img.shields.io/badge/status-v1.0%20stable-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> **Status:** Experimental research project.  
-> **Not production-ready. Do not use for real or sensitive data.**  
-> On-disk format and APIs may change before v1.0.
+> **Status:** v1.0 correctness-first storage core.
+>
+> **Guarantees are enforced through automated validation and CI gates.**  
+> See `VALIDATION_MATRIX.md` for the formal guarantee-to-evidence mapping.
 
-coldkeep is a content-addressed storage engine for cold data.
+coldkeep is a local-first content-addressed file storage engine with verifiable integrity written in Go.
 
-It splits files into content-defined chunks, deduplicates them using SHA-256,
-and stores them as encoded blocks in append-only container files with database-backed metadata.
+Files are split into content-addressed chunks, packed into container files on disk,
+and tracked through relational metadata to provide deterministic restore, integrity verification,
+safe garbage collection, and explicit failure on corruption or inconsistency.
 
 coldkeep is designed to guarantee deterministic, byte-identical restore of stored data,
 validated by end-to-end hashing and resilient across garbage collection
@@ -22,36 +54,34 @@ and system restart/recovery under defined operating conditions.
 > coldkeep is designed as a correctness-first storage engine, prioritizing
 > determinism and recoverability over performance and feature completeness.
 
-## ⚠️ v0.10 — Trust Validation Phase
+## Status
 
-v0.10 marks the transition from system construction to system validation.
+Coldkeep v1.0 establishes a correctness-first storage core with validated guarantees.
 
-The core architecture, storage model, and CLI contracts are considered stable.
-This phase focuses on stress and adversarial validation, including failure conditions.
+The system has been validated across:
 
-During v0.10:
+- deterministic restore
+- integrity and deep corruption detection
+- safe garbage collection
+- recovery after damaged or incomplete states
+- concurrent and adversarial lifecycle scenarios
 
-- No major storage features are expected to be added
-- On-disk format and metadata model are expected to remain stable unless a correctness issue is discovered
-- Changes focus on hardening invariants and lifecycle guarantees
-- Integration tests are expanded for stress and adversarial validation, including long-run scenarios
-- The goal is to actively try to break the system and eliminate remaining correctness risks
-- Validation scope and guarantee-to-evidence mapping are tracked in `VALIDATION_MATRIX.md`
+Coldkeep is designed to fail explicitly rather than silently accept corrupted or inconsistent data.
 
-v1.0 will only be released once these guarantees are validated under real-world conditions.
+Validation scope and guarantee-to-evidence mapping are tracked in `VALIDATION_MATRIX.md`.
 
 ### Validation Matrix
 
-`VALIDATION_MATRIX.md` is the branch-level contract for the v0.10 trust-validation phase.
+`VALIDATION_MATRIX.md` is the branch-level contract for v1.0 guarantee validation.
 
-- It maps each v0.9 guarantee to concrete evidence in verify checks, integration tests, or both.
+- It maps each storage guarantee to concrete evidence in verify checks, integration tests, or both.
 - It is maintained alongside code changes so new trust claims do not drift ahead of evidence.
 - It is audited locally via `scripts/validate_validation_matrix.sh` and enforced in CI.
-- It includes explicit long-run validation evidence for the v1.0 trust phase, not only one-shot correctness tests.
+- It includes explicit long-run validation evidence, not only one-shot correctness tests.
 
-This keeps the validation branch grounded in explicit proof obligations rather than informal release notes.
+This keeps the project grounded in explicit proof obligations rather than informal release notes.
 
-For v0.9, every change intended for mainline or release delivery is expected to
+For v1.0, every change intended for mainline or release delivery is expected to
 pass the full GitHub Actions pipeline before merge or tag publication. The repo
 contains a synthetic required check named `CI Required Gate` that aggregates the
 quality, integration, and smoke jobs across both codecs.
@@ -74,12 +104,27 @@ The goal is not maximum performance, but maximum confidence in stored data.
 
 ---
 
+## When to use coldkeep
+
+Coldkeep is designed for:
+
+- cold storage and backup systems where correctness matters more than speed
+- environments where data integrity must be provable and verifiable
+- systems that benefit from deduplication and deterministic restore
+
+Coldkeep is not designed for:
+
+- high-throughput hot storage workloads
+- distributed or multi-node systems (v1.0 scope)
+
+---
+
 ## What it does (today)
 
 - Store files or folders by splitting them into content-defined chunks.
 - Deduplicate chunks using SHA-256 (content-addressed storage).
 - Pack chunks into container files up to a configurable maximum size.
-- Restore files by reconstructing them from stored chunks. If some containers are damaged or quarantined, any logical file with at least one restorable chunk will survive recovery (loss-minimizing recovery).
+- Restore files by reconstructing them from stored chunks. Loss-minimizing recovery preserves logical-file metadata when at least one referenced chunk remains restorable; restore still succeeds only when the reconstructed file passes final end-to-end hash validation.
 - Guarantee byte-identical restore outputs (verified by SHA-256).
 - Use an append-only container model for deterministic and safe writes.
 - Remove logical files (decrementing chunk reference counts).
@@ -106,13 +151,13 @@ before the observational, read-only verification checks begin.
 
 ---
 
-## 🛡️ Storage Guarantees (v0.9)
+## 🛡️ Storage Guarantees (v1.0)
 
 coldkeep is designed as a **correctness-first storage engine**.  
-This section defines the guarantees provided by the system as of **v0.9**.
+This section defines the guarantees provided by the system as of **v1.0**.
 
 **Loss-minimizing recovery:**
-If a container is damaged or quarantined, logical files referencing it are only lost if all their chunks are unrecoverable. Otherwise, any logical file with at least one restorable chunk will survive recovery. This ensures that recovery is loss-minimizing, not panic-destructive.
+If a container is damaged or quarantined, logical files referencing it are only lost if all their chunks are unrecoverable. Otherwise, logical-file metadata is preserved when at least one referenced chunk remains restorable. Restore success is still end-to-end hash-gated: a restore only succeeds when the reconstructed file matches the original stored file hash. This keeps recovery loss-minimizing without silently accepting partial/corrupted output.
 
 **Guarantee IDs:**
 
@@ -127,13 +172,22 @@ If a container is damaged or quarantined, logical files referencing it are only 
 
 ### Summary
 
-coldkeep v0.9 guarantees:
+coldkeep v1.0 guarantees:
 
 - deterministic, byte-identical restore
 - no exposure of partially written or inconsistent data
 - GC is reference-safe: no reachable chunk is ever deleted
 - Atomic restore replacement (within single-node local filesystem semantics)
 - Safe in-process concurrent storage operations
+
+### G2 scope boundary
+
+G2 is a logical-graph guarantee, not a physical-placement guarantee.
+
+Repeated store of the same file must converge to the same ordered chunk graph
+(chunk order, chunk hash, and chunk size), independent of codec choice.
+It does not guarantee identical container filenames, block offsets, ciphertext,
+or AES-GCM nonce values across runs.
 
 ### Core invariants
 
@@ -154,9 +208,9 @@ A logical file is considered **valid and restorable** when:
 
 - its status is `COMPLETED`
 - all referenced chunks are `COMPLETED`
-- at least one referenced block exists and is readable (loss-minimizing recovery)
+- at least one referenced block exists and is readable (loss-minimizing recovery keeps metadata survivable)
 
-Logical files referencing only unrecoverable or missing containers are not restorable and will be omitted from `list` and `search`. If at least one chunk is restorable, the logical file survives recovery and is eligible for restore.
+Logical files referencing only unrecoverable or missing containers are not restorable and will be omitted from `list` and `search`. If at least one chunk is restorable, the logical-file metadata survives recovery and remains eligible for a restore attempt, but restore succeeds only if full-file reconstruction passes final hash validation.
 
 ---
 
@@ -180,9 +234,17 @@ coldkeep guarantees **safe recovery after crashes or interruptions**:
 - On startup:
   - incomplete operations are marked as `ABORTED`
   - inconsistent containers may be quarantined
-  - logical files referencing quarantined containers are preserved if any chunk is restorable (loss-minimizing recovery)
+  - logical-file metadata referencing quarantined containers is preserved if any chunk is restorable (loss-minimizing recovery)
 
 > No partially written or inconsistent data is exposed as valid. Recovery is loss-minimizing: only logical files with no restorable chunks are lost.
+
+Visibility and reuse validity are intentionally layered:
+
+- Only logical files in `COMPLETED` state are visible to list/search/restore flows.
+- `COMPLETED` state alone is not sufficient for reuse: structural and physical validation is required before reuse is trusted.
+- Invalid or inconsistent metadata (for example missing block rows or invalid container references) is rejected and rebuilt rather than trusted.
+
+This prevents exposure of partially written, corrupted, or structurally inconsistent data.
 
 ### Contributor note (append lifecycle contract)
 
@@ -201,7 +263,9 @@ Restore operations are **atomic and verified**:
 - It is atomically renamed into place
 - The parent directory is fsynced for durability
 
-> A restore either produces a complete valid file, or no file at all. If some chunks are missing due to damaged containers, restore will fail for that file, but other logical files with restorable chunks will succeed (loss-minimizing, partial restore).
+> A restore either produces a complete valid file, or no file at all. Partial reconstruction may occur internally while reading available chunks, but it is never exposed at the target path unless the final restored hash matches the original stored file hash. If missing, quarantined, or corrupted chunks prevent full reconstruction, restore fails explicitly for that file.
+
+G5 applies to the final visible destination-path replacement only. Internal chunk-by-chunk reconstruction may occur in a temporary file, but the destination path is not replaced unless full reconstruction and final hash validation succeed.
 
 ---
 
@@ -211,7 +275,7 @@ Restore operations are **atomic and verified**:
 Garbage collection is **reference-safe**:
 
 - Only chunks with no live file references and no active restore pins are removed
-- Containers are deleted only when all their chunks are unreferenced
+- Containers are deleted only when all resident chunks are reclaimable (`live_ref_count = 0` and `pin_count = 0`)
 - Referenced data is never removed
 
 > GC cannot delete data required to restore a valid logical file.
@@ -230,6 +294,8 @@ coldkeep supports **safe concurrent operations**:
 
 > Concurrent storage operations do not corrupt data or create inconsistent state.
 
+Concurrent operations may perform redundant work under contention, but they converge safely via database constraints and retry logic without producing inconsistent or duplicated logical state.
+
 ---
 
 ### Verification model (G7, G8)
@@ -244,6 +310,8 @@ Verification assumes:
 
 - all `COMPLETED` chunks are valid
 - corrupted or missing containers are quarantined
+
+Deep verification fails explicitly on detected corruption, including payload tampering, invalid offsets or bounds, and trailing unaccounted bytes after the last valid block.
 
 The verification checks themselves are read-only. When using the CLI, startup
 recovery still runs before `verify`, so corrective metadata changes can happen
@@ -280,17 +348,16 @@ Simulation is still a confidence tool, not a correctness proof for the PostgreSQ
 - It does not prove row-lock or lock-wait behavior under contention
 - It is not strong evidence for GC exclusivity or retry behavior under real concurrent load
 
-> These guarantees describe system behavior under controlled conditions.
-> coldkeep remains experimental and is not yet recommended for production use.
+> These guarantees describe system behavior under controlled conditions and validated operating assumptions.
 
 ---
 
-### Non-guarantees (v0.9)
+### Non-guarantees (v1.0)
 
 coldkeep does **not** guarantee:
 
 - Backward compatibility of on-disk format
-- Stability of internal schemas before v1.0
+- Stability of internal schemas across future major-version changes
 - Protection against manual modification of storage or database
 - Distributed or multi-node consistency
 
@@ -306,9 +373,9 @@ Guarantees hold only if:
 
 ---
 
-## 🔬 Validation Strategy (v0.10)
+## 🔬 Validation Evidence (v1.0)
 
-coldkeep v0.10 focuses on validating guarantees through stress and adversarial validation.
+coldkeep v1.0 is backed by stress and adversarial validation of the core guarantees.
 
 The validation approach includes:
 
@@ -325,7 +392,7 @@ The validation approach includes:
   - explicit checks that core invariants hold after every operation
 
 
-The goal is not only to pass tests, but to demonstrate that:
+Validation demonstrates that:
 
 - recovery converges to a valid state
 - garbage collection never breaks restore
@@ -337,7 +404,7 @@ The goal is not only to pass tests, but to demonstrate that:
 
 ## 🎯 v1.0 Readiness Criteria
 
-coldkeep will reach v1.0 when:
+coldkeep v1.0 has demonstrated:
 
 - All core invariants are explicitly tested and consistently hold
 - Stress and adversarial validation tests show no data loss or silent corruption
@@ -346,12 +413,12 @@ coldkeep will reach v1.0 when:
 - Restore remains deterministic and byte-identical across all scenarios
 - The `doctor` command is reliable as a system health gate
 
-v1.0 is not defined by feature completeness, but by confidence in correctness.
-The goal is to reach a state where failures are either impossible or explicitly detected and surfaced.
+v1.0 is defined by confidence in correctness rather than feature count.
+The system is designed so failures are either prevented or explicitly detected and surfaced.
 
 ---
 
-## ✨ What’s new in v0.10
+## Pre-v1.0 hardening (v0.10)
 
 - Reuse integrity hardening for `COMPLETED` logical files:
   - semantic validation mode via `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off` / `suspicious` / `always`; default: `suspicious`)
@@ -646,7 +713,7 @@ export $(cat .env | xargs)
 The `/app` mount ensures the `.env` file created by `init` persists on the host.
 
 ```bash
-docker compose run --rm -v "$PWD:/app" app init
+docker compose run --rm -v "$PWD:/app" coldkeep init
 ```
 
 > ⚠️ Data encrypted with a key cannot be recovered without it.  
@@ -715,7 +782,7 @@ docker compose up -d --build
 
 ```bash
 # 2. Generate encryption key (required before storing data)
-docker compose run --rm -v "$PWD:/app" app init
+docker compose run --rm -v "$PWD:/app" coldkeep init
 ```
 
 > **Important:** This creates a `.env` file with your encryption key.  
@@ -727,15 +794,16 @@ docker compose run --rm -v "$PWD:/app" app init
 docker compose run --rm \
   --env-file .env \
   -v "$PWD/samples:/samples" \
-  app store /samples/hello.txt
+  coldkeep store /samples/hello.txt
 ```
 
 #### Optional: simulate storage impact before storing (Docker)
 
 ```bash
 docker compose run --rm \
+  --env-file .env \
   -v "$PWD/samples:/samples" \
-  app simulate store /samples/hello.txt
+  coldkeep simulate store /samples/hello.txt
 ```
 
 > Simulation does not write any data and can be safely used before storing files.
@@ -960,7 +1028,7 @@ For a reproducible local run that mirrors DB-backed integration expectations:
 1. Start Postgres:
 
 ```bash
-docker compose up -d postgres
+docker compose up -d coldkeep_postgres
 ```
 
 1. Set environment variables:
@@ -1122,6 +1190,8 @@ coldkeep/
 
 ### 🐳 Local development (with Docker)
 
+If you use the default `aes-gcm` codec, pass `--env-file .env` after running `init`.
+
 Start services:
 
 ``` bash
@@ -1131,25 +1201,25 @@ docker compose up -d --build
 Store a sample file:
 
 ``` bash
-docker compose run --rm -v "$PWD/samples:/samples" app store /samples/hello.txt
+docker compose run --rm --env-file .env -v "$PWD/samples:/samples" coldkeep store /samples/hello.txt
 ```
 
 Store the sample folder:
 
 ``` bash
-docker compose run --rm -v "$PWD/samples:/samples" app store-folder /samples
+docker compose run --rm --env-file .env -v "$PWD/samples:/samples" coldkeep store-folder /samples
 ```
 
 List stored files:
 
 ``` bash
-docker compose run --rm app list
+docker compose run --rm coldkeep list
 ```
 
 Restore a file:
 
 ``` bash
-docker compose run --rm app restore 1 _out.bin
+docker compose run --rm --env-file .env -v "$PWD:/work" coldkeep restore 1 /work/_out
 ```
 
 ---
@@ -1158,6 +1228,10 @@ docker compose run --rm app restore 1 _out.bin
 
 The repository-side workflow now enforces a single final status named `CI Required Gate`.
 That gate fails if any upstream quality, integration, or smoke job fails or is skipped.
+
+For first-time contributors, follow the local CI simulation flow in
+[`CONTRIBUTING.md`](CONTRIBUTING.md) ("New Contributor Path: Before You Open a PR")
+to run the same required jobs and codec matrix before opening a pull request.
 
 To make that gate non-bypassable for pull requests, merges, and release preparation,
 GitHub repository settings must also enforce it.
@@ -1192,13 +1266,13 @@ The remote audit requires GitHub CLI authentication with repository admin access
 Show stats:
 
 ``` bash
-docker compose run --rm app stats
+docker compose run --rm coldkeep stats
 ```
 
 Run garbage collection:
 
 ``` bash
-docker compose run --rm app gc
+docker compose run --rm coldkeep gc
 ```
 
 ---
@@ -1208,7 +1282,18 @@ docker compose run --rm app gc
 Start Postgres (example):
 
 ``` bash
-docker compose up -d postgres
+docker compose up -d coldkeep_postgres
+```
+
+Set DB environment variables for the local CLI:
+
+``` bash
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
 ```
 
 Build the CLI first using the build command below.
@@ -1288,7 +1373,7 @@ recovery log replay during smoke.
 #### Local
 
 ``` bash
-docker compose up -d postgres
+docker compose up -d coldkeep_postgres
 go build -o coldkeep ./cmd/coldkeep
 bash scripts/smoke.sh
 ```
@@ -1306,14 +1391,14 @@ This option truncates smoke tables and clears `COLDKEEP_STORAGE_DIR` before runn
 #### Smoke in Docker
 
 ``` bash
-docker compose up -d postgres
+docker compose up -d coldkeep_postgres
 
 docker compose run --rm \
   -e COLDKEEP_SAMPLES_DIR=/samples \
   -e COLDKEEP_STORAGE_DIR=/tmp/coldkeep-storage \
   -v "$PWD/samples:/samples" \
-  --entrypoint bash \
-  app scripts/smoke.sh
+  --entrypoint sh \
+  coldkeep -lc 'apk add --no-cache jq >/dev/null && scripts/smoke.sh'
 ```
 
 ---
@@ -1344,7 +1429,7 @@ You can choose one of two setup modes:
 1. Explicit setup (default)
 
 ``` bash
-psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
+psql -h 127.0.0.1 -p 5432 -U coldkeep -d coldkeep -f db/schema_postgres.sql
 ./coldkeep stats
 ```
 
@@ -1374,7 +1459,7 @@ Fix with one of these options:
 1. Explicit init (recommended default)
 
 ``` bash
-psql -U coldkeep -d coldkeep -f db/schema_postgres.sql
+psql -h 127.0.0.1 -p 5432 -U coldkeep -d coldkeep -f db/schema_postgres.sql
 ```
 
 1. Enable auto-bootstrap for first run
@@ -1394,6 +1479,22 @@ Additional environment variables used in development:
 - COLDKEEP_STORAGE_DIR
 - COLDKEEP_SAMPLES_DIR
 - COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY
+
+### Command validity matrix (v1.0)
+
+Use this checklist to avoid command-example drift during doc updates.
+
+| Command family | Status | Required preconditions | Docker example | Non-Docker example |
+| --- | --- | --- | --- | --- |
+| `init`, `version`, `help`, `simulate --output json`, JSON examples | `verified` | none beyond binary availability | `docker compose run --rm coldkeep init` | `./coldkeep init` |
+| `store`, `store-folder`, `restore` with default codec | `verified` | `COLDKEEP_KEY` present (`aes-gcm` default) | `docker compose run --rm --env-file .env coldkeep store /samples/hello.txt` | `export $(cat .env \| xargs) && ./coldkeep store samples/hello.txt` |
+| `store --codec plain`, `store-folder --codec plain`, `simulate ... --codec plain` | `verified` | no key required when codec explicitly `plain` | `docker compose run --rm coldkeep store --codec plain /samples/hello.txt` | `./coldkeep simulate store --codec plain samples/hello.txt` |
+| `simulate store`, `simulate store-folder` with default codec | `verified` | same key requirement as store path | `docker compose run --rm --env-file .env coldkeep simulate store /samples/hello.txt` | `export $(cat .env \| xargs) && ./coldkeep simulate store samples/hello.txt` |
+| DB-backed CLI (`stats`, `list`, `search`, `gc`, `verify`, `doctor`, `remove`) | `context-dependent` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` set; Postgres reachable and schema initialized | `docker compose run --rm coldkeep stats` | `export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep DB_SSLMODE=disable && ./coldkeep stats` |
+| Verify file examples using `<file_id>` placeholders | `context-dependent` | a real stored file id must replace placeholder | `docker compose run --rm coldkeep verify file 1 --full` | `./coldkeep verify file 1 --full` |
+| Restore examples using fixed id (`restore 1 ...`) | `context-dependent` | id must exist in current database state | `docker compose run --rm --env-file .env coldkeep restore 1 /work/_out` | `./coldkeep restore 1 restored.bin` |
+| Smoke script in Docker | `verified` | `jq` installed in runtime container (inline install shown below) | `docker compose run --rm --entrypoint sh coldkeep -lc 'apk add --no-cache jq >/dev/null && scripts/smoke.sh'` | `bash scripts/smoke.sh` |
+| Postgres schema bootstrap commands (`psql ...`) | `context-dependent` | `psql` installed and target host/port reachable | `docker compose exec -T coldkeep_postgres psql -U coldkeep -d coldkeep -f /docker-entrypoint-initdb.d/schema_postgres.sql` | `psql -h 127.0.0.1 -p 5432 -U coldkeep -d coldkeep -f db/schema_postgres.sql` |
 
 ---
 
@@ -1418,10 +1519,21 @@ the logical state of the system.
 The append-only container model simplifies recovery by eliminating
 in-place mutations of container data.
 
-However, the system is still experimental and full transactional
-guarantees across filesystem and database layers are not yet complete.
+Cross-layer transactional boundaries between filesystem durability and database
+state remain explicitly modeled and validated through recovery and verification flows,
+rather than exposed as a single cross-system transaction primitive.
 
-Use only with **disposable test data**.
+### Deployment maturity
+
+Coldkeep v1.0 provides a correctness-first storage core with strong validation guarantees.
+
+It is suitable for controlled production environments where:
+
+- operational assumptions are respected (PostgreSQL correctness, filesystem durability)
+- storage and database are not externally modified
+- operators follow recovery and verification practices
+
+As with any storage system, gradual adoption and validation against your workload is recommended before large-scale use.
 
 ### Container compression
 
@@ -1431,10 +1543,10 @@ Future versions may introduce block-level compression.
 
 ### Concurrency & integrity
 
-Concurrency support has been significantly improved, including locking and retry mechanisms.
+Concurrency support is correctness-oriented and validated under adversarial scenarios.
 
-However, it is still evolving and not yet optimized for
-extreme parallel workloads.
+While not optimized for extreme parallel workloads, it is designed to preserve
+data integrity and consistency under concurrent operations.
 
 ---
 
@@ -1442,9 +1554,8 @@ extreme parallel workloads.
 
 See `SECURITY.md`.
 
-This is an experimental research project with evolving on-disk formats.
-
-Do not use for real or sensitive data.
+Follow the threat model and operational guidance in `SECURITY.md`, including
+key management, storage access controls, and deployment hardening expectations.
 
 ---
 
@@ -1452,6 +1563,9 @@ Do not use for real or sensitive data.
 
 Coldkeep follows a risk-reduction approach, where each release removes a
 class of failure until the system becomes fully trustworthy.
+
+v1.0 has now been reached; the milestones below are retained as historical
+release progression context.
 
 - **v0.2 — Crash Consistency Foundation**  
   Eliminate DB ↔ filesystem divergence and ensure safe recovery after crashes.

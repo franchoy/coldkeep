@@ -2,27 +2,34 @@
 
 ## Status
 
-coldkeep (V0) is a research prototype and proof-of-concept storage
-engine.
+coldkeep v1.0 provides a correctness-first storage core focused on
+data integrity and deterministic restore.
 
-It is **not production-ready** and must not be used for sensitive,
-regulated, or critical data.
+It is suitable for controlled production environments where:
 
-The security model described below reflects the current prototype
-capabilities and limitations.
+-   operational assumptions are respected (PostgreSQL correctness,
+    filesystem durability)
+-   storage and database are not externally modified
+-   operators follow recovery and verification practices
+
+coldkeep is **not** a hardened security system and does not provide
+protection against malicious actors with system-level access.
+
+The security model described below reflects current capabilities,
+assumptions, and limits.
 
 ------------------------------------------------------------------------
 
-## Threat Model (V0)
+## Threat Model
 
-coldkeep V0 is designed to protect against:
+coldkeep is designed to protect against:
 
 -   Accidental disk corruption
 -   Partial container corruption
 -   Incorrect chunk offsets
 -   Basic concurrent write corruption within the database
 
-coldkeep V0 is **not designed to protect against**:
+coldkeep is **not designed to protect against**:
 
 -   Malicious actors with filesystem access
 -   Malicious actors with database access
@@ -75,7 +82,7 @@ This may leave orphan container files on disk.
 
 ### 3. Concurrency Controls
 
-coldkeep V0 uses:
+coldkeep uses:
 
 -   PostgreSQL transactions per stored file
 -   `SELECT ... FOR UPDATE SKIP LOCKED` for container selection
@@ -94,9 +101,9 @@ parallel workloads.
 
 ## Security Properties NOT Provided
 
-coldkeep V0 does NOT provide:
+coldkeep does NOT provide:
 
--   Encryption at rest
+-   Mandatory encryption at rest for all deployments
 -   Encryption in transit
 -   Authentication
 -   Authorization
@@ -118,7 +125,9 @@ integrity checks can be bypassed.
 
 -   Crash consistency is incomplete.
 -   Filesystem state and database state may temporarily diverge.
--   Container compression (if enabled) reduces random access safety.
+-   Legacy whole-container compression artifacts may still exist in older
+    datasets and can reduce random-access safety for those historical data
+    paths.
 -   Orphan bytes may accumulate inside containers under concurrency.
 -   There is no background integrity verification process.
 
@@ -126,18 +135,13 @@ integrity checks can be bypassed.
 
 ## Recommended Usage
 
-coldkeep V0 should only be used:
+coldkeep is suitable for controlled production environments where the
+documented trust boundary and operational assumptions are respected.
 
--   For experimentation
--   For academic exploration
--   For format design discussions
--   With disposable test data
-
-It must not be used in:
-
--   Production systems
--   Regulated environments
--   Systems requiring strong security guarantees
+For higher-assurance or adversarial environments, use additional
+external controls (host hardening, access controls, key-management
+policy, and monitoring) or a system designed for stronger built-in
+security guarantees.
 
 ------------------------------------------------------------------------
 
@@ -145,7 +149,7 @@ It must not be used in:
 
 Potential future improvements include:
 
--   Encrypted containers (AES-GCM or similar)
+-   Key rotation and stronger key lifecycle management
 -   Authenticated metadata structures
 -   Merkle-tree based verification
 -   Framed container format with integrity boundaries
@@ -165,5 +169,4 @@ If you discover a potential vulnerability:
 3.  Provide a detailed description, reproduction steps, and impact
     analysis.
 
-Because this is a prototype, response times and remediation guarantees
-are not formally defined.
+Response times and remediation guarantees are not formally defined.
