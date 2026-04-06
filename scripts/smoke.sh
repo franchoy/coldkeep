@@ -10,8 +10,8 @@ set -euo pipefail
 # Requires a running Postgres with env vars set (or docker compose).
 #
 # Example (docker):
-#   docker compose up -d postgres
-#   docker compose run --rm  -e COLDKEEP_SAMPLES_DIR=/samples -v ./samples:/samples --entrypoint bash app scripts/smoke.sh
+#   docker compose up -d coldkeep_postgres
+#   docker compose run --rm  -e COLDKEEP_SAMPLES_DIR=/samples -v ./samples:/samples --entrypoint bash coldkeep scripts/smoke.sh
 
 SMOKE_TEMP_STORAGE_DIR=""
 

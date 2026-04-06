@@ -1,26 +1,31 @@
 services:
-  postgres:
+  coldkeep_postgres:
     image: postgres:16
-    container_name: coldkeep_postgres
     environment:
       POSTGRES_USER: coldkeep
       POSTGRES_PASSWORD: coldkeep
       POSTGRES_DB: coldkeep
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coldkeep -d coldkeep"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/schema_postgres.sql:/docker-entrypoint-initdb.d/schema_postgres.sql
 
-  app:
+  coldkeep:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: coldkeep_app
     depends_on:
-      - postgres
+      coldkeep_postgres:
+        condition: service_healthy
     environment:
-      DB_HOST: postgres
+      DB_HOST: coldkeep_postgres
       DB_PORT: 5432
       DB_USER: coldkeep
       DB_PASSWORD: coldkeep
