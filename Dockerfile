@@ -13,6 +13,7 @@ RUN go mod download
 # Copy source
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+COPY db/ ./db/
 
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o coldkeep ./cmd/coldkeep
