@@ -16,6 +16,7 @@ import (
 	"sync"
 	"text/tabwriter"
 
+	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -664,14 +665,22 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep restore <fileID> <outputDir>")
+	if len(parsed.positionals) < 2 {
+		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
 	}
+	targetArgs := parsed.positionals[:len(parsed.positionals)-1]
+	outputPath := parsed.positionals[len(parsed.positionals)-1]
 
-	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
+	rawTargets, err := batch.LoadRawTargets(batch.LoadOptions{Args: targetArgs})
 	if err != nil {
-		return usageErrorf("Invalid fileID: %v", err)
+		return err
 	}
+	resolver := batch.NewBasicResolver()
+	resolvedTargets, resolutionResults, err := resolver.Resolve(rawTargets)
+	if err != nil {
+		return err
+	}
+	plan := batch.BuildPlan(batch.OperationRestore, resolvedTargets)
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -679,27 +688,46 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	outPath := parsed.positionals[1]
-	result, err := storage.RestoreFileWithStorageContextResult(sgctx, fileID, outPath)
-	if err != nil {
-		return err
+	executor := batch.RealExecutor{
+		Run: func(item batch.PlanItem) (string, error) {
+			fileID, parseErr := strconv.ParseInt(item.Target.Name, 10, 64)
+			if parseErr != nil {
+				return "", fmt.Errorf("invalid fileID %q: %w", item.Target.Name, parseErr)
+			}
+			result, runErr := storage.RestoreFileWithStorageContextResult(sgctx, fileID, outputPath)
+			if runErr != nil {
+				return "", runErr
+			}
+			return fmt.Sprintf("restored id=%d output=%s sha256=%s", result.FileID, result.OutputPath, result.RestoredHash), nil
+		},
 	}
 
+	execReport := executor.Execute(plan, batch.ExecuteOptions{DryRun: false, FailFast: false})
+	report := batch.NewReport(append(resolutionResults, execReport.Results...))
+
 	if outputMode == outputModeJSON {
+		status := "ok"
+		if report.Summary.Failed > 0 {
+			status = "error"
+		}
 		payload := map[string]any{
-			"status":  "ok",
+			"status":  status,
 			"command": "restore",
-			"data":    result,
+			"data":    report,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
+		if batch.ExitCodeFromReport(report) != 0 {
+			return &cliError{code: exitGeneral, msg: "one or more restore operations failed"}
+		}
 		return nil
 	}
 
-	fmt.Printf("File restored successfully: id=%d output=%s\n", result.FileID, result.OutputPath)
-	fmt.Printf("  Name: %s\n", result.OriginalName)
-	fmt.Printf("  SHA256: %s\n", result.RestoredHash)
+	fmt.Println(batch.FormatHuman(report))
 	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
+	if batch.ExitCodeFromReport(report) != 0 {
+		return &cliError{code: exitGeneral, msg: "one or more restore operations failed"}
+	}
 	return nil
 }
 
@@ -707,14 +735,20 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) != 1 {
-		return usageErrorf("Usage: coldkeep remove <fileID>")
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep remove <fileID> [fileID ...]")
 	}
 
-	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
+	rawTargets, err := batch.LoadRawTargets(batch.LoadOptions{Args: parsed.positionals})
 	if err != nil {
-		return usageErrorf("Invalid fileID: %v", err)
+		return err
 	}
+	resolver := batch.NewBasicResolver()
+	resolvedTargets, resolutionResults, err := resolver.Resolve(rawTargets)
+	if err != nil {
+		return err
+	}
+	plan := batch.BuildPlan(batch.OperationRemove, resolvedTargets)
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -722,25 +756,46 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	result, err := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
-	if err != nil {
-		return err
+	executor := batch.RealExecutor{
+		Run: func(item batch.PlanItem) (string, error) {
+			fileID, parseErr := strconv.ParseInt(item.Target.Name, 10, 64)
+			if parseErr != nil {
+				return "", fmt.Errorf("invalid fileID %q: %w", item.Target.Name, parseErr)
+			}
+			result, runErr := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
+			if runErr != nil {
+				return "", runErr
+			}
+			return fmt.Sprintf("removed id=%d mappings=%d", result.FileID, result.RemovedMappings), nil
+		},
 	}
 
+	execReport := executor.Execute(plan, batch.ExecuteOptions{DryRun: false, FailFast: false})
+	report := batch.NewReport(append(resolutionResults, execReport.Results...))
+
 	if outputMode == outputModeJSON {
+		status := "ok"
+		if report.Summary.Failed > 0 {
+			status = "error"
+		}
 		payload := map[string]any{
-			"status":  "ok",
+			"status":  status,
 			"command": "remove",
-			"data":    result,
+			"data":    report,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
+		if batch.ExitCodeFromReport(report) != 0 {
+			return &cliError{code: exitGeneral, msg: "one or more remove operations failed"}
+		}
 		return nil
 	}
 
-	fmt.Printf("Logical file removed: id=%d\n", result.FileID)
-	fmt.Printf("  Removed mappings: %d\n", result.RemovedMappings)
+	fmt.Println(batch.FormatHuman(report))
 	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
+	if batch.ExitCodeFromReport(report) != 0 {
+		return &cliError{code: exitGeneral, msg: "one or more remove operations failed"}
+	}
 	return nil
 }
 
