@@ -52,3 +52,46 @@ func TestDeduplicateTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareTargetsPreservesInputOrder(t *testing.T) {
+	raw := []RawTarget{
+		{Value: "12", Source: "args"},
+		{Value: "abc", Source: "args"},
+		{Value: "18", Source: "input"},
+		{Value: "12", Source: "input"},
+	}
+
+	prepared := PrepareTargets(raw)
+	if len(prepared) != 4 {
+		t.Fatalf("prepared target length mismatch: got=%d", len(prepared))
+	}
+
+	if !prepared[0].Executable || prepared[0].ID != 12 {
+		t.Fatalf("unexpected first prepared target: %+v", prepared[0])
+	}
+	if prepared[1].Executable || prepared[1].Result.Status != ResultFailed || prepared[1].Result.RawValue != "abc" {
+		t.Fatalf("unexpected second prepared target: %+v", prepared[1])
+	}
+	if !prepared[2].Executable || prepared[2].ID != 18 {
+		t.Fatalf("unexpected third prepared target: %+v", prepared[2])
+	}
+	if prepared[3].Executable || prepared[3].Result.Status != ResultSkipped || prepared[3].Result.ID != 12 {
+		t.Fatalf("unexpected fourth prepared target: %+v", prepared[3])
+	}
+}
+
+func TestHasExecutableTargets(t *testing.T) {
+	if HasExecutableTargets(nil) {
+		t.Fatal("expected no executable targets for nil slice")
+	}
+
+	onlyInvalid := PrepareTargets([]RawTarget{{Value: "abc", Source: "args"}})
+	if HasExecutableTargets(onlyInvalid) {
+		t.Fatalf("expected no executable targets, got=%+v", onlyInvalid)
+	}
+
+	withValid := PrepareTargets([]RawTarget{{Value: "12", Source: "args"}, {Value: "12", Source: "args"}})
+	if !HasExecutableTargets(withValid) {
+		t.Fatalf("expected executable target, got=%+v", withValid)
+	}
+}

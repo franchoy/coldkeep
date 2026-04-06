@@ -6,8 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -262,66 +260,6 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	}
 }
 
-func TestParseFileIDs(t *testing.T) {
-	raw := []batch.RawTarget{
-		{Value: "12", Source: "args"},
-		{Value: "nope", Source: "args"},
-		{Value: "0", Source: "args"},
-		{Value: " 18 ", Source: "input"},
-	}
-
-	ids, results := parseFileIDs(raw)
-	if !slices.Equal(ids, []int64{12, 18}) {
-		t.Fatalf("parsed IDs mismatch: got=%v", ids)
-	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 parse failures, got=%d results=%v", len(results), results)
-	}
-	for _, result := range results {
-		if result.Status != batch.ResultFailed {
-			t.Fatalf("unexpected parse result status: %v", result)
-		}
-		if !strings.Contains(result.Message, "invalid file ID") {
-			t.Fatalf("unexpected parse error message: %v", result.Message)
-		}
-	}
-}
-
-func TestDeduplicateIDs(t *testing.T) {
-	unique, results := deduplicateIDs([]int64{12, 18, 12, 24, 18})
-	if !slices.Equal(unique, []int64{12, 18, 24}) {
-		t.Fatalf("dedup IDs mismatch: got=%v", unique)
-	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 duplicate results, got=%d", len(results))
-	}
-	for _, result := range results {
-		if result.Status != batch.ResultSkipped {
-			t.Fatalf("expected skipped duplicate result, got=%v", result)
-		}
-		if result.Message != "duplicate target" {
-			t.Fatalf("unexpected duplicate message: %q", result.Message)
-		}
-	}
-}
-
-func TestLoadIDsFromFile(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "ids.txt")
-	content := "# comment\n12\n\ninvalid\n 18 \n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write ids file: %v", err)
-	}
-
-	ids, err := loadIDsFromFile(path)
-	if err != nil {
-		t.Fatalf("load IDs from file: %v", err)
-	}
-	if !slices.Equal(ids, []string{"12", "invalid", "18"}) {
-		t.Fatalf("loaded IDs mismatch: got=%v", ids)
-	}
-}
-
 func TestPrintBatchHumanReportSymbolsAndAlignment(t *testing.T) {
 	report := batch.Report{
 		Operation: batch.OperationRestore,
@@ -453,10 +391,10 @@ func TestExecuteBatchPreservesInputOrder(t *testing.T) {
 		{Value: "12", Source: "args"},
 	}
 
-	targets := buildBatchTargets(raw)
-	report := executeBatch(targets, func(id int64) batch.ItemResult {
+	targets := batch.PrepareTargets(raw)
+	report := batch.ExecutePrepared(batch.OperationRemove, false, false, targets, func(id int64) batch.ItemResult {
 		return batch.ItemResult{ID: id, Status: batch.ResultSuccess, Message: "ok"}
-	}, false, batch.OperationRemove, false)
+	})
 
 	if len(report.Results) != 4 {
 		t.Fatalf("result length mismatch: got=%d", len(report.Results))

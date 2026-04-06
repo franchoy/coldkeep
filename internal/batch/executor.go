@@ -6,6 +6,26 @@ type ExecuteOptions struct {
 	FailFast bool
 }
 
+// ExecutePrepared runs prepared targets in input order.
+func ExecutePrepared(op OperationType, dryRun bool, failFast bool, targets []PreparedTarget, execFunc func(id int64) ItemResult) Report {
+	results := make([]ItemResult, 0, len(targets))
+
+	for _, target := range targets {
+		if !target.Executable {
+			results = append(results, target.Result)
+			continue
+		}
+
+		item := execFunc(target.ID)
+		results = append(results, item)
+		if failFast && item.Status == ResultFailed {
+			break
+		}
+	}
+
+	return NewReport(op, dryRun, results)
+}
+
 // ExecutePlan runs a plan using a per-item execution callback.
 func ExecutePlan(plan Plan, opts ExecuteOptions, execFunc func(id int64) (string, error)) Report {
 	results := make([]ItemResult, 0, len(plan.Items))

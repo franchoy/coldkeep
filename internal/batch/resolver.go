@@ -6,6 +6,62 @@ import (
 	"strings"
 )
 
+// PreparedTarget retains input-order target preparation state.
+type PreparedTarget struct {
+	ID         int64
+	Executable bool
+	Result     ItemResult
+}
+
+// PrepareTargets parses and deduplicates raw targets while preserving input order.
+func PrepareTargets(raw []RawTarget) []PreparedTarget {
+	prepared := make([]PreparedTarget, 0, len(raw))
+	seen := make(map[int64]struct{}, len(raw))
+
+	for _, item := range raw {
+		value := strings.TrimSpace(item.Value)
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || id <= 0 {
+			prepared = append(prepared, PreparedTarget{
+				Executable: false,
+				Result: ItemResult{
+					RawValue: item.Value,
+					Status:   ResultFailed,
+					Message:  fmt.Sprintf("invalid file ID %q", item.Value),
+				},
+			})
+			continue
+		}
+
+		if _, exists := seen[id]; exists {
+			prepared = append(prepared, PreparedTarget{
+				Executable: false,
+				Result: ItemResult{
+					ID:      id,
+					Status:  ResultSkipped,
+					Message: "duplicate target",
+				},
+			})
+			continue
+		}
+
+		seen[id] = struct{}{}
+		prepared = append(prepared, PreparedTarget{ID: id, Executable: true})
+	}
+
+	return prepared
+}
+
+// HasExecutableTargets reports whether at least one target can be executed.
+func HasExecutableTargets(targets []PreparedTarget) bool {
+	for _, target := range targets {
+		if target.Executable {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveTargets validates and parses raw targets into integer IDs.
 func ResolveTargets(raw []RawTarget) ([]ResolvedTarget, []ItemResult) {
 	resolved := make([]ResolvedTarget, 0, len(raw))

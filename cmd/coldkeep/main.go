@@ -686,12 +686,12 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
-	rawTargets, err := collectRawTargets(targetArgs, inputFile)
+	rawTargets, err := batch.LoadRawTargets(targetArgs, inputFile)
 	if err != nil {
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
-	preparedTargets := buildBatchTargets(rawTargets)
-	if !hasExecutableBatchTargets(preparedTargets) {
+	preparedTargets := batch.PrepareTargets(rawTargets)
+	if !batch.HasExecutableTargets(preparedTargets) {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
 	}
 
@@ -708,7 +708,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return executeRestoreItem(&sgctx, fileID, outputPath, overwrite)
 	}
 
-	report := executeBatch(preparedTargets, execFunc, failFast, batch.OperationRestore, dryRun)
+	report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, execFunc)
 	return emitBatchCommandReport("restore", report, outputMode)
 }
 
@@ -724,12 +724,12 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
 	failFast := parsed.hasFlag("fail-fast", "failFast")
 
-	rawTargets, err := collectRawTargets(parsed.positionals, inputFile)
+	rawTargets, err := batch.LoadRawTargets(parsed.positionals, inputFile)
 	if err != nil {
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
-	preparedTargets := buildBatchTargets(rawTargets)
-	if !hasExecutableBatchTargets(preparedTargets) {
+	preparedTargets := batch.PrepareTargets(rawTargets)
+	if !batch.HasExecutableTargets(preparedTargets) {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
 	}
 
@@ -746,7 +746,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return executeRemoveItem(&sgctx, fileID)
 	}
 
-	report := executeBatch(preparedTargets, execFunc, failFast, batch.OperationRemove, dryRun)
+	report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, execFunc)
 	return emitBatchCommandReport("remove", report, outputMode)
 }
 
@@ -826,158 +826,6 @@ func printBatchHumanReport(label string, report batch.Report) {
 		fmt.Printf("  failed:  %d\n", report.Summary.Failed)
 		fmt.Printf("  skipped: %d\n", report.Summary.Skipped)
 	}
-}
-
-func collectRawTargets(cliIDs []string, inputFile string) ([]batch.RawTarget, error) {
-	raw := make([]batch.RawTarget, 0, len(cliIDs))
-	for _, id := range cliIDs {
-		raw = append(raw, batch.RawTarget{Value: id, Source: "args"})
-	}
-
-	if strings.TrimSpace(inputFile) == "" {
-		return raw, nil
-	}
-
-	inputIDs, err := loadIDsFromFile(inputFile)
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range inputIDs {
-		raw = append(raw, batch.RawTarget{Value: id, Source: "input"})
-	}
-
-	return raw, nil
-}
-
-func loadIDsFromFile(inputFile string) ([]string, error) {
-	rawTargets, err := batch.LoadRawTargets(nil, inputFile)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(rawTargets))
-	for _, raw := range rawTargets {
-		ids = append(ids, raw.Value)
-	}
-	return ids, nil
-}
-
-type preparedBatchTarget struct {
-	ID         int64
-	Executable bool
-	Result     batch.ItemResult
-}
-
-func buildBatchTargets(rawTargets []batch.RawTarget) []preparedBatchTarget {
-	prepared := make([]preparedBatchTarget, 0, len(rawTargets))
-	seen := make(map[int64]struct{}, len(rawTargets))
-
-	for _, raw := range rawTargets {
-		value := strings.TrimSpace(raw.Value)
-		parsedID, parseErr := strconv.ParseInt(value, 10, 64)
-		if parseErr != nil || parsedID <= 0 {
-			prepared = append(prepared, preparedBatchTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					RawValue: raw.Value,
-					Status:   batch.ResultFailed,
-					Message:  fmt.Sprintf("invalid file ID %q", raw.Value),
-				},
-			})
-			continue
-		}
-
-		if _, exists := seen[parsedID]; exists {
-			prepared = append(prepared, preparedBatchTarget{
-				Executable: false,
-				Result: batch.ItemResult{
-					ID:      parsedID,
-					Status:  batch.ResultSkipped,
-					Message: "duplicate target",
-				},
-			})
-			continue
-		}
-
-		seen[parsedID] = struct{}{}
-		prepared = append(prepared, preparedBatchTarget{
-			ID:         parsedID,
-			Executable: true,
-		})
-	}
-
-	return prepared
-}
-
-func hasExecutableBatchTargets(targets []preparedBatchTarget) bool {
-	for _, target := range targets {
-		if target.Executable {
-			return true
-		}
-	}
-	return false
-}
-
-func parseFileIDs(rawTargets []batch.RawTarget) ([]int64, []batch.ItemResult) {
-	ids := make([]int64, 0, len(rawTargets))
-	results := make([]batch.ItemResult, 0)
-
-	for _, raw := range rawTargets {
-		value := strings.TrimSpace(raw.Value)
-		parsedID, parseErr := strconv.ParseInt(value, 10, 64)
-		if parseErr != nil || parsedID <= 0 {
-			results = append(results, batch.ItemResult{
-				RawValue: raw.Value,
-				Status:   batch.ResultFailed,
-				Message:  fmt.Sprintf("invalid file ID %q", raw.Value),
-			})
-			continue
-		}
-
-		ids = append(ids, parsedID)
-	}
-
-	return ids, results
-}
-
-func deduplicateIDs(ids []int64) ([]int64, []batch.ItemResult) {
-	seen := make(map[int64]struct{}, len(ids))
-	unique := make([]int64, 0, len(ids))
-	results := make([]batch.ItemResult, 0)
-
-	for _, id := range ids {
-		if _, exists := seen[id]; exists {
-			results = append(results, batch.ItemResult{
-				ID:      id,
-				Status:  batch.ResultSkipped,
-				Message: "duplicate target",
-			})
-			continue
-		}
-
-		seen[id] = struct{}{}
-		unique = append(unique, id)
-	}
-
-	return unique, results
-}
-
-func executeBatch(targets []preparedBatchTarget, execFunc func(id int64) batch.ItemResult, failFast bool, op batch.OperationType, dryRun bool) batch.Report {
-	results := make([]batch.ItemResult, 0, len(targets))
-
-	for _, target := range targets {
-		if !target.Executable {
-			results = append(results, target.Result)
-			continue
-		}
-
-		item := execFunc(target.ID)
-		results = append(results, item)
-		if failFast && item.Status == batch.ResultFailed {
-			break
-		}
-	}
-
-	return batch.NewReport(op, dryRun, results)
 }
 
 func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
