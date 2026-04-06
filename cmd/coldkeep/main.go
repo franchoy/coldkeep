@@ -820,6 +820,7 @@ func printBatchHumanReport(label string, report batch.Report) {
 	if report.DryRun {
 		fmt.Printf("  planned: %d\n", report.Summary.Planned)
 		fmt.Printf("  failed:  %d\n", report.Summary.Failed)
+		fmt.Printf("  skipped: %d\n", report.Summary.Skipped)
 	} else {
 		fmt.Printf("  success: %d\n", report.Summary.Success)
 		fmt.Printf("  failed:  %d\n", report.Summary.Failed)

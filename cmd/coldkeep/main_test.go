@@ -380,6 +380,9 @@ func TestPrintBatchHumanReportDryRunPlannedNoIcon(t *testing.T) {
 	if !strings.Contains(output, "  planned: 1") {
 		t.Fatalf("missing dry-run planned summary: %q", output)
 	}
+	if !strings.Contains(output, "  skipped: 0") {
+		t.Fatalf("missing dry-run skipped summary: %q", output)
+	}
 }
 
 func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
