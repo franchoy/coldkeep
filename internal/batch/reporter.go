@@ -6,9 +6,10 @@ import (
 )
 
 // NewReport builds a report and computes its summary.
-func NewReport(op OperationType, results []ItemResult) Report {
+func NewReport(op OperationType, dryRun bool, results []ItemResult) Report {
 	return Report{
 		Operation: op,
+		DryRun:    dryRun,
 		Summary:   Summarize(results),
 		Results:   results,
 	}
@@ -19,6 +20,8 @@ func Summarize(results []ItemResult) Summary {
 	summary := Summary{Total: len(results)}
 	for _, result := range results {
 		switch result.Status {
+		case ResultPlanned:
+			summary.Planned++
 		case ResultSuccess:
 			summary.Success++
 		case ResultFailed:
@@ -34,15 +37,20 @@ func Summarize(results []ItemResult) Summary {
 func FormatHuman(report Report) string {
 	var b strings.Builder
 	if report.Operation != "" {
-		_, _ = fmt.Fprintf(&b, "[%s]\n", strings.ToUpper(string(report.Operation)))
+		if report.DryRun {
+			_, _ = fmt.Fprintf(&b, "[%s DRY-RUN]\n", strings.ToUpper(string(report.Operation)))
+		} else {
+			_, _ = fmt.Fprintf(&b, "[%s]\n", strings.ToUpper(string(report.Operation)))
+		}
 	}
 	for _, item := range report.Results {
 		_, _ = fmt.Fprintf(&b, "[%s] id=%d %s\n", item.Status, item.ID, item.Message)
 	}
 	_, _ = fmt.Fprintf(
 		&b,
-		"Summary: total=%d success=%d failed=%d skipped=%d",
+		"Summary: total=%d planned=%d success=%d failed=%d skipped=%d",
 		report.Summary.Total,
+		report.Summary.Planned,
 		report.Summary.Success,
 		report.Summary.Failed,
 		report.Summary.Skipped,

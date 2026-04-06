@@ -23,7 +23,7 @@ func ExecutePlan(plan Plan, opts ExecuteOptions, execFunc func(id int64) (string
 		if opts.DryRun {
 			results = append(results, ItemResult{
 				ID:      item.Target.ID,
-				Status:  ResultSuccess,
+				Status:  ResultPlanned,
 				Message: "planned",
 			})
 			continue
@@ -52,7 +52,7 @@ func ExecutePlan(plan Plan, opts ExecuteOptions, execFunc func(id int64) (string
 		})
 	}
 
-	return NewReport(planOperation(plan), results)
+	return NewReport(planOperation(plan), opts.DryRun, results)
 }
 
 func planOperation(plan Plan) OperationType {
