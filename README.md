@@ -640,6 +640,7 @@ coldkeep restore 12 18 ./out --dry-run
 
 - Operations are executed independently per file
 - Failures do not stop execution unless `--fail-fast` is used
+- `--fail-fast` stops on the first execution failure (e.g., restore/remove runtime error), not on pre-execution parse/dedup outcomes
 - Duplicate targets are skipped
 - Results are reported per item with a summary
 - Exit code is non-zero if any item fails
