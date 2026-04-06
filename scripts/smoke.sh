@@ -29,6 +29,19 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v coldkeep >/dev/null 2>&1; then
+  echo "[smoke] ERROR: coldkeep binary is required on PATH"
+  exit 1
+fi
+
+assert_safe_storage_dir() {
+  local dir="$1"
+  if [[ -z "$dir" || "$dir" == "/" ]]; then
+    echo "[smoke] ERROR: refusing destructive operation on unsafe storage dir: '${dir:-<empty>}'"
+    exit 1
+  fi
+}
+
 ensure_postgres_schema() {
   if [[ -z "${COLDKEEP_TEST_DB:-}" ]]; then
     return
@@ -81,6 +94,8 @@ reset_smoke_state() {
   local port="${DB_PORT:-5432}"
   local user="${DB_USER:-coldkeep}"
   local name="${DB_NAME:-coldkeep}"
+
+  assert_safe_storage_dir "$COLDKEEP_STORAGE_DIR"
 
   echo "[smoke] resetting db tables"
   PGPASSWORD="${DB_PASSWORD:-}" psql \
@@ -829,12 +844,18 @@ CURRENT_CODEC="${COLDKEEP_CODEC:-plain}"
 if [[ "$CURRENT_CODEC" == "plain" ]] && [[ -n "${COLDKEEP_KEY:-}" ]]; then
   echo "[smoke] testing aes-gcm codec variant (COLDKEEP_KEY is set)"
 
+  SAMPLE_HELLO="${COLDKEEP_SAMPLES_DIR%/}/hello.txt"
+  if [[ ! -f "$SAMPLE_HELLO" ]]; then
+    echo "[smoke] WARNING: codec variant test skipped (sample file not found: $SAMPLE_HELLO)"
+    echo "[smoke] codec variant test skipped"
+  else
+
   AES_RESTORE_DIR="./_smoke_aes_restore"
   rm -rf "$AES_RESTORE_DIR"
   mkdir -p "$AES_RESTORE_DIR"
 
   # Store a known file with aes-gcm; already-stored is fine — we still get status+file_id
-  aes_store_out=$(COLDKEEP_CODEC=aes-gcm coldkeep store samples/hello.txt --output json 2>/dev/null | grep '^\{' | tail -n1)
+  aes_store_out=$(COLDKEEP_CODEC=aes-gcm coldkeep store "$SAMPLE_HELLO" --output json 2>/dev/null | grep '^\{' | tail -n1)
   aes_store_status=$(echo "$aes_store_out" | jq -r '.status // empty')
   aes_store_cmd=$(echo "$aes_store_out"   | jq -r '.command // empty')
   aes_file_id=$(echo "$aes_store_out"     | jq -r '.data.file_id // empty')
@@ -877,7 +898,7 @@ if [[ "$CURRENT_CODEC" == "plain" ]] && [[ -n "${COLDKEEP_KEY:-}" ]]; then
   aes_restore_out=$(COLDKEEP_CODEC=aes-gcm coldkeep restore "$aes_file_id" "$AES_RESTORE_DIR/" --output json 2>/dev/null | grep '^\{' | tail -n1)
   aes_restore_status=$(echo "$aes_restore_out" | jq -r '.status // empty')
   aes_restore_hash=$(echo "$aes_restore_out"   | jq -r '.data.restored_hash // empty')
-  expected_hello_hash=$(sha256sum samples/hello.txt | awk '{print $1}')
+  expected_hello_hash=$(sha256sum "$SAMPLE_HELLO" | awk '{print $1}')
 
   if [[ "$aes_restore_status" != "ok" ]]; then
     echo "[smoke] FAIL: aes-gcm restore returned status='$aes_restore_status' (expected 'ok')"
@@ -891,6 +912,7 @@ if [[ "$CURRENT_CODEC" == "plain" ]] && [[ -n "${COLDKEEP_KEY:-}" ]]; then
 
   rm -rf "$AES_RESTORE_DIR"
   echo "[smoke] codec variant test PASSED (aes-gcm store/verify/restore round-trip)"
+  fi
 else
   echo "[smoke] codec variant test skipped (COLDKEEP_CODEC is not plain, or COLDKEEP_KEY is not set)"
 fi

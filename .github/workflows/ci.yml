@@ -51,6 +51,11 @@ jobs:
       - name: Check shell script syntax
         run: bash -n scripts/*.sh
 
+      - name: Lint shell scripts (ShellCheck)
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: ./scripts
+
       - name: Audit validation matrix coverage
         run: bash scripts/validate_validation_matrix.sh
           
