@@ -608,6 +608,77 @@ coldkeep list --limit 50 --offset 100 --output json
 coldkeep simulate store-folder ./data --output json
 ```
 
+## Batch Operations (v1.1)
+
+Coldkeep now supports batch restore and remove operations.
+
+### Restore multiple files
+
+```bash
+coldkeep restore 12 18 24 ./out
+```
+
+### Remove multiple files
+
+```bash
+coldkeep remove 12 18 24
+```
+
+### Input file
+
+```bash
+coldkeep remove --input ids.txt
+```
+
+### Dry-run
+
+```bash
+coldkeep restore 12 18 ./out --dry-run
+```
+
+### Batch Operation Semantics
+
+- Operations are executed independently per file
+- Failures do not stop execution unless `--fail-fast` is used
+- Duplicate targets are skipped
+- Results are reported per item with a summary
+- Exit code is non-zero if any item fails
+
+### Batch JSON output example
+
+```json
+{
+  "status": "partial_failure",
+  "command": "restore",
+  "dry_run": false,
+  "summary": {
+    "total": 3,
+    "success": 2,
+    "failed": 1,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "id": 12,
+      "status": "success",
+      "output_path": "./out/report.pdf",
+      "original_name": "report.pdf"
+    },
+    {
+      "id": 18,
+      "status": "success",
+      "output_path": "./out/archive.zip",
+      "original_name": "archive.zip"
+    },
+    {
+      "id": 24,
+      "status": "failed",
+      "error": "file not found"
+    }
+  ]
+}
+```
+
 ### Output notes
 
 - JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
