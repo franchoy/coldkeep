@@ -325,10 +325,11 @@ func TestLoadIDsFromFile(t *testing.T) {
 func TestPrintBatchHumanReportSymbolsAndAlignment(t *testing.T) {
 	report := batch.Report{
 		Operation: batch.OperationRestore,
-		Summary:   batch.Summary{Total: 4, Success: 2, Failed: 1, Skipped: 1},
+		Summary:   batch.Summary{Total: 5, Success: 2, Failed: 2, Skipped: 1},
 		Results: []batch.ItemResult{
 			{ID: 12, Status: batch.ResultSuccess, OutputPath: "./out/report.pdf"},
 			{ID: 18, Status: batch.ResultSuccess, OutputPath: "./out/archive.zip"},
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
 			{ID: 24, Status: batch.ResultFailed, Message: "file not found"},
 			{ID: 18, Status: batch.ResultSkipped, Message: "duplicate target"},
 		},
@@ -346,6 +347,9 @@ func TestPrintBatchHumanReportSymbolsAndAlignment(t *testing.T) {
 	}
 	if !strings.Contains(output, "✖ id=24     error=file not found") {
 		t.Fatalf("missing failed symbol line: %q", output)
+	}
+	if !strings.Contains(output, "✖ input=\"abc\" error=invalid file ID \"abc\"") {
+		t.Fatalf("missing invalid raw-input failure line: %q", output)
 	}
 	if !strings.Contains(output, "↷ id=18     skipped duplicate target") {
 		t.Fatalf("missing skipped symbol line: %q", output)
@@ -381,9 +385,10 @@ func TestPrintBatchHumanReportDryRunPlannedNoIcon(t *testing.T) {
 func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
 	report := batch.Report{
 		Operation: batch.OperationRestore,
-		Summary:   batch.Summary{Total: 3, Success: 2, Failed: 1},
+		Summary:   batch.Summary{Total: 4, Success: 2, Failed: 2},
 		Results: []batch.ItemResult{
 			{ID: 12, Status: batch.ResultSuccess, OutputPath: "./out/a.txt", OriginalName: "a.txt"},
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
 			{ID: 18, Status: batch.ResultFailed, Message: "file not found"},
 			{ID: 22, Status: batch.ResultSuccess},
 		},
@@ -412,12 +417,22 @@ func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
 	}
 
 	results, ok := payload["results"].([]any)
-	if !ok || len(results) != 3 {
+	if !ok || len(results) != 4 {
 		t.Fatalf("results mismatch: payload=%v", payload)
 	}
-	failedItem, ok := results[1].(map[string]any)
+	invalidItem, ok := results[1].(map[string]any)
 	if !ok {
-		t.Fatalf("failed item should be an object: %T", results[1])
+		t.Fatalf("invalid item should be an object: %T", results[1])
+	}
+	if _, hasID := invalidItem["id"]; hasID {
+		t.Fatalf("invalid parse item should not expose id field: %v", invalidItem)
+	}
+	if got, _ := invalidItem["raw_value"].(string); got != "abc" {
+		t.Fatalf("invalid item raw_value mismatch: item=%v", invalidItem)
+	}
+	failedItem, ok := results[2].(map[string]any)
+	if !ok {
+		t.Fatalf("failed item should be an object: %T", results[2])
 	}
 	if got, _ := failedItem["error"].(string); got != "file not found" {
 		t.Fatalf("failed item error mismatch: item=%v", failedItem)
@@ -449,6 +464,9 @@ func TestExecuteBatchPreservesInputOrder(t *testing.T) {
 	}
 	if report.Results[1].Status != batch.ResultFailed || !strings.Contains(report.Results[1].Message, "invalid file ID") {
 		t.Fatalf("unexpected second result: %v", report.Results[1])
+	}
+	if report.Results[1].RawValue != "abc" {
+		t.Fatalf("expected second result raw_value=abc, got: %v", report.Results[1])
 	}
 	if report.Results[2].ID != 18 || report.Results[2].Status != batch.ResultSuccess {
 		t.Fatalf("unexpected third result: %v", report.Results[2])

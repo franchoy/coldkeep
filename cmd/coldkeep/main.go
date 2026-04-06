@@ -802,7 +802,13 @@ func printBatchHumanReport(label string, report batch.Report) {
 				fmt.Printf("✔ id=%-6d success\n", item.ID)
 			}
 		case batch.ResultFailed:
-			fmt.Printf("✖ id=%-6d error=%s\n", item.ID, item.Message)
+			if item.ID > 0 {
+				fmt.Printf("✖ id=%-6d error=%s\n", item.ID, item.Message)
+			} else if strings.TrimSpace(item.RawValue) != "" {
+				fmt.Printf("✖ input=%q error=%s\n", item.RawValue, item.Message)
+			} else {
+				fmt.Printf("✖ error=%s\n", item.Message)
+			}
 		case batch.ResultSkipped:
 			fmt.Printf("↷ id=%-6d skipped %s\n", item.ID, item.Message)
 		case batch.ResultPlanned:
@@ -871,8 +877,9 @@ func buildBatchTargets(rawTargets []batch.RawTarget) []preparedBatchTarget {
 			prepared = append(prepared, preparedBatchTarget{
 				Executable: false,
 				Result: batch.ItemResult{
-					Status:  batch.ResultFailed,
-					Message: fmt.Sprintf("invalid file ID %q", raw.Value),
+					RawValue: raw.Value,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("invalid file ID %q", raw.Value),
 				},
 			})
 			continue
@@ -918,8 +925,9 @@ func parseFileIDs(rawTargets []batch.RawTarget) ([]int64, []batch.ItemResult) {
 		parsedID, parseErr := strconv.ParseInt(value, 10, 64)
 		if parseErr != nil || parsedID <= 0 {
 			results = append(results, batch.ItemResult{
-				Status:  batch.ResultFailed,
-				Message: fmt.Sprintf("invalid file ID %q", raw.Value),
+				RawValue: raw.Value,
+				Status:   batch.ResultFailed,
+				Message:  fmt.Sprintf("invalid file ID %q", raw.Value),
 			})
 			continue
 		}
@@ -1044,8 +1052,13 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 		jsonResults := make([]map[string]any, 0, len(report.Results))
 		for _, item := range report.Results {
 			encoded := map[string]any{
-				"id":     item.ID,
 				"status": item.Status,
+			}
+			if item.ID > 0 {
+				encoded["id"] = item.ID
+			}
+			if strings.TrimSpace(item.RawValue) != "" {
+				encoded["raw_value"] = item.RawValue
 			}
 			if item.OutputPath != "" {
 				encoded["output_path"] = item.OutputPath

@@ -40,6 +40,7 @@ const (
 // ItemResult describes the outcome of one target.
 type ItemResult struct {
 	ID           int64            `json:"id"`
+	RawValue     string           `json:"raw_value,omitempty"`
 	Status       ItemResultStatus `json:"status"`
 	Message      string           `json:"message,omitempty"`
 	OutputPath   string           `json:"output_path,omitempty"`
