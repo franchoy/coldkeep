@@ -217,4 +217,66 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 			t.Fatalf("mixed input chaos should include invalid-file-id failed item: %v", payload)
 		}
 	})
+
+	t.Run("ordered reporting under mixed input", func(t *testing.T) {
+		id1 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-order-a.txt", "g9-order-a")
+		id2 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-order-b.txt", "g9-order-b")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", id1), "abc", fmt.Sprintf("%d", id2), fmt.Sprintf("%d", id1), "--dry-run", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero because mixed input includes invalid token\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 4 {
+			t.Fatalf("unexpected mixed-order results payload: %v", payload)
+		}
+
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		fourth, _ := results[3].(map[string]any)
+
+		if first["status"] != "planned" || int64(first["id"].(float64)) != id1 {
+			t.Fatalf("unexpected first result for mixed order: %v", first)
+		}
+		if second["status"] != "failed" {
+			t.Fatalf("unexpected second result for mixed order: %v", second)
+		}
+		if third["status"] != "planned" || int64(third["id"].(float64)) != id2 {
+			t.Fatalf("unexpected third result for mixed order: %v", third)
+		}
+		if fourth["status"] != "skipped" || int64(fourth["id"].(float64)) != id1 {
+			t.Fatalf("unexpected fourth result for mixed order: %v", fourth)
+		}
+	})
+
+	t.Run("invalid input serializes as raw_value without id zero", func(t *testing.T) {
+		id := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-raw-value.txt", "g9-raw-value")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "abc", fmt.Sprintf("%d", id), "--dry-run", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero because invalid token is included\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) < 1 {
+			t.Fatalf("unexpected results payload: %v", payload)
+		}
+
+		invalid, _ := results[0].(map[string]any)
+		if status, _ := invalid["status"].(string); status != "failed" {
+			t.Fatalf("expected first result to be failed invalid token, got=%v", invalid)
+		}
+		if raw, _ := invalid["raw_value"].(string); raw != "abc" {
+			t.Fatalf("expected raw_value=abc for invalid token, got=%v", invalid)
+		}
+		if _, hasID := invalid["id"]; hasID {
+			t.Fatalf("invalid token result must not serialize id field (no id=0): %v", invalid)
+		}
+	})
 }
