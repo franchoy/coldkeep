@@ -8369,6 +8369,195 @@ func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
 	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
+func TestBatchFlagsEndToEnd(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { container.ContainersDir = "" })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+	fileA := filepath.Join(inputDir, "batch_flags_a.txt")
+	fileB := filepath.Join(inputDir, "batch_flags_b.txt")
+	if err := os.WriteFile(fileA, []byte("batch-flags-file-a"), 0o644); err != nil {
+		t.Fatalf("write fileA: %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("batch-flags-file-b"), 0o644); err != nil {
+		t.Fatalf("write fileB: %v", err)
+	}
+
+	storeA := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", fileA, "--output", "json"), "store")
+	idA := testutils.JSONInt64(t, testutils.JSONMap(t, storeA, "data"), "file_id")
+
+	storeB := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", fileB, "--output", "json"), "store")
+	idB := testutils.JSONInt64(t, testutils.JSONMap(t, storeB, "data"), "file_id")
+
+	t.Run("restore --dry-run", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_dry_run")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), outDir, "--dry-run", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("restore --dry-run failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("restore --dry-run produced no JSON stdout: %s", res.Stdout)
+		}
+		if dryRun, _ := payload["dry_run"].(bool); !dryRun {
+			t.Fatalf("expected dry_run=true in payload: %v", payload)
+		}
+
+		restoredPath := filepath.Join(outDir, filepath.Base(fileA))
+		if _, err := os.Stat(restoredPath); !os.IsNotExist(err) {
+			t.Fatalf("dry-run should not create restored file, stat err=%v", err)
+		}
+	})
+
+	t.Run("restore --dryRun alias", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_dryRun")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idB), outDir, "--dryRun", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("restore --dryRun failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("restore --dryRun produced no JSON stdout: %s", res.Stdout)
+		}
+		if dryRun, _ := payload["dry_run"].(bool); !dryRun {
+			t.Fatalf("expected dry_run=true in payload: %v", payload)
+		}
+	})
+
+	t.Run("restore --overwrite", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_overwrite")
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			t.Fatalf("mkdir outDir: %v", err)
+		}
+		dest := filepath.Join(outDir, filepath.Base(fileA))
+		if err := os.WriteFile(dest, []byte("existing-content"), 0o644); err != nil {
+			t.Fatalf("seed destination file: %v", err)
+		}
+
+		resNoOverwrite := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), outDir, "--output", "json")
+		if resNoOverwrite.ExitCode == 0 {
+			t.Fatalf("restore without --overwrite unexpectedly succeeded: stdout=%s stderr=%s", resNoOverwrite.Stdout, resNoOverwrite.Stderr)
+		}
+
+		before, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("read seeded destination: %v", err)
+		}
+		if string(before) != "existing-content" {
+			t.Fatalf("destination changed on failed restore without overwrite: %q", string(before))
+		}
+
+		resOverwrite := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), outDir, "--overwrite", "--output", "json")
+		if resOverwrite.ExitCode != 0 {
+			t.Fatalf("restore --overwrite failed: exit=%d stdout=%s stderr=%s", resOverwrite.ExitCode, resOverwrite.Stdout, resOverwrite.Stderr)
+		}
+
+		after, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("read overwritten destination: %v", err)
+		}
+		if string(after) != "batch-flags-file-a" {
+			t.Fatalf("destination not overwritten with restored content, got=%q", string(after))
+		}
+	})
+
+	t.Run("restore --fail-fast", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_fail_fast")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", "999999", fmt.Sprintf("%d", idA), outDir, "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("restore --fail-fast unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		maybeRestored := filepath.Join(outDir, filepath.Base(fileA))
+		if _, err := os.Stat(maybeRestored); !os.IsNotExist(err) {
+			t.Fatalf("restore --fail-fast should stop before valid id restore, stat err=%v", err)
+		}
+	})
+
+	t.Run("remove --dry-run", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idA), "--dry-run", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("remove --dry-run failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_dry_run_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode != 0 {
+			t.Fatalf("idA should still exist after remove --dry-run: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
+	t.Run("remove --dryRun alias", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idB), "--dryRun", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("remove --dryRun failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_dryRun_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idB), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode != 0 {
+			t.Fatalf("idB should still exist after remove --dryRun: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
+	t.Run("remove --fail-fast", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "999999", fmt.Sprintf("%d", idA), "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove --fail-fast unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_fail_fast_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode != 0 {
+			t.Fatalf("idA should still exist after remove --fail-fast first-item failure: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+}
+
 func TestContainerOverflowProtection(t *testing.T) {
 	testgate.RequireDB(t)
 

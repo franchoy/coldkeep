@@ -1192,3 +1192,209 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 	}
 	// (Deliberately do not check destination file content here)
 }
+
+func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("overwrite-false-payload")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+	originalName := "overwrite-false.bin"
+
+	containerFilename := "overwrite-false-container.bin"
+	if err := writeReusableTestContainerFileWithPayload(filepath.Join(containersDir, containerFilename), payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		originalName,
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	outputDir := t.TempDir()
+	destPath := filepath.Join(outputDir, originalName)
+	originalDest := []byte("existing-file-content")
+	if err := os.WriteFile(destPath, originalDest, 0o644); err != nil {
+		t.Fatalf("write existing destination file: %v", err)
+	}
+
+	res, err := RestoreFileWithStorageContextResultOptions(
+		StorageContext{DB: dbconn, ContainerDir: containersDir},
+		fileID,
+		outputDir,
+		RestoreOptions{Overwrite: false},
+	)
+	if err == nil || !strings.Contains(err.Error(), "output file already exists") {
+		t.Fatalf("expected overwrite-protection error, got result=%+v err=%v", res, err)
+	}
+
+	gotDest, readErr := os.ReadFile(destPath)
+	if readErr != nil {
+		t.Fatalf("read existing destination file: %v", readErr)
+	}
+	if string(gotDest) != string(originalDest) {
+		t.Fatalf("existing destination file changed unexpectedly: got=%q want=%q", string(gotDest), string(originalDest))
+	}
+}
+
+func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("overwrite-true-payload")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+	originalName := "overwrite-true.bin"
+
+	containerFilename := "overwrite-true-container.bin"
+	if err := writeReusableTestContainerFileWithPayload(filepath.Join(containersDir, containerFilename), payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		originalName,
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	outputDir := t.TempDir()
+	destPath := filepath.Join(outputDir, originalName)
+	if err := os.WriteFile(destPath, []byte("old-content"), 0o644); err != nil {
+		t.Fatalf("write existing destination file: %v", err)
+	}
+
+	result, err := RestoreFileWithStorageContextResultOptions(
+		StorageContext{DB: dbconn, ContainerDir: containersDir},
+		fileID,
+		outputDir,
+		RestoreOptions{Overwrite: true},
+	)
+	if err != nil {
+		t.Fatalf("restore with overwrite=true: %v", err)
+	}
+	if result.OutputPath != destPath {
+		t.Fatalf("unexpected output path: got=%s want=%s", result.OutputPath, destPath)
+	}
+
+	gotDest, readErr := os.ReadFile(destPath)
+	if readErr != nil {
+		t.Fatalf("read destination file: %v", readErr)
+	}
+	if string(gotDest) != string(payload) {
+		t.Fatalf("destination not replaced with restored payload: got=%q want=%q", string(gotDest), string(payload))
+	}
+}
