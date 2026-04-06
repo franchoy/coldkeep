@@ -8745,6 +8745,54 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 			t.Fatalf("dry-run vs real output_path mismatch: dry=%v real=%v", dryItem, realItem)
 		}
 	})
+
+	t.Run("text output symbols and alignment", func(t *testing.T) {
+		fileText := filepath.Join(inputDir, "batch_flags_text.txt")
+		if err := os.WriteFile(fileText, []byte("batch-flags-text"), 0o644); err != nil {
+			t.Fatalf("write text file: %v", err)
+		}
+
+		storeText := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileText, "--output", "json"), "store")
+		idText := testutils.JSONInt64(t, testutils.JSONMap(t, storeText, "data"), "file_id")
+
+		outDir := filepath.Join(tmp, "restore_text_contract")
+		dryRunRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idText), "999999", outDir, "--dry-run")
+		if dryRunRes.ExitCode == 0 {
+			t.Fatalf("expected non-zero due to mixed valid+invalid dry-run IDs, stdout=%s stderr=%s", dryRunRes.Stdout, dryRunRes.Stderr)
+		}
+
+		if !strings.Contains(dryRunRes.Stdout, "[RESTORE DRY-RUN]") {
+			t.Fatalf("text dry-run output missing header:\n%s", dryRunRes.Stdout)
+		}
+
+		expectedPlannedLine := fmt.Sprintf("  id=%-6d would restore ->", idText)
+		if !strings.Contains(dryRunRes.Stdout, expectedPlannedLine) {
+			t.Fatalf("text dry-run output missing aligned planned line %q:\n%s", expectedPlannedLine, dryRunRes.Stdout)
+		}
+
+		expectedFailureLine := fmt.Sprintf("✖ id=%-6d error=", int64(999999))
+		if !strings.Contains(dryRunRes.Stdout, expectedFailureLine) {
+			t.Fatalf("text dry-run output missing failure symbol/alignment line %q:\n%s", expectedFailureLine, dryRunRes.Stdout)
+		}
+
+		removeRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idText), fmt.Sprintf("%d", idText), "--dry-run")
+		if removeRes.ExitCode != 0 {
+			t.Fatalf("remove --dry-run text contract run failed: exit=%d stdout=%s stderr=%s", removeRes.ExitCode, removeRes.Stdout, removeRes.Stderr)
+		}
+
+		expectedPlannedRemoveLine := fmt.Sprintf("  id=%-6d would remove", idText)
+		if !strings.Contains(removeRes.Stdout, expectedPlannedRemoveLine) {
+			t.Fatalf("remove text output missing planned line %q:\n%s", expectedPlannedRemoveLine, removeRes.Stdout)
+		}
+
+		expectedSkippedLine := fmt.Sprintf("↷ id=%-6d skipped duplicate target", idText)
+		if !strings.Contains(removeRes.Stdout, expectedSkippedLine) {
+			t.Fatalf("remove text output missing skipped symbol/alignment line %q:\n%s", expectedSkippedLine, removeRes.Stdout)
+		}
+	})
 }
 
 func TestContainerOverflowProtection(t *testing.T) {
