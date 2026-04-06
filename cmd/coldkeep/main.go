@@ -681,10 +681,6 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	overwrite := parsed.hasFlag("overwrite")
 	targetArgs := parsed.positionals[:len(parsed.positionals)-1]
 	outputRoot := parsed.positionals[len(parsed.positionals)-1]
-	outputPath, err := ensureRestoreOutputDir(outputRoot, !dryRun)
-	if err != nil {
-		return err
-	}
 
 	rawTargets, err := batch.LoadRawTargets(targetArgs, inputFile)
 	if err != nil {
@@ -693,6 +689,11 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	preparedTargets := batch.PrepareTargets(rawTargets)
 	if !batch.HasExecutableTargets(preparedTargets) {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
+	}
+
+	outputPath, err := ensureRestoreOutputDir(outputRoot, !dryRun)
+	if err != nil {
+		return err
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()

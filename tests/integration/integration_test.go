@@ -8433,6 +8433,18 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 		}
 	})
 
+	t.Run("restore invalid targets do not create output directory", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_invalid_no_side_effect")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", "abc", outDir, "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("restore with invalid-only targets unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+		if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+			t.Fatalf("output directory should not be created when no executable targets exist, stat err=%v", err)
+		}
+	})
+
 	t.Run("restore --dryRun alias", func(t *testing.T) {
 		outDir := filepath.Join(tmp, "restore_dryRun")
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
