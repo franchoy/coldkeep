@@ -8557,6 +8557,61 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 		}
 	})
 
+	t.Run("remove --fail-fast ignores pre-execution parse failure", func(t *testing.T) {
+		fileFF := filepath.Join(inputDir, "batch_failfast_parse.txt")
+		if err := os.WriteFile(fileFF, []byte("batch-failfast-parse"), 0o644); err != nil {
+			t.Fatalf("write fileFF: %v", err)
+		}
+
+		storeFF := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileFF, "--output", "json"), "store")
+		idFF := testutils.JSONInt64(t, testutils.JSONMap(t, storeFF, "data"), "file_id")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "abc", fmt.Sprintf("%d", idFF), "999999", "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove --fail-fast with parse+execution failures unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove --fail-fast parse-precheck produced no JSON stdout: %s", res.Stdout)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 1 || int(summary["failed"].(float64)) != 2 {
+			t.Fatalf("unexpected fail-fast parse-precheck summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected results payload: %v", payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		if first["status"] != "failed" || second["status"] != "success" || third["status"] != "failed" {
+			t.Fatalf("unexpected ordered statuses in parse-precheck fail-fast run: results=%v", results)
+		}
+
+		if raw, _ := first["raw_value"].(string); raw != "abc" {
+			t.Fatalf("expected first result raw_value=abc, got first=%v", first)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_fail_fast_parse_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idFF), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode == 0 {
+			t.Fatalf("idFF should have been removed even with leading parse failure: stdout=%s stderr=%s", restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
 	t.Run("restore --input only", func(t *testing.T) {
 		inputFile := filepath.Join(tmp, "restore_ids.txt")
 		if err := os.WriteFile(inputFile, []byte(fmt.Sprintf("# restore ids\n%d\n\n", idA)), 0o644); err != nil {

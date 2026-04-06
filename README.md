@@ -646,6 +646,18 @@ coldkeep restore 12 18 ./out --dry-run
 - Exit code is non-zero if any item fails
 - Adversarial-lite orchestration coverage is enforced by `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast behavior, and mixed input chaos)
 
+Fail-fast example:
+
+```bash
+coldkeep remove abc 12 999 --fail-fast --output json
+```
+
+Behavior:
+
+- `abc` is reported as invalid input (`raw_value`) but does not stop execution
+- `12` is still executed
+- `999` is the first execution failure and stops further execution
+
 ### Batch JSON output example
 
 ```json
