@@ -8,25 +8,15 @@ const (
 	OperationRemove  OperationType = "remove"
 )
 
-// TargetSource identifies where a target originated.
-type TargetSource string
-
-const (
-	TargetFromArgs    TargetSource = "args"
-	TargetFromInput   TargetSource = "input"
-	TargetFromPattern TargetSource = "pattern"
-)
-
 // RawTarget is a target as entered by the user, before normalization.
 type RawTarget struct {
 	Value  string
-	Source TargetSource
+	Source string
 }
 
-// ResolvedTarget is a normalized, deduplicated target ready for planning.
+// ResolvedTarget is a validated target ready for planning.
 type ResolvedTarget struct {
-	Name   string
-	Source TargetSource
+	ID int64
 }
 
 // PlanItem is a single planned batch operation.
@@ -48,8 +38,7 @@ const (
 
 // ItemResult describes the outcome of one target.
 type ItemResult struct {
-	Op      OperationType    `json:"op"`
-	Target  string           `json:"target"`
+	ID      int64            `json:"id"`
 	Status  ItemResultStatus `json:"status"`
 	Message string           `json:"message"`
 }
@@ -64,8 +53,9 @@ type Summary struct {
 
 // Report contains per-item outcomes and an aggregate summary.
 type Report struct {
-	Summary Summary      `json:"summary"`
-	Results []ItemResult `json:"results"`
+	Operation OperationType `json:"operation"`
+	Summary   Summary       `json:"summary"`
+	Results   []ItemResult  `json:"results"`
 }
 
 // Plan is a sequence of planned operations.

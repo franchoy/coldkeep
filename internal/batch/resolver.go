@@ -1,49 +1,60 @@
 package batch
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
-// Resolver turns raw targets into normalized internal targets.
-type Resolver interface {
-	Resolve(raw []RawTarget) ([]ResolvedTarget, []ItemResult, error)
-}
-
-// BasicResolver performs minimal normalization and deduplication.
-type BasicResolver struct{}
-
-// NewBasicResolver returns the Step 1 default resolver.
-func NewBasicResolver() BasicResolver {
-	return BasicResolver{}
-}
-
-// Resolve trims targets, removes duplicates, and reports skipped items.
-func (r BasicResolver) Resolve(raw []RawTarget) ([]ResolvedTarget, []ItemResult, error) {
-	seen := make(map[string]struct{}, len(raw))
+// ResolveTargets validates and parses raw targets into integer IDs.
+func ResolveTargets(raw []RawTarget) ([]ResolvedTarget, []ItemResult) {
 	resolved := make([]ResolvedTarget, 0, len(raw))
-	results := make([]ItemResult, 0)
+	results := make([]ItemResult, 0, len(raw))
 
 	for _, item := range raw {
-		name := strings.TrimSpace(item.Value)
-		if name == "" {
+		value := strings.TrimSpace(item.Value)
+		if value == "" {
 			results = append(results, ItemResult{
-				Target:  item.Value,
-				Status:  ResultSkipped,
-				Message: "empty target",
+				Status:  ResultFailed,
+				Message: fmt.Sprintf("invalid file ID %q", item.Value),
 			})
 			continue
 		}
 
-		if _, ok := seen[name]; ok {
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || id <= 0 {
 			results = append(results, ItemResult{
-				Target:  name,
+				Status:  ResultFailed,
+				Message: fmt.Sprintf("invalid file ID %q", value),
+			})
+			continue
+		}
+
+		resolved = append(resolved, ResolvedTarget{ID: id})
+	}
+
+	return resolved, results
+}
+
+// DeduplicateTargets keeps first occurrence and reports duplicates as skipped.
+func DeduplicateTargets(targets []ResolvedTarget) ([]ResolvedTarget, []ItemResult) {
+	seen := make(map[int64]struct{}, len(targets))
+	deduped := make([]ResolvedTarget, 0, len(targets))
+	results := make([]ItemResult, 0)
+
+	for _, target := range targets {
+		if _, ok := seen[target.ID]; ok {
+			results = append(results, ItemResult{
+				ID:      target.ID,
 				Status:  ResultSkipped,
 				Message: "duplicate target",
 			})
 			continue
 		}
 
-		seen[name] = struct{}{}
-		resolved = append(resolved, ResolvedTarget{Name: name, Source: item.Source})
+		seen[target.ID] = struct{}{}
+		deduped = append(deduped, target)
 	}
 
-	return resolved, results, nil
+	return deduped, results
 }

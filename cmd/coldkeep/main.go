@@ -663,18 +663,12 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 2 {
 		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
 	}
-
-	dryRun := parsed.hasFlag("dry-run", "dryRun")
-	failFast := parsed.hasFlag("fail-fast", "failFast")
-	overwrite := parsed.hasFlag("overwrite")
-
-	inputFile, _ := parsed.lastFlagValue("input")
 	targetArgs := parsed.positionals[:len(parsed.positionals)-1]
 	outputRoot := parsed.positionals[len(parsed.positionals)-1]
 	outputPath, err := ensureRestoreOutputDir(outputRoot)
@@ -682,16 +676,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
-	rawTargets, err := batch.LoadRawTargets(batch.LoadOptions{Args: targetArgs, InputFile: inputFile})
+	rawTargets, err := batch.LoadRawTargets(targetArgs, "")
 	if err != nil {
 		return err
 	}
-	resolver := batch.NewBasicResolver()
-	resolvedTargets, resolutionResults, err := resolver.Resolve(rawTargets)
-	if err != nil {
-		return err
-	}
-	plan := batch.BuildPlan(batch.OperationRestore, resolvedTargets)
+	resolvedTargets, resolveFailures := batch.ResolveTargets(rawTargets)
+	dedupedTargets, dedupeSkips := batch.DeduplicateTargets(resolvedTargets)
+	plan := batch.BuildPlan(batch.OperationRestore, dedupedTargets)
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -699,35 +690,27 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	runItem := func(item batch.PlanItem) (string, error) {
-		fileID, parseErr := strconv.ParseInt(item.Target.Name, 10, 64)
-		if parseErr != nil {
-			return "", fmt.Errorf("invalid file ID %q", item.Target.Name)
-		}
-
-		if dryRun {
-			return fmt.Sprintf("id=%d output_dir=%s planned", fileID, outputPath), nil
-		}
-
-		result, runErr := storage.RestoreFileWithStorageContextResultOptions(sgctx, fileID, outputPath, storage.RestoreOptions{Overwrite: overwrite})
+	runItem := func(fileID int64) (string, error) {
+		result, runErr := storage.RestoreFileWithStorageContextResult(sgctx, fileID, outputPath)
 		if runErr != nil {
 			return "", runErr
 		}
 		return fmt.Sprintf("id=%d output=%s sha256=%s", result.FileID, result.OutputPath, result.RestoredHash), nil
 	}
 
-	executor := batch.RealExecutor{
-		Run: runItem,
-	}
-
-	execReport := executor.Execute(plan, batch.ExecuteOptions{DryRun: dryRun, FailFast: failFast})
-	report := batch.NewReport(append(resolutionResults, execReport.Results...))
+	execReport := batch.ExecutePlan(plan, batch.ExecuteOptions{DryRun: false, FailFast: false}, runItem)
+	allResults := make([]batch.ItemResult, 0, len(resolveFailures)+len(dedupeSkips)+len(execReport.Results))
+	allResults = append(allResults, resolveFailures...)
+	allResults = append(allResults, dedupeSkips...)
+	allResults = append(allResults, execReport.Results...)
+	report := batch.NewReport(batch.OperationRestore, allResults)
 
 	if outputMode == outputModeJSON {
 		status := batchOverallStatus(report)
 		payload := map[string]any{
 			"status":  status,
 			"command": "restore",
+			"data":    report,
 			"summary": report.Summary,
 			"results": report.Results,
 		}
@@ -748,27 +731,20 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "input", "dry-run", "dryRun", "fail-fast", "failFast", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
 		return usageErrorf("Usage: coldkeep remove <fileID> [fileID ...]")
 	}
 
-	dryRun := parsed.hasFlag("dry-run", "dryRun")
-	failFast := parsed.hasFlag("fail-fast", "failFast")
-	inputFile, _ := parsed.lastFlagValue("input")
-
-	rawTargets, err := batch.LoadRawTargets(batch.LoadOptions{Args: parsed.positionals, InputFile: inputFile})
+	rawTargets, err := batch.LoadRawTargets(parsed.positionals, "")
 	if err != nil {
 		return err
 	}
-	resolver := batch.NewBasicResolver()
-	resolvedTargets, resolutionResults, err := resolver.Resolve(rawTargets)
-	if err != nil {
-		return err
-	}
-	plan := batch.BuildPlan(batch.OperationRemove, resolvedTargets)
+	resolvedTargets, resolveFailures := batch.ResolveTargets(rawTargets)
+	dedupedTargets, dedupeSkips := batch.DeduplicateTargets(resolvedTargets)
+	plan := batch.BuildPlan(batch.OperationRemove, dedupedTargets)
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -776,16 +752,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	runItem := func(item batch.PlanItem) (string, error) {
-		fileID, parseErr := strconv.ParseInt(item.Target.Name, 10, 64)
-		if parseErr != nil {
-			return "", fmt.Errorf("invalid file ID %q", item.Target.Name)
-		}
-
-		if dryRun {
-			return fmt.Sprintf("id=%d planned", fileID), nil
-		}
-
+	runItem := func(fileID int64) (string, error) {
 		result, runErr := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
 		if runErr != nil {
 			return "", runErr
@@ -793,18 +760,19 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return fmt.Sprintf("id=%d removed_mappings=%d", result.FileID, result.RemovedMappings), nil
 	}
 
-	executor := batch.RealExecutor{
-		Run: runItem,
-	}
-
-	execReport := executor.Execute(plan, batch.ExecuteOptions{DryRun: dryRun, FailFast: failFast})
-	report := batch.NewReport(append(resolutionResults, execReport.Results...))
+	execReport := batch.ExecutePlan(plan, batch.ExecuteOptions{DryRun: false, FailFast: false}, runItem)
+	allResults := make([]batch.ItemResult, 0, len(resolveFailures)+len(dedupeSkips)+len(execReport.Results))
+	allResults = append(allResults, resolveFailures...)
+	allResults = append(allResults, dedupeSkips...)
+	allResults = append(allResults, execReport.Results...)
+	report := batch.NewReport(batch.OperationRemove, allResults)
 
 	if outputMode == outputModeJSON {
 		status := batchOverallStatus(report)
 		payload := map[string]any{
 			"status":  status,
 			"command": "remove",
+			"data":    report,
 			"summary": report.Summary,
 			"results": report.Results,
 		}
@@ -859,11 +827,11 @@ func printBatchHumanReport(label string, report batch.Report) {
 	for _, item := range report.Results {
 		switch item.Status {
 		case batch.ResultSuccess:
-			fmt.Printf("OK target=%s %s\n", item.Target, item.Message)
+			fmt.Printf("OK id=%d %s\n", item.ID, item.Message)
 		case batch.ResultFailed:
-			fmt.Printf("FAIL target=%s error=%s\n", item.Target, item.Message)
+			fmt.Printf("FAIL id=%d error=%s\n", item.ID, item.Message)
 		case batch.ResultSkipped:
-			fmt.Printf("SKIP target=%s reason=%s\n", item.Target, item.Message)
+			fmt.Printf("SKIP id=%d reason=%s\n", item.ID, item.Message)
 		}
 	}
 	fmt.Println("Summary:")
@@ -1471,8 +1439,8 @@ func printHelp() {
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
-		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
-		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (state-changing unless --dry-run)"},
+		{"  restore <fileID> [<fileID> ...] <outputDir> [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
+		{"  remove <fileID> [<fileID> ...] [--output <text|json>]", "Remove one or more logical file IDs"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},

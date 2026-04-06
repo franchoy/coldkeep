@@ -7,32 +7,20 @@ import (
 	"strings"
 )
 
-// LoadOptions defines supported target input channels.
-type LoadOptions struct {
-	Args      []string
-	InputFile string
-	Patterns  []string
-}
-
-// LoadRawTargets collects raw targets from supported sources.
-// Step 2 supports positional args and --input text files.
-func LoadRawTargets(opts LoadOptions) ([]RawTarget, error) {
-	if len(opts.Patterns) > 0 {
-		return nil, fmt.Errorf("--pattern is not supported yet")
+// LoadRawTargets collects targets from positional args and optional input file.
+func LoadRawTargets(args []string, inputFile string) ([]RawTarget, error) {
+	raw := make([]RawTarget, 0, len(args))
+	for _, arg := range args {
+		raw = append(raw, RawTarget{Value: arg, Source: "args"})
 	}
 
-	raw := make([]RawTarget, 0, len(opts.Args))
-	for _, arg := range opts.Args {
-		raw = append(raw, RawTarget{Value: arg, Source: TargetFromArgs})
-	}
-
-	if opts.InputFile == "" {
+	if inputFile == "" {
 		return raw, nil
 	}
 
-	file, err := os.Open(opts.InputFile)
+	file, err := os.Open(inputFile)
 	if err != nil {
-		return nil, fmt.Errorf("open input file %q: %w", opts.InputFile, err)
+		return nil, fmt.Errorf("open input file %q: %w", inputFile, err)
 	}
 	defer func() { _ = file.Close() }()
 
@@ -42,10 +30,10 @@ func LoadRawTargets(opts LoadOptions) ([]RawTarget, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		raw = append(raw, RawTarget{Value: line, Source: TargetFromInput})
+		raw = append(raw, RawTarget{Value: line, Source: "input"})
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read input file %q: %w", opts.InputFile, err)
+		return nil, fmt.Errorf("read input file %q: %w", inputFile, err)
 	}
 	return raw, nil
 }

@@ -6,10 +6,11 @@ import (
 )
 
 // NewReport builds a report and computes its summary.
-func NewReport(results []ItemResult) Report {
+func NewReport(op OperationType, results []ItemResult) Report {
 	return Report{
-		Summary: Summarize(results),
-		Results: results,
+		Operation: op,
+		Summary:   Summarize(results),
+		Results:   results,
 	}
 }
 
@@ -32,8 +33,11 @@ func Summarize(results []ItemResult) Summary {
 // FormatHuman renders a stable, human-readable report.
 func FormatHuman(report Report) string {
 	var b strings.Builder
+	if report.Operation != "" {
+		_, _ = fmt.Fprintf(&b, "[%s]\n", strings.ToUpper(string(report.Operation)))
+	}
 	for _, item := range report.Results {
-		_, _ = fmt.Fprintf(&b, "[%s] %s: %s\n", item.Status, item.Target, item.Message)
+		_, _ = fmt.Fprintf(&b, "[%s] id=%d %s\n", item.Status, item.ID, item.Message)
 	}
 	_, _ = fmt.Fprintf(
 		&b,

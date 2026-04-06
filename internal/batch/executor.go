@@ -6,39 +6,33 @@ type ExecuteOptions struct {
 	FailFast bool
 }
 
-// Executor runs plan items and returns a report.
-type Executor interface {
-	Execute(plan Plan, opts ExecuteOptions) Report
-}
-
-// ExecuteItemFunc runs a single plan item and returns a human message.
-type ExecuteItemFunc func(item PlanItem) (string, error)
-
-// RealExecutor performs real mutations for each plan item.
-type RealExecutor struct {
-	Run ExecuteItemFunc
-}
-
-// Execute runs the plan with best-effort semantics unless fail-fast is requested.
-func (e RealExecutor) Execute(plan Plan, opts ExecuteOptions) Report {
+// ExecutePlan runs a plan using a per-item execution callback.
+func ExecutePlan(plan Plan, opts ExecuteOptions, execFunc func(id int64) (string, error)) Report {
 	results := make([]ItemResult, 0, len(plan.Items))
 
 	for _, item := range plan.Items {
 		if item.Skipped {
 			results = append(results, ItemResult{
-				Op:      item.Op,
-				Target:  item.Target.Name,
+				ID:      item.Target.ID,
 				Status:  ResultSkipped,
 				Message: item.Reason,
 			})
 			continue
 		}
 
-		message, err := e.Run(item)
+		if opts.DryRun {
+			results = append(results, ItemResult{
+				ID:      item.Target.ID,
+				Status:  ResultSuccess,
+				Message: "planned",
+			})
+			continue
+		}
+
+		message, err := execFunc(item.Target.ID)
 		if err != nil {
 			results = append(results, ItemResult{
-				Op:      item.Op,
-				Target:  item.Target.Name,
+				ID:      item.Target.ID,
 				Status:  ResultFailed,
 				Message: err.Error(),
 			})
@@ -52,39 +46,18 @@ func (e RealExecutor) Execute(plan Plan, opts ExecuteOptions) Report {
 			message = "completed"
 		}
 		results = append(results, ItemResult{
-			Op:      item.Op,
-			Target:  item.Target.Name,
+			ID:      item.Target.ID,
 			Status:  ResultSuccess,
 			Message: message,
 		})
 	}
 
-	return NewReport(results)
+	return NewReport(planOperation(plan), results)
 }
 
-// DryRunExecutor reports what would run without mutation.
-type DryRunExecutor struct{}
-
-// Execute produces a success result for each non-skipped planned item.
-func (e DryRunExecutor) Execute(plan Plan, opts ExecuteOptions) Report {
-	results := make([]ItemResult, 0, len(plan.Items))
-	for _, item := range plan.Items {
-		if item.Skipped {
-			results = append(results, ItemResult{
-				Op:      item.Op,
-				Target:  item.Target.Name,
-				Status:  ResultSkipped,
-				Message: item.Reason,
-			})
-			continue
-		}
-
-		results = append(results, ItemResult{
-			Op:      item.Op,
-			Target:  item.Target.Name,
-			Status:  ResultSuccess,
-			Message: "planned (dry-run)",
-		})
+func planOperation(plan Plan) OperationType {
+	if len(plan.Items) == 0 {
+		return ""
 	}
-	return NewReport(results)
+	return plan.Items[0].Op
 }
