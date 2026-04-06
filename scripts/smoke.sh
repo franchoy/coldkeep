@@ -133,10 +133,12 @@ compare_stat_fields() {
   local after_stats="$2"
   local fields="$3"  # space-separated field names
   local should_change="$4"  # "same" or "different"
+  local before
+  local after
   
   for field in $fields; do
-    local before=$(echo "$before_stats" | jq -r ".data.${field}")
-    local after=$(echo "$after_stats" | jq -r ".data.${field}")
+    before=$(echo "$before_stats" | jq -r ".data.${field}")
+    after=$(echo "$after_stats" | jq -r ".data.${field}")
     
     if [[ "$should_change" == "same" ]]; then
       if [[ "$before" != "$after" ]]; then

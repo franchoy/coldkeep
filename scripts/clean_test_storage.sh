@@ -21,9 +21,7 @@ fi
 
 for dir in "${CANDIDATES[@]}"; do
   echo "Removing $dir ..."
-  shopt -s nullglob
-  matches=( $dir )
-  shopt -u nullglob
+  mapfile -t matches < <(compgen -G "$dir" || true)
 
   if [[ "${#matches[@]}" -eq 0 ]]; then
     echo "No matches for $dir"
