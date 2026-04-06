@@ -1561,11 +1561,11 @@ key management, storage access controls, and deployment hardening expectations.
 
 ## Roadmap
 
-Coldkeep follows a risk-reduction approach, where each release removes a
-class of failure until the system becomes fully trustworthy.
+Coldkeep v1.0 completes the risk-reduction phase.
+The roadmap below is retained as historical context.
 
-v1.0 has now been reached; the milestones below are retained as historical
-release progression context.
+Coldkeep followed a risk-reduction approach, where each release removed a
+class of failure until the system became fully trustworthy.
 
 - **v0.2 — Crash Consistency Foundation**  
   Eliminate DB ↔ filesystem divergence and ensure safe recovery after crashes.
@@ -1600,6 +1600,89 @@ release progression context.
 
 - **v1.0 — Storage Engine Stable**  
   Coldkeep becomes a trustworthy storage engine for real cold backups.
+
+## Roadmap — Post v1.0 (v1.x Evolution)
+
+After reaching v1.0, Coldkeep transitions from risk elimination to value expansion.
+
+The v0.x series focused on removing entire classes of failure and proving
+correctness. With v1.0, the system is considered trustworthy.
+
+The v1.x series focuses on:
+
+- improving usability
+- enhancing storage efficiency
+- evolving the system carefully without breaking guarantees
+
+### Guiding Principles
+
+- Backward compatibility is mandatory
+- Deterministic restore must never be broken
+- Existing data must remain valid
+- Correctness remains the top priority over performance
+
+- **v1.1 — Batch CLI Operations**  
+  Introduce batch semantics into the CLI (multi-file restore/remove, input lists and
+  pattern selection, optional `--dry-run`, and explicit partial-failure/reporting behavior)
+  to establish the interaction model for future backup workflows.
+
+- **v1.2 — Physical File Layer**  
+  Introduce separation between logical content and filesystem structure by adding a
+  `physical_file` entity, mapping `physical_file -> logical_file`, preserving folder
+  structure on restore, and allowing multiple paths to reference the same logical content.
+
+- **v1.3 — Backup Layer**  
+  Introduce snapshot-style grouping through a `backup` entity, incremental backups,
+  partial restore from backups, and explicit backup-level consistency guarantees.
+
+- **v1.4 — CDC Evolution**  
+  Improve deduplication while preserving compatibility via chunker versioning,
+  backward-compatible CDC upgrades, and benchmark-validated improvements.
+
+- **v1.5 — Block Abstraction Upgrade**  
+  Improve storage efficiency by supporting multiple chunks per block, improving container
+  packing, preserving deterministic restore, and extending verification logic.
+
+- **v1.6 — Compression Layer**  
+  Reduce storage footprint with block-level compression while preserving deduplication
+  guarantees and verification compatibility, and explicitly avoiding chunk-level compression.
+
+- **v1.7 — Performance Phase**  
+  Optimize execution without compromising correctness through parallel chunking/hashing,
+  database optimization, optional C-based optimizations, and benchmark-driven tuning.
+
+- **v1.8 — Observability and Tooling**  
+  Improve system transparency through enhanced `coldkeep stats`, a `coldkeep inspect`
+  surface for data visibility, improved `coldkeep simulate`, and stronger traceability.
+
+### Explicit Non-Goals for v1.x
+
+The following are intentionally deferred to v2.x:
+
+- Multi-user support
+- Distributed storage
+- NAS / multi-disk coordination
+- Cloud integrations
+- API / service layer
+- Web UI
+
+These introduce system-level complexity and are outside the scope of v1.x.
+
+### Toward v2.0
+
+v2.0 represents a shift from:
+
+Single-node, local-first storage engine
+
+to:
+
+Multi-user, multi-node storage system
+
+This includes:
+
+- user isolation and permissions
+- concurrent multi-actor coordination
+- distributed storage management
 
 ---
 
