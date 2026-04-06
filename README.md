@@ -643,6 +643,7 @@ coldkeep restore 12 18 ./out --dry-run
 - Duplicate targets are skipped
 - Results are reported per item with a summary
 - Exit code is non-zero if any item fails
+- Adversarial-lite orchestration coverage is enforced by `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast behavior, and mixed input chaos)
 
 ### Batch JSON output example
 

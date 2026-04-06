@@ -38,6 +38,15 @@ the maintained v1.0 guarantee-to-evidence contract.
 | G7 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity, including authenticated AES-GCM decode failures on tampered ciphertext, tampered nonce metadata, wrong-key mismatch, and malformed key configuration (invalid length and invalid encoding) | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsAESGCMTamperedCiphertext`, `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`, `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`, `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`, `TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
 | G8 | Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload`, `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData` | covered |
 
+## Post-v1.0 Extension Guarantees (v1.1+)
+
+These rows track guarantees added after the v1.0 baseline. They are intentionally
+separate from the frozen v1.0 core matrix (G1-G8).
+
+| ID | Guarantee | Primary verify evidence | Primary test evidence | Status |
+| --- | --- | --- | --- | --- |
+| G9 | Batch orchestration semantics are isolated, deterministic, and truthfully reported | CLI batch contract checks (per-item status + summary + exit behavior) | `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast control-flow, mixed `--input` chaos) | covered |
+
 ## Open Work Tracking
 
 Use this section for branch-specific additions that are not yet fully covered.
