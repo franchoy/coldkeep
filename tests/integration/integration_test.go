@@ -8758,6 +8758,36 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 		}
 	})
 
+	t.Run("failed batch json emits stdout result and stderr error envelope", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "999999", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero for failed batch command: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		batchPayload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("expected batch JSON payload on stdout, got stdout=%s", res.Stdout)
+		}
+		if got, _ := batchPayload["command"].(string); got != "remove" {
+			t.Fatalf("expected remove batch payload on stdout, got=%v payload=%v", batchPayload["command"], batchPayload)
+		}
+		if got, _ := batchPayload["status"].(string); got != "error" {
+			t.Fatalf("expected batch payload status=error for single failed item, got=%v payload=%v", batchPayload["status"], batchPayload)
+		}
+
+		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+		if !ok {
+			t.Fatalf("expected generic CLI error envelope on stderr, got stderr=%s", res.Stderr)
+		}
+		if got, _ := errPayload["error_class"].(string); got != "GENERAL" {
+			t.Fatalf("expected GENERAL error class, got payload=%v", errPayload)
+		}
+		if msg, _ := errPayload["message"].(string); !strings.Contains(strings.ToLower(msg), "one or more remove operations failed") {
+			t.Fatalf("expected generic batch failure message in stderr envelope, got payload=%v", errPayload)
+		}
+	})
+
 	t.Run("restore dry-run and real parity", func(t *testing.T) {
 		fileParity := filepath.Join(inputDir, "batch_flags_parity.txt")
 		if err := os.WriteFile(fileParity, []byte("batch-flags-parity"), 0o644); err != nil {

@@ -733,6 +733,7 @@ Example JSON result shape (ordered by input):
 - In `--output json` mode, each command invocation emits exactly one canonical JSON payload: success payloads go to stdout, and error payloads go to stderr with a non-zero exit code.
 - Machine-readable JSON output is written to stdout, while diagnostic and recovery messages are written to stderr.
 - `startup_recovery` JSON is an event-style diagnostic emitted on stderr (preflight stream), while `doctor --output json` emits a command-style result payload on stdout (`status + command + data`).
+- Batch-command exception (intentional): when a batch command emits a full per-item result payload with one or more failures, it writes the batch result payload to stdout and also emits the generic CLI error envelope to stderr; consumers should read both streams.
 
 ### Batch restore/remove output contract (v1.1)
 
