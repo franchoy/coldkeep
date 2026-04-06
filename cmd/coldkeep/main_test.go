@@ -427,6 +427,37 @@ func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
 	}
 }
 
+func TestExecuteBatchPreservesInputOrder(t *testing.T) {
+	raw := []batch.RawTarget{
+		{Value: "12", Source: "args"},
+		{Value: "abc", Source: "args"},
+		{Value: "18", Source: "args"},
+		{Value: "12", Source: "args"},
+	}
+
+	targets := buildBatchTargets(raw)
+	report := executeBatch(targets, func(id int64) batch.ItemResult {
+		return batch.ItemResult{ID: id, Status: batch.ResultSuccess, Message: "ok"}
+	}, false, batch.OperationRemove, false)
+
+	if len(report.Results) != 4 {
+		t.Fatalf("result length mismatch: got=%d", len(report.Results))
+	}
+
+	if report.Results[0].ID != 12 || report.Results[0].Status != batch.ResultSuccess {
+		t.Fatalf("unexpected first result: %v", report.Results[0])
+	}
+	if report.Results[1].Status != batch.ResultFailed || !strings.Contains(report.Results[1].Message, "invalid file ID") {
+		t.Fatalf("unexpected second result: %v", report.Results[1])
+	}
+	if report.Results[2].ID != 18 || report.Results[2].Status != batch.ResultSuccess {
+		t.Fatalf("unexpected third result: %v", report.Results[2])
+	}
+	if report.Results[3].ID != 12 || report.Results[3].Status != batch.ResultSkipped {
+		t.Fatalf("unexpected fourth result: %v", report.Results[3])
+	}
+}
+
 func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
