@@ -658,6 +658,38 @@ Behavior:
 - `12` is still executed
 - `999` is the first execution failure and stops further execution
 
+Example JSON result shape (ordered by input):
+
+```json
+{
+  "status": "partial_failure",
+  "command": "remove",
+  "dry_run": false,
+  "summary": {
+    "total": 3,
+    "success": 1,
+    "failed": 2,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "status": "failed",
+      "raw_value": "abc",
+      "error": "invalid file ID \"abc\""
+    },
+    {
+      "id": 12,
+      "status": "success"
+    },
+    {
+      "id": 999,
+      "status": "failed",
+      "error": "file not found"
+    }
+  ]
+}
+```
+
 ### Batch JSON output example
 
 ```json
