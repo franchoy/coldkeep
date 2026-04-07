@@ -32,7 +32,10 @@ production stability.
 
 ## [1.1.0] - 2026-04-07
 
-Batch CLI semantics and deterministic execution model.
+Interface-correctness milestone (CLI + automation layer).
+
+v1.0 established correctness of storage internals.
+v1.1 establishes correctness of interaction semantics for CLI and automation.
 
 This release introduces a unified batch execution layer for `restore` and
 `remove`, focused on deterministic behavior, structured observability, and
@@ -82,6 +85,9 @@ correctness under real-world mixed-input scenarios.
   of other valid targets unless `--fail-fast` is used
 - This release establishes a deterministic and automation-friendly CLI contract
   for batch workflows, aligned with coldkeep’s correctness-first design
+- In guarantee terms, this release introduces an interface-correctness layer
+  (G9): deterministic orchestration, machine-readable contract stability, and
+  automation-safe partial-failure behavior
 
 
 ------------------------------------------------------------------------

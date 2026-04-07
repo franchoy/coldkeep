@@ -33,10 +33,12 @@ The icon will be used for:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.0%20stable-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.1%20interface--correctness%20milestone-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> **Status:** v1.0 correctness-first storage core.
+> **Status:** v1.1 adds an interface-correctness layer on top of the v1.0 correctness-first storage core.
+>
+> v1.0 established storage correctness. v1.1 establishes interaction correctness for CLI and automation.
 >
 > **Guarantees are enforced through automated validation and CI gates.**  
 > See `VALIDATION_MATRIX.md` for the formal guarantee-to-evidence mapping.
@@ -56,7 +58,13 @@ and system restart/recovery under defined operating conditions.
 
 ## Status
 
-Coldkeep v1.0 establishes a correctness-first storage core with validated guarantees.
+Coldkeep now has two explicit correctness layers:
+
+- v1.0: correctness of storage (restore determinism, integrity, recovery, GC safety)
+- v1.1: correctness of interaction (CLI orchestration, machine-readable contracts, automation-safe batch semantics)
+
+This means v1.1 is not only a feature increment.
+It is a trust-boundary expansion from data-plane correctness to interface-plane correctness.
 
 The system has been validated across:
 
@@ -65,6 +73,7 @@ The system has been validated across:
 - safe garbage collection
 - recovery after damaged or incomplete states
 - concurrent and adversarial lifecycle scenarios
+- deterministic batch orchestration under mixed success/failure inputs
 
 Coldkeep is designed to fail explicitly rather than silently accept corrupted or inconsistent data.
 
@@ -85,6 +94,10 @@ For v1.0, every change intended for mainline or release delivery is expected to
 pass the full GitHub Actions pipeline before merge or tag publication. The repo
 contains a synthetic required check named `CI Required Gate` that aggregates the
 quality, integration, and smoke jobs across both codecs.
+
+For v1.1, this validation scope extends to the interaction layer: batch restore/remove
+contracts, deterministic reporting semantics, and adversarial orchestration behavior
+used by automation and CI consumers.
 
 ---
 
@@ -171,10 +184,12 @@ gates while preserving per-item outcome detail in the JSON report.
 
 ---
 
-## 🛡️ Storage Guarantees (v1.0)
+## 🛡️ Storage and Interface Guarantees (v1.1)
 
 coldkeep is designed as a **correctness-first storage engine**.  
-This section defines the guarantees provided by the system as of **v1.0**.
+This section defines the guarantees provided by the system as of **v1.1**.
+
+v1.0 guarantees remain the storage core. v1.1 adds interface correctness for CLI automation flows.
 
 **Loss-minimizing recovery:**
 If a container is damaged or quarantined, logical files referencing it are only lost if all their chunks are unrecoverable. Otherwise, logical-file metadata is preserved when at least one referenced chunk remains restorable. Restore success is still end-to-end hash-gated: a restore only succeeds when the reconstructed file matches the original stored file hash. This keeps recovery loss-minimizing without silently accepting partial/corrupted output.
@@ -189,16 +204,24 @@ If a container is damaged or quarantined, logical files referencing it are only 
 - G6: Safe in-process concurrent storage operations
 - G7: Deep corruption detection (payload/offset/tail)
 - G8: Corrective health gate contract stability
+- G9: Deterministic batch orchestration and automation-safe CLI contract behavior
 
 ### Summary
 
-coldkeep v1.0 guarantees:
+coldkeep v1.0 storage-core guarantees:
 
 - deterministic, byte-identical restore
 - no exposure of partially written or inconsistent data
 - GC is reference-safe: no reachable chunk is ever deleted
 - Atomic restore replacement (within single-node local filesystem semantics)
 - Safe in-process concurrent storage operations
+
+v1.1 interface-correctness guarantees:
+
+- deterministic batch orchestration across restore/remove item sets
+- stable, machine-readable batch result contracts (`status`, `summary`, per-item outcomes)
+- automation-safe exit semantics for partial failures and all-invalid input sets
+- adversarial validation evidence for mixed-input and fail-fast orchestration paths (G9)
 
 ### G2 scope boundary
 
@@ -630,7 +653,8 @@ coldkeep simulate store-folder ./data --output json
 
 ## Batch Operations (v1.1)
 
-Coldkeep now supports batch restore and remove operations.
+Coldkeep v1.1 introduces the interface-correctness layer through batch restore and remove operations.
+This extends the trusted surface from storage internals to CLI orchestration and machine-driven automation behavior.
 
 ### Restore multiple files
 

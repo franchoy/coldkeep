@@ -1,5 +1,5 @@
 
-# v1.0 Validation Matrix
+# v1.x Validation Matrix
 
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).
@@ -17,11 +17,12 @@ This prevents future “renumbering drift”.
 All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
 
 This document originated from the v0.9/v0.10 trust-validation work and is now
-the maintained v1.0 guarantee-to-evidence contract.
+the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
+guarantees (G1-G8) plus post-v1.0 interface-correctness extensions (G9+).
 
 ## Scope
 
-- Target: single-node trust model for v1.0 and ongoing maintenance
+- Target: single-node trust model for v1.0 core plus v1.1+ interface contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 
@@ -45,7 +46,7 @@ separate from the frozen v1.0 core matrix (G1-G8).
 
 | ID | Guarantee | Primary verify evidence | Primary test evidence | Status |
 | --- | --- | --- | --- | --- |
-| G9 | Batch orchestration semantics are isolated, deterministic, and truthfully reported | CLI batch contract checks (per-item status + summary + exit behavior) | `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast control-flow, mixed `--input` chaos) | covered |
+| G9 | Interface correctness for batch CLI orchestration: isolated execution, deterministic ordering, and truthful machine-readable reporting | CLI batch contract checks (per-item status + summary + exit behavior) | `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast control-flow, mixed `--input` chaos) | covered |
 
 ## Open Work Tracking
 

@@ -2,7 +2,12 @@
 
 Thank you for your interest in contributing to coldkeep.
 
-coldkeep v1.0 is a correctness-first storage engine.
+coldkeep v1.x is a correctness-first storage engine.
+
+The project currently has two explicit correctness layers:
+
+- storage correctness (v1.0 core)
+- interaction correctness for CLI/automation contracts (v1.1 layer)
 
 The project originated as a research prototype, and continues to
 prioritize correctness, determinism, and clarity over feature velocity.
@@ -13,10 +18,11 @@ thoughtful critiques.
 
 ## Project Philosophy
 
-coldkeep v1.0 prioritizes:
+coldkeep v1.x prioritizes:
 
 -   Correctness over performance
 -   Deterministic storage behavior
+-   Deterministic interaction behavior for automation workflows
 -   Transactional metadata safety
 -   Clear and readable code
 -   Simplicity over abstraction
@@ -25,12 +31,13 @@ Stability and conceptual clarity remain more important than feature velocity.
 
 Major architectural changes should be discussed before implementation.
 
-## v1.0 Philosophy: Correctness Over Features
+## v1.x Philosophy: Correctness Over Feature Velocity
 
-The v0.10 validation phase established a contribution posture that remains important in v1.0.
+The v0.10 validation phase established a contribution posture that remains important across v1.x.
 Contributions should prioritize:
 
--   strengthening invariants and correctness guarantees
+-   strengthening storage invariants and correctness guarantees
+-   preserving stable machine-readable CLI contracts for automation
 -   improving stress and adversarial validation coverage, including long-run tests
 -   identifying and reproducing edge-case failures
 -   improving observability and operator-facing behavior
@@ -172,8 +179,8 @@ If unsure, open a discussion before implementing changes.
 -   Avoid flaky timing-based tests
 -   Prefer deterministic inputs
 
-For v1.0, changes that affect storage, restore, verification, recovery, GC,
-or CLI contracts are expected to pass the full GitHub Actions pipeline:
+For v1.x, changes that affect storage, restore, verification, recovery, GC,
+batch orchestration, or CLI contracts are expected to pass the full GitHub Actions pipeline:
 
 -   quality
 -   integration-correctness
@@ -375,9 +382,9 @@ coldkeep continues to evolve in areas such as:
 
 ------------------------------------------------------------------------
 
-## Not in Scope for v1.0
+## Not in Scope for v1.x
 
-The following are unlikely to be accepted in v1.0:
+The following are unlikely to be accepted in v1.x:
 
 -   Large framework rewrites
 -   ORM introduction

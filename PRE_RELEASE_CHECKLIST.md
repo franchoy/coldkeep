@@ -108,7 +108,7 @@ Expected: both succeed and JSON output is machine-readable.
 scripts/validate_validation_matrix.sh
 ```
 
-Expected: required v1.0 guarantee rows and exit criteria are present in `VALIDATION_MATRIX.md`.
+Expected: required v1.0 core guarantee rows (G1-G8), post-v1.0 extension rows (G9+), and exit criteria are present in `VALIDATION_MATRIX.md`.
 
 ## 7) Test bootstrap on and off
 
