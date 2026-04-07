@@ -149,6 +149,19 @@ CLI note: `coldkeep verify ...` still runs automatic startup recovery before the
 verification phase, so the overall command may correct stale recoverable state
 before the observational, read-only verification checks begin.
 
+### Batch command status and exit semantics
+
+For batch-style commands (`restore` and `remove`), JSON payload status and
+process exit code are intentionally related but not identical:
+
+- JSON `status` is one of `ok`, `partial_failure`, or `error`.
+- Process exit code is binary for automation:
+  - `0` when no item failed
+  - `1` when one or more items failed
+
+This means `partial_failure` still exits non-zero, allowing strict CI/scripting
+gates while preserving per-item outcome detail in the JSON report.
+
 ---
 
 ## 🛡️ Storage Guarantees (v1.0)

@@ -687,6 +687,8 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	preparedTargets := batch.PrepareTargets(rawTargets)
+	// Defensive fallback: empty prepared targets can still happen when no
+	// materialized IDs are provided (for example, empty args/input combinations).
 	if len(preparedTargets) == 0 {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
 	}
@@ -734,6 +736,8 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	preparedTargets := batch.PrepareTargets(rawTargets)
+	// Defensive fallback: empty prepared targets can still happen when no
+	// materialized IDs are provided (for example, empty args/input combinations).
 	if len(preparedTargets) == 0 {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
 	}
@@ -1613,6 +1617,8 @@ func printHelp() {
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
 	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
+	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
+	fmt.Println("  Batch process exit contract (restore/remove): exit 0 when no item failed, exit 1 when any item failed")
 	fmt.Println("  Simulated mode is not proof of physical durability")
 	fmt.Println()
 	fmt.Println("Operator quick check:")
