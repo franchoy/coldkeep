@@ -966,12 +966,12 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 	}
 
 	if batch.ExitCodeFromReport(report) != 0 {
-		return &cliError{code: batchFailureExitCode(report), msg: fmt.Sprintf("one or more %s operations failed", command)}
+		return &cliError{code: deriveBatchFailureExitCode(report), msg: fmt.Sprintf("one or more %s operations failed", command)}
 	}
 	return nil
 }
 
-func batchFailureExitCode(report batch.Report) int {
+func deriveBatchFailureExitCode(report batch.Report) int {
 	hasValidationFailures := false
 	hasExecutionFailures := false
 

@@ -778,7 +778,7 @@ func TestBatchFailureExitCodeClassification(t *testing.T) {
 			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
 		},
 	}
-	if got := batchFailureExitCode(validationOnly); got != exitUsage {
+	if got := deriveBatchFailureExitCode(validationOnly); got != exitUsage {
 		t.Fatalf("expected usage exit code for validation-only failures %d, got %d", exitUsage, got)
 	}
 
@@ -787,7 +787,7 @@ func TestBatchFailureExitCodeClassification(t *testing.T) {
 			{ID: 12, Status: batch.ResultFailed, Message: "file ID 12 not found"},
 		},
 	}
-	if got := batchFailureExitCode(executionOnly); got != exitGeneral {
+	if got := deriveBatchFailureExitCode(executionOnly); got != exitGeneral {
 		t.Fatalf("expected general exit code for execution failures %d, got %d", exitGeneral, got)
 	}
 
@@ -797,7 +797,7 @@ func TestBatchFailureExitCodeClassification(t *testing.T) {
 			{ID: 99, Status: batch.ResultFailed, Message: "file ID 99 not found"},
 		},
 	}
-	if got := batchFailureExitCode(mixed); got != exitGeneral {
+	if got := deriveBatchFailureExitCode(mixed); got != exitGeneral {
 		t.Fatalf("expected execution failure precedence exit code %d, got %d", exitGeneral, got)
 	}
 }
