@@ -12,6 +12,16 @@ production stability.
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified CLI help for batch `restore`/`remove` JSON status semantics by
+  explicitly defining `ok`, `partial_failure`, and `error`, including that
+  `partial_failure` means at least one item failed while others succeeded or
+  were planned.
+- Clarified batch process exit-code behavior in CLI help: exit `0` when no item
+  fails, exit `1` when any item fails, and exit `2` for pre-execution
+  usage/validation errors.
+
 ### TODO
 
 - Documented post-v1.1 technical-debt cleanup plan for legacy plan-based batch APIs:
@@ -48,8 +58,12 @@ correctness under real-world mixed-input scenarios.
 
 - Unified CLI → batch → reporting pipeline so all inputs (valid, invalid,
   duplicates) are processed through a single deterministic execution model
-- Batch execution now preserves input order end-to-end, including invalid and
-  duplicate entries
+- Strict input-order preservation guaranteed across parsing → planning →
+  execution → reporting, including invalid and duplicate entries
+- Introduced explicit batch status contract:
+  - `ok`: all items succeeded
+  - `partial_failure`: some items failed
+  - `error`: all items failed or no execution possible
 - JSON output contract improved:
   - failure items expose `error`
   - non-failure items (`success`, `skipped`, `planned`) expose `message`

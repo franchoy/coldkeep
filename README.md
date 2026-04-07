@@ -145,6 +145,9 @@ Coldkeep is not designed for:
 - `doctor` is corrective and may mutate metadata because it runs recovery before verify.
 - `verify` is observational and assumes recovered state; its verification phase is read-only.
 
+Operator note: `doctor` runs its own recovery pass even if automatic startup
+recovery already ran for the current process.
+
 CLI note: `coldkeep verify ...` still runs automatic startup recovery before the
 verification phase, so the overall command may correct stale recoverable state
 before the observational, read-only verification checks begin.

@@ -697,7 +697,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	// Defensive fallback: empty prepared targets can still happen when no
 	// materialized IDs are provided (for example, empty args/input combinations).
 	if len(preparedTargets) == 0 {
-		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
+		return usageErrorf("no valid file IDs provided")
 	}
 	if !batch.HasExecutableTargets(preparedTargets) {
 		report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, nil)
@@ -746,7 +746,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	// Defensive fallback: empty prepared targets can still happen when no
 	// materialized IDs are provided (for example, empty args/input combinations).
 	if len(preparedTargets) == 0 {
-		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
+		return usageErrorf("no valid file IDs provided")
 	}
 	if !batch.HasExecutableTargets(preparedTargets) {
 		report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, nil)
@@ -937,6 +937,12 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 			}
 			if item.Status == batch.ResultFailed && item.Message != "" {
 				encoded["error"] = item.Message
+			} else if item.Status == batch.ResultSkipped {
+				message := strings.TrimSpace(item.Message)
+				if message == "" {
+					message = "skipped"
+				}
+				encoded["message"] = message
 			} else if item.Message != "" {
 				encoded["message"] = item.Message
 			}
@@ -960,9 +966,35 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 	}
 
 	if batch.ExitCodeFromReport(report) != 0 {
-		return &cliError{code: exitGeneral, msg: fmt.Sprintf("one or more %s operations failed", command)}
+		return &cliError{code: batchFailureExitCode(report), msg: fmt.Sprintf("one or more %s operations failed", command)}
 	}
 	return nil
+}
+
+func batchFailureExitCode(report batch.Report) int {
+	hasValidationFailures := false
+	hasExecutionFailures := false
+
+	for _, item := range report.Results {
+		if item.Status != batch.ResultFailed {
+			continue
+		}
+
+		if strings.TrimSpace(item.RawValue) != "" || item.ID <= 0 {
+			hasValidationFailures = true
+			continue
+		}
+
+		hasExecutionFailures = true
+	}
+
+	if hasExecutionFailures {
+		return exitGeneral
+	}
+	if hasValidationFailures {
+		return exitUsage
+	}
+	return exitGeneral
 }
 
 func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -1624,8 +1656,15 @@ func printHelp() {
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
 	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
+	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
 	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
-	fmt.Println("  Batch process exit contract (restore/remove): exit 0 when no item failed, exit 1 when any item failed")
+	fmt.Println("    ok: no item failed")
+	fmt.Println("    partial_failure: at least one item failed and at least one item succeeded or was planned")
+	fmt.Println("    error: all executable items failed")
+	fmt.Println("  Batch process exit contract (restore/remove):")
+	fmt.Println("    exit 0: no item failed")
+	fmt.Println("    exit 1: any item failed (partial_failure or error)")
+	fmt.Println("    exit 2: usage/validation error before execution")
 	fmt.Println("  Simulated mode is not proof of physical durability")
 	fmt.Println()
 	fmt.Println("Operator quick check:")

@@ -437,6 +437,39 @@ func TestEmitBatchCommandReportJSONIncludesNonFailureMessages(t *testing.T) {
 	}
 }
 
+func TestEmitBatchCommandReportJSONSkippedMessageFallback(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRemove,
+		DryRun:    false,
+		Summary:   batch.Summary{Total: 1, Success: 0, Failed: 0, Skipped: 1},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultSkipped, Message: "   "},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		err := emitBatchCommandReport("remove", report, outputModeJSON)
+		if err != nil {
+			t.Fatalf("expected nil error when report has no failures, got %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", err, output)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+
+	skippedItem, _ := results[0].(map[string]any)
+	if got, _ := skippedItem["message"].(string); got != "skipped" {
+		t.Fatalf("skipped item should expose fallback message, got item=%v", skippedItem)
+	}
+}
+
 func TestExecuteBatchPreservesInputOrder(t *testing.T) {
 	raw := []batch.RawTarget{
 		{Value: "12", Source: "args"},
@@ -484,8 +517,8 @@ func TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-nil error for all-invalid remove targets")
 	}
-	if got := classifyExitCode(err); got != exitGeneral {
-		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 
 	var payload map[string]any
@@ -545,8 +578,8 @@ func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-nil error for all-invalid restore targets")
 	}
-	if got := classifyExitCode(err); got != exitGeneral {
-		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 
 	var payload map[string]any
@@ -736,6 +769,36 @@ func TestClassifyExitCodeTypedUsageError(t *testing.T) {
 	err := usageErrorf("Usage: coldkeep store <filePath>")
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestBatchFailureExitCodeClassification(t *testing.T) {
+	validationOnly := batch.Report{
+		Results: []batch.ItemResult{
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
+		},
+	}
+	if got := batchFailureExitCode(validationOnly); got != exitUsage {
+		t.Fatalf("expected usage exit code for validation-only failures %d, got %d", exitUsage, got)
+	}
+
+	executionOnly := batch.Report{
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultFailed, Message: "file ID 12 not found"},
+		},
+	}
+	if got := batchFailureExitCode(executionOnly); got != exitGeneral {
+		t.Fatalf("expected general exit code for execution failures %d, got %d", exitGeneral, got)
+	}
+
+	mixed := batch.Report{
+		Results: []batch.ItemResult{
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
+			{ID: 99, Status: batch.ResultFailed, Message: "file ID 99 not found"},
+		},
+	}
+	if got := batchFailureExitCode(mixed); got != exitGeneral {
+		t.Fatalf("expected execution failure precedence exit code %d, got %d", exitGeneral, got)
 	}
 }
 
