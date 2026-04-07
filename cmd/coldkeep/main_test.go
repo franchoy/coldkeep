@@ -383,6 +383,60 @@ func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
 	}
 }
 
+func TestEmitBatchCommandReportJSONIncludesNonFailureMessages(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRemove,
+		DryRun:    true,
+		Summary:   batch.Summary{Total: 4, Planned: 1, Success: 1, Failed: 1, Skipped: 1},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultPlanned, Message: "would remove"},
+			{ID: 18, Status: batch.ResultSkipped, Message: "duplicate target"},
+			{ID: 24, Status: batch.ResultSuccess, Message: "removed mappings=3"},
+			{ID: 99, Status: batch.ResultFailed, Message: "file not found"},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		err := emitBatchCommandReport("remove", report, outputModeJSON)
+		if err == nil {
+			t.Fatalf("expected non-nil error when report has failures")
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", err, output)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 4 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+
+	plannedItem, _ := results[0].(map[string]any)
+	if got, _ := plannedItem["message"].(string); got != "would remove" {
+		t.Fatalf("planned item should expose message, got item=%v", plannedItem)
+	}
+
+	skippedItem, _ := results[1].(map[string]any)
+	if got, _ := skippedItem["message"].(string); got != "duplicate target" {
+		t.Fatalf("skipped item should expose message, got item=%v", skippedItem)
+	}
+
+	successItem, _ := results[2].(map[string]any)
+	if got, _ := successItem["message"].(string); got != "removed mappings=3" {
+		t.Fatalf("success item should expose message, got item=%v", successItem)
+	}
+
+	failedItem, _ := results[3].(map[string]any)
+	if got, _ := failedItem["error"].(string); got != "file not found" {
+		t.Fatalf("failed item error mismatch: item=%v", failedItem)
+	}
+	if _, hasMessage := failedItem["message"]; hasMessage {
+		t.Fatalf("failed item should not expose message when error is present: %v", failedItem)
+	}
+}
+
 func TestExecuteBatchPreservesInputOrder(t *testing.T) {
 	raw := []batch.RawTarget{
 		{Value: "12", Source: "args"},

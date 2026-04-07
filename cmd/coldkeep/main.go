@@ -926,6 +926,8 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 			}
 			if item.Status == batch.ResultFailed && item.Message != "" {
 				encoded["error"] = item.Message
+			} else if item.Message != "" {
+				encoded["message"] = item.Message
 			}
 			jsonResults = append(jsonResults, encoded)
 		}
