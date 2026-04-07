@@ -43,6 +43,7 @@ guarantees (G1-G8) plus post-v1.0 interface-correctness extensions (G9+).
 
 These rows track guarantees added after the v1.0 baseline. They are intentionally
 separate from the frozen v1.0 core matrix (G1-G8).
+This extends the correctness model from storage invariants to interaction semantics.
 
 | ID | Guarantee | Primary verify evidence | Primary test evidence | Status |
 | --- | --- | --- | --- | --- |

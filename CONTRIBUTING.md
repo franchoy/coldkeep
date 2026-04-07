@@ -38,6 +38,7 @@ Contributions should prioritize:
 
 -   strengthening storage invariants and correctness guarantees
 -   preserving stable machine-readable CLI contracts for automation
+-   preserving G9 interface correctness guarantees for CLI and automation
 -   improving stress and adversarial validation coverage, including long-run tests
 -   identifying and reproducing edge-case failures
 -   improving observability and operator-facing behavior

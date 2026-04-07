@@ -89,6 +89,10 @@ correctness under real-world mixed-input scenarios.
   (G9): deterministic orchestration, machine-readable contract stability, and
   automation-safe partial-failure behavior
 
+### Guarantees
+
+- Introduces G9: interface correctness for batch CLI orchestration
+
 
 ------------------------------------------------------------------------
 

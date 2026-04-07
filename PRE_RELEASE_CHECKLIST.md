@@ -171,6 +171,8 @@ Expected: no drift in CLI JSON structure, error classification, or frozen exit-c
 
 ## 11) Verify batch CLI contract stability (v1.1)
 
+These checks validate G9 (interface correctness guarantee).
+
 Run targeted tests that lock batch parser, reporting, and integration behavior:
 
 ```bash

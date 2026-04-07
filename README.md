@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  Secure, deterministic, content-addressed cold storage engine.
+  Correctness-first, deterministic, content-addressed cold storage engine.
 </p>
 
 <p align="center">
@@ -63,8 +63,8 @@ Coldkeep now has two explicit correctness layers:
 - v1.0: correctness of storage (restore determinism, integrity, recovery, GC safety)
 - v1.1: correctness of interaction (CLI orchestration, machine-readable contracts, automation-safe batch semantics)
 
-This means v1.1 is not only a feature increment.
-It is a trust-boundary expansion from data-plane correctness to interface-plane correctness.
+This means v1.1 is not a feature increment, but a trust-boundary expansion.
+It extends coldkeep from data-plane correctness to interface-plane correctness.
 
 The system has been validated across:
 
@@ -687,7 +687,9 @@ coldkeep restore 12 18 ./out --dry-run
 - `--fail-fast` stops on the first execution failure (e.g., restore/remove runtime error), not on pre-execution parse/dedup outcomes
 - Duplicate targets are skipped
 - Results are reported per item with a summary
-- Exit code is non-zero if any item fails
+- Exit code is binary for automation:
+  - `0` when no item fails
+  - `1` when one or more items fail
 - Adversarial-lite orchestration coverage is enforced by `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast behavior, and mixed input chaos)
 
 Fail-fast example:
