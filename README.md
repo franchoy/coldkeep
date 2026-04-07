@@ -162,6 +162,10 @@ process exit code are intentionally related but not identical:
   - `0` when no item failed
   - `1` when one or more items failed
 
+Batch commands internally classify failures (for example, usage vs execution),
+but expose a binary exit outcome for executed batch reports to keep automation
+simple and predictable.
+
 This means `partial_failure` still exits non-zero, allowing strict CI/scripting
 gates while preserving per-item outcome detail in the JSON report.
 
