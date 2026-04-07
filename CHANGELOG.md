@@ -12,11 +12,105 @@ production stability.
 
 ## [Unreleased]
 
-### Changed
+### TODO
 
 - Documented post-v1.1 technical-debt cleanup plan for legacy plan-based batch APIs:
   `BuildPlan` and `ExecutePlan` are deprecated transitional helpers and are
   candidates for removal in v1.2 or isolation into a dedicated legacy file.
+
+------------------------------------------------------------------------
+
+## [1.1.0] - 2026-04-07
+
+Batch CLI semantics and deterministic execution model.
+
+This release introduces a unified batch execution layer for `restore` and
+`remove`, focused on deterministic behavior, structured observability, and
+correctness under real-world mixed-input scenarios.
+
+### Added
+
+- Multi-target support for `restore` and `remove` commands (multiple IDs in a
+  single invocation)
+- Input file ingestion via `--input <file>` for batch operations
+- Dry-run mode (`--dry-run`) providing full execution planning without mutation
+- Structured per-item batch reporting with explicit status classification:
+  `success`, `failed`, `skipped`, and `planned`
+- Preservation of raw invalid inputs via `raw_value` in JSON output (no implicit
+  `id=0` fallback)
+- Fail-fast execution mode (`--fail-fast`) to stop processing on first execution
+  failure
+- Comprehensive adversarial integration test suite for batch semantics,
+  including mixed input, duplicate handling, ordering guarantees, and dry-run
+  parity
+
+### Changed
+
+- Unified CLI → batch → reporting pipeline so all inputs (valid, invalid,
+  duplicates) are processed through a single deterministic execution model
+- Batch execution now preserves input order end-to-end, including invalid and
+  duplicate entries
+- JSON output contract improved:
+  - failure items expose `error`
+  - non-failure items (`success`, `skipped`, `planned`) expose `message`
+- All-invalid input now produces a full structured batch report instead of a
+  generic CLI error
+- Dry-run output aligned with real execution semantics (same ordering, same
+  targets, same output paths; only status differs)
+- Duplicate targets are executed once and reported as `skipped` with explicit
+  reason
+- Exit-code behavior aligned with batch semantics: non-zero exit when any item
+  fails while still emitting full structured results
+
+### Notes
+
+- Batch operations are best-effort by default: failures do not prevent execution
+  of other valid targets unless `--fail-fast` is used
+- This release establishes a deterministic and automation-friendly CLI contract
+  for batch workflows, aligned with coldkeep’s correctness-first design
+
+
+------------------------------------------------------------------------
+
+## [1.0.0] - 2026-04-06
+
+First stable correctness milestone.
+
+This release marks the transition from experimental validation to a
+correctness-defined baseline. The storage model, lifecycle semantics, and CLI
+contracts are considered stable within the documented trust boundary.
+
+v1.0 consolidates the guarantees defined in v0.9 and validated in v0.10,
+establishing coldkeep as a correctness-first storage engine with deterministic
+restore, verifiable integrity, and safe garbage collection.
+
+### Added
+
+- Formalized v1.0 trust model consolidating:
+  - storage correctness guarantees
+  - verification semantics
+  - recovery behavior expectations
+- Established `doctor` as the primary operator-facing health and recovery command
+- Defined CLI behavior and output contracts as stable for v1.x evolution
+
+### Changed
+
+- Promoted validation and adversarial testing results (v0.10) to baseline
+  correctness guarantees
+- Frozen CLI surface and operational semantics as a v1.0 contract
+- Clarified system trust boundaries and non-goals for the v1.x line
+
+### Notes
+
+- v1.0 defines a correctness and operational baseline, not long-term
+  compatibility guarantees
+- On-disk format and internal structures may evolve in future versions
+- coldkeep remains a research-oriented project, but with a stable and validated
+  correctness model for local-first usage
+
+
+------------------------------------------------------------------------
+
 
 ## [0.10.0] - Pre-v1.0 Validation Phase
 
