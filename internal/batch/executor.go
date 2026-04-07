@@ -1,6 +1,8 @@
 package batch
 
 // ExecuteOptions controls execution semantics.
+//
+// Deprecated: transitional v1.1 type for ExecutePlan.
 type ExecuteOptions struct {
 	DryRun   bool
 	FailFast bool
@@ -27,6 +29,9 @@ func ExecutePrepared(op OperationType, dryRun bool, failFast bool, targets []Pre
 }
 
 // ExecutePlan runs a plan using a per-item execution callback.
+//
+// Deprecated: transitional v1.1 helper from the legacy plan-based path.
+// Prefer ExecutePrepared for new code.
 func ExecutePlan(plan Plan, opts ExecuteOptions, execFunc func(id int64) (string, error)) Report {
 	results := make([]ItemResult, 0, len(plan.Items))
 

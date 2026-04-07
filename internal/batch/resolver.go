@@ -63,6 +63,9 @@ func HasExecutableTargets(targets []PreparedTarget) bool {
 }
 
 // ResolveTargets validates and parses raw targets into integer IDs.
+//
+// Deprecated: transitional v1.1 helper from the legacy plan-based path.
+// Prefer PrepareTargets for new code.
 func ResolveTargets(raw []RawTarget) ([]ResolvedTarget, []ItemResult) {
 	resolved := make([]ResolvedTarget, 0, len(raw))
 	results := make([]ItemResult, 0, len(raw))
@@ -93,6 +96,9 @@ func ResolveTargets(raw []RawTarget) ([]ResolvedTarget, []ItemResult) {
 }
 
 // DeduplicateTargets keeps first occurrence and reports duplicates as skipped.
+//
+// Deprecated: transitional v1.1 helper from the legacy plan-based path.
+// Prefer PrepareTargets for new code.
 func DeduplicateTargets(targets []ResolvedTarget) ([]ResolvedTarget, []ItemResult) {
 	seen := make(map[int64]struct{}, len(targets))
 	deduped := make([]ResolvedTarget, 0, len(targets))

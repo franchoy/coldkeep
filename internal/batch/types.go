@@ -15,11 +15,17 @@ type RawTarget struct {
 }
 
 // ResolvedTarget is a validated target ready for planning.
+//
+// Deprecated: transitional v1.1 type kept for legacy plan-based helpers
+// (ResolveTargets/DeduplicateTargets/BuildPlan/ExecutePlan). New CLI paths use
+// RawTarget -> PrepareTargets -> ExecutePrepared.
 type ResolvedTarget struct {
 	ID int64
 }
 
 // PlanItem is a single planned batch operation.
+//
+// Deprecated: transitional v1.1 type used only by legacy plan-based helpers.
 type PlanItem struct {
 	Op      OperationType
 	Target  ResolvedTarget
@@ -65,6 +71,8 @@ type Report struct {
 }
 
 // Plan is a sequence of planned operations.
+//
+// Deprecated: transitional v1.1 type used only by legacy plan-based helpers.
 type Plan struct {
 	Items []PlanItem
 }
