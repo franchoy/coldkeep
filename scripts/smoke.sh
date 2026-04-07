@@ -899,13 +899,18 @@ if [[ "$CURRENT_CODEC" == "plain" ]] && [[ -n "${COLDKEEP_KEY:-}" ]]; then
   # Restore with aes-gcm and assert the restored_hash matches the original file
   aes_restore_out=$(COLDKEEP_CODEC=aes-gcm coldkeep restore "$aes_file_id" "$AES_RESTORE_DIR/" --output json 2>/dev/null | grep '^\{' | tail -n1)
   aes_restore_status=$(echo "$aes_restore_out" | jq -r '.status // empty')
-  aes_restore_hash=$(echo "$aes_restore_out"   | jq -r '.data.restored_hash // empty')
+  aes_restore_path=$(echo "$aes_restore_out"   | jq -r '.results[0].output_path // empty')
   expected_hello_hash=$(sha256sum "$SAMPLE_HELLO" | awk '{print $1}')
 
   if [[ "$aes_restore_status" != "ok" ]]; then
     echo "[smoke] FAIL: aes-gcm restore returned status='$aes_restore_status' (expected 'ok')"
     exit 1
   fi
+  if [[ -z "$aes_restore_path" ]] || [[ ! -f "$aes_restore_path" ]]; then
+    echo "[smoke] FAIL: aes-gcm restore did not return a valid output_path"
+    exit 1
+  fi
+  aes_restore_hash=$(sha256sum "$aes_restore_path" | awk '{print $1}')
   if [[ "$aes_restore_hash" != "$expected_hello_hash" ]]; then
     echo "[smoke] FAIL: aes-gcm restore hash mismatch: got '$aes_restore_hash', expected '$expected_hello_hash'"
     exit 1
