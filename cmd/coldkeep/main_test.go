@@ -417,6 +417,128 @@ func TestExecuteBatchPreservesInputOrder(t *testing.T) {
 	}
 }
 
+func TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
+	err := error(nil)
+	output := captureStdout(t, func() {
+		err = runRemoveCommand(parsedCommandLine{
+			method:      "remove",
+			positionals: []string{"abc", "def", "ghi"},
+			flags:       map[string][]string{},
+		}, outputModeJSON)
+	})
+
+	if err == nil {
+		t.Fatal("expected non-nil error for all-invalid remove targets")
+	}
+	if got := classifyExitCode(err); got != exitGeneral {
+		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	}
+
+	var payload map[string]any
+	if decodeErr := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); decodeErr != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", decodeErr, output)
+	}
+
+	if got, _ := payload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "remove" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary should be object: payload=%v", payload)
+	}
+	if total, _ := summary["total"].(float64); int(total) != 3 {
+		t.Fatalf("summary.total mismatch: summary=%v", summary)
+	}
+	if failed, _ := summary["failed"].(float64); int(failed) != 3 {
+		t.Fatalf("summary.failed mismatch: summary=%v", summary)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 3 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+	for _, raw := range results {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("result should be object: %T", raw)
+		}
+		if got, _ := item["status"].(string); got != string(batch.ResultFailed) {
+			t.Fatalf("expected failed item status, got item=%v", item)
+		}
+		if _, hasID := item["id"]; hasID {
+			t.Fatalf("invalid item should not include id: item=%v", item)
+		}
+		if got, _ := item["error"].(string); !strings.Contains(got, "invalid file ID") {
+			t.Fatalf("invalid item error mismatch: item=%v", item)
+		}
+	}
+}
+
+func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
+	err := error(nil)
+	output := captureStdout(t, func() {
+		err = runRestoreCommand(parsedCommandLine{
+			method:      "restore",
+			positionals: []string{"abc", "def", "ghi", "./out"},
+			flags:       map[string][]string{},
+		}, outputModeJSON)
+	})
+
+	if err == nil {
+		t.Fatal("expected non-nil error for all-invalid restore targets")
+	}
+	if got := classifyExitCode(err); got != exitGeneral {
+		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	}
+
+	var payload map[string]any
+	if decodeErr := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); decodeErr != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", decodeErr, output)
+	}
+
+	if got, _ := payload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "restore" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary should be object: payload=%v", payload)
+	}
+	if total, _ := summary["total"].(float64); int(total) != 3 {
+		t.Fatalf("summary.total mismatch: summary=%v", summary)
+	}
+	if failed, _ := summary["failed"].(float64); int(failed) != 3 {
+		t.Fatalf("summary.failed mismatch: summary=%v", summary)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 3 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+	for _, raw := range results {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("result should be object: %T", raw)
+		}
+		if got, _ := item["status"].(string); got != string(batch.ResultFailed) {
+			t.Fatalf("expected failed item status, got item=%v", item)
+		}
+		if _, hasID := item["id"]; hasID {
+			t.Fatalf("invalid item should not include id: item=%v", item)
+		}
+		if got, _ := item["error"].(string); !strings.Contains(got, "invalid file ID") {
+			t.Fatalf("invalid item error mismatch: item=%v", item)
+		}
+	}
+}
+
 func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase

@@ -687,8 +687,12 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	preparedTargets := batch.PrepareTargets(rawTargets)
-	if !batch.HasExecutableTargets(preparedTargets) {
+	if len(preparedTargets) == 0 {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
+	}
+	if !batch.HasExecutableTargets(preparedTargets) {
+		report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, nil)
+		return emitBatchCommandReport("restore", report, outputMode)
 	}
 
 	outputPath, err := ensureRestoreOutputDir(outputRoot, !dryRun)
@@ -730,8 +734,12 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("failed to open/read input file: %v", err)
 	}
 	preparedTargets := batch.PrepareTargets(rawTargets)
-	if !batch.HasExecutableTargets(preparedTargets) {
+	if len(preparedTargets) == 0 {
 		return &cliError{code: exitGeneral, msg: "no valid file IDs provided"}
+	}
+	if !batch.HasExecutableTargets(preparedTargets) {
+		report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, nil)
+		return emitBatchCommandReport("remove", report, outputMode)
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
