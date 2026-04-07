@@ -681,6 +681,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	overwrite := parsed.hasFlag("overwrite")
 	targetArgs := parsed.positionals[:len(parsed.positionals)-1]
 	outputRoot := parsed.positionals[len(parsed.positionals)-1]
+	if !hasInput && len(targetArgs) == 1 {
+		target := strings.TrimSpace(targetArgs[0])
+		id, parseErr := strconv.ParseInt(target, 10, 64)
+		if parseErr != nil || id <= 0 {
+			return usageErrorf("Invalid fileID: %s", targetArgs[0])
+		}
+	}
 
 	rawTargets, err := batch.LoadRawTargets(targetArgs, inputFile)
 	if err != nil {

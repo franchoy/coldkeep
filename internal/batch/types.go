@@ -56,10 +56,10 @@ type ItemResult struct {
 // Summary aggregates all item outcomes.
 type Summary struct {
 	Total   int `json:"total"`
-	Planned int `json:"planned,omitempty"`
-	Success int `json:"success,omitempty"`
-	Failed  int `json:"failed,omitempty"`
-	Skipped int `json:"skipped,omitempty"`
+	Planned int `json:"planned"`
+	Success int `json:"success"`
+	Failed  int `json:"failed"`
+	Skipped int `json:"skipped"`
 }
 
 // Report contains per-item outcomes and an aggregate summary.
