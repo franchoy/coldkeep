@@ -746,7 +746,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	// Defensive fallback: empty prepared targets can still happen when no
 	// materialized IDs are provided (for example, empty args/input combinations).
 	if len(preparedTargets) == 0 {
-		return usageErrorf("no valid file IDs after parsing input")
+		return fmt.Errorf("no valid file IDs after parsing input")
 	}
 	if !batch.HasExecutableTargets(preparedTargets) {
 		report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, nil)

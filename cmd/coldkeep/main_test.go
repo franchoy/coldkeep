@@ -823,6 +823,13 @@ func TestClassifyExitCodeFallbackStringMatch(t *testing.T) {
 	}
 }
 
+func TestClassifyExitCodeNoValidFileIDsIsGeneral(t *testing.T) {
+	err := errors.New("no valid file IDs after parsing input")
+	if got := classifyExitCode(err); got != exitGeneral {
+		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	}
+}
+
 func TestClassifyExitCodeFallbackVerifyMessage(t *testing.T) {
 	err := errors.New("doctor verify phase failed: chunk mismatch")
 	if got := classifyExitCode(err); got != exitVerify {
