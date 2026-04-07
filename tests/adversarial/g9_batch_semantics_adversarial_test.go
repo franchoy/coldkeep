@@ -135,6 +135,12 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 			if dryItem["output_path"] != realItem["output_path"] {
 				t.Fatalf("dry-run and real output path mismatch at index %d: dry=%v real=%v", i, dryItem, realItem)
 			}
+			if msg, _ := dryItem["message"].(string); strings.TrimSpace(msg) == "" {
+				t.Fatalf("dry-run item should include message at index %d: %v", i, dryItem)
+			}
+			if msg, _ := realItem["message"].(string); strings.TrimSpace(msg) == "" {
+				t.Fatalf("real item should include message at index %d: %v", i, realItem)
+			}
 		}
 	})
 
@@ -149,6 +155,33 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		payload := parseBatchPayload(t, res)
 		if summaryCount(t, payload, "success") != 1 || summaryCount(t, payload, "skipped") != 4 || summaryCount(t, payload, "failed") != 0 {
 			t.Fatalf("unexpected duplicate explosion summary: %v", payload)
+		}
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 5 {
+			t.Fatalf("unexpected duplicate explosion results shape: %v", payload)
+		}
+		seenSuccessMessage := false
+		skippedWithMessage := 0
+		for _, raw := range results {
+			item, _ := raw.(map[string]any)
+			status, _ := item["status"].(string)
+			msg, _ := item["message"].(string)
+			switch status {
+			case "success":
+				if strings.Contains(strings.ToLower(msg), "removed mappings=") {
+					seenSuccessMessage = true
+				}
+			case "skipped":
+				if strings.Contains(strings.ToLower(msg), "duplicate target") {
+					skippedWithMessage++
+				}
+			}
+		}
+		if !seenSuccessMessage {
+			t.Fatalf("duplicate explosion should include success message detail: %v", payload)
+		}
+		if skippedWithMessage != 4 {
+			t.Fatalf("duplicate explosion should include duplicate-target skipped messages for all duplicates: %v", payload)
 		}
 
 		outDir := filepath.Join(tmp, "g9-dup-restore")
@@ -250,6 +283,48 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		}
 		if fourth["status"] != "skipped" || int64(fourth["id"].(float64)) != id1 {
 			t.Fatalf("unexpected fourth result for mixed order: %v", fourth)
+		}
+		if msg, _ := first["message"].(string); strings.TrimSpace(msg) == "" {
+			t.Fatalf("planned first result should include message: %v", first)
+		}
+		if msg, _ := third["message"].(string); strings.TrimSpace(msg) == "" {
+			t.Fatalf("planned third result should include message: %v", third)
+		}
+		if msg, _ := fourth["message"].(string); !strings.Contains(strings.ToLower(msg), "duplicate target") {
+			t.Fatalf("skipped fourth result should include duplicate-target message: %v", fourth)
+		}
+	})
+
+	t.Run("all-invalid input returns structured failed items", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "abc", "def", "ghi", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("all-invalid remove input should fail\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		if summaryCount(t, payload, "success") != 0 || summaryCount(t, payload, "failed") != 3 || summaryCount(t, payload, "skipped") != 0 {
+			t.Fatalf("unexpected all-invalid summary: %v", payload)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected all-invalid results shape: %v", payload)
+		}
+		for _, raw := range results {
+			item, _ := raw.(map[string]any)
+			if status, _ := item["status"].(string); status != "failed" {
+				t.Fatalf("all-invalid item should be failed: %v", item)
+			}
+			if rawValue, _ := item["raw_value"].(string); strings.TrimSpace(rawValue) == "" {
+				t.Fatalf("all-invalid item should include raw_value: %v", item)
+			}
+			if _, hasID := item["id"]; hasID {
+				t.Fatalf("all-invalid item should not include id: %v", item)
+			}
+			if errText, _ := item["error"].(string); !strings.Contains(strings.ToLower(errText), "invalid file id") {
+				t.Fatalf("all-invalid item should include invalid-file-id error detail: %v", item)
+			}
 		}
 	})
 
