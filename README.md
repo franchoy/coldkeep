@@ -738,6 +738,47 @@ Example JSON result shape (ordered by input):
 }
 ```
 
+### All-invalid input JSON example
+
+When every provided target is invalid, batch commands still emit a structured
+payload (instead of only a generic CLI error):
+
+```json
+{
+  "status": "error",
+  "command": "remove",
+  "dry_run": false,
+  "summary": {
+    "total": 3,
+    "success": 0,
+    "failed": 3,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "status": "failed",
+      "raw_value": "abc",
+      "error": "invalid file ID \"abc\""
+    },
+    {
+      "status": "failed",
+      "raw_value": "def",
+      "error": "invalid file ID \"def\""
+    },
+    {
+      "status": "failed",
+      "raw_value": "ghi",
+      "error": "invalid file ID \"ghi\""
+    }
+  ]
+}
+```
+
+Automation tip:
+
+- Parse `summary.failed` and per-item `results[*].status` from stdout JSON.
+- When `failed > 0`, also read stderr for the generic CLI error envelope.
+
 ### Output notes
 
 - JSON output is considered stable starting in v0.8 and is intended for long-term compatibility.
@@ -828,6 +869,11 @@ JSON mode (`--output json`) for batch commands uses this envelope:
 }
 ```
 
+Per-item field contract:
+
+- `failed` items expose `error`
+- non-failure items (`success`, `skipped`, `planned`) expose `message`
+
 Top-level `status` logic:
 
 - `ok` when `failed == 0`
@@ -839,7 +885,8 @@ Validation and edge-case rules:
 - `restore` requires an output directory and rejects missing/ambiguous positional forms.
 - `remove` requires at least one effective ID source (CLI IDs or `--input`).
 - `--input` can be used alone or merged with positional IDs.
-- If effective valid IDs are empty after parsing, command fails with `no valid file IDs provided` and exit code `1`.
+- If all provided targets are invalid, command emits a full structured batch report (all items `failed`, preserving `raw_value`) and exits non-zero.
+- If no targets are provided at all (empty positional IDs and empty/no `--input` entries), command fails with `no valid file IDs provided` and exit code `1`.
 - `--fail-fast` stops execution at first failure while still printing/emitting partial report data.
 - `restore` does not overwrite destination files unless `--overwrite` is explicitly set.
 
