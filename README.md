@@ -188,6 +188,8 @@ Semantics (summary):
   - 0 when no item fails
   - 1 when one or more items fail
 
+Clarifier: the binary 0/1 mapping applies to executed batch reports. Pre-execution validation/usage failures (including empty effective target sets after parsing input) return usage exit code 2.
+
 For full batch contract details and examples, see ARCHITECTURE.md and PRE_RELEASE_CHECKLIST.md.
 
 ## Doctor (recommended health gate)

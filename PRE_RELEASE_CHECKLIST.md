@@ -176,7 +176,7 @@ These checks validate G9 (interface correctness guarantee).
 Run targeted tests that lock batch parser, reporting, and integration behavior:
 
 ```bash
-go test ./cmd/coldkeep -run 'TestParseFileIDs|TestDeduplicateIDs|TestLoadIDsFromFile|TestPrintBatchHumanReportSymbolsAndAlignment|TestPrintBatchHumanReportDryRunPlannedNoIcon|TestEmitBatchCommandReportJSONSchema'
+go test ./cmd/coldkeep -run 'TestPrintBatchHumanReportSymbolsAndAlignment|TestPrintBatchHumanReportDryRunPlannedNoIcon|TestEmitBatchCommandReportJSONSchema|TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport|TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport|TestBatchFailureExitCodeClassification|TestClassifyExitCodeNoValidFileIDsIsUsage'
 go test ./internal/batch -run 'TestLoadRawTargets|TestResolveTargets|TestDeduplicateTargets'
 go test ./tests/integration -run TestBatchFlagsEndToEnd
 ```
@@ -195,7 +195,7 @@ Confirm:
 - JSON batch envelope remains `status + command + dry_run + summary + results`
 - Failed item JSON uses `error` field (not `message`)
 - `--fail-fast` stops further execution but still emits partial report
-- Empty effective ID set returns `no valid file IDs provided` with exit code `1`
+- Empty effective ID set returns `no valid file IDs after parsing input` with usage exit code `2`
 - Restore overwrite default is safe (requires `--overwrite` to replace files)
 
 ## Sign-off

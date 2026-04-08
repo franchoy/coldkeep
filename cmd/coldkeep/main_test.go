@@ -823,10 +823,10 @@ func TestClassifyExitCodeFallbackStringMatch(t *testing.T) {
 	}
 }
 
-func TestClassifyExitCodeNoValidFileIDsIsGeneral(t *testing.T) {
+func TestClassifyExitCodeNoValidFileIDsIsUsage(t *testing.T) {
 	err := errors.New("no valid file IDs after parsing input")
-	if got := classifyExitCode(err); got != exitGeneral {
-		t.Fatalf("expected general exit code %d, got %d", exitGeneral, got)
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 

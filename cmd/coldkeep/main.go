@@ -522,6 +522,7 @@ func classifyExitCode(err error) int {
 		strings.Contains(msg, "unknown flag(s)") ||
 		strings.Contains(msg, "unknown command") ||
 		strings.Contains(msg, "unknown option for gc") ||
+		strings.Contains(msg, "no valid file ids after parsing input") ||
 		strings.Contains(msg, "invalid fileid") ||
 		strings.Contains(msg, "invalid file id") ||
 		strings.Contains(msg, "unknown target for verify") ||
@@ -746,7 +747,7 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	// Defensive fallback: empty prepared targets can still happen when no
 	// materialized IDs are provided (for example, empty args/input combinations).
 	if len(preparedTargets) == 0 {
-		return fmt.Errorf("no valid file IDs after parsing input")
+		return usageErrorf("no valid file IDs after parsing input")
 	}
 	if !batch.HasExecutableTargets(preparedTargets) {
 		report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, nil)

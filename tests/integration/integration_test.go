@@ -8702,15 +8702,15 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 			"remove", "--input", emptyInput, "--output", "json")
-		if res.ExitCode != 1 {
-			t.Fatalf("expected general exit code 1 for empty effective input, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		if res.ExitCode != 2 {
+			t.Fatalf("expected usage exit code 2 for empty effective input, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
 		}
 		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
 		if !ok {
 			t.Fatalf("expected JSON error payload on stderr for empty input file, stderr=%s", res.Stderr)
 		}
-		if got, _ := errPayload["error_class"].(string); got != "GENERAL" {
-			t.Fatalf("expected GENERAL error class, got payload=%v", errPayload)
+		if got, _ := errPayload["error_class"].(string); got != "USAGE" {
+			t.Fatalf("expected USAGE error class, got payload=%v", errPayload)
 		}
 		if msg, _ := errPayload["message"].(string); !strings.Contains(strings.ToLower(msg), "no valid file ids") {
 			t.Fatalf("expected no-valid-file-ids message, got payload=%v", errPayload)
