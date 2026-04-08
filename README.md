@@ -35,18 +35,6 @@ Coldkeep uses a visual identity based on an ice cube vault:
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
 
-## Mental Model
-
-```text
-Storage correctness (G1-G8)
-  ↓
-Interface correctness (G9)
-  ↓
-Automation / CLI / CI
-```
-
-For internal model details, see ARCHITECTURE.md.
-
 ## Why coldkeep?
 
 coldkeep is designed for correctness-first cold storage.

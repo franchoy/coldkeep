@@ -21,6 +21,40 @@ Correctness has two explicit layers:
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
 
+### Correctness Layers
+
+This diagram is a mental anchor for how guarantees compose across layers.
+
+```text
++------------------------------------------------------------+
+| Interface Correctness (v1.1 - G9)                         |
+|------------------------------------------------------------|
+| Deterministic batch CLI behavior                           |
+| Stable JSON contracts                                      |
+| Automation-safe execution semantics                        |
++------------------------------------------------------------+
+						  ^
+						  | builds on
+						  |
++------------------------------------------------------------+
+| Storage Correctness (v1.0 - G1..G8)                        |
+|------------------------------------------------------------|
+| Deterministic restore                                      |
+| Content-addressed integrity                                |
+| Crash-safe lifecycle and recovery                          |
+| Reference-safe GC                                          |
++------------------------------------------------------------+
+						  ^
+						  | enables
+						  |
++------------------------------------------------------------+
+| Physical Storage Model                                     |
+|------------------------------------------------------------|
+| logical_file -> chunk -> blocks -> container               |
+| Append-only containers + transactional DB                  |
++------------------------------------------------------------+
+```
+
 ## Data Model
 
 Core entities:
