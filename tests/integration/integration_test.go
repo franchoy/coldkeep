@@ -8369,6 +8369,529 @@ func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
 	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
+func TestBatchFlagsEndToEnd(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { container.ContainersDir = "" })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input dir: %v", err)
+	}
+	fileA := filepath.Join(inputDir, "batch_flags_a.txt")
+	fileB := filepath.Join(inputDir, "batch_flags_b.txt")
+	if err := os.WriteFile(fileA, []byte("batch-flags-file-a"), 0o644); err != nil {
+		t.Fatalf("write fileA: %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("batch-flags-file-b"), 0o644); err != nil {
+		t.Fatalf("write fileB: %v", err)
+	}
+
+	storeA := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", fileA, "--output", "json"), "store")
+	idA := testutils.JSONInt64(t, testutils.JSONMap(t, storeA, "data"), "file_id")
+
+	storeB := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", fileB, "--output", "json"), "store")
+	idB := testutils.JSONInt64(t, testutils.JSONMap(t, storeB, "data"), "file_id")
+
+	t.Run("restore --dry-run", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_dry_run")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), outDir, "--dry-run", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("restore --dry-run failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("restore --dry-run produced no JSON stdout: %s", res.Stdout)
+		}
+		if dryRun, _ := payload["dry_run"].(bool); !dryRun {
+			t.Fatalf("expected dry_run=true in payload: %v", payload)
+		}
+
+		restoredPath := filepath.Join(outDir, filepath.Base(fileA))
+		if _, err := os.Stat(restoredPath); !os.IsNotExist(err) {
+			t.Fatalf("dry-run should not create restored file, stat err=%v", err)
+		}
+	})
+
+	t.Run("restore invalid targets do not create output directory", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_invalid_no_side_effect")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", "abc", outDir, "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("restore with invalid-only targets unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+		if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+			t.Fatalf("output directory should not be created when no executable targets exist, stat err=%v", err)
+		}
+	})
+
+	t.Run("restore --dryRun alias", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_dryRun")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idB), outDir, "--dryRun", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("restore --dryRun failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("restore --dryRun produced no JSON stdout: %s", res.Stdout)
+		}
+		if dryRun, _ := payload["dry_run"].(bool); !dryRun {
+			t.Fatalf("expected dry_run=true in payload: %v", payload)
+		}
+	})
+
+	t.Run("restore --overwrite", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_overwrite")
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			t.Fatalf("mkdir outDir: %v", err)
+		}
+		dest := filepath.Join(outDir, filepath.Base(fileA))
+		if err := os.WriteFile(dest, []byte("existing-content"), 0o644); err != nil {
+			t.Fatalf("seed destination file: %v", err)
+		}
+
+		resNoOverwrite := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), outDir, "--output", "json")
+		if resNoOverwrite.ExitCode == 0 {
+			t.Fatalf("restore without --overwrite unexpectedly succeeded: stdout=%s stderr=%s", resNoOverwrite.Stdout, resNoOverwrite.Stderr)
+		}
+
+		before, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("read seeded destination: %v", err)
+		}
+		if string(before) != "existing-content" {
+			t.Fatalf("destination changed on failed restore without overwrite: %q", string(before))
+		}
+
+		resOverwrite := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), outDir, "--overwrite", "--output", "json")
+		if resOverwrite.ExitCode != 0 {
+			t.Fatalf("restore --overwrite failed: exit=%d stdout=%s stderr=%s", resOverwrite.ExitCode, resOverwrite.Stdout, resOverwrite.Stderr)
+		}
+
+		after, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("read overwritten destination: %v", err)
+		}
+		if string(after) != "batch-flags-file-a" {
+			t.Fatalf("destination not overwritten with restored content, got=%q", string(after))
+		}
+	})
+
+	t.Run("restore --fail-fast", func(t *testing.T) {
+		outDir := filepath.Join(tmp, "restore_fail_fast")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", "999999", fmt.Sprintf("%d", idA), outDir, "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("restore --fail-fast unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		maybeRestored := filepath.Join(outDir, filepath.Base(fileA))
+		if _, err := os.Stat(maybeRestored); !os.IsNotExist(err) {
+			t.Fatalf("restore --fail-fast should stop before valid id restore, stat err=%v", err)
+		}
+	})
+
+	t.Run("remove --dry-run", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idA), "--dry-run", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("remove --dry-run failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_dry_run_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode != 0 {
+			t.Fatalf("idA should still exist after remove --dry-run: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
+	t.Run("remove --dryRun alias", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idB), "--dryRun", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("remove --dryRun failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_dryRun_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idB), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode != 0 {
+			t.Fatalf("idB should still exist after remove --dryRun: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
+	t.Run("remove --fail-fast", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "999999", fmt.Sprintf("%d", idA), "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove --fail-fast unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_fail_fast_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idA), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode != 0 {
+			t.Fatalf("idA should still exist after remove --fail-fast first-item failure: exit=%d stdout=%s stderr=%s", restoreCheck.ExitCode, restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
+	t.Run("remove --fail-fast ignores pre-execution parse failure", func(t *testing.T) {
+		fileFF := filepath.Join(inputDir, "batch_failfast_parse.txt")
+		if err := os.WriteFile(fileFF, []byte("batch-failfast-parse"), 0o644); err != nil {
+			t.Fatalf("write fileFF: %v", err)
+		}
+
+		storeFF := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileFF, "--output", "json"), "store")
+		idFF := testutils.JSONInt64(t, testutils.JSONMap(t, storeFF, "data"), "file_id")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "abc", fmt.Sprintf("%d", idFF), "999999", "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove --fail-fast with parse+execution failures unexpectedly succeeded: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove --fail-fast parse-precheck produced no JSON stdout: %s", res.Stdout)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 1 || int(summary["failed"].(float64)) != 2 {
+			t.Fatalf("unexpected fail-fast parse-precheck summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected results payload: %v", payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		if first["status"] != "failed" || second["status"] != "success" || third["status"] != "failed" {
+			t.Fatalf("unexpected ordered statuses in parse-precheck fail-fast run: results=%v", results)
+		}
+
+		if raw, _ := first["raw_value"].(string); raw != "abc" {
+			t.Fatalf("expected first result raw_value=abc, got first=%v", first)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_fail_fast_parse_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreCheck := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idFF), checkDir, "--overwrite", "--output", "json")
+		if restoreCheck.ExitCode == 0 {
+			t.Fatalf("idFF should have been removed even with leading parse failure: stdout=%s stderr=%s", restoreCheck.Stdout, restoreCheck.Stderr)
+		}
+	})
+
+	t.Run("restore --input only", func(t *testing.T) {
+		inputFile := filepath.Join(tmp, "restore_ids.txt")
+		if err := os.WriteFile(inputFile, []byte(fmt.Sprintf("# restore ids\n%d\n\n", idA)), 0o644); err != nil {
+			t.Fatalf("write restore input file: %v", err)
+		}
+
+		outDir := filepath.Join(tmp, "restore_input_only")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", outDir, "--input", inputFile, "--dry-run", "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("restore with --input only failed: exit=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("restore with --input only produced no JSON stdout: %s", res.Stdout)
+		}
+		if dryRun, _ := payload["dry_run"].(bool); !dryRun {
+			t.Fatalf("expected dry_run=true payload for restore --input: %v", payload)
+		}
+	})
+
+	t.Run("remove merge cli+input dedup and invalid", func(t *testing.T) {
+		inputFile := filepath.Join(tmp, "remove_ids_merge.txt")
+		content := fmt.Sprintf("# remove ids\n%d\n%d\ninvalid-id\n", idA, idB)
+		if err := os.WriteFile(inputFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("write remove merge input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idA), "--input", inputFile, "--dry-run", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove merge dry-run should report invalid entry as failure: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove merge dry-run produced no JSON stdout: %s", res.Stdout)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary in payload: %v", payload)
+		}
+		if int(summary["planned"].(float64)) < 2 {
+			t.Fatalf("expected at least two planned items from merged IDs, got summary=%v", summary)
+		}
+		if int(summary["skipped"].(float64)) < 1 {
+			t.Fatalf("expected duplicate skip from merged IDs, got summary=%v", summary)
+		}
+		if int(summary["failed"].(float64)) < 1 {
+			t.Fatalf("expected invalid input failure from merged IDs, got summary=%v", summary)
+		}
+	})
+
+	t.Run("--input missing file usage error", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--input", filepath.Join(tmp, "missing_ids.txt"), "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("expected usage exit code 2 for missing input file, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+		if !ok {
+			t.Fatalf("expected JSON error payload on stderr for missing input file, stderr=%s", res.Stderr)
+		}
+		if got, _ := errPayload["error_class"].(string); got != "USAGE" {
+			t.Fatalf("expected USAGE error class, got payload=%v", errPayload)
+		}
+	})
+
+	t.Run("--input empty file usage error", func(t *testing.T) {
+		emptyInput := filepath.Join(tmp, "empty_ids.txt")
+		if err := os.WriteFile(emptyInput, []byte("# empty\n\n"), 0o644); err != nil {
+			t.Fatalf("write empty input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--input", emptyInput, "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("expected usage exit code 2 for empty effective input, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+		if !ok {
+			t.Fatalf("expected JSON error payload on stderr for empty input file, stderr=%s", res.Stderr)
+		}
+		if got, _ := errPayload["error_class"].(string); got != "USAGE" {
+			t.Fatalf("expected USAGE error class, got payload=%v", errPayload)
+		}
+		if msg, _ := errPayload["message"].(string); !strings.Contains(strings.ToLower(msg), "no valid file ids") {
+			t.Fatalf("expected no-valid-file-ids message, got payload=%v", errPayload)
+		}
+	})
+
+	t.Run("remove failure isolation", func(t *testing.T) {
+		fileC := filepath.Join(inputDir, "batch_flags_c.txt")
+		if err := os.WriteFile(fileC, []byte("batch-flags-file-c"), 0o644); err != nil {
+			t.Fatalf("write fileC: %v", err)
+		}
+
+		storeC := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileC, "--output", "json"), "store")
+		idC := testutils.JSONInt64(t, testutils.JSONMap(t, storeC, "data"), "file_id")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idA), "999999", fmt.Sprintf("%d", idC), "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove failure isolation should return non-zero due to failed item: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove failure isolation produced no JSON stdout: %s", res.Stdout)
+		}
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 2 || int(summary["failed"].(float64)) != 1 {
+			t.Fatalf("unexpected failure isolation summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected results payload: %v", payload)
+		}
+
+		first, _ := results[0].(map[string]any)
+		middle, _ := results[1].(map[string]any)
+		last, _ := results[2].(map[string]any)
+		if first["status"] != "success" || middle["status"] != "failed" || last["status"] != "success" {
+			t.Fatalf("unexpected per-item statuses for failure isolation: results=%v", results)
+		}
+	})
+
+	t.Run("failed batch json emits stdout result and stderr error envelope", func(t *testing.T) {
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "999999", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero for failed batch command: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		batchPayload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("expected batch JSON payload on stdout, got stdout=%s", res.Stdout)
+		}
+		if got, _ := batchPayload["command"].(string); got != "remove" {
+			t.Fatalf("expected remove batch payload on stdout, got=%v payload=%v", batchPayload["command"], batchPayload)
+		}
+		if got, _ := batchPayload["status"].(string); got != "error" {
+			t.Fatalf("expected batch payload status=error for single failed item, got=%v payload=%v", batchPayload["status"], batchPayload)
+		}
+
+		errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+		if !ok {
+			t.Fatalf("expected generic CLI error envelope on stderr, got stderr=%s", res.Stderr)
+		}
+		if got, _ := errPayload["error_class"].(string); got != "GENERAL" {
+			t.Fatalf("expected GENERAL error class, got payload=%v", errPayload)
+		}
+		if msg, _ := errPayload["message"].(string); !strings.Contains(strings.ToLower(msg), "one or more remove operations failed") {
+			t.Fatalf("expected generic batch failure message in stderr envelope, got payload=%v", errPayload)
+		}
+	})
+
+	t.Run("restore dry-run and real parity", func(t *testing.T) {
+		fileParity := filepath.Join(inputDir, "batch_flags_parity.txt")
+		if err := os.WriteFile(fileParity, []byte("batch-flags-parity"), 0o644); err != nil {
+			t.Fatalf("write parity file: %v", err)
+		}
+
+		storeParity := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileParity, "--output", "json"), "store")
+		idParity := testutils.JSONInt64(t, testutils.JSONMap(t, storeParity, "data"), "file_id")
+
+		outDir := filepath.Join(tmp, "restore_parity")
+		dryRunRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idParity), outDir, "--dry-run", "--output", "json")
+		if dryRunRes.ExitCode != 0 {
+			t.Fatalf("restore parity dry-run failed: exit=%d stdout=%s stderr=%s", dryRunRes.ExitCode, dryRunRes.Stdout, dryRunRes.Stderr)
+		}
+		realRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idParity), outDir, "--overwrite", "--output", "json")
+		if realRes.ExitCode != 0 {
+			t.Fatalf("restore parity real execution failed: exit=%d stdout=%s stderr=%s", realRes.ExitCode, realRes.Stdout, realRes.Stderr)
+		}
+
+		dryPayload, ok := testutils.TryParseLastJSONLine(dryRunRes.Stdout)
+		if !ok {
+			t.Fatalf("restore parity dry-run JSON missing: stdout=%s", dryRunRes.Stdout)
+		}
+		realPayload, ok := testutils.TryParseLastJSONLine(realRes.Stdout)
+		if !ok {
+			t.Fatalf("restore parity real JSON missing: stdout=%s", realRes.Stdout)
+		}
+
+		drySummary, _ := dryPayload["summary"].(map[string]any)
+		realSummary, _ := realPayload["summary"].(map[string]any)
+		if int(drySummary["planned"].(float64)) != 1 || int(drySummary["failed"].(float64)) != 0 {
+			t.Fatalf("unexpected dry-run parity summary: %v", drySummary)
+		}
+		if int(realSummary["success"].(float64)) != 1 || int(realSummary["failed"].(float64)) != 0 {
+			t.Fatalf("unexpected real parity summary: %v", realSummary)
+		}
+
+		dryResults, _ := dryPayload["results"].([]any)
+		realResults, _ := realPayload["results"].([]any)
+		if len(dryResults) != 1 || len(realResults) != 1 {
+			t.Fatalf("unexpected parity results length: dry=%v real=%v", dryResults, realResults)
+		}
+		dryItem, _ := dryResults[0].(map[string]any)
+		realItem, _ := realResults[0].(map[string]any)
+		if dryItem["id"] != realItem["id"] {
+			t.Fatalf("dry-run vs real id mismatch: dry=%v real=%v", dryItem, realItem)
+		}
+		if dryItem["output_path"] != realItem["output_path"] {
+			t.Fatalf("dry-run vs real output_path mismatch: dry=%v real=%v", dryItem, realItem)
+		}
+	})
+
+	t.Run("text output symbols and alignment", func(t *testing.T) {
+		fileText := filepath.Join(inputDir, "batch_flags_text.txt")
+		if err := os.WriteFile(fileText, []byte("batch-flags-text"), 0o644); err != nil {
+			t.Fatalf("write text file: %v", err)
+		}
+
+		storeText := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileText, "--output", "json"), "store")
+		idText := testutils.JSONInt64(t, testutils.JSONMap(t, storeText, "data"), "file_id")
+
+		outDir := filepath.Join(tmp, "restore_text_contract")
+		dryRunRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idText), "999999", outDir, "--dry-run")
+		if dryRunRes.ExitCode == 0 {
+			t.Fatalf("expected non-zero due to mixed valid+invalid dry-run IDs, stdout=%s stderr=%s", dryRunRes.Stdout, dryRunRes.Stderr)
+		}
+
+		if !strings.Contains(dryRunRes.Stdout, "[RESTORE DRY-RUN]") {
+			t.Fatalf("text dry-run output missing header:\n%s", dryRunRes.Stdout)
+		}
+
+		expectedPlannedLine := fmt.Sprintf("  id=%-6d would restore ->", idText)
+		if !strings.Contains(dryRunRes.Stdout, expectedPlannedLine) {
+			t.Fatalf("text dry-run output missing aligned planned line %q:\n%s", expectedPlannedLine, dryRunRes.Stdout)
+		}
+
+		expectedFailureLine := fmt.Sprintf("✖ id=%-6d error=", int64(999999))
+		if !strings.Contains(dryRunRes.Stdout, expectedFailureLine) {
+			t.Fatalf("text dry-run output missing failure symbol/alignment line %q:\n%s", expectedFailureLine, dryRunRes.Stdout)
+		}
+
+		removeRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", fmt.Sprintf("%d", idText), fmt.Sprintf("%d", idText), "--dry-run")
+		if removeRes.ExitCode != 0 {
+			t.Fatalf("remove --dry-run text contract run failed: exit=%d stdout=%s stderr=%s", removeRes.ExitCode, removeRes.Stdout, removeRes.Stderr)
+		}
+
+		expectedPlannedRemoveLine := fmt.Sprintf("  id=%-6d would remove", idText)
+		if !strings.Contains(removeRes.Stdout, expectedPlannedRemoveLine) {
+			t.Fatalf("remove text output missing planned line %q:\n%s", expectedPlannedRemoveLine, removeRes.Stdout)
+		}
+
+		expectedSkippedLine := fmt.Sprintf("↷ id=%-6d skipped duplicate target", idText)
+		if !strings.Contains(removeRes.Stdout, expectedSkippedLine) {
+			t.Fatalf("remove text output missing skipped symbol/alignment line %q:\n%s", expectedSkippedLine, removeRes.Stdout)
+		}
+	})
+}
+
 func TestContainerOverflowProtection(t *testing.T) {
 	testgate.RequireDB(t)
 

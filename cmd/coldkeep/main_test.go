@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -259,6 +260,372 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	}
 }
 
+func TestPrintBatchHumanReportSymbolsAndAlignment(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRestore,
+		Summary:   batch.Summary{Total: 5, Success: 2, Failed: 2, Skipped: 1},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultSuccess, OutputPath: "./out/report.pdf"},
+			{ID: 18, Status: batch.ResultSuccess, OutputPath: "./out/archive.zip"},
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
+			{ID: 24, Status: batch.ResultFailed, Message: "file not found"},
+			{ID: 18, Status: batch.ResultSkipped, Message: "duplicate target"},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		printBatchHumanReport("RESTORE", report)
+	})
+
+	if !strings.Contains(output, "[RESTORE]\n") {
+		t.Fatalf("missing restore header: %q", output)
+	}
+	if !strings.Contains(output, "✔ id=12     -> ./out/report.pdf") {
+		t.Fatalf("missing aligned success line: %q", output)
+	}
+	if !strings.Contains(output, "✖ id=24     error=file not found") {
+		t.Fatalf("missing failed symbol line: %q", output)
+	}
+	if !strings.Contains(output, "✖ input=\"abc\" error=invalid file ID \"abc\"") {
+		t.Fatalf("missing invalid raw-input failure line: %q", output)
+	}
+	if !strings.Contains(output, "↷ id=18     skipped duplicate target") {
+		t.Fatalf("missing skipped symbol line: %q", output)
+	}
+}
+
+func TestPrintBatchHumanReportDryRunPlannedNoIcon(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRestore,
+		DryRun:    true,
+		Summary:   batch.Summary{Total: 2, Planned: 1, Failed: 1},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultPlanned, Message: "would restore -> ./out/report.pdf"},
+			{ID: 99, Status: batch.ResultFailed, Message: "file not found"},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		printBatchHumanReport("RESTORE", report)
+	})
+
+	if !strings.Contains(output, "[RESTORE DRY-RUN]\n") {
+		t.Fatalf("missing dry-run header: %q", output)
+	}
+	if !strings.Contains(output, "  id=12     would restore -> ./out/report.pdf") {
+		t.Fatalf("planned line should not have icon: %q", output)
+	}
+	if !strings.Contains(output, "  planned: 1") {
+		t.Fatalf("missing dry-run planned summary: %q", output)
+	}
+	if !strings.Contains(output, "  skipped: 0") {
+		t.Fatalf("missing dry-run skipped summary: %q", output)
+	}
+}
+
+func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRestore,
+		Summary:   batch.Summary{Total: 4, Success: 2, Failed: 2},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultSuccess, OutputPath: "./out/a.txt", OriginalName: "a.txt"},
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
+			{ID: 18, Status: batch.ResultFailed, Message: "file not found"},
+			{ID: 22, Status: batch.ResultSuccess},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		err := emitBatchCommandReport("restore", report, outputModeJSON)
+		if err == nil {
+			t.Fatalf("expected non-nil error when report has failures")
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", err, output)
+	}
+
+	if got, _ := payload["status"].(string); got != "partial_failure" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "restore" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+	if _, hasData := payload["data"]; hasData {
+		t.Fatalf("batch payload should not include legacy data field: %v", payload)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 4 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+	invalidItem, ok := results[1].(map[string]any)
+	if !ok {
+		t.Fatalf("invalid item should be an object: %T", results[1])
+	}
+	if _, hasID := invalidItem["id"]; hasID {
+		t.Fatalf("invalid parse item should not expose id field: %v", invalidItem)
+	}
+	if got, _ := invalidItem["raw_value"].(string); got != "abc" {
+		t.Fatalf("invalid item raw_value mismatch: item=%v", invalidItem)
+	}
+	failedItem, ok := results[2].(map[string]any)
+	if !ok {
+		t.Fatalf("failed item should be an object: %T", results[2])
+	}
+	if got, _ := failedItem["error"].(string); got != "file not found" {
+		t.Fatalf("failed item error mismatch: item=%v", failedItem)
+	}
+	if _, hasMessage := failedItem["message"]; hasMessage {
+		t.Fatalf("failed item should expose error field, not message: %v", failedItem)
+	}
+}
+
+func TestEmitBatchCommandReportJSONIncludesNonFailureMessages(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRemove,
+		DryRun:    true,
+		Summary:   batch.Summary{Total: 4, Planned: 1, Success: 1, Failed: 1, Skipped: 1},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultPlanned, Message: "would remove"},
+			{ID: 18, Status: batch.ResultSkipped, Message: "duplicate target"},
+			{ID: 24, Status: batch.ResultSuccess, Message: "removed mappings=3"},
+			{ID: 99, Status: batch.ResultFailed, Message: "file not found"},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		err := emitBatchCommandReport("remove", report, outputModeJSON)
+		if err == nil {
+			t.Fatalf("expected non-nil error when report has failures")
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", err, output)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 4 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+
+	plannedItem, _ := results[0].(map[string]any)
+	if got, _ := plannedItem["message"].(string); got != "would remove" {
+		t.Fatalf("planned item should expose message, got item=%v", plannedItem)
+	}
+
+	skippedItem, _ := results[1].(map[string]any)
+	if got, _ := skippedItem["message"].(string); got != "duplicate target" {
+		t.Fatalf("skipped item should expose message, got item=%v", skippedItem)
+	}
+
+	successItem, _ := results[2].(map[string]any)
+	if got, _ := successItem["message"].(string); got != "removed mappings=3" {
+		t.Fatalf("success item should expose message, got item=%v", successItem)
+	}
+
+	failedItem, _ := results[3].(map[string]any)
+	if got, _ := failedItem["error"].(string); got != "file not found" {
+		t.Fatalf("failed item error mismatch: item=%v", failedItem)
+	}
+	if _, hasMessage := failedItem["message"]; hasMessage {
+		t.Fatalf("failed item should not expose message when error is present: %v", failedItem)
+	}
+}
+
+func TestEmitBatchCommandReportJSONSkippedMessageFallback(t *testing.T) {
+	report := batch.Report{
+		Operation: batch.OperationRemove,
+		DryRun:    false,
+		Summary:   batch.Summary{Total: 1, Success: 0, Failed: 0, Skipped: 1},
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultSkipped, Message: "   "},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		err := emitBatchCommandReport("remove", report, outputModeJSON)
+		if err != nil {
+			t.Fatalf("expected nil error when report has no failures, got %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", err, output)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+
+	skippedItem, _ := results[0].(map[string]any)
+	if got, _ := skippedItem["message"].(string); got != "skipped" {
+		t.Fatalf("skipped item should expose fallback message, got item=%v", skippedItem)
+	}
+}
+
+func TestExecuteBatchPreservesInputOrder(t *testing.T) {
+	raw := []batch.RawTarget{
+		{Value: "12", Source: "args"},
+		{Value: "abc", Source: "args"},
+		{Value: "18", Source: "args"},
+		{Value: "12", Source: "args"},
+	}
+
+	targets := batch.PrepareTargets(raw)
+	report := batch.ExecutePrepared(batch.OperationRemove, false, false, targets, func(id int64) batch.ItemResult {
+		return batch.ItemResult{ID: id, Status: batch.ResultSuccess, Message: "ok"}
+	})
+
+	if len(report.Results) != 4 {
+		t.Fatalf("result length mismatch: got=%d", len(report.Results))
+	}
+
+	if report.Results[0].ID != 12 || report.Results[0].Status != batch.ResultSuccess {
+		t.Fatalf("unexpected first result: %v", report.Results[0])
+	}
+	if report.Results[1].Status != batch.ResultFailed || !strings.Contains(report.Results[1].Message, "invalid file ID") {
+		t.Fatalf("unexpected second result: %v", report.Results[1])
+	}
+	if report.Results[1].RawValue != "abc" {
+		t.Fatalf("expected second result raw_value=abc, got: %v", report.Results[1])
+	}
+	if report.Results[2].ID != 18 || report.Results[2].Status != batch.ResultSuccess {
+		t.Fatalf("unexpected third result: %v", report.Results[2])
+	}
+	if report.Results[3].ID != 12 || report.Results[3].Status != batch.ResultSkipped {
+		t.Fatalf("unexpected fourth result: %v", report.Results[3])
+	}
+}
+
+func TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
+	err := error(nil)
+	output := captureStdout(t, func() {
+		err = runRemoveCommand(parsedCommandLine{
+			method:      "remove",
+			positionals: []string{"abc", "def", "ghi"},
+			flags:       map[string][]string{},
+		}, outputModeJSON)
+	})
+
+	if err == nil {
+		t.Fatal("expected non-nil error for all-invalid remove targets")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	var payload map[string]any
+	if decodeErr := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); decodeErr != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", decodeErr, output)
+	}
+
+	if got, _ := payload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "remove" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary should be object: payload=%v", payload)
+	}
+	if total, _ := summary["total"].(float64); int(total) != 3 {
+		t.Fatalf("summary.total mismatch: summary=%v", summary)
+	}
+	if failed, _ := summary["failed"].(float64); int(failed) != 3 {
+		t.Fatalf("summary.failed mismatch: summary=%v", summary)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 3 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+	for _, raw := range results {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("result should be object: %T", raw)
+		}
+		if got, _ := item["status"].(string); got != string(batch.ResultFailed) {
+			t.Fatalf("expected failed item status, got item=%v", item)
+		}
+		if _, hasID := item["id"]; hasID {
+			t.Fatalf("invalid item should not include id: item=%v", item)
+		}
+		if got, _ := item["error"].(string); !strings.Contains(got, "invalid file ID") {
+			t.Fatalf("invalid item error mismatch: item=%v", item)
+		}
+	}
+}
+
+func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
+	err := error(nil)
+	output := captureStdout(t, func() {
+		err = runRestoreCommand(parsedCommandLine{
+			method:      "restore",
+			positionals: []string{"abc", "def", "ghi", "./out"},
+			flags:       map[string][]string{},
+		}, outputModeJSON)
+	})
+
+	if err == nil {
+		t.Fatal("expected non-nil error for all-invalid restore targets")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	var payload map[string]any
+	if decodeErr := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); decodeErr != nil {
+		t.Fatalf("parse batch JSON: %v output=%q", decodeErr, output)
+	}
+
+	if got, _ := payload["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "restore" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary should be object: payload=%v", payload)
+	}
+	if total, _ := summary["total"].(float64); int(total) != 3 {
+		t.Fatalf("summary.total mismatch: summary=%v", summary)
+	}
+	if failed, _ := summary["failed"].(float64); int(failed) != 3 {
+		t.Fatalf("summary.failed mismatch: summary=%v", summary)
+	}
+
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 3 {
+		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+	for _, raw := range results {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("result should be object: %T", raw)
+		}
+		if got, _ := item["status"].(string); got != string(batch.ResultFailed) {
+			t.Fatalf("expected failed item status, got item=%v", item)
+		}
+		if _, hasID := item["id"]; hasID {
+			t.Fatalf("invalid item should not include id: item=%v", item)
+		}
+		if got, _ := item["error"].(string); !strings.Contains(got, "invalid file ID") {
+			t.Fatalf("invalid item error mismatch: item=%v", item)
+		}
+	}
+}
+
 func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
@@ -405,6 +772,36 @@ func TestClassifyExitCodeTypedUsageError(t *testing.T) {
 	}
 }
 
+func TestBatchFailureExitCodeClassification(t *testing.T) {
+	validationOnly := batch.Report{
+		Results: []batch.ItemResult{
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
+		},
+	}
+	if got := deriveBatchFailureExitCode(validationOnly); got != exitUsage {
+		t.Fatalf("expected usage exit code for validation-only failures %d, got %d", exitUsage, got)
+	}
+
+	executionOnly := batch.Report{
+		Results: []batch.ItemResult{
+			{ID: 12, Status: batch.ResultFailed, Message: "file ID 12 not found"},
+		},
+	}
+	if got := deriveBatchFailureExitCode(executionOnly); got != exitGeneral {
+		t.Fatalf("expected general exit code for execution failures %d, got %d", exitGeneral, got)
+	}
+
+	mixed := batch.Report{
+		Results: []batch.ItemResult{
+			{Status: batch.ResultFailed, RawValue: "abc", Message: "invalid file ID \"abc\""},
+			{ID: 99, Status: batch.ResultFailed, Message: "file ID 99 not found"},
+		},
+	}
+	if got := deriveBatchFailureExitCode(mixed); got != exitGeneral {
+		t.Fatalf("expected execution failure precedence exit code %d, got %d", exitGeneral, got)
+	}
+}
+
 func TestClassifyExitCodeTypedVerifyError(t *testing.T) {
 	err := verifyError(errors.New("verification failed: chunk mismatch"))
 	if got := classifyExitCode(err); got != exitVerify {
@@ -423,6 +820,13 @@ func TestClassifyExitCodeFallbackStringMatch(t *testing.T) {
 	err := errors.New("unknown command: nope")
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code from fallback matching %d, got %d", exitUsage, got)
+	}
+}
+
+func TestClassifyExitCodeNoValidFileIDsIsUsage(t *testing.T) {
+	err := errors.New("no valid file IDs after parsing input")
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 

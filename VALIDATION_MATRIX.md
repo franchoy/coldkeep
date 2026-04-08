@@ -17,11 +17,12 @@ This prevents future “renumbering drift”.
 All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
 
 This document originated from the v0.9/v0.10 trust-validation work and is now
-the maintained v1.0 guarantee-to-evidence contract.
+the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
+guarantees (G1-G8) plus post-v1.0 interface-correctness extensions (G9+).
 
 ## Scope
 
-- Target: single-node trust model for v1.0 and ongoing maintenance
+- Target: single-node trust model for v1.0 core plus v1.1+ interface contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 
@@ -37,6 +38,16 @@ the maintained v1.0 guarantee-to-evidence contract.
 | G6 | Safe in-process concurrent storage operations | Verify catches graph/reference corruption; transactional claims/retries in write path | `TestConcurrentStoreSameFile`, `TestConcurrentStoreSameChunk`, `TestConcurrentStoreFolderStress`, `TestRepeatedJitteredStoreGCRestoreInterleaving`, `TestRepeatedJitteredStoreGCRestoreRemoveInterleaving` (all in-process, shared DB and store path, dedup races, stress) | covered (multi-process contention and external crash overlap not covered; see open work) |
 | G7 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity, including authenticated AES-GCM decode failures on tampered ciphertext, tampered nonce metadata, wrong-key mismatch, and malformed key configuration (invalid length and invalid encoding) | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsAESGCMTamperedCiphertext`, `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`, `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`, `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`, `TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
 | G8 | Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload`, `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData` | covered |
+
+## Post-v1.0 Extension Guarantees (v1.1+)
+
+These rows track guarantees added after the v1.0 baseline. They are intentionally
+separate from the frozen v1.0 core matrix (G1-G8).
+This extends the correctness model from storage invariants to interaction semantics.
+
+| ID | Guarantee | Primary verify evidence | Primary test evidence | Status |
+| --- | --- | --- | --- | --- |
+| G9 | Interface correctness for batch CLI orchestration: isolated execution, deterministic ordering, and truthful machine-readable reporting | CLI batch contract checks (per-item status + summary + exit behavior) | `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast control-flow, mixed `--input` chaos) | covered |
 
 ## Open Work Tracking
 

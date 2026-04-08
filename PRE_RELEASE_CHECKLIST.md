@@ -108,7 +108,7 @@ Expected: both succeed and JSON output is machine-readable.
 scripts/validate_validation_matrix.sh
 ```
 
-Expected: required v1.0 guarantee rows and exit criteria are present in `VALIDATION_MATRIX.md`.
+Expected: required v1.0 core guarantee rows (G1-G8), post-v1.0 extension rows (G9+), and exit criteria are present in `VALIDATION_MATRIX.md`.
 
 ## 7) Test bootstrap on and off
 
@@ -169,6 +169,41 @@ Confirm:
 
 Expected: no drift in CLI JSON structure, error classification, or frozen exit-code mapping.
 
+## 11) Verify batch CLI contract stability (v1.1)
+
+These checks validate G9 (interface correctness guarantee).
+
+Run targeted tests that lock the primary batch parser/preparation path, execution/reporting path, and integration behavior:
+
+```bash
+go test ./cmd/coldkeep -run 'TestPrintBatchHumanReportSymbolsAndAlignment|TestPrintBatchHumanReportDryRunPlannedNoIcon|TestEmitBatchCommandReportJSONSchema|TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport|TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport|TestBatchFailureExitCodeClassification|TestClassifyExitCodeNoValidFileIDsIsUsage'
+go test ./internal/batch -run 'TestLoadRawTargets|TestPrepareTargetsPreservesInputOrder|TestHasExecutableTargets|TestExecutePreparedPreservesInputOrderAndFailFast|TestExecutePreparedFailFastStopsOnlyOnExecutionFailure'
+go test ./tests/integration -run TestBatchFlagsEndToEnd
+```
+
+Optional transitional API guardrails (legacy-facing, keep while transition remains supported):
+
+```bash
+go test ./internal/batch -run 'TestResolveTargets|TestDeduplicateTargets'
+```
+
+Manual spot-checks (text mode):
+
+```bash
+./coldkeep restore 12 ./out --dry-run
+./coldkeep remove 12 999 13
+```
+
+Confirm:
+
+- Human symbols remain stable: `✔` success, `✖` failed, `↷` skipped, no icon for planned dry-run rows
+- ID column remains aligned (`id=%-6d` style)
+- JSON batch envelope remains `status + command + dry_run + summary + results`
+- Failed item JSON uses `error` field (not `message`)
+- `--fail-fast` stops further execution but still emits partial report
+- Empty effective ID set returns `no valid file IDs after parsing input` with usage exit code `2`
+- Restore overwrite default is safe (requires `--overwrite` to replace files)
+
 ## Sign-off
 
 - [ ] Quality parity checks passed
@@ -180,3 +215,4 @@ Expected: no drift in CLI JSON structure, error classification, or frozen exit-c
 - [ ] Bootstrap on/off behavior verified
 - [ ] Clean install path verified
 - [ ] CLI contract stability verified
+- [ ] Batch CLI contract stability verified

@@ -10,12 +10,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
 
+	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -40,6 +42,7 @@ var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
 	"codec":    true,
+	"input":    true,
 	"limit":    true,
 	"offset":   true,
 	"name":     true,
@@ -519,7 +522,9 @@ func classifyExitCode(err error) int {
 		strings.Contains(msg, "unknown flag(s)") ||
 		strings.Contains(msg, "unknown command") ||
 		strings.Contains(msg, "unknown option for gc") ||
+		strings.Contains(msg, "no valid file ids after parsing input") ||
 		strings.Contains(msg, "invalid fileid") ||
+		strings.Contains(msg, "invalid file id") ||
 		strings.Contains(msg, "unknown target for verify") ||
 		strings.Contains(msg, "unknown verify level") ||
 		strings.Contains(msg, "multiple verify levels provided") ||
@@ -661,16 +666,48 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep restore <fileID> <outputDir>")
+	inputFile, _ := parsed.lastFlagValue("input")
+	hasInput := strings.TrimSpace(inputFile) != ""
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+	}
+	if !hasInput && len(parsed.positionals) < 2 {
+		return usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+	}
+	dryRun := parsed.hasFlag("dry-run", "dryRun")
+	failFast := parsed.hasFlag("fail-fast", "failFast")
+	overwrite := parsed.hasFlag("overwrite")
+	targetArgs := parsed.positionals[:len(parsed.positionals)-1]
+	outputRoot := parsed.positionals[len(parsed.positionals)-1]
+	if !hasInput && len(targetArgs) == 1 {
+		target := strings.TrimSpace(targetArgs[0])
+		id, parseErr := strconv.ParseInt(target, 10, 64)
+		if parseErr != nil || id <= 0 {
+			return usageErrorf("Invalid fileID: %s", targetArgs[0])
+		}
 	}
 
-	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
+	rawTargets, err := batch.LoadRawTargets(targetArgs, inputFile)
 	if err != nil {
-		return usageErrorf("Invalid fileID: %v", err)
+		return usageErrorf("failed to open/read input file: %v", err)
+	}
+	preparedTargets := batch.PrepareTargets(rawTargets)
+	// Defensive fallback: empty prepared targets can still happen when no
+	// materialized IDs are provided (for example, empty args/input combinations).
+	if len(preparedTargets) == 0 {
+		return usageErrorf("no valid file IDs after parsing input")
+	}
+	if !batch.HasExecutableTargets(preparedTargets) {
+		report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, nil)
+		return emitBatchCommandReport("restore", report, outputMode)
+	}
+
+	outputPath, err := ensureRestoreOutputDir(outputRoot, !dryRun)
+	if err != nil {
+		return err
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -679,41 +716,42 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	outPath := parsed.positionals[1]
-	result, err := storage.RestoreFileWithStorageContextResult(sgctx, fileID, outPath)
-	if err != nil {
-		return err
-	}
-
-	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "restore",
-			"data":    result,
+	execFunc := func(fileID int64) batch.ItemResult {
+		if dryRun {
+			return executeRestoreDryRunItem(sgctx.DB, fileID, outputPath, overwrite)
 		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
+		return executeRestoreItem(&sgctx, fileID, outputPath, overwrite)
 	}
 
-	fmt.Printf("File restored successfully: id=%d output=%s\n", result.FileID, result.OutputPath)
-	fmt.Printf("  Name: %s\n", result.OriginalName)
-	fmt.Printf("  SHA256: %s\n", result.RestoredHash)
-	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
-	return nil
+	report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, execFunc)
+	return emitBatchCommandReport("restore", report, outputMode)
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) != 1 {
-		return usageErrorf("Usage: coldkeep remove <fileID>")
+	inputFile, _ := parsed.lastFlagValue("input")
+	hasInput := strings.TrimSpace(inputFile) != ""
+	if !hasInput && len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep remove <fileID> [fileID ...]")
 	}
+	dryRun := parsed.hasFlag("dry-run", "dryRun")
+	failFast := parsed.hasFlag("fail-fast", "failFast")
 
-	fileID, err := strconv.ParseInt(parsed.positionals[0], 10, 64)
+	rawTargets, err := batch.LoadRawTargets(parsed.positionals, inputFile)
 	if err != nil {
-		return usageErrorf("Invalid fileID: %v", err)
+		return usageErrorf("failed to open/read input file: %v", err)
+	}
+	preparedTargets := batch.PrepareTargets(rawTargets)
+	// Defensive fallback: empty prepared targets can still happen when no
+	// materialized IDs are provided (for example, empty args/input combinations).
+	if len(preparedTargets) == 0 {
+		return usageErrorf("no valid file IDs after parsing input")
+	}
+	if !batch.HasExecutableTargets(preparedTargets) {
+		report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, nil)
+		return emitBatchCommandReport("remove", report, outputMode)
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
@@ -722,26 +760,242 @@ func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	result, err := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
-	if err != nil {
-		return err
+	execFunc := func(fileID int64) batch.ItemResult {
+		if dryRun {
+			return executeRemoveDryRunItem(sgctx.DB, fileID)
+		}
+		return executeRemoveItem(&sgctx, fileID)
 	}
 
+	report := batch.ExecutePrepared(batch.OperationRemove, dryRun, failFast, preparedTargets, execFunc)
+	return emitBatchCommandReport("remove", report, outputMode)
+}
+
+func ensureRestoreOutputDir(path string, createIfMissing bool) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", usageErrorf("Usage: coldkeep restore <fileID> [fileID ...] <outputDir>")
+	}
+
+	if createIfMissing {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return "", fmt.Errorf("create output directory %q: %w", path, err)
+		}
+	}
+
+	st, err := os.Stat(path)
+	if err != nil {
+		if !createIfMissing && os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", fmt.Errorf("stat output directory %q: %w", path, err)
+	}
+	if !st.IsDir() {
+		return "", usageErrorf("restore output destination must be a directory: %s", path)
+	}
+
+	return path, nil
+}
+
+func batchOverallStatus(report batch.Report) string {
+	if report.Summary.Failed == 0 {
+		return "ok"
+	}
+	if report.Summary.Success > 0 || report.Summary.Planned > 0 {
+		return "partial_failure"
+	}
+	return "error"
+}
+
+func printBatchHumanReport(label string, report batch.Report) {
+	if report.DryRun {
+		fmt.Printf("[%s DRY-RUN]\n", label)
+	} else {
+		fmt.Printf("[%s]\n", label)
+	}
+	for _, item := range report.Results {
+		switch item.Status {
+		case batch.ResultSuccess:
+			if item.OutputPath != "" {
+				fmt.Printf("✔ id=%-6d -> %s\n", item.ID, item.OutputPath)
+			} else if item.Message != "" {
+				fmt.Printf("✔ id=%-6d %s\n", item.ID, item.Message)
+			} else {
+				fmt.Printf("✔ id=%-6d success\n", item.ID)
+			}
+		case batch.ResultFailed:
+			if item.ID > 0 {
+				fmt.Printf("✖ id=%-6d error=%s\n", item.ID, item.Message)
+			} else if strings.TrimSpace(item.RawValue) != "" {
+				fmt.Printf("✖ input=%q error=%s\n", item.RawValue, item.Message)
+			} else {
+				fmt.Printf("✖ error=%s\n", item.Message)
+			}
+		case batch.ResultSkipped:
+			fmt.Printf("↷ id=%-6d skipped %s\n", item.ID, item.Message)
+		case batch.ResultPlanned:
+			fmt.Printf("  id=%-6d %s\n", item.ID, item.Message)
+		}
+	}
+	fmt.Println("Summary:")
+	fmt.Printf("  total:   %d\n", report.Summary.Total)
+	if report.DryRun {
+		fmt.Printf("  planned: %d\n", report.Summary.Planned)
+		fmt.Printf("  failed:  %d\n", report.Summary.Failed)
+		fmt.Printf("  skipped: %d\n", report.Summary.Skipped)
+	} else {
+		fmt.Printf("  success: %d\n", report.Summary.Success)
+		fmt.Printf("  failed:  %d\n", report.Summary.Failed)
+		fmt.Printf("  skipped: %d\n", report.Summary.Skipped)
+	}
+}
+
+func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
+	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d not found", fileID)}
+		}
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+	}
+
+	if info.Status != filestate.LogicalFileCompleted {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d is not COMPLETED", fileID)}
+	}
+
+	out := filepath.Join(outputDir, info.OriginalName)
+	if !overwrite {
+		if _, statErr := os.Stat(out); statErr == nil {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("output file already exists: %s (use --overwrite)", out), OutputPath: out, OriginalName: info.OriginalName}
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("check output path %s: %v", out, statErr), OutputPath: out, OriginalName: info.OriginalName}
+		}
+	}
+
+	return batch.ItemResult{
+		ID:           fileID,
+		Status:       batch.ResultPlanned,
+		Message:      fmt.Sprintf("would restore -> %s", out),
+		OriginalName: info.OriginalName,
+		OutputPath:   out,
+	}
+}
+
+func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
+	result, err := storage.RestoreFileWithStorageContextResultOptions(*sgctx, fileID, outputDir, storage.RestoreOptions{Overwrite: overwrite})
+	if err != nil {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+	}
+
+	return batch.ItemResult{
+		ID:           fileID,
+		Status:       batch.ResultSuccess,
+		Message:      "restored",
+		OriginalName: result.OriginalName,
+		OutputPath:   result.OutputPath,
+	}
+}
+
+func executeRemoveDryRunItem(dbconn *sql.DB, fileID int64) batch.ItemResult {
+	info, err := storage.GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d not found", fileID)}
+		}
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+	}
+	if info.Status == filestate.LogicalFileProcessing {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("file ID %d is still PROCESSING and cannot be removed", fileID)}
+	}
+	return batch.ItemResult{ID: fileID, Status: batch.ResultPlanned, Message: "would remove"}
+}
+
+func executeRemoveItem(sgctx *storage.StorageContext, fileID int64) batch.ItemResult {
+	result, err := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
+	if err != nil {
+		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+	}
+	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", result.RemovedMappings)}
+}
+
+func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode) error {
 	if outputMode == outputModeJSON {
+		jsonResults := make([]map[string]any, 0, len(report.Results))
+		for _, item := range report.Results {
+			encoded := map[string]any{
+				"status": item.Status,
+			}
+			if item.ID > 0 {
+				encoded["id"] = item.ID
+			}
+			if strings.TrimSpace(item.RawValue) != "" {
+				encoded["raw_value"] = item.RawValue
+			}
+			if item.OutputPath != "" {
+				encoded["output_path"] = item.OutputPath
+			}
+			if item.OriginalName != "" {
+				encoded["original_name"] = item.OriginalName
+			}
+			if item.Status == batch.ResultFailed && item.Message != "" {
+				encoded["error"] = item.Message
+			} else if item.Status == batch.ResultSkipped {
+				message := strings.TrimSpace(item.Message)
+				if message == "" {
+					message = "skipped"
+				}
+				encoded["message"] = message
+			} else if item.Message != "" {
+				encoded["message"] = item.Message
+			}
+			jsonResults = append(jsonResults, encoded)
+		}
+
 		payload := map[string]any{
-			"status":  "ok",
-			"command": "remove",
-			"data":    result,
+			"status":  batchOverallStatus(report),
+			"command": command,
+			"dry_run": report.DryRun,
+			"summary": report.Summary,
+			"results": jsonResults,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
-		return nil
+	} else {
+		printBatchHumanReport(strings.ToUpper(command), report)
+		if !report.DryRun {
+			fmt.Printf("  Hint: %s\n", doctorOperationalHint)
+		}
 	}
 
-	fmt.Printf("Logical file removed: id=%d\n", result.FileID)
-	fmt.Printf("  Removed mappings: %d\n", result.RemovedMappings)
-	fmt.Printf("  Hint: %s\n", doctorOperationalHint)
+	if batch.ExitCodeFromReport(report) != 0 {
+		return &cliError{code: deriveBatchFailureExitCode(report), msg: fmt.Sprintf("one or more %s operations failed", command)}
+	}
 	return nil
+}
+
+func deriveBatchFailureExitCode(report batch.Report) int {
+	hasValidationFailures := false
+	hasExecutionFailures := false
+
+	for _, item := range report.Results {
+		if item.Status != batch.ResultFailed {
+			continue
+		}
+
+		if strings.TrimSpace(item.RawValue) != "" || item.ID <= 0 {
+			hasValidationFailures = true
+			continue
+		}
+
+		hasExecutionFailures = true
+	}
+
+	if hasExecutionFailures {
+		return exitGeneral
+	}
+	if hasValidationFailures {
+		return exitUsage
+	}
+	return exitGeneral
 }
 
 func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -1342,8 +1596,8 @@ func printHelp() {
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
-		{"  restore <fileID> <dir>", "Restore file by ID into directory (accepts COMPLETED chunks from any container, sealed or active)"},
-		{"  remove <fileID>", "Remove logical file (state-changing; decrements chunk reference counts)"},
+		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
+		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
@@ -1403,6 +1657,15 @@ func printHelp() {
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
 	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
+	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
+	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
+	fmt.Println("    ok: no item failed")
+	fmt.Println("    partial_failure: at least one item failed and at least one item succeeded or was planned")
+	fmt.Println("    error: all executable items failed")
+	fmt.Println("  Batch process exit contract (restore/remove):")
+	fmt.Println("    exit 0: no item failed")
+	fmt.Println("    exit 1: any item failed (partial_failure or error)")
+	fmt.Println("    exit 2: usage/validation error before execution")
 	fmt.Println("  Simulated mode is not proof of physical durability")
 	fmt.Println()
 	fmt.Println("Operator quick check:")
