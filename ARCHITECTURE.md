@@ -33,9 +33,9 @@ This diagram is a mental anchor for how guarantees compose across layers.
 | Stable JSON contracts                                      |
 | Automation-safe execution semantics                        |
 +------------------------------------------------------------+
-						  ^
-						  | builds on
-						  |
+                          ^
+                          | requires storage guarantees
+                          |
 +------------------------------------------------------------+
 | Storage Correctness (v1.0 - G1..G8)                        |
 |------------------------------------------------------------|
@@ -44,9 +44,9 @@ This diagram is a mental anchor for how guarantees compose across layers.
 | Crash-safe lifecycle and recovery                          |
 | Reference-safe GC                                          |
 +------------------------------------------------------------+
-						  ^
-						  | enables
-						  |
+                          ^
+                          | implemented by
+                          |
 +------------------------------------------------------------+
 | Physical Storage Model                                     |
 |------------------------------------------------------------|
