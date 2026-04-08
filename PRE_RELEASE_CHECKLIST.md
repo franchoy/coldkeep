@@ -173,12 +173,18 @@ Expected: no drift in CLI JSON structure, error classification, or frozen exit-c
 
 These checks validate G9 (interface correctness guarantee).
 
-Run targeted tests that lock batch parser, reporting, and integration behavior:
+Run targeted tests that lock the primary batch parser/preparation path, execution/reporting path, and integration behavior:
 
 ```bash
 go test ./cmd/coldkeep -run 'TestPrintBatchHumanReportSymbolsAndAlignment|TestPrintBatchHumanReportDryRunPlannedNoIcon|TestEmitBatchCommandReportJSONSchema|TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport|TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport|TestBatchFailureExitCodeClassification|TestClassifyExitCodeNoValidFileIDsIsUsage'
-go test ./internal/batch -run 'TestLoadRawTargets|TestResolveTargets|TestDeduplicateTargets'
+go test ./internal/batch -run 'TestLoadRawTargets|TestPrepareTargetsPreservesInputOrder|TestHasExecutableTargets|TestExecutePreparedPreservesInputOrderAndFailFast|TestExecutePreparedFailFastStopsOnlyOnExecutionFailure'
 go test ./tests/integration -run TestBatchFlagsEndToEnd
+```
+
+Optional transitional API guardrails (legacy-facing, keep while transition remains supported):
+
+```bash
+go test ./internal/batch -run 'TestResolveTargets|TestDeduplicateTargets'
 ```
 
 Manual spot-checks (text mode):
