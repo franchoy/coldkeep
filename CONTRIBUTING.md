@@ -14,6 +14,17 @@ prioritize correctness, determinism, and clarity over feature velocity.
 We welcome improvements, bug reports, architectural discussions, and
 thoughtful critiques.
 
+## New Contributor Reading Order
+
+If you are new to coldkeep, read docs in this order:
+
+1. [`README.md`](README.md) for project scope, quickstart, and command basics.
+2. [`ARCHITECTURE.md`](ARCHITECTURE.md) for internals: data model, invariants, lifecycle, recovery, and trust assumptions.
+3. [`VALIDATION_MATRIX.md`](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping (G1-G9).
+4. [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) for CI-parity and release readiness workflow.
+
+This keeps onboarding lightweight while preserving access to the full correctness model.
+
 ------------------------------------------------------------------------
 
 ## Project Philosophy
