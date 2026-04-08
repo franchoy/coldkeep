@@ -23,7 +23,7 @@ If you are new to coldkeep, read docs in this order:
 3. [`VALIDATION_MATRIX.md`](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping (G1-G9).
 4. [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) for CI-parity and release readiness workflow.
 
-This keeps onboarding lightweight while preserving access to the full correctness model.
+This order minimizes cognitive load while preserving full access to the correctness model.
 
 ------------------------------------------------------------------------
 

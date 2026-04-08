@@ -2,6 +2,7 @@
 
 This document contains the internal architecture model for coldkeep.
 It complements README.md, which is intentionally newcomer-first.
+This document is intended for contributors and advanced users who need to understand system invariants and internal behavior.
 
 ## System Overview
 
