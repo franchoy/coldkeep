@@ -1,5 +1,5 @@
 
-# v1.x Validation Matrix
+# v1.0 Validation Matrix
 
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).

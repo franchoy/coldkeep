@@ -59,7 +59,17 @@ Coldkeep currently has two explicit correctness layers:
 Guarantees are enforced through automated validation and CI gates.
 See VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
 
-## Core Guarantees (Summary)
+## Core Guarantees
+
+### Summary
+
+- deterministic, byte-identical restore
+- no exposure of partially written or inconsistent data
+- GC is reference-safe: no reachable chunk is ever deleted
+- Atomic restore replacement (within single-node local filesystem semantics)
+- Safe in-process concurrent storage operations
+
+### Core invariants
 
 Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 
