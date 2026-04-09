@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  Correctness-first, deterministic, content-addressed cold storage engine.
+  Correctness-first cold storage engine
 </p>
 
 <p align="center">
-  Crash-safe • GC-safe • Deterministic restore • Verifiable integrity
+  Content-addressed • Deduplicated • Deterministic restore • Verifiable integrity • Crash-safe • GC-safe
 </p>
 
 ## 🧊 Branding
