@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Content-addressed • Deduplicated • Deterministic restore • Verifiable integrity • Crash-safe • GC-safe
+  • Content-addressed • Built-in deduplication • Deterministic restore • Verifiable integrity • Crash-safe • GC-safe
 </p>
 
 ## 🧊 Branding
