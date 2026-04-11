@@ -103,11 +103,12 @@ func buildPhysicalFileMetadata(fileInfo os.FileInfo) physicalFileMetadata {
 	return meta
 }
 
-func insertPhysicalFile(ctx context.Context, ex execer, path string, logicalFileID int64, meta physicalFileMetadata) error {
-	_, err := ex.ExecContext(
+func insertPhysicalFileIfAbsent(ctx context.Context, ex execer, path string, logicalFileID int64, meta physicalFileMetadata) (bool, error) {
+	result, err := ex.ExecContext(
 		ctx,
 		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (path) DO NOTHING`,
 		path,
 		logicalFileID,
 		meta.Mode,
@@ -116,7 +117,16 @@ func insertPhysicalFile(ctx context.Context, ex execer, path string, logicalFile
 		meta.GID,
 		meta.IsMetadataComplete,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rowsAffected > 0, nil
 }
 
 func updatePhysicalFile(ctx context.Context, ex execer, path string, logicalFileID int64, meta physicalFileMetadata) error {
@@ -180,15 +190,36 @@ func ensurePhysicalFileForPathDefaultPolicyWithTx(ctx context.Context, dbconn *s
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			if err := insertPhysicalFile(ctx, tx, path, logicalFileID, meta); err != nil {
+			inserted, err := insertPhysicalFileIfAbsent(ctx, tx, path, logicalFileID, meta)
+			if err != nil {
 				return false, fmt.Errorf("insert physical_file %q: %w", path, err)
 			}
-			if err := incrementLogicalFileRefCount(ctx, tx, logicalFileID); err != nil {
-				return false, fmt.Errorf("increment logical_file.ref_count id=%d: %w", logicalFileID, err)
+			if inserted {
+				if err := incrementLogicalFileRefCount(ctx, tx, logicalFileID); err != nil {
+					return false, fmt.Errorf("increment logical_file.ref_count id=%d: %w", logicalFileID, err)
+				}
+				return false, nil
 			}
-			return false, nil
+
+			// Another concurrent transaction inserted the row after our initial read.
+			err = tx.QueryRowContext(ctx, selectQuery, path).Scan(
+				&existing.Path,
+				&existing.LogicalFileID,
+				&existing.Mode,
+				&existing.MTime,
+				&existing.UID,
+				&existing.GID,
+				&existing.IsMetadataComplete,
+			)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return false, fmt.Errorf("insert physical_file %q raced but row is missing", path)
+				}
+				return false, err
+			}
+		} else {
+			return false, err
 		}
-		return false, err
 	}
 
 	if existing.LogicalFileID != logicalFileID {
@@ -252,8 +283,12 @@ func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, path); err != nil {
 		return fmt.Errorf("delete physical_file row for replace path %q: %w", path, err)
 	}
-	if err := insertPhysicalFile(ctx, tx, path, newLogicalFileID, meta); err != nil {
+	inserted, err := insertPhysicalFileIfAbsent(ctx, tx, path, newLogicalFileID, meta)
+	if err != nil {
 		return fmt.Errorf("insert replacement physical_file row for %q: %w", path, err)
+	}
+	if !inserted {
+		return fmt.Errorf("insert replacement physical_file row for %q: raced with concurrent insert", path)
 	}
 
 	if err := decrementLogicalFileRefCount(ctx, tx, oldLogicalFileID); err != nil {
