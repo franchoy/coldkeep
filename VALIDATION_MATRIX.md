@@ -49,6 +49,7 @@ This extends the correctness model from storage invariants to interaction semant
 | --- | --- | --- | --- | --- |
 | G9 | Interface correctness for batch CLI orchestration: isolated execution, deterministic ordering, and truthful machine-readable reporting | CLI batch contract checks (per-item status + summary + exit behavior) | `TestAdversarialG9BatchSemanticsOrchestration` (partial failure isolation, dry-run parity, duplicate explosion, fail-fast control-flow, mixed `--input` chaos) | covered |
 | G10 | Current-state physical mapping graph coherence is audited in standard verify | Standard verify checks orphan `physical_file` rows, `logical_file.ref_count` mismatches, and negative `logical_file.ref_count` states before deeper storage checks | `TestVerifySystemStandardPassesOnConsistentPhysicalGraph`, `TestVerifySystemStandardDetectsOrphanPhysicalFileRows`, `TestVerifySystemStandardDetectsLogicalRefCountMismatch`, `TestVerifySystemStandardDetectsNegativeLogicalRefCount`, `TestDoctorSurfacesPhysicalMappingIntegrityFailures` | covered |
+| G11 | GC only executes on an audited coherent physical-root graph | GC refuses (real and dry-run) when physical_file graph has any integrity issue; operator recovery path: repair ref-counts → GC succeeds | `TestRunGCRefusesOnOrphanPhysicalFileRows`, `TestRunGCRefusesOnNegativeLogicalRefCounts`, `TestRunGCRefusesOnPhysicalIntegrityIssues`, `TestRunGCDryRunRefusesOnDriftedGraph`, `TestRunGCSucceedsAfterRepairLogicalRefCounts`, `TestRepairThenVerifyThenGCSmoke` | covered |
 
 ## Open Work Tracking
 

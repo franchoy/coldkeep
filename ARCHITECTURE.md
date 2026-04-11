@@ -310,6 +310,31 @@ This preserves a clear source of truth: current-state `physical_file` rows win f
 
 This phase also wires GC to the audited physical roots: `RunGCWithContainersDirResult` runs `CheckPhysicalFileGraphIntegrity` as a pre-flight immediately after acquiring the advisory lock. If any integrity issue is detected (orphan `physical_file` rows, `ref_count` mismatches, or negative ref counts), GC is refused with an actionable error directing the operator to run `repair ref-counts` first. This prevents GC from treating live blocks as unreferenced due to drift in `logical_file.ref_count`.
 
+### Phase 6 — GC root model formalization
+
+Phase 6 formalizes the GC trust model to explicitly operate under the v1.2 audited-root model (Option A — conservative path):
+
+1. **Advisory lock** — singleton enforcement (existing).
+2. **Pre-flight gate** — `CheckPhysicalFileGraphIntegrity` must pass before any deletion decision. Applies equally to real GC and dry-run GC. A drifted dry-run graph produces misleading "what would be deleted" output and is therefore also refused.
+3. **Chunk liveness evaluation** — `chunk.live_ref_count` and `chunk.pin_count` remain the immediate deletion criterion. This is correct and safe because steps 1–2 guarantee the physical-root graph is coherent and chunk ref counts are trustworthy inputs.
+
+#### GC root model invariant chain
+
+```
+physical_file rows (audited coherent)
+    → logical_file (ref_count authoritative after repair)
+        → file_chunk → chunk (live_ref_count/pin_count evaluated per container)
+            → blocks → container (eligible for deletion only if all chunks have zero liveness)
+```
+
+#### Phase 6 test coverage
+
+- `TestRunGCRefusesOnOrphanPhysicalFileRows` — orphan rows trigger refusal
+- `TestRunGCRefusesOnNegativeLogicalRefCounts` — negative ref counts trigger refusal
+- `TestRunGCDryRunRefusesOnDriftedGraph` — dry-run respects the pre-flight gate
+- `TestRunGCSucceedsAfterRepairLogicalRefCounts` — repair unblocks GC (unit)
+- `TestRepairThenVerifyThenGCSmoke` — full operator recovery loop (integration): store → corrupt → verify fails → doctor fails → repair succeeds → verify passes → gc dry-run passes → gc passes → restore matches
+
 ### Dry-run Support (Deferred to Phase 5)
 
 v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.

@@ -476,6 +476,110 @@ func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
 	}
 }
 
+// TestRepairThenVerifyThenGCSmoke exercises the full operator recovery story:
+//
+//	store → corrupt → verify fails → doctor fails → repair succeeds →
+//	verify passes → gc dry-run passes → gc passes → restore matches
+//
+// This validates that the audited physical-root trust loop closes end-to-end.
+func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	defer dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "repair_gc_smoke.bin", 96*1024)
+	originalHash := testutils.SHA256File(t, inPath)
+
+	// 1. Store the file.
+	storeRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", inPath, "--output", "json")
+	storePayload := testutils.AssertCLIJSONOK(t, storeRes, "store")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	storedPath, _ := storeData["stored_path"].(string)
+	if storedPath == "" {
+		t.Fatalf("store returned empty stored_path: payload=%v", storePayload)
+	}
+
+	// 2. Corrupt logical_file.ref_count (simulate drift).
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = ref_count + 3 WHERE id = (SELECT id FROM logical_file LIMIT 1)`); err != nil {
+		t.Fatalf("corrupt logical_file.ref_count: %v", err)
+	}
+
+	// 3. verify must fail with exit=3.
+	verifyFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "--output", "json")
+	if verifyFail.ExitCode != 3 {
+		t.Fatalf("verify should exit=3 on drifted graph, got=%d\nstdout:\n%s\nstderr:\n%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
+	}
+
+	// 4. doctor must fail in verify phase with exit=3.
+	doctorFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if doctorFail.ExitCode != 3 {
+		t.Fatalf("doctor should exit=3 on drifted graph, got=%d\nstdout:\n%s\nstderr:\n%s", doctorFail.ExitCode, doctorFail.Stdout, doctorFail.Stderr)
+	}
+
+	// 5. repair ref-counts must succeed and report UpdatedLogicalFiles=1.
+	repairRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "repair", "ref-counts", "--output", "json")
+	repairPayload := testutils.AssertCLIJSONOK(t, repairRes, "repair")
+	repairData := testutils.JSONMap(t, repairPayload, "data")
+	if updated := testutils.JSONInt64(t, repairData, "updated_logical_files"); updated != 1 {
+		t.Fatalf("repair: expected updated_logical_files=1, got=%d payload=%v", updated, repairData)
+	}
+
+	// 6. verify must now pass.
+	verifyOK := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "--output", "json")
+	if verifyOK.ExitCode != 0 {
+		t.Fatalf("verify should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", verifyOK.ExitCode, verifyOK.Stdout, verifyOK.Stderr)
+	}
+
+	// 7. gc --dry-run must not be refused.
+	gcDryRun := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--dry-run", "--output", "json")
+	if gcDryRun.ExitCode != 0 {
+		t.Fatalf("gc --dry-run should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcDryRun.ExitCode, gcDryRun.Stdout, gcDryRun.Stderr)
+	}
+
+	// 8. gc must not be refused and must report no containers eligible.
+	gcFull := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--output", "json")
+	if gcFull.ExitCode != 0 {
+		t.Fatalf("gc should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcFull.ExitCode, gcFull.Stdout, gcFull.Stderr)
+	}
+
+	// 9. restore the stored file and verify content hash matches.
+	restoreDir := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	restoreRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "restore", storedPath, "--output-dir", restoreDir, "--output", "json")
+	if restoreRes.ExitCode != 0 {
+		t.Fatalf("restore should succeed, got=%d\nstdout:\n%s\nstderr:\n%s", restoreRes.ExitCode, restoreRes.Stdout, restoreRes.Stderr)
+	}
+	restoredFile := filepath.Join(restoreDir, filepath.Base(inPath))
+	if _, err := os.Stat(restoredFile); err != nil {
+		t.Fatalf("restored file not found at %s: %v", restoredFile, err)
+	}
+	restoredHash := testutils.SHA256File(t, restoredFile)
+	if restoredHash != originalHash {
+		t.Fatalf("restored file hash mismatch: want=%s got=%s", originalHash, restoredHash)
+	}
+}
+
 func TestDoctorJSONContractConsistency(t *testing.T) {
 	testgate.RequireDB(t)
 
