@@ -174,6 +174,7 @@ Batch restore/remove expands v1.1 interface correctness for automation.
 coldkeep restore 12 18 24 ./out
 coldkeep remove 12 18 24
 coldkeep remove --input ids.txt
+coldkeep remove --stored-paths /data/a.txt /data/b.txt --input paths.txt
 coldkeep restore 12 18 ./out --dry-run
 ```
 
