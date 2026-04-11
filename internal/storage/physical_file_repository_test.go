@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -472,5 +473,70 @@ func TestStoreFileNormalizesSymlinkAndRealPathToSingleIdentity(t *testing.T) {
 	}
 	if refCount != 1 {
 		t.Fatalf("expected logical ref_count=1 after canonicalized symlink/real stores, got %d", refCount)
+	}
+}
+
+func TestStoreFileCaseSensitivity(t *testing.T) {
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "off")
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	workDir := t.TempDir()
+	lowerPath := filepath.Join(workDir, "case-sensitive.txt")
+	upperPath := filepath.Join(workDir, "CASE-SENSITIVE.txt")
+
+	if err := os.WriteFile(lowerPath, []byte("lower-content"), 0o600); err != nil {
+		t.Fatalf("write lower path: %v", err)
+	}
+
+	if st, err := os.Stat(upperPath); err == nil && st != nil {
+		t.Skip("filesystem appears case-insensitive; skipping case-sensitivity identity test")
+	}
+
+	if err := os.WriteFile(upperPath, []byte("upper-content"), 0o600); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "exists") {
+			t.Skipf("filesystem appears case-insensitive; cannot create case-different files: %v", err)
+		}
+		t.Fatalf("write upper path: %v", err)
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewSimulatedWriter(container.GetContainerMaxSize()),
+		ContainerDir: t.TempDir(),
+	}
+
+	lowerResult, err := StoreFileWithStorageContextAndCodecResult(sgctx, lowerPath, codec)
+	if err != nil {
+		t.Fatalf("store lower path: %v", err)
+	}
+	upperResult, err := StoreFileWithStorageContextAndCodecResult(sgctx, upperPath, codec)
+	if err != nil {
+		t.Fatalf("store upper path: %v", err)
+	}
+
+	if lowerResult.Path == upperResult.Path {
+		t.Fatalf("expected distinct physical identities for case-different paths, got same path %q", lowerResult.Path)
+	}
+
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path IN ($1, $2)`, lowerResult.Path, upperResult.Path).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical identities: %v", err)
+	}
+	if physicalCount != 2 {
+		t.Fatalf("expected 2 distinct physical identities for case-different paths, got %d", physicalCount)
 	}
 }

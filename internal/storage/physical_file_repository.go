@@ -73,6 +73,11 @@ func normalizePhysicalFilePath(path string) (string, error) {
 		return "", errors.New("physical file path cannot be empty")
 	}
 
+	// Path identity policy (v1.2): canonicalize structure (absolute/clean/symlinks)
+	// but do not case-fold. This keeps identity aligned with case-sensitive
+	// filesystems and avoids collapsing distinct Linux paths such as A.txt/a.txt.
+	// Any cross-platform case policy change must be deliberate and versioned.
+
 	absPath, err := filepath.Abs(trimmed)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute physical file path: %w", err)
