@@ -83,8 +83,12 @@ Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 - G7: deep corruption detection (payload/offset/tail)
 - G8: corrective health gate contract stability
 - G9: deterministic batch CLI orchestration and automation-safe contract behavior
+- G10: current-state physical mapping graph coherence is audited in standard verify
+- G11: GC executes only on an audited coherent physical-root graph
+- G12: invariant failures expose stable machine-readable classification and operator guidance
+- G13: batch maintenance commands expose deterministic execution semantics and invariant-aware per-item reporting
 
-Post-v1.0 extension guarantees G10-G13 (physical graph coherence, audited GC roots, invariant classification, and batch maintenance reporting semantics) are tracked in VALIDATION_MATRIX.md.
+Guarantee definitions and evidence mapping for G1-G13 are tracked in VALIDATION_MATRIX.md.
 
 Coldkeep separates system understanding into:
 

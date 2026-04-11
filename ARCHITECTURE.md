@@ -306,7 +306,7 @@ The cascade reads all paths in a transaction snapshot, then iterates to delete e
 This is superior to "best-effort" deletion without verification. It ensures we fail **loud** rather than **silent**.
 
 **Future expansions:**
-If batch operations are introduced in later phases (v1.4+), this invariant-driven pattern should remain the foundation, with verification pushed to the end of the batch operation rather than per-item.
+As batch operations evolve in later phases (v1.4+), this invariant-driven pattern should remain the foundation, with verification potentially pushed to the end of the batch operation rather than per-item.
 
 ### Phase 5: Audited Physical Graph Coherence
 
