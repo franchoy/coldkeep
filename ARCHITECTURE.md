@@ -242,4 +242,26 @@ For v1.2 physical path identity rules (canonicalization strategy, case behavior,
 
 - docs/PATH_IDENTITY.md
 
+### Remove Semantics Consistency
+
+v1.2 introduces a critical consistency guarantee between two remove entry points:
+
+**remove-by-stored-path (new)** and **remove-by-ID (legacy)** are now semantically symmetric:
+- Both cascade through all physical_file mappings before cleanup
+- Both maintain the invariant: `logical_file.ref_count == COUNT(physical_file rows)`
+- Both prevent orphan physical_file rows from pointing to deleted logical_file
+
+**Implementation:**
+- `remove-by-stored-path`: Removes one physical_file mapping, decrements logical_file.ref_count
+- `remove-by-ID`: Cascades through ALL physical_file mappings (using remove-by-stored-path primitive), then deletes logical_file and file_chunk records
+
+**Data Integrity:**
+The cascade design ensures that:
+1. No physical_file rows can exist after their logical_file is deleted
+2. At each step of removal, ref_count correctly reflects the number of remaining physical mappings
+3. References to deleted logical_file are impossible by construction
+
+**Migration Path:**
+This architecture enables future phases (v1.3+) to redefine higher-level remove commands entirely in terms of the physical_file → logical_file → chunk model without breaking storage guarantees.
+
 This means architecture documentation should evolve by extension, not by rewrite.

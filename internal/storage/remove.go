@@ -155,6 +155,48 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 	return nil
 }
 
+// removeAllPhysicalMappingsForLogicalFileTx removes all physical_file rows
+// associated with a logical_file, maintaining ref_count invariants.
+// This ensures that by the time logical_file is deleted, no physical_file
+// rows reference it, maintaining referential integrity across the two removal
+// semantics (remove-by-ID and remove-by-stored-path are now symmetric).
+func removeAllPhysicalMappingsForLogicalFileTx(ctx context.Context, tx *sql.Tx, logicalFileID int64) error {
+	// Find all physical_file rows for this logical_file
+	rows, err := tx.QueryContext(
+		ctx,
+		`SELECT path FROM physical_file WHERE logical_file_id = $1`,
+		logicalFileID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to query physical_file rows for logical_file_id %d: %w", logicalFileID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return fmt.Errorf("failed to scan physical_file path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Remove each physical_file mapping.
+	// This maintains invariants: each DELETE + ref_count decrement + invariant check
+	// ensures logical_file.ref_count == COUNT(physical_file rows) at each step.
+	for _, path := range paths {
+		result := &RemovePhysicalFileResult{StoredPath: path}
+		if err := removePhysicalFileByPathTx(ctx, nil, tx, result); err != nil {
+			return fmt.Errorf("failed to remove physical mapping %q for logical_file_id %d: %w", path, logicalFileID, err)
+		}
+	}
+
+	return nil
+}
+
 func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResult, err error) {
 	result.FileID = fileID
 	ctx, cancel := db.NewOperationContext(context.Background())
@@ -189,6 +231,17 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 	if fileStatus == filestate.LogicalFileProcessing {
 		return RemoveFileResult{}, fmt.Errorf("file ID %d is still PROCESSING and cannot be removed", fileID)
 	}
+
+	// PHASE 1: Remove all physical_file mappings for this logical_file.
+	// This ensures that remove-by-ID and remove-by-stored-path are semantically consistent:
+	// both remove physical mappings, maintain ref_count invariants throughout, and leave
+	// no orphan physical_file rows pointing to a deleted logical_file.
+	if err := removeAllPhysicalMappingsForLogicalFileTx(ctx, tx, fileID); err != nil {
+		return RemoveFileResult{}, err
+	}
+
+	// PHASE 2: Remove logical_file metadata (file_chunk and logical_file records).
+	// At this point, no physical_file rows reference this logical_file, so deletion is safe.
 
 	// Get chunk IDs
 	rows, err := tx.QueryContext(ctx, `
