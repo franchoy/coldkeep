@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -146,5 +147,157 @@ func TestGetLogicalFileInfoWithDBNotFound(t *testing.T) {
 	}
 	if err != sql.ErrNoRows {
 		t.Fatalf("expected sql.ErrNoRows, got: %v", err)
+	}
+}
+
+func TestRemoveByStoredPathUnlinksSingleMappingAndKeepsSharedLogicalAlive(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"shared.bin", int64(8), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(2),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	pathA := filepath.Join(t.TempDir(), "a.txt")
+	pathB := filepath.Join(t.TempDir(), "b.txt")
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0), ($3, $2, 0)`,
+		pathA, logicalID, pathB,
+	); err != nil {
+		t.Fatalf("insert physical_file rows: %v", err)
+	}
+
+	result, err := RemoveFileByStoredPathWithStorageContextResult(StorageContext{DB: dbconn}, pathA)
+	if err != nil {
+		t.Fatalf("remove by stored path: %v", err)
+	}
+	if !result.Removed || result.StoredPath != pathA || result.LogicalFileID != logicalID || result.RemainingRefCount != 1 {
+		t.Fatalf("unexpected remove result: %+v", result)
+	}
+
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count: %v", err)
+	}
+	if refCount != 1 {
+		t.Fatalf("expected logical ref_count=1 after unlinking one of two paths, got %d", refCount)
+	}
+
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, logicalID).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical mappings: %v", err)
+	}
+	if physicalCount != 1 {
+		t.Fatalf("expected one remaining physical mapping, got %d", physicalCount)
+	}
+
+	var existsPathB int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path = $1`, pathB).Scan(&existsPathB); err != nil {
+		t.Fatalf("check unrelated mapping: %v", err)
+	}
+	if existsPathB != 1 {
+		t.Fatalf("expected unrelated mapping to survive, count=%d", existsPathB)
+	}
+}
+
+func TestRemoveByStoredPathLastReferenceSetsRefCountToZero(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"single.bin", int64(4), strings.Repeat("b", 64), filestate.LogicalFileCompleted, int64(1),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	storedPath := filepath.Join(t.TempDir(), "single.txt")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`, storedPath, logicalID); err != nil {
+		t.Fatalf("insert physical_file row: %v", err)
+	}
+
+	result, err := RemoveFileByStoredPathWithStorageContextResult(StorageContext{DB: dbconn}, storedPath)
+	if err != nil {
+		t.Fatalf("remove by stored path: %v", err)
+	}
+	if result.RemainingRefCount != 0 {
+		t.Fatalf("expected remaining_ref_count=0, got %d", result.RemainingRefCount)
+	}
+
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count: %v", err)
+	}
+	if refCount != 0 {
+		t.Fatalf("expected logical ref_count=0 after removing last mapping, got %d", refCount)
+	}
+}
+
+func TestRemoveByStoredPathReturnsNotFound(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	err = RemoveFileByStoredPathWithStorageContext(StorageContext{DB: dbconn}, filepath.Join(t.TempDir(), "missing.txt"))
+	if err == nil || !strings.Contains(err.Error(), "physical file path") || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected physical-path not found error, got: %v", err)
+	}
+}
+
+func TestRemoveByStoredPathSecondRemoveFailsCleanly(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"again.bin", int64(4), strings.Repeat("c", 64), filestate.LogicalFileCompleted, int64(1),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	storedPath := filepath.Join(t.TempDir(), "again.txt")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`, storedPath, logicalID); err != nil {
+		t.Fatalf("insert physical_file row: %v", err)
+	}
+
+	if _, err := RemoveFileByStoredPathWithStorageContextResult(StorageContext{DB: dbconn}, storedPath); err != nil {
+		t.Fatalf("first remove by stored path failed: %v", err)
+	}
+
+	err = RemoveFileByStoredPathWithStorageContext(StorageContext{DB: dbconn}, storedPath)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected second remove to fail with not-found, got: %v", err)
 	}
 }

@@ -828,9 +828,57 @@ func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDesti
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "stored-path"); err != nil {
 		return err
 	}
+
+	storedPath, _ := parsed.lastFlagValue("stored-path")
+	hasStoredPath := strings.TrimSpace(storedPath) != ""
+	if hasStoredPath {
+		if len(parsed.positionals) != 0 {
+			return usageErrorf("Usage: coldkeep remove --stored-path <path>")
+		}
+		if parsed.hasFlag("input") {
+			return usageErrorf("--input is not supported with --stored-path")
+		}
+		if parsed.hasFlag("dry-run", "dryRun", "fail-fast", "failFast") {
+			return usageErrorf("--dry-run and --fail-fast are not supported with --stored-path")
+		}
+
+		sgctx, err := storage.LoadDefaultStorageContext()
+		if err != nil {
+			return fmt.Errorf("load storage context: %w", err)
+		}
+		defer func() { _ = sgctx.Close() }()
+
+		result, err := storage.RemoveFileByStoredPathWithStorageContextResult(sgctx, storedPath)
+		if err != nil {
+			return err
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "remove",
+				"data": map[string]any{
+					"stored_path":         result.StoredPath,
+					"logical_file_id":     result.LogicalFileID,
+					"remaining_ref_count": result.RemainingRefCount,
+					"removed":             result.Removed,
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintln(os.Stdout, "Stored path mapping removed: "+result.StoredPath)
+		_, _ = fmt.Fprintln(os.Stdout, "  LogicalFileID: "+strconv.FormatInt(result.LogicalFileID, 10))
+		_, _ = fmt.Fprintln(os.Stdout, "  Remaining refs: "+strconv.FormatInt(result.RemainingRefCount, 10))
+		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+		return nil
+	}
+
 	inputFile, _ := parsed.lastFlagValue("input")
 	hasInput := strings.TrimSpace(inputFile) != ""
 	if !hasInput && len(parsed.positionals) < 1 {
@@ -1697,7 +1745,8 @@ func printHelp() {
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
 		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
-		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs"},
+		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (legacy mode)"},
+		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},

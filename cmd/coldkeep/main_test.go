@@ -565,6 +565,56 @@ func TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	}
 }
 
+func TestRunRemoveCommandStoredPathRejectsPositionals(t *testing.T) {
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: []string{"1"},
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep remove --stored-path") {
+		t.Fatalf("expected remove stored-path usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRemoveCommandStoredPathRejectsInput(t *testing.T) {
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"input":       {"ids.txt"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--input is not supported with --stored-path") {
+		t.Fatalf("expected remove stored-path input usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRemoveCommandStoredPathRejectsDryRunAndFailFast(t *testing.T) {
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"dry-run":     {""},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--dry-run and --fail-fast are not supported with --stored-path") {
+		t.Fatalf("expected remove stored-path dry-run/fail-fast usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	err := error(nil)
 	output := captureStdout(t, func() {
