@@ -185,9 +185,19 @@ func removeAllPhysicalMappingsForLogicalFileTx(ctx context.Context, tx *sql.Tx, 
 		return err
 	}
 
-	// Remove each physical_file mapping.
-	// This maintains invariants: each DELETE + ref_count decrement + invariant check
-	// ensures logical_file.ref_count == COUNT(physical_file rows) at each step.
+	// Remove each physical_file mapping via the standard remove-by-path transaction.
+	// This is an O(N) cascade where N = number of physical_file rows for this logical_file.
+	//
+	// Design rationale (v1.2):
+	// - Correctness priority: Each iteration maintains the invariant
+	//   logical_file.ref_count == COUNT(physical_file rows) before proceeding
+	// - N is typically small (<10 paths per logical file in practice)
+	// - Individual transactions provide strong isolation guarantees
+	// - Batch delete + single invariant check would be faster but more fragile
+	//
+	// Future optimization (v1.4+):
+	// Could batch delete all paths and validate count once instead of per-path,
+	// but current per-path approach is safer for the initial correctness release.
 	for _, path := range paths {
 		result := &RemovePhysicalFileResult{StoredPath: path}
 		if err := removePhysicalFileByPathTx(ctx, nil, tx, result); err != nil {

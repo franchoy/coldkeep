@@ -59,6 +59,7 @@ Use this section for branch-specific additions that are not yet fully covered.
 | Multi-process contention (non-goal for v1.0 baseline) | Separate post-v1.0 track | TBD | deferred |
 | Atomic restore explicit failure-mode and atomicity | Simulate restore failures before/after rename; verify original output file is preserved, no partial/corrupt final file is visible, and temp files are cleaned up; assert destination file is byte-identical and no temp files remain after failure | `TestRestoreFailurePreservesExistingOutput`, `TestRestoreAtomicityWithTestHook`, `TestRestoreAtomicityWithCorruption`, `TestRestoreFailureDoesNotCorruptDestination` | completed |
 | Dry-run support for `remove --stored-path` (v1.2 deferral) | Extend remove tx primitive to support rollback-safe preview mode; implement in CLI with `--dry-run` flag; add integration tests validating preview output matches dry-run semantics | Phase 5 planned feature | deferred |
+| Batch delete optimization for remove cascade (v1.4+ optimization) | Current v1.2 implementation uses O(N) per-path delete + invariant check; optimize to batch DELETE + single post-batch invariant check; add micro-benchmarks comparing per-path vs batch semantics; ensure no correctness regression | v1.4 performance enhancement | deferred |
 
 ## Exit Criteria
 
