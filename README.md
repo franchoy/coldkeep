@@ -69,7 +69,7 @@ Guarantees are enforced through automated validation and CI gates; see VALIDATIO
 - Atomic restore replacement (within single-node local filesystem semantics)
 - Safe in-process concurrent storage operations
 
-### Guarantees (G1-G13)
+### Core invariants
 
 Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 
