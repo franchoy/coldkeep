@@ -264,6 +264,28 @@ The cascade design ensures that:
 **Migration Path:**
 This architecture enables future phases (v1.3+) to redefine higher-level remove commands entirely in terms of the physical_file → logical_file → chunk model without breaking storage guarantees.
 
+### Invariant-Driven Concurrency Safety
+
+A key design pattern in v1.2 remove operations is the use of **invariant-driven safety nets** to handle edge cases:
+
+**Pattern:**
+When cascading through physical_file mappings for removal, each step verifies the invariant:
+```
+logical_file.ref_count == COUNT(physical_file rows for that logical_file)
+```
+
+**Why this matters:**
+The cascade reads all paths in a transaction snapshot, then iterates to delete each one. A concurrent INSERT could theoretically add a new mapping after the SELECT but before all DELETEs complete. This is **safe by design** because:
+
+1. **Invariant check enforces correctness**: Each removal verifies the ref_count matches the actual row count
+2. **Isolation prevents corruption**: Transaction isolation prevents the snapshot from being corrupted by concurrent writes
+3. **Safety net catches edge cases**: If a concurrent operation somehow violated expectations, the invariant check would detect it and abort, preventing silent corruption
+
+This is superior to "best-effort" deletion without verification. It ensures we fail **loud** rather than **silent**.
+
+**Future expansions:**
+If batch operations are introduced in later phases (v1.4+), this invariant-driven pattern should remain the foundation, with verification pushed to the end of the batch operation rather than per-item.
+
 ### Dry-run Support (Deferred to Phase 5)
 
 v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.

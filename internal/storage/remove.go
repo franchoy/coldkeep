@@ -161,8 +161,21 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 // This ensures that by the time logical_file is deleted, no physical_file
 // rows reference it, maintaining referential integrity across the two removal
 // semantics (remove-by-ID and remove-by-stored-path are now symmetric).
+//
+// Concurrency safety note:
+// This function takes a transaction snapshot of all paths for the logical_file,
+// then iterates to delete each one. A concurrent INSERT could add a new mapping
+// after the SELECT but before we're done deleting.
+// This is safe by design because:
+//  1. Each per-path removal runs removePhysicalFileByPathTx, which verifies the
+//     invariant: logical_file.ref_count == COUNT(physical_file rows for that logical)
+//  2. If a new row was somehow added and missed, the concurrent storage operation
+//     would increment ref_count, and our final invariant check would catch the mismatch
+//  3. Transaction isolation prevents our snapshot from being corrupted by concurrent writes
+//
+// Result: Invariant-driven safety net ensures correctness even in edge cases.
 func removeAllPhysicalMappingsForLogicalFileTx(ctx context.Context, tx *sql.Tx, logicalFileID int64) error {
-	// Find all physical_file rows for this logical_file
+	// Find all physical_file rows for this logical_file within the transaction snapshot.
 	rows, err := tx.QueryContext(
 		ctx,
 		`SELECT path FROM physical_file WHERE logical_file_id = $1`,
