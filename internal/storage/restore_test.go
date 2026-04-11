@@ -1,15 +1,18 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -519,6 +522,77 @@ func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
 	}
 
 	restored, err := os.ReadFile(overridePath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
+	}
+}
+
+func TestRestoreFileByStoredPathWarnsOnIncompleteMetadata(t *testing.T) {
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(t, sql.NullInt64{Int64: 0o600, Valid: true}, sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true}, sql.NullInt64{}, sql.NullInt64{}, false)
+	defer func() { _ = dbconn.Close() }()
+
+	var logBuffer bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("restore by stored path with incomplete metadata: %v", err)
+	}
+
+	restored, err := os.ReadFile(result.OutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
+	}
+
+	if !strings.Contains(logBuffer.String(), "event=restore_metadata_warning") || !strings.Contains(logBuffer.String(), "incomplete_metadata") {
+		t.Fatalf("expected metadata warning log, got: %q", logBuffer.String())
+	}
+}
+
+func TestRestoreFileByStoredPathStrictFailsWhenMetadataIncomplete(t *testing.T) {
+	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, false)
+	defer func() { _ = dbconn.Close() }()
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:      true,
+		StrictMetadata: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "metadata is incomplete") {
+		t.Fatalf("expected strict metadata incomplete error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(storedPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no output file to be created on strict metadata failure, statErr=%v", statErr)
+	}
+}
+
+func TestRestoreFileByStoredPathNoMetadataBypassesStrictIncompleteCheck(t *testing.T) {
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, false)
+	defer func() { _ = dbconn.Close() }()
+
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:      true,
+		StrictMetadata: true,
+		NoMetadata:     true,
+	})
+	if err != nil {
+		t.Fatalf("expected no-metadata to bypass strict incomplete metadata check, got: %v", err)
+	}
+
+	restored, err := os.ReadFile(result.OutputPath)
 	if err != nil {
 		t.Fatalf("read restored file: %v", err)
 	}
@@ -1792,4 +1866,133 @@ func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
 	if string(gotDest) != string(payload) {
 		t.Fatalf("destination not replaced with restored payload: got=%q want=%q", string(gotDest), string(payload))
 	}
+}
+
+func setupStoredPathRestoreFixture(
+	t *testing.T,
+	mode sql.NullInt64,
+	mtime sql.NullTime,
+	uid sql.NullInt64,
+	gid sql.NullInt64,
+	isMetadataComplete bool,
+) (*sql.DB, StorageContext, string, []byte) {
+	t.Helper()
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := db.RunMigrations(dbconn); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("restore-metadata-fixture")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "restore-metadata-fixture.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, 1) RETURNING id`,
+		"restore-metadata-fixture.bin",
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	restoreRoot := t.TempDir()
+	storedPath := filepath.Join(restoreRoot, "nested", "restore-metadata-target.bin")
+
+	modeValue := any(nil)
+	if mode.Valid {
+		modeValue = mode.Int64
+	}
+	mtimeValue := any(nil)
+	if mtime.Valid {
+		mtimeValue = mtime.Time
+	}
+	uidValue := any(nil)
+	if uid.Valid {
+		uidValue = uid.Int64
+	}
+	gidValue := any(nil)
+	if gid.Valid {
+		gidValue = gid.Int64
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		storedPath,
+		fileID,
+		modeValue,
+		mtimeValue,
+		uidValue,
+		gidValue,
+		isMetadataComplete,
+	); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	return dbconn, StorageContext{DB: dbconn, ContainerDir: containersDir}, storedPath, payload
 }

@@ -669,7 +669,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
 		return err
 	}
 
@@ -679,13 +679,19 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	if hasStoredPath {
 		if len(parsed.positionals) != 0 {
-			return usageErrorf("Usage: coldkeep restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite]")
+			return usageErrorf("Usage: coldkeep restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata]")
 		}
 		if parsed.hasFlag("input") {
 			return usageErrorf("--input is not supported with --stored-path")
 		}
 		if parsed.hasFlag("dry-run", "dryRun", "fail-fast", "failFast") {
 			return usageErrorf("--dry-run and --fail-fast are not supported with --stored-path")
+		}
+
+		strictMetadata := parsed.hasFlag("strict")
+		noMetadata := parsed.hasFlag("no-metadata")
+		if strictMetadata && noMetadata {
+			return usageErrorf("--strict and --no-metadata cannot be used together")
 		}
 
 		destinationMode, err := parseRestoreDestinationMode(parsed)
@@ -711,6 +717,8 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 			Overwrite:       overwrite,
 			DestinationMode: destinationMode,
 			Destination:     destination,
+			StrictMetadata:  strictMetadata,
+			NoMetadata:      noMetadata,
 		})
 		if err != nil {
 			return err
@@ -738,6 +746,10 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		_, _ = fmt.Fprintln(os.Stdout, "  SHA256: "+result.RestoredHash)
 		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 		return nil
+	}
+
+	if parsed.hasFlag("strict", "no-metadata") {
+		return usageErrorf("--strict and --no-metadata are only supported with --stored-path")
 	}
 
 	inputFile, _ := parsed.lastFlagValue("input")

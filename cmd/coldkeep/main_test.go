@@ -676,6 +676,40 @@ func TestRunRestoreCommandStoredPathRejectsPositionals(t *testing.T) {
 	}
 }
 
+func TestRunRestoreCommandStoredPathRejectsStrictAndNoMetadataTogether(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"strict":      {""},
+			"no-metadata": {""},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--strict and --no-metadata cannot be used together") {
+		t.Fatalf("expected strict/no-metadata conflict usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandRejectsStrictWithoutStoredPath(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: []string{"1", "/tmp/out"},
+		flags: map[string][]string{
+			"strict": {""},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--strict and --no-metadata are only supported with --stored-path") {
+		t.Fatalf("expected strict unsupported usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase

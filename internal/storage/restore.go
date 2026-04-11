@@ -30,6 +30,8 @@ type RestoreOptions struct {
 	Overwrite       bool
 	DestinationMode RestoreDestinationMode
 	Destination     string
+	StrictMetadata  bool
+	NoMetadata      bool
 }
 
 type RestoreDestinationMode string
@@ -255,7 +257,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 }
 
 func RestoreFileWithDBResult(dbconn *sql.DB, fileID int64, outputPath string) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir, RestoreOptions{Overwrite: true})
+	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir, RestoreOptions{Overwrite: true}, nil)
 }
 
 func RestoreFileWithStorageContext(sgctx StorageContext, fileID int64, outputPath string) error {
@@ -268,7 +270,7 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 }
 
 func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
+	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts, nil)
 }
 
 func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string) (RestoreDescriptor, error) {
@@ -327,13 +329,16 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
+	if opts.StrictMetadata && !opts.NoMetadata && !descriptor.IsMetadataComplete {
+		return RestoreFileResult{}, fmt.Errorf("metadata is incomplete for %q (use --no-metadata to bypass)", descriptor.Path)
+	}
 
 	resolvedOutputPath, err := resolveRestoreOutputPath(descriptor, opts)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
 
-	return restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
+	return restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts, &descriptor)
 }
 
 func RestoreFileByStoredPathWithStorageContextResult(sgctx StorageContext, storedPath string) (RestoreFileResult, error) {
@@ -389,7 +394,7 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 	}
 }
 
-func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
+func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions, descriptor *RestoreDescriptor) (result RestoreFileResult, err error) {
 	result.FileID = fileID
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -657,9 +662,65 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 	cleanupTemp = false
 
+	if err := applyPhysicalMetadata(outputPath, descriptor, opts); err != nil {
+		return RestoreFileResult{}, err
+	}
+
 	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
+}
+
+func applyPhysicalMetadata(outputPath string, descriptor *RestoreDescriptor, opts RestoreOptions) error {
+	if descriptor == nil || opts.NoMetadata {
+		return nil
+	}
+
+	metadataErrs := make([]string, 0)
+
+	if !descriptor.IsMetadataComplete {
+		msg := fmt.Sprintf("restore metadata incomplete for %q (mode=%t mtime=%t uid=%t gid=%t)",
+			descriptor.Path,
+			descriptor.Mode.Valid,
+			descriptor.MTime.Valid,
+			descriptor.UID.Valid,
+			descriptor.GID.Valid,
+		)
+		if opts.StrictMetadata {
+			return fmt.Errorf(msg)
+		}
+		log.Printf("event=restore_metadata_warning path=%q reason=incomplete_metadata details=%q", outputPath, msg)
+	}
+
+	if descriptor.Mode.Valid {
+		if err := os.Chmod(outputPath, os.FileMode(descriptor.Mode.Int64)); err != nil {
+			metadataErrs = append(metadataErrs, fmt.Sprintf("chmod: %v", err))
+		}
+	}
+
+	if descriptor.MTime.Valid {
+		mtime := descriptor.MTime.Time
+		if err := os.Chtimes(outputPath, mtime, mtime); err != nil {
+			metadataErrs = append(metadataErrs, fmt.Sprintf("chtimes: %v", err))
+		}
+	}
+
+	if descriptor.UID.Valid && descriptor.GID.Valid {
+		if err := os.Chown(outputPath, int(descriptor.UID.Int64), int(descriptor.GID.Int64)); err != nil {
+			metadataErrs = append(metadataErrs, fmt.Sprintf("chown: %v", err))
+		}
+	}
+
+	if len(metadataErrs) == 0 {
+		return nil
+	}
+
+	metadataErr := fmt.Errorf("apply restored metadata for %q: %s", outputPath, strings.Join(metadataErrs, "; "))
+	if opts.StrictMetadata {
+		return metadataErr
+	}
+	log.Printf("event=restore_metadata_warning path=%q reason=apply_failed error=%q", outputPath, metadataErr.Error())
+	return nil
 }
 
 // testRestoreFailBeforeRenameHook is a test-only hook for simulating restore failures after temp file is written but before rename.
