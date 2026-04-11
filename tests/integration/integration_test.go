@@ -9037,6 +9037,118 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 			"remove", "--stored-path", storedPathFF2, "--output", "json")
 	})
 
+	t.Run("repair --batch --input deterministic partial failure", func(t *testing.T) {
+		fileRepair := filepath.Join(inputDir, "batch_repair_input.txt")
+		if err := os.WriteFile(fileRepair, []byte("batch-repair-input"), 0o644); err != nil {
+			t.Fatalf("write fileRepair: %v", err)
+		}
+
+		storeRepair := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileRepair, "--output", "json"), "store")
+		repairID := testutils.JSONInt64(t, testutils.JSONMap(t, storeRepair, "data"), "file_id")
+
+		dbconnRepair, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("connectDB for repair drift: %v", err)
+		}
+		defer dbconnRepair.Close()
+		if _, err := dbconnRepair.Exec(`UPDATE logical_file SET ref_count = ref_count + 3 WHERE id = $1`, repairID); err != nil {
+			t.Fatalf("corrupt ref_count for repair batch test: %v", err)
+		}
+
+		repairInput := filepath.Join(tmp, "repair_targets_batch.txt")
+		if err := os.WriteFile(repairInput, []byte("ref-counts\nunknown-target\nref-counts\n"), 0o644); err != nil {
+			t.Fatalf("write repair input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"repair", "--batch", "--input", repairInput, "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("repair --batch --input expected usage-class partial failure exit=2, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("repair --batch --input produced no JSON stdout: %s", res.Stdout)
+		}
+		if got, _ := payload["status"].(string); got != "partial_failure" {
+			t.Fatalf("expected status=partial_failure, got payload=%v", payload)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 1 || int(summary["failed"].(float64)) != 1 || int(summary["skipped"].(float64)) != 1 {
+			t.Fatalf("unexpected repair batch summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected repair batch results payload: %v", payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		if first["status"] != "success" || second["status"] != "failed" || third["status"] != "skipped" {
+			t.Fatalf("unexpected repair batch result ordering: results=%v", results)
+		}
+
+		verifyAfter := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"verify", "--output", "json")
+		if verifyAfter.ExitCode != 0 {
+			t.Fatalf("verify should pass after first batch repair success item, got exit=%d stdout=%s stderr=%s", verifyAfter.ExitCode, verifyAfter.Stdout, verifyAfter.Stderr)
+		}
+	})
+
+	t.Run("repair --batch --fail-fast stops before execution", func(t *testing.T) {
+		fileRepairFF := filepath.Join(inputDir, "batch_repair_fail_fast.txt")
+		if err := os.WriteFile(fileRepairFF, []byte("batch-repair-fail-fast"), 0o644); err != nil {
+			t.Fatalf("write fileRepairFF: %v", err)
+		}
+
+		storeRepairFF := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileRepairFF, "--output", "json"), "store")
+		repairFFID := testutils.JSONInt64(t, testutils.JSONMap(t, storeRepairFF, "data"), "file_id")
+
+		dbconnRepairFF, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("connectDB for repair fail-fast drift: %v", err)
+		}
+		defer dbconnRepairFF.Close()
+		if _, err := dbconnRepairFF.Exec(`UPDATE logical_file SET ref_count = ref_count + 2 WHERE id = $1`, repairFFID); err != nil {
+			t.Fatalf("corrupt ref_count for repair fail-fast test: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"repair", "--batch", "unknown-target", "ref-counts", "--fail-fast", "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("repair --batch --fail-fast expected exit=2, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("repair --batch --fail-fast produced no JSON stdout: %s", res.Stdout)
+		}
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 1 {
+			t.Fatalf("expected fail-fast to stop after first failed target, results=%v payload=%v", results, payload)
+		}
+
+		verifyFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"verify", "--output", "json")
+		if verifyFail.ExitCode != 3 {
+			t.Fatalf("verify should fail because repair execution was skipped by fail-fast, got exit=%d stdout=%s stderr=%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
+		}
+
+		// Cleanup the induced drift so later subtests are unaffected.
+		repairCleanup := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"repair", "ref-counts", "--output", "json")
+		if repairCleanup.ExitCode != 0 {
+			t.Fatalf("cleanup repair ref-counts failed: exit=%d stdout=%s stderr=%s", repairCleanup.ExitCode, repairCleanup.Stdout, repairCleanup.Stderr)
+		}
+	})
+
 	t.Run("--input missing file usage error", func(t *testing.T) {
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 			"remove", "--input", filepath.Join(tmp, "missing_ids.txt"), "--output", "json")
