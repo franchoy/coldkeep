@@ -42,13 +42,16 @@ var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
 	"codec":    true,
+	"destination": true,
 	"input":    true,
 	"limit":    true,
+	"mode":     true,
 	"offset":   true,
 	"name":     true,
 	"min-size": true,
 	"max-size": true,
 	"output":   true,
+	"stored-path": true,
 }
 
 type cliOutputMode string
@@ -666,9 +669,77 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination"); err != nil {
 		return err
 	}
+
+	storedPath, _ := parsed.lastFlagValue("stored-path")
+	hasStoredPath := strings.TrimSpace(storedPath) != ""
+	overwrite := parsed.hasFlag("overwrite")
+
+	if hasStoredPath {
+		if len(parsed.positionals) != 0 {
+			return usageErrorf("Usage: coldkeep restore --stored-path <path> [--mode <original|prefix|override>] [--destination <path>] [--overwrite]")
+		}
+		if parsed.hasFlag("input") {
+			return usageErrorf("--input is not supported with --stored-path")
+		}
+		if parsed.hasFlag("dry-run", "dryRun", "fail-fast", "failFast") {
+			return usageErrorf("--dry-run and --fail-fast are not supported with --stored-path")
+		}
+
+		destinationMode, err := parseRestoreDestinationMode(parsed)
+		if err != nil {
+			return err
+		}
+		destination, _ := parsed.lastFlagValue("destination")
+		destination = strings.TrimSpace(destination)
+		if destinationMode == storage.RestoreDestinationOriginal && destination != "" {
+			return usageErrorf("--destination is only supported with --mode prefix or --mode override")
+		}
+		if (destinationMode == storage.RestoreDestinationPrefix || destinationMode == storage.RestoreDestinationOverride) && destination == "" {
+			return usageErrorf("--destination is required with --mode %s", destinationMode)
+		}
+
+		sgctx, err := storage.LoadDefaultStorageContext()
+		if err != nil {
+			return fmt.Errorf("load storage context: %w", err)
+		}
+		defer func() { _ = sgctx.Close() }()
+
+		result, err := storage.RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, storage.RestoreOptions{
+			Overwrite:       overwrite,
+			DestinationMode: destinationMode,
+			Destination:     destination,
+		})
+		if err != nil {
+			return err
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "restore",
+				"data": map[string]any{
+					"stored_path":  strings.TrimSpace(storedPath),
+					"output_path":  result.OutputPath,
+					"file_id":      result.FileID,
+					"restored_hash": result.RestoredHash,
+					"mode":         destinationMode,
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintln(os.Stdout, "File restored successfully: "+result.OutputPath)
+		_, _ = fmt.Fprintln(os.Stdout, "  FileID: "+strconv.FormatInt(result.FileID, 10))
+		_, _ = fmt.Fprintln(os.Stdout, "  SHA256: "+result.RestoredHash)
+		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+		return nil
+	}
+
 	inputFile, _ := parsed.lastFlagValue("input")
 	hasInput := strings.TrimSpace(inputFile) != ""
 	if len(parsed.positionals) < 1 {
@@ -679,7 +750,6 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 	dryRun := parsed.hasFlag("dry-run", "dryRun")
 	failFast := parsed.hasFlag("fail-fast", "failFast")
-	overwrite := parsed.hasFlag("overwrite")
 	targetArgs := parsed.positionals[:len(parsed.positionals)-1]
 	outputRoot := parsed.positionals[len(parsed.positionals)-1]
 	if !hasInput && len(targetArgs) == 1 {
@@ -725,6 +795,24 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 
 	report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, execFunc)
 	return emitBatchCommandReport("restore", report, outputMode)
+}
+
+func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDestinationMode, error) {
+	value, hasValue := parsed.lastFlagValue("mode")
+	if !hasValue {
+		return storage.RestoreDestinationOriginal, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(storage.RestoreDestinationOriginal):
+		return storage.RestoreDestinationOriginal, nil
+	case string(storage.RestoreDestinationPrefix):
+		return storage.RestoreDestinationPrefix, nil
+	case string(storage.RestoreDestinationOverride):
+		return storage.RestoreDestinationOverride, nil
+	default:
+		return "", usageErrorf("invalid --mode value %q (allowed: original, prefix, override)", value)
+	}
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -866,7 +954,7 @@ func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, ov
 	if !overwrite {
 		if _, statErr := os.Stat(out); statErr == nil {
 			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("output file already exists: %s (use --overwrite)", out), OutputPath: out, OriginalName: info.OriginalName}
-		} else if statErr != nil && !os.IsNotExist(statErr) {
+		} else if !os.IsNotExist(statErr) {
 			return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: fmt.Sprintf("check output path %s: %v", out, statErr), OutputPath: out, OriginalName: info.OriginalName}
 		}
 	}

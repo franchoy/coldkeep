@@ -626,6 +626,56 @@ func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	}
 }
 
+func TestRunRestoreCommandStoredPathRejectsInvalidModeClassifiesAsUsage(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"mode":        {"unsupported"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --mode value") {
+		t.Fatalf("expected invalid mode usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandStoredPathRequiresDestinationForPrefixMode(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"mode":        {"prefix"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--destination is required with --mode prefix") {
+		t.Fatalf("expected missing destination usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandStoredPathRejectsPositionals(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: []string{"123", "./out"},
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep restore --stored-path") {
+		t.Fatalf("expected stored-path usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunDoctorCommandShortCircuitsAfterRecoveryFailure(t *testing.T) {
 	originalRecovery := doctorRecoveryPhase
 	originalSchema := doctorSchemaVersionPhase
