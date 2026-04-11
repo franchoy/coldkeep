@@ -111,6 +111,12 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 	if err != nil {
 		return err
 	}
+	// Concurrent remove path: if another transaction deletes the mapping after
+	// we resolved it but before this DELETE executes, treat it as a clean
+	// already-removed outcome instead of a generic conflict.
+	if rowsDeleted == 0 {
+		return fmt.Errorf("physical file path %q already removed", result.StoredPath)
+	}
 	if rowsDeleted != 1 {
 		return fmt.Errorf("physical file path %q unlink conflict (deleted=%d)", result.StoredPath, rowsDeleted)
 	}
