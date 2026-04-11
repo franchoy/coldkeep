@@ -27,8 +27,18 @@ type RestoreFileResult struct {
 
 // RestoreOptions controls restore-file behavior.
 type RestoreOptions struct {
-	Overwrite bool
+	Overwrite       bool
+	DestinationMode RestoreDestinationMode
+	Destination     string
 }
+
+type RestoreDestinationMode string
+
+const (
+	RestoreDestinationOriginal RestoreDestinationMode = "original"
+	RestoreDestinationPrefix   RestoreDestinationMode = "prefix"
+	RestoreDestinationOverride RestoreDestinationMode = "override"
+)
 
 // RestoreDescriptor describes a current-state restore target resolved from physical_file.
 // It is the stable restore input shape that v1.3 snapshot/history restore can also produce.
@@ -318,7 +328,12 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, err
 	}
 
-	return restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, descriptor.Path, sgctx.EffectiveContainerDir(), opts)
+	resolvedOutputPath, err := resolveRestoreOutputPath(descriptor, opts)
+	if err != nil {
+		return RestoreFileResult{}, err
+	}
+
+	return restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
 func RestoreFileByStoredPathWithStorageContextResult(sgctx StorageContext, storedPath string) (RestoreFileResult, error) {
@@ -328,6 +343,50 @@ func RestoreFileByStoredPathWithStorageContextResult(sgctx StorageContext, store
 func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath string) error {
 	_, err := RestoreFileByStoredPathWithStorageContextResult(sgctx, storedPath)
 	return err
+}
+
+func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, error) {
+	mode := opts.DestinationMode
+	if mode == "" {
+		mode = RestoreDestinationOriginal
+	}
+
+	switch mode {
+	case RestoreDestinationOriginal:
+		return descriptor.Path, nil
+	case RestoreDestinationPrefix:
+		prefix := strings.TrimSpace(opts.Destination)
+		if prefix == "" {
+			return "", fmt.Errorf("restore prefix destination is required for mode %q", RestoreDestinationPrefix)
+		}
+		absPrefix, err := filepath.Abs(prefix)
+		if err != nil {
+			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
+		}
+
+		relativePath := descriptor.Path
+		if vol := filepath.VolumeName(relativePath); vol != "" {
+			relativePath = strings.TrimPrefix(relativePath, vol)
+		}
+		relativePath = strings.TrimLeft(relativePath, string(os.PathSeparator)+"/")
+		if relativePath == "" {
+			return "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
+		}
+
+		return filepath.Join(absPrefix, relativePath), nil
+	case RestoreDestinationOverride:
+		overridePath := strings.TrimSpace(opts.Destination)
+		if overridePath == "" {
+			return "", fmt.Errorf("restore override destination is required for mode %q", RestoreDestinationOverride)
+		}
+		absOverridePath, err := filepath.Abs(overridePath)
+		if err != nil {
+			return "", fmt.Errorf("resolve restore override destination: %w", err)
+		}
+		return filepath.Clean(absOverridePath), nil
+	default:
+		return "", fmt.Errorf("unsupported restore destination mode: %s", mode)
+	}
 }
 
 func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {

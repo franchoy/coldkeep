@@ -294,6 +294,247 @@ func TestRestoreFileByStoredPathUsesPhysicalPathIdentity(t *testing.T) {
 	}
 }
 
+func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("restore-by-prefix-mode")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "restore-prefix-mode.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"prefix-mode-original.bin",
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+		1,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	storedPath := filepath.Join(string(os.PathSeparator), "home", "tester", "docs", "prefix-file.bin")
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		storedPath,
+		fileID,
+		nil,
+		nil,
+		nil,
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	prefixRoot := t.TempDir()
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+	})
+	if err != nil {
+		t.Fatalf("restore by path with prefix mode: %v", err)
+	}
+
+	expectedOutputPath := filepath.Join(prefixRoot, "home", "tester", "docs", "prefix-file.bin")
+	if result.OutputPath != expectedOutputPath {
+		t.Fatalf("expected prefixed output path %q, got %q", expectedOutputPath, result.OutputPath)
+	}
+
+	restored, err := os.ReadFile(expectedOutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
+	}
+}
+
+func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	payload := []byte("restore-by-override-mode")
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	containerFilename := "restore-override-mode.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+		t.Fatalf("write test container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		containerFilename,
+		int64(container.ContainerHdrLen+len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		[]byte{},
+		containerID,
+		int64(container.ContainerHdrLen),
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"override-mode-original.bin",
+		int64(len(payload)),
+		hash,
+		filestate.LogicalFileCompleted,
+		1,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
+		fileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	storedPath := filepath.Join(string(os.PathSeparator), "var", "lib", "coldkeep", "override-file.bin")
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		storedPath,
+		fileID,
+		nil,
+		nil,
+		nil,
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	overridePath := filepath.Join(t.TempDir(), "custom", "override-target.bin")
+	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationOverride,
+		Destination:     overridePath,
+	})
+	if err != nil {
+		t.Fatalf("restore by path with override mode: %v", err)
+	}
+
+	if result.OutputPath != overridePath {
+		t.Fatalf("expected override output path %q, got %q", overridePath, result.OutputPath)
+	}
+
+	restored, err := os.ReadFile(overridePath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
+	}
+}
+
+func TestRestoreFileByStoredPathRejectsInvalidDestinationMode(t *testing.T) {
+	descriptor := RestoreDescriptor{Path: "/a/b/c.bin"}
+	_, err := resolveRestoreOutputPath(descriptor, RestoreOptions{DestinationMode: RestoreDestinationMode("unsupported")})
+	if err == nil || !strings.Contains(err.Error(), "unsupported restore destination mode") {
+		t.Fatalf("expected unsupported destination mode error, got: %v", err)
+	}
+}
+
 func TestRestoreFailsWhenContainerFileMissing(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
