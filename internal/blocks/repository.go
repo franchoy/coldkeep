@@ -3,14 +3,17 @@ package blocks
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
+
+var ErrBlockAlreadyExists = errors.New("block already exists for chunk")
 
 type Repository struct {
 	DB *sql.DB
 }
 
 func (r *Repository) Insert(ctx context.Context, tx *sql.Tx, d *Descriptor) error {
-	return tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		INSERT INTO blocks (
 			chunk_id,
 			codec,
@@ -21,6 +24,7 @@ func (r *Repository) Insert(ctx context.Context, tx *sql.Tx, d *Descriptor) erro
 			container_id,
 			block_offset
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (chunk_id) DO NOTHING
 		RETURNING id, created_at, updated_at
 	`,
 		d.ChunkID,
@@ -36,6 +40,10 @@ func (r *Repository) Insert(ctx context.Context, tx *sql.Tx, d *Descriptor) erro
 		&d.CreatedAt,
 		&d.UpdatedAt,
 	)
+	if err == sql.ErrNoRows {
+		return ErrBlockAlreadyExists
+	}
+	return err
 }
 
 func (r *Repository) GetByChunkID(ctx context.Context, chunkID int64) (*Descriptor, error) {
