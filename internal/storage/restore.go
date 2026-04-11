@@ -30,6 +30,18 @@ type RestoreOptions struct {
 	Overwrite bool
 }
 
+// RestoreDescriptor describes a current-state restore target resolved from physical_file.
+// It is the stable restore input shape that v1.3 snapshot/history restore can also produce.
+type RestoreDescriptor struct {
+	Path               string
+	LogicalFileID      int64
+	Mode               sql.NullInt64
+	MTime              sql.NullTime
+	UID                sql.NullInt64
+	GID                sql.NullInt64
+	IsMetadataComplete bool
+}
+
 type restoreChunkRow struct {
 	chunkOrder          int64
 	blockOffset         int64
@@ -247,6 +259,75 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 
 func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
 	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
+}
+
+func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string) (RestoreDescriptor, error) {
+	var descriptor RestoreDescriptor
+	err := dbconn.QueryRowContext(
+		ctx,
+		`SELECT
+			pf.path,
+			pf.logical_file_id,
+			pf.mode,
+			pf.mtime,
+			pf.uid,
+			pf.gid,
+			pf.is_metadata_complete
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE pf.path = $1 AND lf.status = $2`,
+		storedPath,
+		filestate.LogicalFileCompleted,
+	).Scan(
+		&descriptor.Path,
+		&descriptor.LogicalFileID,
+		&descriptor.Mode,
+		&descriptor.MTime,
+		&descriptor.UID,
+		&descriptor.GID,
+		&descriptor.IsMetadataComplete,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return RestoreDescriptor{}, fmt.Errorf("physical path %q not found", storedPath)
+		}
+		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor for path %q: %w", storedPath, err)
+	}
+
+	return descriptor, nil
+}
+
+// RestoreFileByStoredPathWithStorageContextResultOptions restores a file using the
+// current-state physical_file path as identity (v1.2 model).
+// This is original destination mode: output path is the stored physical path.
+func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext, storedPath string, opts RestoreOptions) (RestoreFileResult, error) {
+	if sgctx.DB == nil {
+		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
+	}
+
+	normalizedPath, err := normalizePhysicalFilePath(storedPath)
+	if err != nil {
+		return RestoreFileResult{}, err
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	descriptor, err := buildRestoreDescriptorFromPhysicalPath(ctx, sgctx.DB, normalizedPath)
+	if err != nil {
+		return RestoreFileResult{}, err
+	}
+
+	return restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, descriptor.Path, sgctx.EffectiveContainerDir(), opts)
+}
+
+func RestoreFileByStoredPathWithStorageContextResult(sgctx StorageContext, storedPath string) (RestoreFileResult, error) {
+	return RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{Overwrite: true})
+}
+
+func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath string) error {
+	_, err := RestoreFileByStoredPathWithStorageContextResult(sgctx, storedPath)
+	return err
 }
 
 func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
