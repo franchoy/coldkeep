@@ -236,4 +236,10 @@ This is expected to extend the external model (path/folder restore semantics) wh
 - storage correctness guarantees G1-G8
 - interface correctness direction from G9 onward
 
+### Path Identity Policy
+
+For v1.2 physical path identity rules (canonicalization strategy, case behavior, and rationale), see:
+
+- docs/PATH_IDENTITY.md
+
 This means architecture documentation should evolve by extension, not by rewrite.
