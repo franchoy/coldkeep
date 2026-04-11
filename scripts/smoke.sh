@@ -17,6 +17,7 @@ SMOKE_TEMP_STORAGE_DIR=""
 
 cleanup() {
   rm -rf ./_smoke_out
+  rm -rf ./_smoke_out_dups
   if [[ -n "$SMOKE_TEMP_STORAGE_DIR" ]]; then
     rm -rf "$SMOKE_TEMP_STORAGE_DIR"
   fi
@@ -229,6 +230,44 @@ coldkeep list
 
 LIST_OUTPUT=$(coldkeep list --output json)
 
+echo "[smoke] duplicate-id regression test: restore remains valid when multiple paths share one id"
+DUPLICATE_ID_GROUPS=$(echo "$LIST_OUTPUT" | jq -r '[.files | group_by(.id)[] | select(length > 1)] | length')
+if [[ "$DUPLICATE_ID_GROUPS" -gt 0 ]]; then
+  rm -rf ./_smoke_out_dups
+  DUPLICATE_RESTORE_FAILED=0
+  while IFS=$'\t' read -r file_id expected_hash sample_count; do
+    dup_restore_dir="./_smoke_out_dups/${file_id}"
+    mkdir -p "$dup_restore_dir"
+    if ! coldkeep restore "${file_id}" "${dup_restore_dir}/"; then
+      echo "[smoke] ERROR: duplicate-id restore failed for id=${file_id} (paths=${sample_count})"
+      DUPLICATE_RESTORE_FAILED=1
+      continue
+    fi
+
+    restored="$(find "$dup_restore_dir" -mindepth 1 -maxdepth 1 -type f | head -n1)"
+    if [[ -z "$restored" || ! -f "$restored" ]]; then
+      echo "[smoke] ERROR: duplicate-id restore produced no output for id=${file_id} (paths=${sample_count})"
+      DUPLICATE_RESTORE_FAILED=1
+      continue
+    fi
+
+    rest_hash=$(sha256sum "$restored" | awk '{print $1}')
+    if [[ "$expected_hash" != "$rest_hash" ]]; then
+      echo "[smoke] ERROR: duplicate-id hash mismatch for id=${file_id}: want=${expected_hash} got=${rest_hash}"
+      DUPLICATE_RESTORE_FAILED=1
+    else
+      echo "[smoke]   ok: duplicate-id restore id=${file_id} paths=${sample_count} -> $(basename "$restored")"
+    fi
+  done < <(echo "$LIST_OUTPUT" | jq -r '.files | group_by(.id)[] | select(length > 1) | [(. [0].id | tostring), .[0].file_hash, (length | tostring)] | @tsv')
+
+  if [[ "$DUPLICATE_RESTORE_FAILED" -eq 1 ]]; then
+    exit 1
+  fi
+  echo "[smoke] duplicate-id regression PASSED"
+else
+  echo "[smoke] duplicate-id regression SKIPPED: no duplicate ids in this dataset"
+fi
+
 # Capture first ID before the restore loop (needed for the remove test below)
 FIRST_ID=$(echo "$LIST_OUTPUT" | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
 
@@ -237,16 +276,15 @@ rm -rf ./_smoke_out
 RESTORE_ALL_FAILED=0
 while IFS=$'\t' read -r file_id file_name expected_hash; do
   restore_dir="./_smoke_out/${file_id}"
-  restore_name="$(basename "$file_name")"
   mkdir -p "$restore_dir"
   if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
     echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
     RESTORE_ALL_FAILED=1
     continue
   fi
-  restored="${restore_dir}/${restore_name}"
-  if [[ ! -f "$restored" ]]; then
-    echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+  restored="$(find "$restore_dir" -mindepth 1 -maxdepth 1 -type f | head -n1)"
+  if [[ -z "$restored" || ! -f "$restored" ]]; then
+    echo "[smoke] ERROR: restore produced no output file for id=${file_id} (sample name=${file_name})"
     RESTORE_ALL_FAILED=1
     continue
   fi
@@ -257,12 +295,12 @@ while IFS=$'\t' read -r file_id file_name expected_hash; do
   fi
   rest_hash=$(sha256sum "$restored" | awk '{print $1}')
   if [[ "$expected_hash" != "$rest_hash" ]]; then
-    echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
+    echo "[smoke] ERROR: hash mismatch for id=${file_id} (sample name=${file_name}): want=${expected_hash} got=${rest_hash}"
     RESTORE_ALL_FAILED=1
   else
-    echo "[smoke]   ok: id=${file_id} ${file_name}"
+    echo "[smoke]   ok: id=${file_id} ${file_name} -> $(basename "$restored")"
   fi
-done < <(echo "$LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
+done < <(echo "$LIST_OUTPUT" | jq -r '.files | unique_by(.id)[] | [(.id | tostring), .name, .file_hash] | @tsv')
 if [[ "$RESTORE_ALL_FAILED" -eq 1 ]]; then
   exit 1
 fi
@@ -350,16 +388,15 @@ else
   EDGE_RESTORE_ALL_FAILED=0
   while IFS=$'\t' read -r file_id file_name expected_hash; do
     restore_dir="./_smoke_out/${file_id}"
-    restore_name="$(basename "$file_name")"
     mkdir -p "$restore_dir"
     if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
       echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
       EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
-    restored="${restore_dir}/${restore_name}"
-    if [[ ! -f "$restored" ]]; then
-      echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+    restored="$(find "$restore_dir" -mindepth 1 -maxdepth 1 -type f | head -n1)"
+    if [[ -z "$restored" || ! -f "$restored" ]]; then
+      echo "[smoke] ERROR: restore produced no output file for id=${file_id} (sample name=${file_name})"
       EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
@@ -370,12 +407,12 @@ else
     fi
     rest_hash=$(sha256sum "$restored" | awk '{print $1}')
     if [[ "$expected_hash" != "$rest_hash" ]]; then
-      echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
+      echo "[smoke] ERROR: hash mismatch for id=${file_id} (sample name=${file_name}): want=${expected_hash} got=${rest_hash}"
       EDGE_RESTORE_ALL_FAILED=1
     else
-      echo "[smoke]   ok: id=${file_id} ${file_name}"
+      echo "[smoke]   ok: id=${file_id} ${file_name} -> $(basename "$restored")"
     fi
-  done < <(echo "$EDGE_LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
+  done < <(echo "$EDGE_LIST_OUTPUT" | jq -r '.files | unique_by(.id)[] | [(.id | tostring), .name, .file_hash] | @tsv')
   if [[ "$EDGE_RESTORE_ALL_FAILED" -eq 1 ]]; then
     exit 1
   fi
