@@ -131,6 +131,9 @@ func verifyInvariantConvergenceG8(t *testing.T, dbconn *sql.DB, repoRoot, binPat
 	if got := countInt64QueryG8(t, dbconn, `SELECT COUNT(*) FROM chunk WHERE pin_count < 0`); got != 0 {
 		t.Fatalf("expected no negative pin_count rows, got %d", got)
 	}
+	if got := countInt64QueryG8(t, dbconn, `SELECT COUNT(*) FROM logical_file WHERE ref_count < 0`); got != 0 {
+		t.Fatalf("expected no negative logical_file.ref_count rows, got %d", got)
+	}
 	if got := countInt64QueryG8(t, dbconn, `
 		SELECT COUNT(*)
 		FROM chunk c
@@ -146,6 +149,25 @@ func verifyInvariantConvergenceG8(t *testing.T, dbconn *sql.DB, repoRoot, binPat
 		  AND NOT EXISTS (SELECT 1 FROM file_chunk fc WHERE fc.chunk_id = c.id)
 	`); got != 0 {
 		t.Fatalf("expected no orphan chunk with live_ref_count > 0, got %d", got)
+	}
+	if got := countInt64QueryG8(t, dbconn, `
+		SELECT COUNT(*)
+		FROM physical_file pf
+		LEFT JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.id IS NULL
+	`); got != 0 {
+		t.Fatalf("expected no orphan physical_file rows, got %d", got)
+	}
+	if got := countInt64QueryG8(t, dbconn, `
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count <> (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`); got != 0 {
+		t.Fatalf("expected no logical_file.ref_count drift vs physical_file rows, got %d", got)
 	}
 }
 
