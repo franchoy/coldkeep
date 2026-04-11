@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -91,5 +92,217 @@ func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", " 'On' ")
 	if !loadPostgresAutoBootstrapEnabled() {
 		t.Fatal("expected quoted mixed-case truthy env value to be enabled")
+	}
+}
+
+func TestRunMigrationsBackfillsPhysicalFileForLegacyLogicalFiles(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	legacySchema := `
+		CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+		INSERT INTO schema_version(version) VALUES (5);
+		CREATE TABLE logical_file (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			original_name TEXT NOT NULL,
+			total_size INTEGER NOT NULL,
+			file_hash TEXT NOT NULL,
+			status TEXT NOT NULL,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`
+	if _, err := dbconn.Exec(legacySchema); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		name := "same-name.txt"
+		if i == 2 {
+			name = ""
+		}
+		if _, err := dbconn.Exec(
+			`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+			name,
+			int64(128+i),
+			fmt.Sprintf("hash-%d", i),
+			"COMPLETED",
+		); err != nil {
+			t.Fatalf("insert legacy logical_file row %d: %v", i, err)
+		}
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations first pass: %v", err)
+	}
+
+	var refCount int
+	if err := dbconn.QueryRow(`
+		SELECT ref_count
+		FROM logical_file
+		ORDER BY id ASC
+		LIMIT 1
+	`).Scan(&refCount); err != nil {
+		t.Fatalf("query migrated logical_file columns: %v", err)
+	}
+	if refCount != 1 {
+		t.Fatalf("unexpected ref_count after migration: got %d want 1", refCount)
+	}
+
+	var physicalCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file`).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical_file rows: %v", err)
+	}
+	if physicalCount != 3 {
+		t.Fatalf("expected one physical_file row per logical_file row, got %d", physicalCount)
+	}
+
+	var duplicatePaths int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT path FROM physical_file GROUP BY path HAVING COUNT(*) > 1
+		)
+	`).Scan(&duplicatePaths); err != nil {
+		t.Fatalf("check duplicate paths: %v", err)
+	}
+	if duplicatePaths != 0 {
+		t.Fatalf("expected unique migrated paths, found %d duplicates", duplicatePaths)
+	}
+
+	var prefixedPaths int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE '/migrated/%'`).Scan(&prefixedPaths); err != nil {
+		t.Fatalf("count migrated path prefix matches: %v", err)
+	}
+	if prefixedPaths != 3 {
+		t.Fatalf("expected all paths under /migrated, got %d", prefixedPaths)
+	}
+
+	var physicalMetadataComplete int
+	if err := dbconn.QueryRow(`
+		SELECT is_metadata_complete
+		FROM physical_file
+		ORDER BY logical_file_id ASC
+		LIMIT 1
+	`).Scan(&physicalMetadataComplete); err != nil {
+		t.Fatalf("query physical_file metadata completion flag: %v", err)
+	}
+	if physicalMetadataComplete != 0 {
+		t.Fatalf("unexpected physical_file.is_metadata_complete after migration: got %d want 0", physicalMetadataComplete)
+	}
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if schemaVersion < 6 {
+		t.Fatalf("expected schema version >= 6 after migration, got %d", schemaVersion)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations second pass (idempotency): %v", err)
+	}
+
+	var physicalCountAfterSecondRun int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file`).Scan(&physicalCountAfterSecondRun); err != nil {
+		t.Fatalf("count physical_file rows after second run: %v", err)
+	}
+	if physicalCountAfterSecondRun != physicalCount {
+		t.Fatalf("expected idempotent physical_file backfill, got %d then %d", physicalCount, physicalCountAfterSecondRun)
+	}
+}
+
+func TestRunMigrationsAllowsMultiplePhysicalFilesPerLogicalFile(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	res, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		"data.bin",
+		int64(64),
+		"hash-shared",
+		"COMPLETED",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file row: %v", err)
+	}
+
+	logicalID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("read inserted logical_file id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
+		"/user/a/data.bin",
+		logicalID,
+		1,
+	); err != nil {
+		t.Fatalf("insert first physical_file row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
+		"/user/b/data.bin",
+		logicalID,
+		1,
+	); err != nil {
+		t.Fatalf("insert second physical_file row for same logical_file: %v", err)
+	}
+
+	var mappedCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?`, logicalID).Scan(&mappedCount); err != nil {
+		t.Fatalf("count physical_file rows for logical_file: %v", err)
+	}
+	if mappedCount != 2 {
+		t.Fatalf("expected 2 physical_file rows for the same logical_file, got %d", mappedCount)
+	}
+}
+
+func TestRunMigrationsRejectsEmptyPhysicalFilePath(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	res, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		"tiny.txt",
+		int64(4),
+		"hash-tiny",
+		"COMPLETED",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file row: %v", err)
+	}
+
+	logicalID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("read inserted logical_file id: %v", err)
+	}
+
+	_, err = dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, ?)`,
+		"",
+		logicalID,
+		1,
+	)
+	if err == nil {
+		t.Fatalf("expected empty path insert to fail")
 	}
 }

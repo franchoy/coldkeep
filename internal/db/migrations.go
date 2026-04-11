@@ -11,7 +11,185 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 5
+const requiredPostgresSchemaVersion = 6
+
+func sqliteTableHasColumn(dbconn *sql.DB, ctx context.Context, tableName, columnName string) (bool, error) {
+	rows, err := dbconn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid      int
+			name     string
+			dataType string
+			notNull  int
+			defaultV sql.NullString
+			primaryK int
+		)
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultV, &primaryK); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, columnName) {
+			return true, nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	return false, nil
+}
+
+func sqliteTableSQL(dbconn *sql.DB, ctx context.Context, tableName string) (string, error) {
+	var sqlText sql.NullString
+	err := dbconn.QueryRowContext(
+		ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		tableName,
+	).Scan(&sqlText)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	if !sqlText.Valid {
+		return "", nil
+	}
+	return sqlText.String, nil
+}
+
+func sqlitePhysicalFileNeedsRebuild(tableSQL string) bool {
+	if tableSQL == "" {
+		return false
+	}
+	normalized := strings.ToLower(tableSQL)
+	return strings.Contains(normalized, "logical_file_id integer not null unique") ||
+		!strings.Contains(normalized, "check (path != '')")
+}
+
+func rebuildSQLitePhysicalFileTable(dbconn *sql.DB, ctx context.Context) error {
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE physical_file_v2 (
+			path TEXT PRIMARY KEY CHECK (path != ''),
+			logical_file_id INTEGER NOT NULL
+				REFERENCES logical_file(id) ON DELETE CASCADE,
+			mode INTEGER,
+			mtime DATETIME,
+			uid INTEGER,
+			gid INTEGER,
+			is_metadata_complete INTEGER NOT NULL DEFAULT 0 CHECK (is_metadata_complete IN (0, 1))
+		)
+	`); err != nil {
+		return fmt.Errorf("create physical_file_v2 table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT INTO physical_file_v2 (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		SELECT path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete
+		FROM physical_file
+	`); err != nil {
+		return fmt.Errorf("copy physical_file rows into v2: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `DROP TABLE physical_file`); err != nil {
+		return fmt.Errorf("drop legacy physical_file table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `ALTER TABLE physical_file_v2 RENAME TO physical_file`); err != nil {
+		return fmt.Errorf("rename physical_file_v2 table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_physical_file_logical_file_id ON physical_file(logical_file_id)`); err != nil {
+		return fmt.Errorf("create physical_file logical_file_id index: %w", err)
+	}
+
+	return nil
+}
+
+func runSQLitePhysicalFileMigration(dbconn *sql.DB, ctx context.Context) error {
+	hasRefCount, err := sqliteTableHasColumn(dbconn, ctx, "logical_file", "ref_count")
+	if err != nil {
+		return fmt.Errorf("inspect logical_file.ref_count: %w", err)
+	}
+	if !hasRefCount {
+		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE logical_file ADD COLUMN ref_count INTEGER NOT NULL DEFAULT 1 CHECK (ref_count >= 0)`); err != nil {
+			return fmt.Errorf("add logical_file.ref_count: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS physical_file (
+			path TEXT PRIMARY KEY CHECK (path != ''),
+			logical_file_id INTEGER NOT NULL
+				REFERENCES logical_file(id) ON DELETE CASCADE,
+			mode INTEGER,
+			mtime DATETIME,
+			uid INTEGER,
+			gid INTEGER,
+			is_metadata_complete INTEGER NOT NULL DEFAULT 0 CHECK (is_metadata_complete IN (0, 1))
+		)
+	`); err != nil {
+		return fmt.Errorf("create physical_file table: %w", err)
+	}
+
+	tableSQL, err := sqliteTableSQL(dbconn, ctx, "physical_file")
+	if err != nil {
+		return fmt.Errorf("read physical_file schema: %w", err)
+	}
+	if sqlitePhysicalFileNeedsRebuild(tableSQL) {
+		if err := rebuildSQLitePhysicalFileTable(dbconn, ctx); err != nil {
+			return err
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE logical_file
+		SET ref_count = 1
+		WHERE ref_count IS NULL OR ref_count < 1
+	`); err != nil {
+		return fmt.Errorf("backfill logical_file.ref_count: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		SELECT
+			'/migrated/' ||
+			CASE
+				WHEN TRIM(COALESCE(original_name, '')) = '' THEN 'file'
+				ELSE TRIM(original_name)
+			END || '-' || CAST(id AS TEXT),
+			id,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			0
+		FROM logical_file
+	`); err != nil {
+		return fmt.Errorf("backfill physical_file: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE schema_version
+		SET version = 6
+		WHERE version < 6
+	`); err != nil {
+		return fmt.Errorf("update sqlite schema_version to 6: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (6)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 6: %w", err)
+	}
+
+	return nil
+}
 
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
@@ -120,6 +298,10 @@ func RunMigrations(dbconn *sql.DB) error {
 
 	if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("apply sqlite schema: %w", err)
+	}
+
+	if err := runSQLitePhysicalFileMigration(dbconn, ctx); err != nil {
+		return err
 	}
 
 	return nil
