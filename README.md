@@ -51,14 +51,13 @@ The goal is confidence and recoverability over maximum throughput.
 
 ## Status
 
-Coldkeep currently has three explicit correctness layers:
+Coldkeep has three explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
 - v1.2: physical-file graph coherence, explicit repair semantics, audited GC refusal, and invariant-aware batch maintenance reporting
 
-Guarantees are enforced through automated validation and CI gates.
-See VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
+Guarantees are enforced through automated validation and CI gates; see VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
 
 ## Core Guarantees
 
@@ -88,14 +87,14 @@ Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 - G12: invariant failures expose stable machine-readable classification and operator guidance
 - G13: batch maintenance commands expose deterministic execution semantics and invariant-aware per-item reporting
 
-Guarantee definitions and evidence mapping for G1-G13 are tracked in VALIDATION_MATRIX.md.
+Definitions and evidence mapping for G1-G13 are tracked in VALIDATION_MATRIX.md.
 
-Coldkeep separates system understanding into:
+Documentation is split into:
 
 - README.md (overview and usage)
 - ARCHITECTURE.md (internal model and invariants)
 
-For the deep model (invariants, lifecycle, validity, recovery, trust boundary), see ARCHITECTURE.md.
+For the deeper model (invariants, lifecycle, validity, recovery, trust boundary), see ARCHITECTURE.md.
 
 ## When to use coldkeep
 
@@ -189,8 +188,8 @@ coldkeep restore 12 18 ./out --dry-run
 
 Current `repair --batch` scope is target-oriented, not item-oriented:
 
-- today the only supported batch repair target is `ref-counts`
-- input files for `repair --batch --input <file>` currently contain repeated repair target names such as `ref-counts`
+- today the only supported target is `ref-counts`
+- input files for `repair --batch --input <file>` currently contain repeated target names such as `ref-counts`
 - they do not contain file IDs or stored paths
 
 Semantics (summary):
@@ -202,7 +201,7 @@ Semantics (summary):
 - JSON status values are intentionally two-layered:
   - overall payload status: ok, partial_failure, error
   - per-item result status: success, failed, skipped, planned
-- JSON execution mode is explicit: continue_on_error (default) or fail_fast
+- JSON execution mode is explicit: `continue_on_error` (default) or `fail_fast`
 - process exit is automation-friendly:
   - 0 when no item fails
   - 1 when one or more items fail
