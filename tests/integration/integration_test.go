@@ -596,15 +596,15 @@ func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
 
 	// 5. gc must be refused before repair and include invariant guidance.
 	gcRefused := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--output", "json")
-	if gcRefused.ExitCode == 0 {
-		t.Fatalf("gc should fail on drifted graph before repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcRefused.ExitCode, gcRefused.Stdout, gcRefused.Stderr)
+	if gcRefused.ExitCode != 1 {
+		t.Fatalf("gc should exit=1 on drifted graph before repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcRefused.ExitCode, gcRefused.Stdout, gcRefused.Stderr)
 	}
 	gcErrPayload, ok := testutils.FindCLIErrorPayload(gcRefused.Stderr)
 	if !ok {
 		t.Fatalf("gc on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", gcRefused.Stdout, gcRefused.Stderr)
 	}
-	if got, _ := gcErrPayload["error_class"].(string); got != "GENERAL" && got != "VERIFY" {
-		t.Fatalf("gc drifted-graph error class mismatch: want GENERAL|VERIFY got %q payload=%v", got, gcErrPayload)
+	if got, _ := gcErrPayload["error_class"].(string); got != "GENERAL" {
+		t.Fatalf("gc drifted-graph error class mismatch: want GENERAL got %q payload=%v", got, gcErrPayload)
 	}
 	if got, _ := gcErrPayload["invariant_code"].(string); got != "GC_REFUSED_INTEGRITY" {
 		t.Fatalf("gc drifted-graph invariant_code mismatch: want GC_REFUSED_INTEGRITY got %q payload=%v", got, gcErrPayload)
@@ -675,11 +675,7 @@ func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	restoredFile := filepath.Join(restoreDir, filepath.Base(inPath))
-	restoreRes := testutils.RunColdkeepCommand(
-		t,
-		repoRoot,
-		binPath,
-		env,
+	restoreRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"restore",
 		"--stored-path", storedPath,
 		"--mode", "override",

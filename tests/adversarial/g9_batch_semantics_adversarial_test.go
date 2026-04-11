@@ -268,7 +268,7 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			t.Fatalf("mkdir restore dir: %v", err)
 		}
-		expectRestoreFails(t, repoRoot, binPath, env, id1, outDir)
+		expectRestoreSucceeds(t, repoRoot, binPath, env, id1, outDir)
 		expectRestoreSucceeds(t, repoRoot, binPath, env, id2, outDir)
 	})
 
@@ -310,7 +310,7 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			t.Fatalf("mkdir restore dir: %v", err)
 		}
-		expectRestoreFails(t, repoRoot, binPath, env, id, outDir)
+		expectRestoreSucceeds(t, repoRoot, binPath, env, id, outDir)
 	})
 
 	t.Run("stored-path mixed input ordering under dry-run", func(t *testing.T) {

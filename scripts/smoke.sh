@@ -237,13 +237,14 @@ rm -rf ./_smoke_out
 RESTORE_ALL_FAILED=0
 while IFS=$'\t' read -r file_id file_name expected_hash; do
   restore_dir="./_smoke_out/${file_id}"
+  restore_name="$(basename "$file_name")"
   mkdir -p "$restore_dir"
   if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
     echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
     RESTORE_ALL_FAILED=1
     continue
   fi
-  restored="${restore_dir}/${file_name}"
+  restored="${restore_dir}/${restore_name}"
   if [[ ! -f "$restored" ]]; then
     echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
     RESTORE_ALL_FAILED=1
@@ -349,13 +350,14 @@ else
   EDGE_RESTORE_ALL_FAILED=0
   while IFS=$'\t' read -r file_id file_name expected_hash; do
     restore_dir="./_smoke_out/${file_id}"
+    restore_name="$(basename "$file_name")"
     mkdir -p "$restore_dir"
     if ! coldkeep restore "${file_id}" "${restore_dir}/"; then
       echo "[smoke] ERROR: restore command failed for id=${file_id} name=${file_name}"
       EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
-    restored="${restore_dir}/${file_name}"
+    restored="${restore_dir}/${restore_name}"
     if [[ ! -f "$restored" ]]; then
       echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
       EDGE_RESTORE_ALL_FAILED=1
