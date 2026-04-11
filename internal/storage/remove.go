@@ -78,24 +78,41 @@ func removePhysicalFileByPathWithDBResult(dbconn *sql.DB, storedPath string) (re
 		}
 	}()
 
-	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `SELECT logical_file_id FROM physical_file WHERE path = $1`)
-	if err := tx.QueryRowContext(ctx, selectQuery, storedPath).Scan(&result.LogicalFileID); err != nil {
-		if err == sql.ErrNoRows {
-			return RemovePhysicalFileResult{}, fmt.Errorf("physical file path %q not found", storedPath)
-		}
+	if err := removePhysicalFileByPathTx(ctx, dbconn, tx, &result); err != nil {
 		return RemovePhysicalFileResult{}, err
 	}
 
-	deleteRes, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, storedPath)
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return RemovePhysicalFileResult{}, err
+	}
+
+	result.Removed = true
+	return result, nil
+}
+
+func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, result *RemovePhysicalFileResult) error {
+	if result == nil {
+		return fmt.Errorf("remove result container is nil")
+	}
+
+	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `SELECT logical_file_id FROM physical_file WHERE path = $1`)
+	if err := tx.QueryRowContext(ctx, selectQuery, result.StoredPath).Scan(&result.LogicalFileID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("physical file path %q not found", result.StoredPath)
+		}
+		return err
+	}
+
+	deleteRes, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, result.StoredPath)
+	if err != nil {
+		return err
 	}
 	rowsDeleted, err := deleteRes.RowsAffected()
 	if err != nil {
-		return RemovePhysicalFileResult{}, err
+		return err
 	}
 	if rowsDeleted != 1 {
-		return RemovePhysicalFileResult{}, fmt.Errorf("physical file path %q unlink conflict (deleted=%d)", storedPath, rowsDeleted)
+		return fmt.Errorf("physical file path %q unlink conflict (deleted=%d)", result.StoredPath, rowsDeleted)
 	}
 
 	if err := tx.QueryRowContext(
@@ -107,17 +124,12 @@ func removePhysicalFileByPathWithDBResult(dbconn *sql.DB, storedPath string) (re
 		result.LogicalFileID,
 	).Scan(&result.RemainingRefCount); err != nil {
 		if err == sql.ErrNoRows {
-			return RemovePhysicalFileResult{}, fmt.Errorf("invalid logical_file.ref_count transition id=%d", result.LogicalFileID)
+			return fmt.Errorf("invalid logical_file.ref_count transition id=%d", result.LogicalFileID)
 		}
-		return RemovePhysicalFileResult{}, err
+		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return RemovePhysicalFileResult{}, err
-	}
-
-	result.Removed = true
-	return result, nil
+	return nil
 }
 
 func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResult, err error) {
