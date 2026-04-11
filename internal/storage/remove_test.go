@@ -301,3 +301,49 @@ func TestRemoveByStoredPathSecondRemoveFailsCleanly(t *testing.T) {
 		t.Fatalf("expected second remove to fail with not-found, got: %v", err)
 	}
 }
+
+func TestRemoveByStoredPathDetectsRefCountInvariantMismatchAndRollsBack(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"corrupt.bin", int64(4), strings.Repeat("d", 64), filestate.LogicalFileCompleted, int64(5),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	storedPath := filepath.Join(t.TempDir(), "corrupt.txt")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 0)`, storedPath, logicalID); err != nil {
+		t.Fatalf("insert physical_file row: %v", err)
+	}
+
+	_, err = RemoveFileByStoredPathWithStorageContextResult(StorageContext{DB: dbconn}, storedPath)
+	if err == nil || !strings.Contains(err.Error(), "ref_count invariant mismatch") {
+		t.Fatalf("expected ref_count invariant mismatch error, got: %v", err)
+	}
+
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, logicalID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count after rollback: %v", err)
+	}
+	if refCount != 5 {
+		t.Fatalf("expected rollback to keep original ref_count=5, got %d", refCount)
+	}
+
+	var mappingCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path = $1`, storedPath).Scan(&mappingCount); err != nil {
+		t.Fatalf("check mapping rollback: %v", err)
+	}
+	if mappingCount != 1 {
+		t.Fatalf("expected rollback to keep physical mapping row, count=%d", mappingCount)
+	}
+}

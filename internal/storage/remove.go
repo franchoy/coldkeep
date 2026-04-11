@@ -129,6 +129,23 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 		return err
 	}
 
+	var actualMappings int64
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`,
+		result.LogicalFileID,
+	).Scan(&actualMappings); err != nil {
+		return err
+	}
+	if actualMappings != result.RemainingRefCount {
+		return fmt.Errorf(
+			"logical_file.ref_count invariant mismatch id=%d expected=%d actual=%d",
+			result.LogicalFileID,
+			result.RemainingRefCount,
+			actualMappings,
+		)
+	}
+
 	return nil
 }
 
