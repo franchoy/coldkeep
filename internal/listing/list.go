@@ -10,7 +10,7 @@ import (
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
-// FileRecord is a single logical file entry returned by list/search.
+// FileRecord is a single current-state physical file entry returned by list/search.
 type FileRecord struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
@@ -34,10 +34,11 @@ func ListFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error) 
 	}
 
 	query := `
-		SELECT id, original_name, file_hash, total_size, created_at
-		FROM logical_file
-		WHERE status = $1
-		ORDER BY created_at DESC
+		SELECT lf.id, pf.path, lf.file_hash, lf.total_size, lf.created_at
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.status = $1
+		ORDER BY pf.path ASC
 	`
 	params := []interface{}{filestate.LogicalFileCompleted}
 	query, params = applyPagination(query, params, 2, limit, offset)
