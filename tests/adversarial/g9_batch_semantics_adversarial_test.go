@@ -272,6 +272,98 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		expectRestoreSucceeds(t, repoRoot, binPath, env, id2, outDir)
 	})
 
+	t.Run("stored-path duplicate explosion remove", func(t *testing.T) {
+		id, storedPath := storeAdversarialBatchFileWithPath(t, repoRoot, binPath, env, inputDir, "g9-sp-dup.txt", "g9-sp-dup")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-paths", storedPath, storedPath, storedPath, storedPath, storedPath, "--output", "json")
+		if res.ExitCode != 0 {
+			t.Fatalf("stored-path duplicate explosion should succeed\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+		payload := parseBatchPayload(t, res)
+		if summaryCount(t, payload, "success") != 1 || summaryCount(t, payload, "skipped") != 4 || summaryCount(t, payload, "failed") != 0 {
+			t.Fatalf("unexpected stored-path duplicate summary: %v", payload)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 5 {
+			t.Fatalf("unexpected stored-path duplicate results shape: %v", payload)
+		}
+		skippedWithMessage := 0
+		for _, raw := range results {
+			item, _ := raw.(map[string]any)
+			status, _ := item["status"].(string)
+			msg, _ := item["message"].(string)
+			rawValue, _ := item["raw_value"].(string)
+			if rawValue != storedPath {
+				t.Fatalf("stored-path duplicate item should preserve raw_value=%q, got %v", storedPath, item)
+			}
+			if status == "skipped" && strings.Contains(strings.ToLower(msg), "duplicate target") {
+				skippedWithMessage++
+			}
+		}
+		if skippedWithMessage != 4 {
+			t.Fatalf("expected duplicate-target skipped message for all duplicate stored paths: %v", payload)
+		}
+
+		outDir := filepath.Join(tmp, "g9-sp-dup-restore")
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			t.Fatalf("mkdir restore dir: %v", err)
+		}
+		expectRestoreFails(t, repoRoot, binPath, env, id, outDir)
+	})
+
+	t.Run("stored-path mixed input ordering under dry-run", func(t *testing.T) {
+		id1, storedPath1 := storeAdversarialBatchFileWithPath(t, repoRoot, binPath, env, inputDir, "g9-sp-order-a.txt", "g9-sp-order-a")
+		id2, storedPath2 := storeAdversarialBatchFileWithPath(t, repoRoot, binPath, env, inputDir, "g9-sp-order-b.txt", "g9-sp-order-b")
+
+		inputFile := filepath.Join(inputDir, "g9_sp_order_paths.txt")
+		content := fmt.Sprintf("# stored path batch\n%s\n%s\n", storedPath2, storedPath1)
+		if err := os.WriteFile(inputFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("write stored-path input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-paths", storedPath1, "/missing/stored/path/order", "--input", inputFile, "--dry-run", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero because stored-path input includes invalid path\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 4 {
+			t.Fatalf("unexpected stored-path mixed-order results payload: %v", payload)
+		}
+
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		fourth, _ := results[3].(map[string]any)
+
+		if first["status"] != "planned" || first["raw_value"] != storedPath1 {
+			t.Fatalf("unexpected first stored-path result: %v", first)
+		}
+		if second["status"] != "failed" || second["raw_value"] != "/missing/stored/path/order" {
+			t.Fatalf("unexpected second stored-path result: %v", second)
+		}
+		if third["status"] != "planned" || third["raw_value"] != storedPath2 {
+			t.Fatalf("unexpected third stored-path result: %v", third)
+		}
+		if fourth["status"] != "skipped" || fourth["raw_value"] != storedPath1 {
+			t.Fatalf("unexpected fourth stored-path result: %v", fourth)
+		}
+		if msg, _ := fourth["message"].(string); !strings.Contains(strings.ToLower(msg), "duplicate target") {
+			t.Fatalf("expected duplicate-target skip message on fourth stored-path result: %v", fourth)
+		}
+
+		outDir := filepath.Join(tmp, "g9-sp-order-restore")
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			t.Fatalf("mkdir restore dir: %v", err)
+		}
+		expectRestoreSucceeds(t, repoRoot, binPath, env, id1, outDir)
+		expectRestoreSucceeds(t, repoRoot, binPath, env, id2, outDir)
+	})
+
 	t.Run("input file mixed chaos", func(t *testing.T) {
 		id1 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-input-a.txt", "g9-input-a")
 		id2 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-input-b.txt", "g9-input-b")
