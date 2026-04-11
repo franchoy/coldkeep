@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -397,7 +398,7 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 		if vol := filepath.VolumeName(relativePath); vol != "" {
 			relativePath = strings.TrimPrefix(relativePath, vol)
 		}
-		relativePath = strings.TrimLeft(relativePath, string(os.PathSeparator)+"/")
+		relativePath = strings.TrimLeft(relativePath, `/\`)
 		if relativePath == "" {
 			return "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
 		}
@@ -707,7 +708,7 @@ func applyPhysicalMetadata(outputPath string, descriptor RestoreDescriptor, opts
 			descriptor.GID.Valid,
 		)
 		if opts.StrictMetadata {
-			return fmt.Errorf(msg)
+			return errors.New(msg)
 		}
 		log.Printf("event=restore_metadata_warning path=%q reason=incomplete_metadata details=%q", outputPath, msg)
 	}

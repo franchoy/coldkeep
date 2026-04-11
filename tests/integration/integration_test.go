@@ -1122,11 +1122,12 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	// Use a Hash/name that will not conflict with the real stored file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		"dangling_write.bin", 1024,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
+		int64(0),
 	).Scan(&danglingID)
 	if err != nil {
 		t.Fatalf("inject dangling PROCESSING logical file: %v", err)
@@ -1210,11 +1211,12 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	// Inject recoverable corruption: dangling PROCESSING logical file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		"doctor_operator_story_dangling.bin", 1024,
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		filestate.LogicalFileProcessing,
+		int64(0),
 	).Scan(&danglingID)
 	if err != nil {
 		t.Fatalf("inject dangling PROCESSING logical file: %v", err)
@@ -1293,11 +1295,12 @@ func TestEndToEndTrustProof(t *testing.T) {
 
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		"trust_proof_crash.bin", 4096,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
+		int64(0),
 	).Scan(&danglingID)
 	if err != nil {
 		t.Fatalf("seed dangling PROCESSING logical_file: %v", err)
@@ -7125,6 +7128,15 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		t.Fatalf("insert file_chunk: %v", err)
 	}
 
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
+		 VALUES ($1, $2, FALSE)`,
+		"/tmp/interleaving.txt",
+		fileID,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -8990,26 +9002,26 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 		second, _ := results[1].(map[string]any)
 		third, _ := results[2].(map[string]any)
 		fourth, _ := results[3].(map[string]any)
-		if first["status"] != "success" || second["status"] != "skipped" || third["status"] != "failed" || fourth["status"] != "success" {
+		if first["status"] != "success" || second["status"] != "success" || third["status"] != "failed" || fourth["status"] != "skipped" {
 			t.Fatalf("unexpected ordered statuses for remove --stored-paths: results=%v", results)
 		}
-		if raw, _ := second["raw_value"].(string); raw != storedPathA {
-			t.Fatalf("expected duplicate skip to carry raw_value=%q, got %v", storedPathA, second)
+		if raw, _ := fourth["raw_value"].(string); raw != storedPathA {
+			t.Fatalf("expected duplicate skip to carry raw_value=%q, got %v", storedPathA, fourth)
 		}
 
 		checkDir := filepath.Join(tmp, "remove_stored_paths_check")
 		if err := os.MkdirAll(checkDir, 0o755); err != nil {
 			t.Fatalf("mkdir checkDir: %v", err)
 		}
-		restoreA := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-			"restore", fmt.Sprintf("%d", idA), checkDir, "--overwrite", "--output", "json")
-		if restoreA.ExitCode == 0 {
-			t.Fatalf("idA should be removed by stored-path batch: stdout=%s stderr=%s", restoreA.Stdout, restoreA.Stderr)
+		removeAgainA := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathA, "--output", "json")
+		if removeAgainA.ExitCode == 0 {
+			t.Fatalf("storedPathA should no longer be removable after batch unlink: stdout=%s stderr=%s", removeAgainA.Stdout, removeAgainA.Stderr)
 		}
-		restoreB := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-			"restore", fmt.Sprintf("%d", idB), checkDir, "--overwrite", "--output", "json")
-		if restoreB.ExitCode == 0 {
-			t.Fatalf("idB should be removed by stored-path batch: stdout=%s stderr=%s", restoreB.Stdout, restoreB.Stderr)
+		removeAgainB := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathB, "--output", "json")
+		if removeAgainB.ExitCode == 0 {
+			t.Fatalf("storedPathB should no longer be removable after batch unlink: stdout=%s stderr=%s", removeAgainB.Stdout, removeAgainB.Stderr)
 		}
 	})
 
@@ -9220,7 +9232,7 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 		}
 
 		verifyAfter := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-			"verify", "--output", "json")
+			"verify", "system", "--output", "json")
 		if verifyAfter.ExitCode != 0 {
 			t.Fatalf("verify should pass after first batch repair success item, got exit=%d stdout=%s stderr=%s", verifyAfter.ExitCode, verifyAfter.Stdout, verifyAfter.Stderr)
 		}
@@ -9256,14 +9268,19 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 			t.Fatalf("repair --batch --fail-fast produced no JSON stdout: %s", res.Stdout)
 		}
 		results, ok := payload["results"].([]any)
-		if !ok || len(results) != 1 {
-			t.Fatalf("expected fail-fast to stop after first failed target, results=%v payload=%v", results, payload)
+		if !ok || len(results) != 2 {
+			t.Fatalf("expected invalid target to fail and executable repair target to still run, results=%v payload=%v", results, payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		if first["status"] != "failed" || second["status"] != "success" {
+			t.Fatalf("unexpected repair fail-fast result ordering: results=%v", results)
 		}
 
 		verifyFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-			"verify", "--output", "json")
-		if verifyFail.ExitCode != 3 {
-			t.Fatalf("verify should fail because repair execution was skipped by fail-fast, got exit=%d stdout=%s stderr=%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
+			"verify", "system", "--output", "json")
+		if verifyFail.ExitCode != 0 {
+			t.Fatalf("verify should pass because executable repair target still ran after invalid target precheck, got exit=%d stdout=%s stderr=%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
 		}
 
 		// Cleanup the induced drift so later subtests are unaffected.

@@ -616,6 +616,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			"command": "store",
 			"data": map[string]any{
 				"path":           result.Path,
+				"stored_path":    result.Path,
 				"file_id":        result.FileID,
 				"file_hash":      result.FileHash,
 				"already_stored": result.AlreadyStored,

@@ -10,28 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
-type queryRower interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
-type queryExecer interface {
-	queryRower
-	execer
-}
-
-type logicalFileRecord struct {
-	ID       int64
-	Status   string
-	RefCount int64
 }
 
 type physicalFileRecord struct {
@@ -117,62 +101,6 @@ func buildPhysicalFileMetadata(fileInfo os.FileInfo) physicalFileMetadata {
 
 	meta.IsMetadataComplete = meta.Mode.Valid && meta.MTime.Valid && meta.UID.Valid && meta.GID.Valid
 	return meta
-}
-
-func getLogicalFileByHashAndSize(ctx context.Context, q queryRower, fileHash string, totalSize int64) (logicalFileRecord, error) {
-	var rec logicalFileRecord
-	err := q.QueryRowContext(
-		ctx,
-		`SELECT id, status, ref_count FROM logical_file WHERE file_hash = $1 AND total_size = $2`,
-		fileHash,
-		totalSize,
-	).Scan(&rec.ID, &rec.Status, &rec.RefCount)
-	if err != nil {
-		return logicalFileRecord{}, err
-	}
-	return rec, nil
-}
-
-func insertLogicalFile(ctx context.Context, q queryRower, originalName string, totalSize int64, fileHash string, status string, refCount int64) (int64, error) {
-	var id int64
-	err := q.QueryRowContext(
-		ctx,
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id`,
-		originalName,
-		totalSize,
-		fileHash,
-		status,
-		refCount,
-	).Scan(&id)
-	if err != nil {
-		return 0, err
-	}
-	return id, nil
-}
-
-func getPhysicalFileByPath(ctx context.Context, q queryRower, path string) (physicalFileRecord, error) {
-	var rec physicalFileRecord
-	err := q.QueryRowContext(
-		ctx,
-		`SELECT path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete
-		 FROM physical_file
-		 WHERE path = $1`,
-		path,
-	).Scan(
-		&rec.Path,
-		&rec.LogicalFileID,
-		&rec.Mode,
-		&rec.MTime,
-		&rec.UID,
-		&rec.GID,
-		&rec.IsMetadataComplete,
-	)
-	if err != nil {
-		return physicalFileRecord{}, err
-	}
-	return rec, nil
 }
 
 func insertPhysicalFile(ctx context.Context, ex execer, path string, logicalFileID int64, meta physicalFileMetadata) error {
@@ -336,11 +264,4 @@ func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx 
 	}
 
 	return nil
-}
-
-func nullableTime(t time.Time) sql.NullTime {
-	if t.IsZero() {
-		return sql.NullTime{}
-	}
-	return sql.NullTime{Time: t.UTC(), Valid: true}
 }
