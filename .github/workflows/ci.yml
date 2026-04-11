@@ -274,7 +274,7 @@ jobs:
           go-version: '1.23'
           cache: true
 
-      - name: Run adversarial validation (G1–G8)
+      - name: Run adversarial validation (G1–G9)
         env:
           COLDKEEP_TEST_DB: 1
           COLDKEEP_LONG_RUN: 1
