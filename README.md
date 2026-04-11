@@ -70,7 +70,7 @@ See VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
 - Atomic restore replacement (within single-node local filesystem semantics)
 - Safe in-process concurrent storage operations
 
-### Core invariants
+### Guarantees (G1-G13)
 
 Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 
@@ -206,6 +206,7 @@ Semantics (summary):
 - process exit is automation-friendly:
   - 0 when no item fails
   - 1 when one or more items fail
+  - 2 for pre-execution validation/usage failures (including empty effective target sets after parsing input)
 
 Example JSON payload:
 
@@ -237,8 +238,6 @@ Example JSON payload:
   ]
 }
 ```
-
-Clarifier: the binary 0/1 mapping applies to executed batch reports. Pre-execution validation/usage failures (including empty effective target sets after parsing input) return usage exit code 2.
 
 For full batch contract details and examples, see ARCHITECTURE.md and PRE_RELEASE_CHECKLIST.md.
 
