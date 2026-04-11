@@ -23,7 +23,7 @@ func (s PhysicalFileIntegritySummary) totalIssues() int64 {
 	return s.OrphanPhysicalFileRows + s.LogicalRefCountMismatches + s.NegativeLogicalRefCounts
 }
 
-func checkPhysicalFileGraphIntegrity(dbconn *sql.DB) (PhysicalFileIntegritySummary, error) {
+func CheckPhysicalFileGraphIntegrity(dbconn *sql.DB) (PhysicalFileIntegritySummary, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 

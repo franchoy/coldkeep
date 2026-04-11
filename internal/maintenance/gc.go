@@ -9,11 +9,16 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
 	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
 	return err
+}
+
+var gcPhysicalIntegrityCheck = func(dbconn *sql.DB) (verify.PhysicalFileIntegritySummary, error) {
+	return verify.CheckPhysicalFileGraphIntegrity(dbconn)
 }
 
 // GCResult contains structured metadata about a GC run.
@@ -61,6 +66,21 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
 		}
 	}()
+
+	// Pre-flight: refuse GC if the physical_file graph has integrity issues.
+	// Proceeding on a drifted graph risks treating live blocks as unreferenced.
+	integrity, err := gcPhysicalIntegrityCheck(dbconn)
+	if err != nil {
+		return GCResult{}, fmt.Errorf("GC pre-flight integrity check failed: %w", err)
+	}
+	if integrity.OrphanPhysicalFileRows > 0 || integrity.LogicalRefCountMismatches > 0 || integrity.NegativeLogicalRefCounts > 0 {
+		return GCResult{}, fmt.Errorf(
+			"GC refused: physical_file graph integrity issues detected (orphan_rows=%d ref_count_mismatches=%d negative_ref_counts=%d); run 'repair ref-counts' first",
+			integrity.OrphanPhysicalFileRows,
+			integrity.LogicalRefCountMismatches,
+			integrity.NegativeLogicalRefCounts,
+		)
+	}
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename

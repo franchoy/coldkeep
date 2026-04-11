@@ -12,6 +12,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 func requireDB(t *testing.T) {
@@ -121,5 +122,43 @@ func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	}
 	if remaining != 0 {
 		t.Fatalf("expected container row to be deleted, got %d", remaining)
+	}
+}
+
+func TestRunGCRefusesOnPhysicalIntegrityIssues(t *testing.T) {
+	// This test stubs gcPhysicalIntegrityCheck to simulate a drifted graph.
+	// No DB connection required — the refusal path is exercised before any
+	// container work begins.
+	requireDB(t)
+
+	originalCheck := gcPhysicalIntegrityCheck
+	t.Cleanup(func() { gcPhysicalIntegrityCheck = originalCheck })
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	gcPhysicalIntegrityCheck = func(_ *sql.DB) (verify.PhysicalFileIntegritySummary, error) {
+		return verify.PhysicalFileIntegritySummary{
+			OrphanPhysicalFileRows:    0,
+			LogicalRefCountMismatches: 3,
+			NegativeLogicalRefCounts:  0,
+		}, nil
+	}
+
+	_, gcErr := RunGCWithContainersDirResult(false, t.TempDir())
+	if gcErr == nil {
+		t.Fatal("expected GC to be refused but got no error")
+	}
+	if !strings.Contains(gcErr.Error(), "GC refused") {
+		t.Fatalf("expected error to mention 'GC refused', got: %v", gcErr)
+	}
+	if !strings.Contains(gcErr.Error(), "ref_count_mismatches=3") {
+		t.Fatalf("expected error to include mismatch count, got: %v", gcErr)
 	}
 }

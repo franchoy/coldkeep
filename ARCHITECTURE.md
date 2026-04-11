@@ -308,7 +308,7 @@ The explicit repair boundary is now defined:
 
 This preserves a clear source of truth: current-state `physical_file` rows win for ref-count reconstruction, while orphan `physical_file` rows remain a hard integrity failure that must be investigated rather than silently rewritten.
 
-This phase also prepares GC directionally: future GC logic can rely on audited physical roots rather than trusting write-path assumptions alone.
+This phase also wires GC to the audited physical roots: `RunGCWithContainersDirResult` runs `CheckPhysicalFileGraphIntegrity` as a pre-flight immediately after acquiring the advisory lock. If any integrity issue is detected (orphan `physical_file` rows, `ref_count` mismatches, or negative ref counts), GC is refused with an actionable error directing the operator to run `repair ref-counts` first. This prevents GC from treating live blocks as unreferenced due to drift in `logical_file.ref_count`.
 
 ### Dry-run Support (Deferred to Phase 5)
 
