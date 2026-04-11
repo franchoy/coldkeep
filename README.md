@@ -84,6 +84,8 @@ Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 - G8: corrective health gate contract stability
 - G9: deterministic batch CLI orchestration and automation-safe contract behavior
 
+Post-v1.0 extension guarantees G10-G13 (physical graph coherence, audited GC roots, invariant classification, and batch maintenance reporting semantics) are tracked in VALIDATION_MATRIX.md.
+
 Coldkeep separates system understanding into:
 
 - README.md (overview and usage)
@@ -200,6 +202,37 @@ Semantics (summary):
 - process exit is automation-friendly:
   - 0 when no item fails
   - 1 when one or more items fail
+
+Example JSON payload:
+
+```json
+{
+  "status": "partial_failure",
+  "operation": "repair",
+  "dry_run": false,
+  "execution_mode": "continue_on_error",
+  "summary": {
+    "total": 2,
+    "succeeded": 1,
+    "failed": 1,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "id": "ref-counts",
+      "status": "success",
+      "message": "logical_file ref_count values repaired"
+    },
+    {
+      "id": "ref-counts",
+      "status": "failed",
+      "message": "repair refused: orphan physical_file rows detected",
+      "invariant_code": "REPAIR_REFUSED_ORPHAN_ROWS",
+      "recommended_action": "Remove or correct orphan physical_file rows before retrying repair."
+    }
+  ]
+}
+```
 
 Clarifier: the binary 0/1 mapping applies to executed batch reports. Pre-execution validation/usage failures (including empty effective target sets after parsing input) return usage exit code 2.
 

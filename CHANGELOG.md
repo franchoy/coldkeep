@@ -26,7 +26,7 @@ production stability.
 
 - Documented post-v1.1 technical-debt cleanup plan for legacy plan-based batch APIs:
   `BuildPlan` and `ExecutePlan` are deprecated transitional helpers and are
-  candidates for removal in v1.2 or isolation into a dedicated legacy file.
+  candidates for removal beyond v1.2 or isolation into a dedicated legacy file.
 
 ------------------------------------------------------------------------
 

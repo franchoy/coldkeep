@@ -365,7 +365,7 @@ CLI error payloads now include optional advisory metadata when an invariant code
 
 This improves operator guidance while keeping doctor detect-only for physical-layer drift and preserving the explicit repair boundary.
 
-### Dry-run Support (Deferred to Phase 5)
+### Dry-run Support (Deferred beyond v1.2)
 
 v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
 
@@ -375,7 +375,7 @@ v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
 - Exposing dry-run now would require significant refactoring of the cascade logic
 - The overhead of implementing dry-run correctly (separate read-only simulation) is not justified for the initial release
 
-**Phase 5 Plan:**
+**Post-v1.2 plan:**
 Dry-run support for `remove --stored-path` will be added when:
 1. The remove transaction primitive is refactored for independent preview semantics
 2. Integration tests validate that dry-run output accurately mirrors execute behavior
