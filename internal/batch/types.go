@@ -6,6 +6,7 @@ type OperationType string
 const (
 	OperationRestore OperationType = "restore"
 	OperationRemove  OperationType = "remove"
+	OperationRepair  OperationType = "repair"
 )
 
 // RawTarget is a target as entered by the user, before normalization.
@@ -45,12 +46,14 @@ const (
 
 // ItemResult describes the outcome of one target.
 type ItemResult struct {
-	ID           int64            `json:"id"`
-	RawValue     string           `json:"raw_value,omitempty"`
-	Status       ItemResultStatus `json:"status"`
-	Message      string           `json:"message,omitempty"`
-	OutputPath   string           `json:"output_path,omitempty"`
-	OriginalName string           `json:"original_name,omitempty"`
+	ID                int64            `json:"id"`
+	RawValue          string           `json:"raw_value,omitempty"`
+	Status            ItemResultStatus `json:"status"`
+	Message           string           `json:"message,omitempty"`
+	InvariantCode     string           `json:"invariant_code,omitempty"`
+	RecommendedAction string           `json:"recommended_action,omitempty"`
+	OutputPath        string           `json:"output_path,omitempty"`
+	OriginalName      string           `json:"original_name,omitempty"`
 }
 
 // Summary aggregates all item outcomes.

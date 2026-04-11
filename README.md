@@ -175,6 +175,7 @@ coldkeep restore 12 18 24 ./out
 coldkeep remove 12 18 24
 coldkeep remove --input ids.txt
 coldkeep remove --stored-paths /data/a.txt /data/b.txt --input paths.txt
+coldkeep repair ref-counts --batch --input repair_targets.txt
 coldkeep restore 12 18 ./out --dry-run
 ```
 

@@ -1423,3 +1423,106 @@ func TestRunRepairCommandIntegrityFailureUsesVerifyExitClass(t *testing.T) {
 		t.Fatalf("expected verify exit code %d, got %d", exitVerify, got)
 	}
 }
+
+func TestRunRepairCommandBatchJSONPartialFailure(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	defer func() {
+		repairLogicalRefCountsPhase = originalRepair
+	}()
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{
+			ScannedLogicalFiles:    4,
+			UpdatedLogicalFiles:    1,
+			OrphanPhysicalFileRows: 0,
+		}, nil
+	}
+
+	var runErr error
+	output := captureStdout(t, func() {
+		runErr = runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"ref-counts", "unknown-target", "ref-counts"},
+			flags: map[string][]string{
+				"batch":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+	})
+
+	if runErr == nil {
+		t.Fatal("expected non-nil error for batch partial failure")
+	}
+	if got := classifyExitCode(runErr); got != exitUsage {
+		t.Fatalf("expected usage exit code %d for mixed valid/invalid targets, got %d", exitUsage, got)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch repair JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["status"].(string); got != "partial_failure" {
+		t.Fatalf("expected status=partial_failure, got payload=%v", payload)
+	}
+	if got, _ := payload["command"].(string); got != "repair" {
+		t.Fatalf("expected command=repair, got payload=%v", payload)
+	}
+
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary object, got payload=%v", payload)
+	}
+	if int(summary["success"].(float64)) != 1 || int(summary["failed"].(float64)) != 1 || int(summary["skipped"].(float64)) != 1 {
+		t.Fatalf("unexpected summary for repair batch partial failure: %v", summary)
+	}
+}
+
+func TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	defer func() {
+		repairLogicalRefCountsPhase = originalRepair
+	}()
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{}, invariants.New(
+			invariants.CodeRepairRefusedOrphanRows,
+			"ref_count repair refused: orphan physical_file rows=1",
+			nil,
+		)
+	}
+
+	var runErr error
+	output := captureStdout(t, func() {
+		runErr = runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"ref-counts"},
+			flags: map[string][]string{
+				"batch":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+	})
+
+	if runErr == nil {
+		t.Fatal("expected non-nil error for invariant-coded batch repair failure")
+	}
+	if got := classifyExitCode(runErr); got != exitVerify {
+		t.Fatalf("expected verify exit code %d, got %d", exitVerify, got)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch repair JSON output: %v output=%q", err, output)
+	}
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected one result in batch repair payload, got=%v payload=%v", results, payload)
+	}
+	first, _ := results[0].(map[string]any)
+	if got, _ := first["invariant_code"].(string); got != invariants.CodeRepairRefusedOrphanRows {
+		t.Fatalf("expected invariant_code=%s, got first=%v", invariants.CodeRepairRefusedOrphanRows, first)
+	}
+	if action, _ := first["recommended_action"].(string); !strings.Contains(action, "orphan physical_file") {
+		t.Fatalf("expected recommended_action to mention orphan physical_file handling, got first=%v", first)
+	}
+}

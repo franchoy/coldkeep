@@ -1021,10 +1021,14 @@ func printBatchHumanReport(label string, report batch.Report) {
 		case batch.ResultSuccess:
 			if item.OutputPath != "" {
 				fmt.Printf("✔ id=%-6d -> %s\n", item.ID, item.OutputPath)
-			} else if item.Message != "" {
+			} else if item.ID > 0 && item.Message != "" {
 				fmt.Printf("✔ id=%-6d %s\n", item.ID, item.Message)
+			} else if strings.TrimSpace(item.RawValue) != "" && item.Message != "" {
+				fmt.Printf("✔ input=%q %s\n", item.RawValue, item.Message)
+			} else if item.Message != "" {
+				fmt.Printf("✔ %s\n", item.Message)
 			} else {
-				fmt.Printf("✔ id=%-6d success\n", item.ID)
+				fmt.Printf("✔ success\n")
 			}
 		case batch.ResultFailed:
 			if item.ID > 0 {
@@ -1034,10 +1038,28 @@ func printBatchHumanReport(label string, report batch.Report) {
 			} else {
 				fmt.Printf("✖ error=%s\n", item.Message)
 			}
+			if strings.TrimSpace(item.InvariantCode) != "" {
+				fmt.Printf("  invariant_code=%s\n", item.InvariantCode)
+			}
+			if strings.TrimSpace(item.RecommendedAction) != "" {
+				fmt.Printf("  recommended_action=%s\n", item.RecommendedAction)
+			}
 		case batch.ResultSkipped:
-			fmt.Printf("↷ id=%-6d skipped %s\n", item.ID, item.Message)
+			if item.ID > 0 {
+				fmt.Printf("↷ id=%-6d skipped %s\n", item.ID, item.Message)
+			} else if strings.TrimSpace(item.RawValue) != "" {
+				fmt.Printf("↷ input=%q skipped %s\n", item.RawValue, item.Message)
+			} else {
+				fmt.Printf("↷ skipped %s\n", item.Message)
+			}
 		case batch.ResultPlanned:
-			fmt.Printf("  id=%-6d %s\n", item.ID, item.Message)
+			if item.ID > 0 {
+				fmt.Printf("  id=%-6d %s\n", item.ID, item.Message)
+			} else if strings.TrimSpace(item.RawValue) != "" {
+				fmt.Printf("  input=%q %s\n", item.RawValue, item.Message)
+			} else {
+				fmt.Printf("  %s\n", item.Message)
+			}
 		}
 	}
 	fmt.Println("Summary:")
@@ -1257,6 +1279,12 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 			if item.OriginalName != "" {
 				encoded["original_name"] = item.OriginalName
 			}
+			if strings.TrimSpace(item.InvariantCode) != "" {
+				encoded["invariant_code"] = item.InvariantCode
+			}
+			if strings.TrimSpace(item.RecommendedAction) != "" {
+				encoded["recommended_action"] = item.RecommendedAction
+			}
 			if item.Status == batch.ResultFailed && item.Message != "" {
 				encoded["error"] = item.Message
 			} else if item.Status == batch.ResultSkipped {
@@ -1296,9 +1324,15 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 func deriveBatchFailureExitCode(report batch.Report) int {
 	hasValidationFailures := false
 	hasExecutionFailures := false
+	hasVerifyFailures := false
 
 	for _, item := range report.Results {
 		if item.Status != batch.ResultFailed {
+			continue
+		}
+
+		if strings.TrimSpace(item.InvariantCode) != "" {
+			hasVerifyFailures = true
 			continue
 		}
 
@@ -1310,6 +1344,9 @@ func deriveBatchFailureExitCode(report batch.Report) int {
 		hasExecutionFailures = true
 	}
 
+	if hasVerifyFailures {
+		return exitVerify
+	}
 	if hasExecutionFailures {
 		return exitGeneral
 	}
@@ -1409,9 +1446,30 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "batch", "input", "fail-fast", "failFast"); err != nil {
 		return err
 	}
+
+	batchMode := parsed.hasFlag("batch")
+	if batchMode {
+		inputFile, _ := parsed.lastFlagValue("input")
+		rawTargets, err := batch.LoadRawTargets(parsed.positionals, inputFile)
+		if err != nil {
+			return usageErrorf("failed to open/read input file: %v", err)
+		}
+		if len(rawTargets) == 0 {
+			return usageErrorf("Usage: coldkeep repair ref-counts --batch [--input <file>] [--fail-fast] [--output <text|json>]")
+		}
+
+		prepared := prepareRepairTargets(rawTargets)
+		if len(prepared) == 0 {
+			return usageErrorf("no valid repair targets after parsing input")
+		}
+
+		report := executeRepairPrepared(parsed.hasFlag("fail-fast", "failFast"), prepared)
+		return emitBatchCommandReport("repair", report, outputMode)
+	}
+
 	if len(parsed.positionals) != 1 || parsed.positionals[0] != "ref-counts" {
 		return usageErrorf("Usage: coldkeep repair ref-counts [--output <text|json>]")
 	}
@@ -1444,6 +1502,103 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	)
 	fmt.Printf("Hint: %s\n", doctorOperationalHint)
 	return nil
+}
+
+type preparedRepairTarget struct {
+	Target     string
+	Executable bool
+	Result     batch.ItemResult
+}
+
+func prepareRepairTargets(raw []batch.RawTarget) []preparedRepairTarget {
+	prepared := make([]preparedRepairTarget, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+
+	for _, item := range raw {
+		target := strings.TrimSpace(item.Value)
+		if target == "" {
+			prepared = append(prepared, preparedRepairTarget{
+				Executable: false,
+				Result: batch.ItemResult{
+					RawValue: item.Value,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("invalid repair target %q", item.Value),
+				},
+			})
+			continue
+		}
+
+		if target != "ref-counts" {
+			prepared = append(prepared, preparedRepairTarget{
+				Executable: false,
+				Result: batch.ItemResult{
+					RawValue: item.Value,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("unknown repair target %q", item.Value),
+				},
+			})
+			continue
+		}
+
+		if _, exists := seen[target]; exists {
+			prepared = append(prepared, preparedRepairTarget{
+				Executable: false,
+				Result: batch.ItemResult{
+					RawValue: target,
+					Status:   batch.ResultSkipped,
+					Message:  "duplicate target",
+				},
+			})
+			continue
+		}
+
+		seen[target] = struct{}{}
+		prepared = append(prepared, preparedRepairTarget{Target: target, Executable: true})
+	}
+
+	return prepared
+}
+
+func executeRepairPrepared(failFast bool, targets []preparedRepairTarget) batch.Report {
+	results := make([]batch.ItemResult, 0, len(targets))
+
+	for _, target := range targets {
+		if !target.Executable {
+			results = append(results, target.Result)
+			continue
+		}
+
+		result, err := repairLogicalRefCountsPhase()
+		if err != nil {
+			item := batch.ItemResult{
+				RawValue: target.Target,
+				Status:   batch.ResultFailed,
+				Message:  fmt.Sprintf("repair ref-counts failed: %v", err),
+			}
+			if code, ok := invariants.Code(err); ok {
+				item.InvariantCode = code
+				item.RecommendedAction = invariants.RecommendedActionForCode(code)
+			}
+			results = append(results, item)
+			if failFast {
+				break
+			}
+			continue
+		}
+
+		results = append(results, batch.ItemResult{
+			RawValue: target.Target,
+			Status:   batch.ResultSuccess,
+			Message: fmt.Sprintf(
+				"repaired scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d",
+				result.ScannedLogicalFiles,
+				result.UpdatedLogicalFiles,
+				result.OrphanPhysicalFileRows,
+			),
+		})
+	}
+
+	return batch.NewReport(batch.OperationRepair, false, results)
 }
 
 func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -1964,7 +2119,7 @@ func printHelp() {
 		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (legacy mode)"},
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  remove --stored-paths <path> [<path> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Batch remove physical path mappings in deterministic input order"},
-		{"  repair ref-counts [--output <text|json>]", "Recompute logical_file.ref_count from physical_file rows (explicit repair)"},
+		{"  repair ref-counts [--batch] [--input <file>] [--fail-fast] [--output <text|json>]", "Recompute logical_file.ref_count from physical_file rows (explicit repair)"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
