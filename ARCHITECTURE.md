@@ -227,14 +227,24 @@ These contracts are validated by targeted adversarial orchestration tests and tr
 
 ## Evolution Note: v1.2 physical_file Layer
 
-v1.2 is planned to introduce a physical_file to logical_file relationship.
-This is expected to extend the external model (path/folder restore semantics) while preserving core architecture pillars:
+v1.2 introduces the `physical_file` to `logical_file` relationship.
+This extends the external model (path/folder restore semantics, explicit current-state roots, repair boundaries, and GC pre-flight integrity gating) while preserving core architecture pillars:
 
 - chunk identity model
 - container/block model
 - lifecycle and recovery philosophy
 - storage correctness guarantees G1-G8
 - interface correctness direction from G9 onward
+
+### Current batch invariant strategy
+
+For v1.2 batch operations (`restore`, `remove`, `repair --batch`), invariant preservation is enforced per item rather than once at batch end.
+
+- This is the intentional safety-first design for the current release.
+- It keeps failure isolation simple and deterministic.
+- It ensures every successful item leaves the system in a verified-consistent state before the next item executes.
+
+Future performance work may introduce optional post-batch invariant enforcement or batched SQL primitives, but that is explicitly deferred beyond v1.2.
 
 ### Path Identity Policy
 

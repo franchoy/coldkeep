@@ -27,10 +27,10 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.1%20interface--correctness%20milestone-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.2%20physical--file%20and%20operator%20semantics-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.1 adds an interface-correctness layer on top of the v1.0 storage-correctness core.
+> Status: v1.2 adds the physical-file mapping layer, explicit repair boundaries, audited GC roots, and deterministic batch operator semantics on top of the v1.0/v1.1 correctness core.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -51,10 +51,11 @@ The goal is confidence and recoverability over maximum throughput.
 
 ## Status
 
-Coldkeep currently has two explicit correctness layers:
+Coldkeep currently has three explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
+- v1.2: physical-file graph coherence, explicit repair semantics, audited GC refusal, and invariant-aware batch maintenance reporting
 
 Guarantees are enforced through automated validation and CI gates.
 See VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
@@ -166,18 +167,25 @@ coldkeep simulate store-folder ./data
 coldkeep simulate store file.txt --output json
 ```
 
-## Batch Operations (v1.1)
+## Batch Operations (v1.2)
 
-Batch restore/remove expands v1.1 interface correctness for automation.
+Batch restore/remove/repair extends the automation contract with deterministic orchestration and invariant-aware reporting.
 
 ```bash
 coldkeep restore 12 18 24 ./out
 coldkeep remove 12 18 24
 coldkeep remove --input ids.txt
 coldkeep remove --stored-paths /data/a.txt /data/b.txt --input paths.txt
-coldkeep repair ref-counts --batch --input repair_targets.txt
+coldkeep repair ref-counts --batch
+coldkeep repair --batch --input repair_targets.txt
 coldkeep restore 12 18 ./out --dry-run
 ```
+
+Current `repair --batch` scope is target-oriented, not item-oriented:
+
+- today the only supported batch repair target is `ref-counts`
+- input files for `repair --batch --input <file>` currently contain repeated repair target names such as `ref-counts`
+- they do not contain file IDs or stored paths
 
 Semantics (summary):
 
@@ -237,11 +245,9 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Release readiness flow: PRE_RELEASE_CHECKLIST.md
 - Security reporting and threat guidance: SECURITY.md
 
-## Roadmap note (v1.2 and beyond)
+## Roadmap note (v1.3 and beyond)
 
-v1.2 is planned to introduce a physical_file to logical_file mapping layer to preserve
-filesystem structure semantics more explicitly. This is an extension of the architecture,
-not a reset of the core correctness model (G1-G9).
+v1.2 now includes the `physical_file` to `logical_file` mapping layer, explicit `repair ref-counts`, audited GC refusal on drifted roots, and deterministic batch maintenance semantics. Future work is expected to focus on performance, broader repair scopes, and higher-level orchestration rather than changing the core correctness model.
 
 ## Contributing
 
