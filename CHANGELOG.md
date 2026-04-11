@@ -12,21 +12,113 @@ production stability.
 
 ## [Unreleased]
 
+Nothing pending beyond v1.2.
+
+------------------------------------------------------------------------
+
+## [1.2.0] - 2026-04-11
+
+Physical-file layer and operator semantics milestone.
+
+v1.0 established storage correctness.
+v1.1 established interface correctness.
+v1.2 establishes physical-graph coherence: the system now knows and audits
+*where* each logical file lives, can repair drifted reference counts explicitly,
+and refuses GC when the physical root graph is inconsistent.
+
+### Added
+
+- **`physical_file` table** — new schema object (schema version 6) that maps each
+  current-state filesystem path to its owning `logical_file`. Managed by the
+  `physical_file_repository` layer.
+- **`remove --stored-path <path>`** — removes one physical-path mapping and
+  decrements `logical_file.ref_count`. Emits `remaining_ref_count` in JSON output.
+- **`remove --stored-paths <path> [path …]`** — batch stored-path remove with
+  the same deterministic batch contract as ID-based batch remove (input-order
+  preservation, deduplication, fail-fast, dry-run support absent for
+  stored-path per documented deferral).
+- **`restore --stored-path <path>`** — restore a file by its stored path, with
+  optional `--mode` (`original` / `prefix` / `override`) and `--destination`.
+- **`repair ref-counts [--output json]`** — explicit operator command that
+  recomputes `logical_file.ref_count` from `physical_file` rows. Reports
+  `updated_logical_files` and `scanned_logical_files`.
+- **`repair --batch [--input <file>] [--fail-fast]`** — batch maintenance layer
+  for `repair` operations (currently `ref-counts`), following the same batch
+  contract as `restore` and `remove`.
+- **Physical graph audit in `verify system`** — standard verify now checks:
+  - orphan `physical_file` rows whose `logical_file_id` points nowhere
+  - `logical_file.ref_count` drift relative to `COUNT(physical_file rows)`
+  - impossible negative `logical_file.ref_count` states
+  - Failures carry machine-readable `invariant_code` and `recommended_action`.
+- **Audited GC root gate** — `gc` (including dry-run) runs
+  `CheckPhysicalFileGraphIntegrity` as a mandatory pre-flight after acquiring the
+  advisory lock. A drifted root graph refuses GC with `GC_REFUSED_INTEGRITY`.
+- **Typed invariant taxonomy** (`internal/invariants`) — stable, machine-readable
+  error codes for physical graph failures: `PHYSICAL_GRAPH_ORPHAN`,
+  `PHYSICAL_GRAPH_REFCOUNT_MISMATCH`, `PHYSICAL_GRAPH_NEGATIVE_REFCOUNT`,
+  `GC_REFUSED_INTEGRITY`, `REPAIR_REFUSED_ORPHAN_ROWS`.
+- **`invariant_code` + `recommended_action` in JSON error payloads** — all
+  physical-graph verify failures and GC/repair refusals now include advisory
+  metadata in both JSON (`invariant_code`, `recommended_action`) and text output.
+- **`stored_path` field in store JSON output** — `coldkeep store --output json`
+  now includes `stored_path` alongside `file_id` and `path`.
+- **`docs/PATH_IDENTITY.md`** — canonical reference for path identity policy
+  (canonicalization, case-sensitivity, symlink behavior) in the v1.2
+  `physical_file` layer.
+- **G10–G13 guarantees** — post-v1.0 extensions tracked in `VALIDATION_MATRIX.md`:
+  - G10: physical graph audit (orphan/ref-count coherence)
+  - G11: audited GC root gate (pre-flight on drifted graph)
+  - G12: stable invariant error taxonomy (machine-readable codes)
+  - G13: batch maintenance reporting semantics (`execution_mode`,
+    per-item `success`/`failed`/`skipped`, `recommended_action` on refusal)
+- Schema migration to version 6 (`physical_file` table, index on
+  `physical_file(logical_file_id)`).
+
 ### Changed
 
-- Clarified CLI help for batch `restore`/`remove` JSON status semantics by
-  explicitly defining `ok`, `partial_failure`, and `error`, including that
-  `partial_failure` means at least one item failed while others succeeded or
-  were planned.
-- Clarified batch process exit-code behavior in CLI help: exit `0` when no item
-  fails, exit `1` when any item fails, and exit `2` for pre-execution
-  usage/validation errors.
+- `list --output json` and `search --output json` now include `stored_path` per
+  file entry when a physical mapping exists.
+- `doctor` verify phase now includes the physical graph audit; a drifted graph
+  causes `doctor` to exit with `PHYSICAL_GRAPH_REFCOUNT_MISMATCH`.
+- `repair` extended with `ref-counts` sub-command and batch wrapper; existing
+  `repair --batch` tests cover mixed-input ordering and fail-fast semantics.
+- Clarified batch `restore`/`remove` CLI help: JSON `status` values are
+  `ok`, `partial_failure`, `error` (overall) and `success`, `failed`,
+  `skipped`, `planned` (per-item). Exit `0` when no item fails, `1` when any
+  item fails, `2` for pre-execution usage/validation errors.
 
-### TODO
+### Fixed
 
-- Documented post-v1.1 technical-debt cleanup plan for legacy plan-based batch APIs:
-  `BuildPlan` and `ExecutePlan` are deprecated transitional helpers and are
+- `strings.TrimLeft` path separator cutset in `restore.go` corrected to handle
+  both `/` and `\` reliably.
+- Unused helper types in `physical_file_repository.go` removed (lint/staticcheck
+  cleanliness).
+
+### Technical debt noted (post-v1.2)
+
+- `BuildPlan` and `ExecutePlan` are deprecated transitional helpers and are
   candidates for removal beyond v1.2 or isolation into a dedicated legacy file.
+- Dry-run support for `remove --stored-path` is deferred beyond v1.2 (rationale
+  documented in ARCHITECTURE.md under "Dry-run Support").
+
+### Notes
+
+- `remove --stored-path` unlinks one physical mapping at a time; the logical
+  file and its data remain restorable as long as any physical mapping still
+  exists. Removing all mappings does not automatically trigger GC: the logical
+  file row persists with `ref_count=0` until GC runs.
+- `repair ref-counts` is an explicit operator command, not an automatic
+  background repair. `doctor` detects drift but does not auto-repair.
+- The explicit repair boundary: `verify` detects, `doctor` recovers + detects,
+  `repair ref-counts` is the only write-path for fixing drift.
+- On-disk format and internal structures may evolve in future versions.
+
+### Guarantees
+
+- Introduces G10: physical graph audit (orphan/ref-count coherence in `verify system`)
+- Introduces G11: audited GC root gate (pre-flight refusal on drifted graph)
+- Introduces G12: stable invariant error taxonomy (machine-readable codes)
+- Introduces G13: batch maintenance reporting semantics (execution_mode, per-item isolation)
 
 ------------------------------------------------------------------------
 

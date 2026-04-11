@@ -16,16 +16,28 @@ The architecture composes:
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
 
-Correctness has two explicit layers:
+Correctness has three explicit layers:
 
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
+- v1.2 physical-graph coherence: audited physical roots, explicit repair, invariant taxonomy, batch maintenance semantics
 
 ### Correctness Layers
 
 This diagram is a mental anchor for how guarantees compose across layers.
 
 ```text
++------------------------------------------------------------+
+| Physical Graph Coherence (v1.2 - G10..G13)                |
+|------------------------------------------------------------|
+| Audited physical_file root graph                           |
+| Explicit repair boundary (repair ref-counts)               |
+| GC pre-flight integrity gate                               |
+| Invariant error taxonomy + batch maintenance reporting     |
++------------------------------------------------------------+
+    ^
+    | extends interface layer
+    |
 +------------------------------------------------------------+
 | Interface Correctness (v1.1 - G9)                         |
 |------------------------------------------------------------|
