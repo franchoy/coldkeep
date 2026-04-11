@@ -65,6 +65,39 @@ func TestIntegrationHarnessSmoke(t *testing.T) {
 	}
 }
 
+func assertPhysicalGraphCoherentIntegration(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+
+	var orphanRows int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM physical_file pf
+		LEFT JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.id IS NULL
+	`).Scan(&orphanRows); err != nil {
+		t.Fatalf("count orphan physical_file rows: %v", err)
+	}
+	if orphanRows != 0 {
+		t.Fatalf("expected 0 orphan physical_file rows, got %d", orphanRows)
+	}
+
+	var refMismatches int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count <> (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`).Scan(&refMismatches); err != nil {
+		t.Fatalf("count logical_file.ref_count mismatches: %v", err)
+	}
+	if refMismatches != 0 {
+		t.Fatalf("expected 0 logical_file.ref_count mismatches, got %d", refMismatches)
+	}
+}
+
 func TestCLIJSONOutputContracts(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -9035,6 +9068,98 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 			"remove", "--stored-path", storedPathFF1, "--output", "json")
 		_ = testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 			"remove", "--stored-path", storedPathFF2, "--output", "json")
+	})
+
+	t.Run("physical_file ownership transitions for stored-path removes", func(t *testing.T) {
+		fileP1 := filepath.Join(inputDir, "batch_paths_owned_1.txt")
+		fileP2 := filepath.Join(inputDir, "batch_paths_owned_2.txt")
+		sharedContent := []byte("v1.2-physical-file-shared-content")
+		if err := os.WriteFile(fileP1, sharedContent, 0o644); err != nil {
+			t.Fatalf("write fileP1: %v", err)
+		}
+		if err := os.WriteFile(fileP2, sharedContent, 0o644); err != nil {
+			t.Fatalf("write fileP2: %v", err)
+		}
+
+		storeP1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileP1, "--output", "json"), "store")
+		storeP2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileP2, "--output", "json"), "store")
+
+		idP1 := testutils.JSONInt64(t, testutils.JSONMap(t, storeP1, "data"), "file_id")
+		idP2 := testutils.JSONInt64(t, testutils.JSONMap(t, storeP2, "data"), "file_id")
+		if idP1 != idP2 {
+			t.Fatalf("expected identical logical_file id for same content, got idP1=%d idP2=%d", idP1, idP2)
+		}
+		storedPathP1, _ := testutils.JSONMap(t, storeP1, "data")["stored_path"].(string)
+		storedPathP2, _ := testutils.JSONMap(t, storeP2, "data")["stored_path"].(string)
+		if strings.TrimSpace(storedPathP1) == "" || strings.TrimSpace(storedPathP2) == "" {
+			t.Fatalf("expected non-empty stored paths: storeP1=%v storeP2=%v", storeP1, storeP2)
+		}
+
+		dbconnCheck, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("connect db for physical ownership assertions: %v", err)
+		}
+		defer dbconnCheck.Close()
+
+		var preMappings, preRefCount int64
+		if err := dbconnCheck.QueryRow(`
+			SELECT COUNT(*), COALESCE(MAX(lf.ref_count), -1)
+			FROM physical_file pf
+			JOIN logical_file lf ON lf.id = pf.logical_file_id
+			WHERE pf.logical_file_id = $1
+		`, idP1).Scan(&preMappings, &preRefCount); err != nil {
+			t.Fatalf("query pre-remove physical ownership state: %v", err)
+		}
+		if preMappings != 2 || preRefCount != 2 {
+			t.Fatalf("expected pre-remove mappings=2 ref_count=2, got mappings=%d ref_count=%d", preMappings, preRefCount)
+		}
+		assertPhysicalGraphCoherentIntegration(t, dbconnCheck)
+
+		removeFirst := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathP1, "--output", "json")
+		if removeFirst.ExitCode != 0 {
+			t.Fatalf("remove first stored-path failed: exit=%d stdout=%s stderr=%s", removeFirst.ExitCode, removeFirst.Stdout, removeFirst.Stderr)
+		}
+
+		var midMappings, midRefCount int64
+		if err := dbconnCheck.QueryRow(`
+			SELECT COUNT(*), COALESCE(MAX(lf.ref_count), -1)
+			FROM physical_file pf
+			JOIN logical_file lf ON lf.id = pf.logical_file_id
+			WHERE pf.logical_file_id = $1
+		`, idP1).Scan(&midMappings, &midRefCount); err != nil {
+			t.Fatalf("query mid-remove physical ownership state: %v", err)
+		}
+		if midMappings != 1 || midRefCount != 1 {
+			t.Fatalf("expected mid-remove mappings=1 ref_count=1, got mappings=%d ref_count=%d", midMappings, midRefCount)
+		}
+		assertPhysicalGraphCoherentIntegration(t, dbconnCheck)
+
+		removeSecond := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathP2, "--output", "json")
+		if removeSecond.ExitCode != 0 {
+			t.Fatalf("remove second stored-path failed: exit=%d stdout=%s stderr=%s", removeSecond.ExitCode, removeSecond.Stdout, removeSecond.Stderr)
+		}
+
+		var postMappings int64
+		if err := dbconnCheck.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, idP1).Scan(&postMappings); err != nil {
+			t.Fatalf("query post-remove physical mappings: %v", err)
+		}
+		if postMappings != 0 {
+			t.Fatalf("expected post-remove mappings=0, got %d", postMappings)
+		}
+
+		var postRefCount int64
+		err = dbconnCheck.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, idP1).Scan(&postRefCount)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("query post-remove ref_count: %v", err)
+		}
+		if err == nil && postRefCount != 0 {
+			t.Fatalf("expected post-remove logical ref_count=0 when row exists, got %d", postRefCount)
+		}
+		assertPhysicalGraphCoherentIntegration(t, dbconnCheck)
 	})
 
 	t.Run("repair --batch --input deterministic partial failure", func(t *testing.T) {

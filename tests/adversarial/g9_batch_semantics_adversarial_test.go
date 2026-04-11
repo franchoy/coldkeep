@@ -41,6 +41,23 @@ func storeAdversarialBatchFile(t *testing.T, repoRoot, binPath string, env map[s
 	return testutils.JSONInt64(t, testutils.JSONMap(t, store, "data"), "file_id")
 }
 
+func storeAdversarialBatchFileWithPath(t *testing.T, repoRoot, binPath string, env map[string]string, inputDir, name, content string) (int64, string) {
+	t.Helper()
+	path := filepath.Join(inputDir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write input file %s: %v", name, err)
+	}
+	store := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", path, "--output", "json"), "store")
+	data := testutils.JSONMap(t, store, "data")
+	fileID := testutils.JSONInt64(t, data, "file_id")
+	storedPath, _ := data["stored_path"].(string)
+	if strings.TrimSpace(storedPath) == "" {
+		t.Fatalf("store payload missing stored_path: %v", store)
+	}
+	return fileID, storedPath
+}
+
 func expectRestoreFails(t *testing.T, repoRoot, binPath string, env map[string]string, fileID int64, outDir string) {
 	t.Helper()
 	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -206,6 +223,48 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		}
 
 		outDir := filepath.Join(tmp, "g9-fail-fast-restore")
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			t.Fatalf("mkdir restore dir: %v", err)
+		}
+		expectRestoreFails(t, repoRoot, binPath, env, id1, outDir)
+		expectRestoreSucceeds(t, repoRoot, binPath, env, id2, outDir)
+	})
+
+	t.Run("stored-path fail-fast preserves ordering and isolation", func(t *testing.T) {
+		id1, storedPath1 := storeAdversarialBatchFileWithPath(t, repoRoot, binPath, env, inputDir, "g9-sp-fast-a.txt", "g9-sp-fast-a")
+		id2, storedPath2 := storeAdversarialBatchFileWithPath(t, repoRoot, binPath, env, inputDir, "g9-sp-fast-b.txt", "g9-sp-fast-b")
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-paths", storedPath1, "/missing/stored/path", storedPath2, "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("stored-path fail-fast should return non-zero\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		if summaryCount(t, payload, "success") != 1 || summaryCount(t, payload, "failed") != 1 {
+			t.Fatalf("unexpected stored-path fail-fast summary: %v", payload)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 2 {
+			t.Fatalf("expected fail-fast to stop after first failure, results=%v payload=%v", results, payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		if first["status"] != "success" {
+			t.Fatalf("expected first stored-path item success, got %v", first)
+		}
+		if second["status"] != "failed" {
+			t.Fatalf("expected second stored-path item failure, got %v", second)
+		}
+		if raw, _ := first["raw_value"].(string); raw != storedPath1 {
+			t.Fatalf("expected first raw_value=%q, got %v", storedPath1, first)
+		}
+		if raw, _ := second["raw_value"].(string); raw != "/missing/stored/path" {
+			t.Fatalf("expected second raw_value for missing path, got %v", second)
+		}
+
+		outDir := filepath.Join(tmp, "g9-stored-path-fast-restore")
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			t.Fatalf("mkdir restore dir: %v", err)
 		}
