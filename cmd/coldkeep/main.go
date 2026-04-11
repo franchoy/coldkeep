@@ -41,16 +41,16 @@ const (
 var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
-	"codec":    true,
+	"codec":       true,
 	"destination": true,
-	"input":    true,
-	"limit":    true,
-	"mode":     true,
-	"offset":   true,
-	"name":     true,
-	"min-size": true,
-	"max-size": true,
-	"output":   true,
+	"input":       true,
+	"limit":       true,
+	"mode":        true,
+	"offset":      true,
+	"name":        true,
+	"min-size":    true,
+	"max-size":    true,
+	"output":      true,
 	"stored-path": true,
 }
 
@@ -721,11 +721,11 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 				"status":  "ok",
 				"command": "restore",
 				"data": map[string]any{
-					"stored_path":  strings.TrimSpace(storedPath),
-					"output_path":  result.OutputPath,
-					"file_id":      result.FileID,
+					"stored_path":   strings.TrimSpace(storedPath),
+					"output_path":   result.OutputPath,
+					"file_id":       result.FileID,
 					"restored_hash": result.RestoredHash,
-					"mode":         destinationMode,
+					"mode":          destinationMode,
 				},
 			}
 			encoded, _ := json.Marshal(payload)
