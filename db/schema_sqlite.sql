@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (5);
+UPDATE schema_version SET version = 6 WHERE version < 6;
+INSERT OR IGNORE INTO schema_version(version) VALUES (6);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS logical_file (
   original_name TEXT NOT NULL,
   total_size INTEGER NOT NULL CHECK (total_size >= 0),
   file_hash TEXT NOT NULL,
+  ref_count INTEGER NOT NULL DEFAULT 1 CHECK (ref_count >= 0),
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -55,6 +57,19 @@ CREATE TABLE IF NOT EXISTS logical_file (
 
 CREATE INDEX IF NOT EXISTS idx_logical_file_hash ON logical_file(file_hash);
 CREATE INDEX IF NOT EXISTS idx_logical_file_status ON logical_file(status);
+
+CREATE TABLE IF NOT EXISTS physical_file (
+  path TEXT PRIMARY KEY CHECK (path != ''),
+  logical_file_id INTEGER NOT NULL
+    REFERENCES logical_file(id) ON DELETE CASCADE,
+  mode INTEGER,
+  mtime DATETIME,
+  uid INTEGER,
+  gid INTEGER,
+  is_metadata_complete INTEGER NOT NULL DEFAULT 0 CHECK (is_metadata_complete IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_physical_file_logical_file_id ON physical_file(logical_file_id);
 
 CREATE TABLE IF NOT EXISTS file_chunk (
   logical_file_id INTEGER NOT NULL

@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -192,6 +195,103 @@ func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
 	if _, exists := payload["data"]; exists {
 		t.Fatalf("unexpected data field in doctor failure payload: %v", payload["data"])
 	}
+	if _, exists := payload["invariant_code"]; exists {
+		t.Fatalf("unexpected invariant_code field for generic verify error: %v", payload["invariant_code"])
+	}
+	if _, exists := payload["recommended_action"]; exists {
+		t.Fatalf("unexpected recommended_action field for generic verify error: %v", payload["recommended_action"])
+	}
+}
+
+func TestDoctorJSONFailureIncludesInvariantCodeAndActionWhenAvailable(t *testing.T) {
+	err := verifyError(
+		fmt.Errorf(
+			"doctor verify phase failed: %w",
+			invariants.New(invariants.CodePhysicalGraphRefCountMismatch, "logical ref_count mismatches=1", nil),
+		),
+	)
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, _ := payload["invariant_code"].(string); got != invariants.CodePhysicalGraphRefCountMismatch {
+		t.Fatalf("invariant_code mismatch: got=%v payload=%v", payload["invariant_code"], payload)
+	}
+	action, _ := payload["recommended_action"].(string)
+	if !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("recommended_action should mention repair ref-counts: payload=%v", payload)
+	}
+}
+
+func TestDoctorTextFailureIncludesInvariantCodeAndActionWhenAvailable(t *testing.T) {
+	err := verifyError(
+		fmt.Errorf(
+			"doctor verify phase failed: %w",
+			invariants.New(invariants.CodePhysicalGraphOrphan, "orphan physical_file rows=1", nil),
+		),
+	)
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeText)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	if !strings.Contains(output, "INVARIANT_CODE: PHYSICAL_GRAPH_ORPHAN") {
+		t.Fatalf("expected invariant code line in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "Recommended action:") {
+		t.Fatalf("expected recommended action line in text output, got: %q", output)
+	}
+}
+
+func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
+	originalRepairPhase := repairLogicalRefCountsPhase
+	t.Cleanup(func() { repairLogicalRefCountsPhase = originalRepairPhase })
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{}, invariants.New(
+			invariants.CodeRepairRefusedOrphanRows,
+			"ref_count repair refused: orphan physical_file rows=1",
+			nil,
+		)
+	}
+
+	stderr := captureStderr(t, func() {
+		code := runCLI([]string{"repair", "ref-counts", "--output", "json"})
+		if code != exitVerify {
+			t.Fatalf("expected exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	lastLine := lines[len(lines)-1]
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(lastLine), &payload); err != nil {
+		t.Fatalf("parse JSON payload: %v output=%q", err, stderr)
+	}
+
+	if got, _ := payload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("error_class mismatch: got=%v payload=%v", payload["error_class"], payload)
+	}
+	if got, _ := payload["invariant_code"].(string); got != invariants.CodeRepairRefusedOrphanRows {
+		t.Fatalf("invariant_code mismatch: got=%v payload=%v", payload["invariant_code"], payload)
+	}
+	action, _ := payload["recommended_action"].(string)
+	if !strings.Contains(action, "orphan physical_file") {
+		t.Fatalf("recommended_action should mention orphan physical_file handling: payload=%v", payload)
+	}
 }
 
 func TestDoctorJSONRecoveryFailureUsesRecoveryErrorClass(t *testing.T) {
@@ -353,6 +453,9 @@ func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
 	if got, _ := payload["command"].(string); got != "restore" {
 		t.Fatalf("command mismatch: payload=%v", payload)
 	}
+	if got, _ := payload["execution_mode"].(string); got != string(batch.ExecutionModeContinueOnError) {
+		t.Fatalf("execution_mode mismatch: payload=%v", payload)
+	}
 	if _, hasData := payload["data"]; hasData {
 		t.Fatalf("batch payload should not include legacy data field: %v", payload)
 	}
@@ -385,14 +488,15 @@ func TestEmitBatchCommandReportJSONSchema(t *testing.T) {
 
 func TestEmitBatchCommandReportJSONIncludesNonFailureMessages(t *testing.T) {
 	report := batch.Report{
-		Operation: batch.OperationRemove,
-		DryRun:    true,
-		Summary:   batch.Summary{Total: 4, Planned: 1, Success: 1, Failed: 1, Skipped: 1},
+		Operation:     batch.OperationRemove,
+		ExecutionMode: batch.ExecutionModeFailFast,
+		DryRun:        true,
+		Summary:       batch.Summary{Total: 4, Planned: 1, Success: 1, Failed: 1, Skipped: 1},
 		Results: []batch.ItemResult{
 			{ID: 12, Status: batch.ResultPlanned, Message: "would remove"},
 			{ID: 18, Status: batch.ResultSkipped, Message: "duplicate target"},
 			{ID: 24, Status: batch.ResultSuccess, Message: "removed mappings=3"},
-			{ID: 99, Status: batch.ResultFailed, Message: "file not found"},
+			{ID: 99, Status: batch.ResultFailed, Message: "file not found", InvariantCode: invariants.CodeGCRefusedIntegrity, RecommendedAction: "coldkeep repair ref-counts; then rerun coldkeep verify"},
 		},
 	}
 
@@ -411,6 +515,9 @@ func TestEmitBatchCommandReportJSONIncludesNonFailureMessages(t *testing.T) {
 	results, ok := payload["results"].([]any)
 	if !ok || len(results) != 4 {
 		t.Fatalf("results mismatch: payload=%v", payload)
+	}
+	if got, _ := payload["execution_mode"].(string); got != string(batch.ExecutionModeFailFast) {
+		t.Fatalf("execution_mode mismatch: payload=%v", payload)
 	}
 
 	plannedItem, _ := results[0].(map[string]any)
@@ -431,6 +538,12 @@ func TestEmitBatchCommandReportJSONIncludesNonFailureMessages(t *testing.T) {
 	failedItem, _ := results[3].(map[string]any)
 	if got, _ := failedItem["error"].(string); got != "file not found" {
 		t.Fatalf("failed item error mismatch: item=%v", failedItem)
+	}
+	if got, _ := failedItem["invariant_code"].(string); got != invariants.CodeGCRefusedIntegrity {
+		t.Fatalf("failed item invariant_code mismatch: item=%v", failedItem)
+	}
+	if got, _ := failedItem["recommended_action"].(string); !strings.Contains(got, "repair ref-counts") {
+		t.Fatalf("failed item recommended_action mismatch: item=%v", failedItem)
 	}
 	if _, hasMessage := failedItem["message"]; hasMessage {
 		t.Fatalf("failed item should not expose message when error is present: %v", failedItem)
@@ -565,6 +678,56 @@ func TestRunRemoveCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	}
 }
 
+func TestRunRemoveCommandStoredPathRejectsPositionals(t *testing.T) {
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: []string{"1"},
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep remove --stored-path") {
+		t.Fatalf("expected remove stored-path usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRemoveCommandStoredPathRejectsInput(t *testing.T) {
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"input":       {"ids.txt"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--input is not supported with --stored-path") {
+		t.Fatalf("expected remove stored-path input usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRemoveCommandStoredPathRejectsDryRunAndFailFast(t *testing.T) {
+	err := runRemoveCommand(parsedCommandLine{
+		method:      "remove",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"dry-run":     {""},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--dry-run and --fail-fast are not supported with --stored-path") {
+		t.Fatalf("expected remove stored-path dry-run/fail-fast usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 	err := error(nil)
 	output := captureStdout(t, func() {
@@ -623,6 +786,90 @@ func TestRunRestoreCommandAllInvalidTargetsEmitsBatchJSONReport(t *testing.T) {
 		if got, _ := item["error"].(string); !strings.Contains(got, "invalid file ID") {
 			t.Fatalf("invalid item error mismatch: item=%v", item)
 		}
+	}
+}
+
+func TestRunRestoreCommandStoredPathRejectsInvalidModeClassifiesAsUsage(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"mode":        {"unsupported"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --mode value") {
+		t.Fatalf("expected invalid mode usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandStoredPathRequiresDestinationForPrefixMode(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"mode":        {"prefix"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--destination is required with --mode prefix") {
+		t.Fatalf("expected missing destination usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandStoredPathRejectsPositionals(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: []string{"123", "./out"},
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep restore --stored-path") {
+		t.Fatalf("expected stored-path usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandStoredPathRejectsStrictAndNoMetadataTogether(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: nil,
+		flags: map[string][]string{
+			"stored-path": {"/tmp/file.txt"},
+			"strict":      {""},
+			"no-metadata": {""},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--strict and --no-metadata cannot be used together") {
+		t.Fatalf("expected strict/no-metadata conflict usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRestoreCommandRejectsStrictWithoutStoredPath(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: []string{"1", "/tmp/out"},
+		flags: map[string][]string{
+			"strict": {""},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--strict and --no-metadata are only supported with --stored-path") {
+		t.Fatalf("expected strict unsupported usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
@@ -726,6 +973,7 @@ func TestFormatDoctorTextReportGoldenHealthy(t *testing.T) {
 		"  Phase 3 - Schema:    ok (version=5)\n" +
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0\n" +
+		"  Physical mapping integrity: orphan_physical_file_rows=0 logical_ref_count_mismatches=0 negative_logical_ref_count_rows=0\n" +
 		"  Recommended next step: none\n"
 
 	if got != want {
@@ -758,6 +1006,7 @@ func TestFormatDoctorTextReportGoldenDegraded(t *testing.T) {
 		"  Phase 3 - Schema:    error\n" +
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=1 aborted_chunks=2 quarantined_missing_containers=3 quarantined_corrupt_tail_containers=4 quarantined_orphan_containers=5\n" +
+		"  Physical mapping integrity: orphan_physical_file_rows=0 logical_ref_count_mismatches=0 negative_logical_ref_count_rows=0\n" +
 		"  Recommended next step: inspect stderr / doctor output\n"
 
 	if got != want {
@@ -1014,7 +1263,7 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 }
 
 func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
-	commands := []string{"store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify"}
+	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify"}
 
 	for _, command := range commands {
 		if !shouldRunStartupRecovery(command) {
@@ -1074,7 +1323,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -1102,5 +1351,191 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		if got, ok := payload["command"].(string); !ok || got != command {
 			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
 		}
+	}
+}
+
+func TestRunRepairCommandRejectsUnknownTarget(t *testing.T) {
+	err := runRepairCommand(parsedCommandLine{
+		method:      "repair",
+		positionals: []string{"wrong-target"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep repair ref-counts") {
+		t.Fatalf("expected repair usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRepairCommandJSONSuccess(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	defer func() {
+		repairLogicalRefCountsPhase = originalRepair
+	}()
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{
+			ScannedLogicalFiles:    4,
+			UpdatedLogicalFiles:    2,
+			OrphanPhysicalFileRows: 0,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"ref-counts"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runRepairCommand json failed: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse repair JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "repair" {
+		t.Fatalf("expected command=repair, got payload=%v", payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("repair JSON missing data object: payload=%v", payload)
+	}
+	if got, _ := data["target"].(string); got != "ref-counts" {
+		t.Fatalf("expected target=ref-counts, got payload=%v", payload)
+	}
+	if got := int64(data["updated_logical_files"].(float64)); got != 2 {
+		t.Fatalf("expected updated_logical_files=2, got payload=%v", payload)
+	}
+}
+
+func TestRunRepairCommandIntegrityFailureUsesVerifyExitClass(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	defer func() {
+		repairLogicalRefCountsPhase = originalRepair
+	}()
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{}, errors.New("ref_count repair refused: orphan physical_file rows=1")
+	}
+
+	err := runRepairCommand(parsedCommandLine{
+		method:      "repair",
+		positionals: []string{"ref-counts"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "repair ref-counts failed") {
+		t.Fatalf("expected repair integrity failure, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitVerify {
+		t.Fatalf("expected verify exit code %d, got %d", exitVerify, got)
+	}
+}
+
+func TestRunRepairCommandBatchJSONPartialFailure(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	defer func() {
+		repairLogicalRefCountsPhase = originalRepair
+	}()
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{
+			ScannedLogicalFiles:    4,
+			UpdatedLogicalFiles:    1,
+			OrphanPhysicalFileRows: 0,
+		}, nil
+	}
+
+	var runErr error
+	output := captureStdout(t, func() {
+		runErr = runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"ref-counts", "unknown-target", "ref-counts"},
+			flags: map[string][]string{
+				"batch":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+	})
+
+	if runErr == nil {
+		t.Fatal("expected non-nil error for batch partial failure")
+	}
+	if got := classifyExitCode(runErr); got != exitUsage {
+		t.Fatalf("expected usage exit code %d for mixed valid/invalid targets, got %d", exitUsage, got)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch repair JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["status"].(string); got != "partial_failure" {
+		t.Fatalf("expected status=partial_failure, got payload=%v", payload)
+	}
+	if got, _ := payload["command"].(string); got != "repair" {
+		t.Fatalf("expected command=repair, got payload=%v", payload)
+	}
+
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary object, got payload=%v", payload)
+	}
+	if int(summary["success"].(float64)) != 1 || int(summary["failed"].(float64)) != 1 || int(summary["skipped"].(float64)) != 1 {
+		t.Fatalf("unexpected summary for repair batch partial failure: %v", summary)
+	}
+}
+
+func TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	defer func() {
+		repairLogicalRefCountsPhase = originalRepair
+	}()
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{}, invariants.New(
+			invariants.CodeRepairRefusedOrphanRows,
+			"ref_count repair refused: orphan physical_file rows=1",
+			nil,
+		)
+	}
+
+	var runErr error
+	output := captureStdout(t, func() {
+		runErr = runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"ref-counts"},
+			flags: map[string][]string{
+				"batch":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+	})
+
+	if runErr == nil {
+		t.Fatal("expected non-nil error for invariant-coded batch repair failure")
+	}
+	if got := classifyExitCode(runErr); got != exitVerify {
+		t.Fatalf("expected verify exit code %d, got %d", exitVerify, got)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse batch repair JSON output: %v output=%q", err, output)
+	}
+	results, ok := payload["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected one result in batch repair payload, got=%v payload=%v", results, payload)
+	}
+	first, _ := results[0].(map[string]any)
+	if got, _ := first["invariant_code"].(string); got != invariants.CodeRepairRefusedOrphanRows {
+		t.Fatalf("expected invariant_code=%s, got first=%v", invariants.CodeRepairRefusedOrphanRows, first)
+	}
+	if action, _ := first["recommended_action"].(string); !strings.Contains(action, "orphan physical_file") {
+		t.Fatalf("expected recommended_action to mention orphan physical_file handling, got first=%v", first)
 	}
 }

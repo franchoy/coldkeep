@@ -65,6 +65,39 @@ func TestIntegrationHarnessSmoke(t *testing.T) {
 	}
 }
 
+func assertPhysicalGraphCoherentIntegration(t *testing.T, dbconn *sql.DB) {
+	t.Helper()
+
+	var orphanRows int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM physical_file pf
+		LEFT JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.id IS NULL
+	`).Scan(&orphanRows); err != nil {
+		t.Fatalf("count orphan physical_file rows: %v", err)
+	}
+	if orphanRows != 0 {
+		t.Fatalf("expected 0 orphan physical_file rows, got %d", orphanRows)
+	}
+
+	var refMismatches int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM logical_file lf
+		WHERE lf.ref_count <> (
+			SELECT COUNT(*)
+			FROM physical_file pf
+			WHERE pf.logical_file_id = lf.id
+		)
+	`).Scan(&refMismatches); err != nil {
+		t.Fatalf("count logical_file.ref_count mismatches: %v", err)
+	}
+	if refMismatches != 0 {
+		t.Fatalf("expected 0 logical_file.ref_count mismatches, got %d", refMismatches)
+	}
+}
+
 func TestCLIJSONOutputContracts(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -419,6 +452,246 @@ func TestDoctorCommand(t *testing.T) {
 	}
 
 	t.Logf("doctor command test passed: verify_level=%q recovery=%q verify=%q schema=%q", verifyLevel, recoveryStatus, verifyStatus, schemaStatus)
+}
+
+func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	defer dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_physical_graph.bin", 64*1024)
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = ref_count + 4 WHERE id = (SELECT id FROM logical_file LIMIT 1)`); err != nil {
+		t.Fatalf("corrupt logical_file.ref_count: %v", err)
+	}
+
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.ExitCode != 3 {
+		t.Fatalf("doctor on physical mapping corruption should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+	if !ok {
+		t.Fatalf("doctor physical mapping corruption produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+	}
+
+	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor physical mapping corruption error class mismatch: want VERIFY got %q payload=%v", got, errPayload)
+	}
+	msg, _ := errPayload["message"].(string)
+	if !strings.Contains(msg, "doctor verify phase failed") {
+		t.Fatalf("doctor physical mapping corruption message should mention verify phase: payload=%v", errPayload)
+	}
+	if !strings.Contains(msg, "logical ref_count mismatches=1") {
+		t.Fatalf("doctor physical mapping corruption message should surface ref_count mismatch summary: payload=%v", errPayload)
+	}
+}
+
+// TestRepairThenVerifyThenGCSmoke exercises the full operator recovery story:
+//
+//	store → corrupt → verify fails → doctor fails → repair succeeds →
+//	verify passes → gc dry-run passes → gc passes → restore matches
+//
+// This validates that the audited physical-root trust loop closes end-to-end.
+func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	defer dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "repair_gc_smoke.bin", 96*1024)
+	originalHash := testutils.SHA256File(t, inPath)
+
+	// 1. Store the file.
+	storeRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", inPath, "--output", "json")
+	storePayload := testutils.AssertCLIJSONOK(t, storeRes, "store")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	storedPath, _ := storeData["stored_path"].(string)
+	if storedPath == "" {
+		t.Fatalf("store returned empty stored_path: payload=%v", storePayload)
+	}
+
+	// 2. Corrupt logical_file.ref_count (simulate drift).
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = ref_count + 3 WHERE id = (SELECT id FROM logical_file LIMIT 1)`); err != nil {
+		t.Fatalf("corrupt logical_file.ref_count: %v", err)
+	}
+
+	// 3. verify must fail with exit=3.
+	verifyFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--output", "json")
+	if verifyFail.ExitCode != 3 {
+		t.Fatalf("verify should exit=3 on drifted graph, got=%d\nstdout:\n%s\nstderr:\n%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
+	}
+	verifyErrPayload, ok := testutils.FindCLIErrorPayload(verifyFail.Stderr)
+	if !ok {
+		t.Fatalf("verify on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", verifyFail.Stdout, verifyFail.Stderr)
+	}
+	if got, _ := verifyErrPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("verify drifted-graph error class mismatch: want VERIFY got %q payload=%v", got, verifyErrPayload)
+	}
+	if got, _ := verifyErrPayload["invariant_code"].(string); got != "PHYSICAL_GRAPH_REFCOUNT_MISMATCH" {
+		t.Fatalf("verify drifted-graph invariant_code mismatch: want PHYSICAL_GRAPH_REFCOUNT_MISMATCH got %q payload=%v", got, verifyErrPayload)
+	}
+	if action, _ := verifyErrPayload["recommended_action"].(string); !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("verify drifted-graph recommended_action should mention repair ref-counts: payload=%v", verifyErrPayload)
+	}
+
+	// 4. doctor must fail in verify phase with exit=3.
+	doctorFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if doctorFail.ExitCode != 3 {
+		t.Fatalf("doctor should exit=3 on drifted graph, got=%d\nstdout:\n%s\nstderr:\n%s", doctorFail.ExitCode, doctorFail.Stdout, doctorFail.Stderr)
+	}
+	doctorErrPayload, ok := testutils.FindCLIErrorPayload(doctorFail.Stderr)
+	if !ok {
+		t.Fatalf("doctor on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", doctorFail.Stdout, doctorFail.Stderr)
+	}
+	if got, _ := doctorErrPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor drifted-graph error class mismatch: want VERIFY got %q payload=%v", got, doctorErrPayload)
+	}
+	if got, _ := doctorErrPayload["invariant_code"].(string); got != "PHYSICAL_GRAPH_REFCOUNT_MISMATCH" {
+		t.Fatalf("doctor drifted-graph invariant_code mismatch: want PHYSICAL_GRAPH_REFCOUNT_MISMATCH got %q payload=%v", got, doctorErrPayload)
+	}
+	if action, _ := doctorErrPayload["recommended_action"].(string); !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("doctor drifted-graph recommended_action should mention repair ref-counts: payload=%v", doctorErrPayload)
+	}
+
+	// 5. gc must be refused before repair and include invariant guidance.
+	gcRefused := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--output", "json")
+	if gcRefused.ExitCode != 1 {
+		t.Fatalf("gc should exit=1 on drifted graph before repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcRefused.ExitCode, gcRefused.Stdout, gcRefused.Stderr)
+	}
+	gcErrPayload, ok := testutils.FindCLIErrorPayload(gcRefused.Stderr)
+	if !ok {
+		t.Fatalf("gc on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", gcRefused.Stdout, gcRefused.Stderr)
+	}
+	if got, _ := gcErrPayload["error_class"].(string); got != "GENERAL" {
+		t.Fatalf("gc drifted-graph error class mismatch: want GENERAL got %q payload=%v", got, gcErrPayload)
+	}
+	if got, _ := gcErrPayload["invariant_code"].(string); got != "GC_REFUSED_INTEGRITY" {
+		t.Fatalf("gc drifted-graph invariant_code mismatch: want GC_REFUSED_INTEGRITY got %q payload=%v", got, gcErrPayload)
+	}
+	if action, _ := gcErrPayload["recommended_action"].(string); !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("gc drifted-graph recommended_action should mention repair ref-counts: payload=%v", gcErrPayload)
+	}
+
+	// 6. repair ref-counts must succeed and report UpdatedLogicalFiles=1.
+	repairRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "repair", "ref-counts", "--output", "json")
+	repairPayload := testutils.AssertCLIJSONOK(t, repairRes, "repair")
+	repairData := testutils.JSONMap(t, repairPayload, "data")
+	if updated := testutils.JSONInt64(t, repairData, "updated_logical_files"); updated != 1 {
+		t.Fatalf("repair: expected updated_logical_files=1, got=%d payload=%v", updated, repairData)
+	}
+
+	// 7. verify must now pass.
+	verifyOK := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "system", "--output", "json")
+	if verifyOK.ExitCode != 0 {
+		t.Fatalf("verify should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", verifyOK.ExitCode, verifyOK.Stdout, verifyOK.Stderr)
+	}
+	verifyOKPayload, ok := testutils.TryParseLastJSONLine(verifyOK.Stdout)
+	if !ok {
+		t.Fatalf("verify success produced no JSON payload\nstdout:\n%s\nstderr:\n%s", verifyOK.Stdout, verifyOK.Stderr)
+	}
+	if _, exists := verifyOKPayload["invariant_code"]; exists {
+		t.Fatalf("verify success payload must not include invariant_code: payload=%v", verifyOKPayload)
+	}
+	if _, exists := verifyOKPayload["recommended_action"]; exists {
+		t.Fatalf("verify success payload must not include recommended_action: payload=%v", verifyOKPayload)
+	}
+
+	// 8. gc --dry-run must not be refused.
+	gcDryRun := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--dry-run", "--output", "json")
+	if gcDryRun.ExitCode != 0 {
+		t.Fatalf("gc --dry-run should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcDryRun.ExitCode, gcDryRun.Stdout, gcDryRun.Stderr)
+	}
+	gcDryRunPayload, ok := testutils.TryParseLastJSONLine(gcDryRun.Stdout)
+	if !ok {
+		t.Fatalf("gc --dry-run success produced no JSON payload\nstdout:\n%s\nstderr:\n%s", gcDryRun.Stdout, gcDryRun.Stderr)
+	}
+	if _, exists := gcDryRunPayload["invariant_code"]; exists {
+		t.Fatalf("gc --dry-run success payload must not include invariant_code: payload=%v", gcDryRunPayload)
+	}
+	if _, exists := gcDryRunPayload["recommended_action"]; exists {
+		t.Fatalf("gc --dry-run success payload must not include recommended_action: payload=%v", gcDryRunPayload)
+	}
+
+	// 9. gc must not be refused and must report no containers eligible.
+	gcFull := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--output", "json")
+	if gcFull.ExitCode != 0 {
+		t.Fatalf("gc should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcFull.ExitCode, gcFull.Stdout, gcFull.Stderr)
+	}
+	gcFullPayload, ok := testutils.TryParseLastJSONLine(gcFull.Stdout)
+	if !ok {
+		t.Fatalf("gc success produced no JSON payload\nstdout:\n%s\nstderr:\n%s", gcFull.Stdout, gcFull.Stderr)
+	}
+	if _, exists := gcFullPayload["invariant_code"]; exists {
+		t.Fatalf("gc success payload must not include invariant_code: payload=%v", gcFullPayload)
+	}
+	if _, exists := gcFullPayload["recommended_action"]; exists {
+		t.Fatalf("gc success payload must not include recommended_action: payload=%v", gcFullPayload)
+	}
+
+	// 10. restore the stored file and verify content hash matches.
+	restoreDir := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	restoredFile := filepath.Join(restoreDir, filepath.Base(inPath))
+	restoreRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"restore",
+		"--stored-path", storedPath,
+		"--mode", "override",
+		"--destination", restoredFile,
+		"--output", "json",
+	)
+	if restoreRes.ExitCode != 0 {
+		t.Fatalf("restore should succeed, got=%d\nstdout:\n%s\nstderr:\n%s", restoreRes.ExitCode, restoreRes.Stdout, restoreRes.Stderr)
+	}
+	if _, err := os.Stat(restoredFile); err != nil {
+		t.Fatalf("restored file not found at %s: %v", restoredFile, err)
+	}
+	restoredHash := testutils.SHA256File(t, restoredFile)
+	if restoredHash != originalHash {
+		t.Fatalf("restored file hash mismatch: want=%s got=%s", originalHash, restoredHash)
+	}
 }
 
 func TestDoctorJSONContractConsistency(t *testing.T) {
@@ -855,11 +1128,12 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	// Use a Hash/name that will not conflict with the real stored file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		"dangling_write.bin", 1024,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
+		int64(0),
 	).Scan(&danglingID)
 	if err != nil {
 		t.Fatalf("inject dangling PROCESSING logical file: %v", err)
@@ -943,11 +1217,12 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	// Inject recoverable corruption: dangling PROCESSING logical file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		"doctor_operator_story_dangling.bin", 1024,
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		filestate.LogicalFileProcessing,
+		int64(0),
 	).Scan(&danglingID)
 	if err != nil {
 		t.Fatalf("inject dangling PROCESSING logical file: %v", err)
@@ -1026,11 +1301,12 @@ func TestEndToEndTrustProof(t *testing.T) {
 
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		"trust_proof_crash.bin", 4096,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
+		int64(0),
 	).Scan(&danglingID)
 	if err != nil {
 		t.Fatalf("seed dangling PROCESSING logical_file: %v", err)
@@ -2661,9 +2937,9 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 
 	// Seed a PROCESSING logical_file to simulate incomplete store (crash during store)
 	_, err = dbconn.Exec(`
-		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count)
-		VALUES ($1, $2, $3, $4, 0)
-	`, "incomplete_file.bin", "0000000000000000000000000000000000000000000000000000000000000000", 512, filestate.LogicalFileProcessing)
+		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count, ref_count)
+		VALUES ($1, $2, $3, $4, 0, $5)
+	`, "incomplete_file.bin", "0000000000000000000000000000000000000000000000000000000000000000", 512, filestate.LogicalFileProcessing, int64(0))
 	if err != nil {
 		t.Fatalf("seed PROCESSING logical_file: %v", err)
 	}
@@ -2824,12 +3100,13 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 
 		var danglingLogicalID int64
 		err = dbconn.QueryRow(`
-			INSERT INTO logical_file (original_name, total_size, file_hash, status)
-			VALUES ($1, $2, $3, $4) RETURNING id`,
+			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+			VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 			fmt.Sprintf("doctor_dangling_%02d.bin", round),
 			int64(2048+round),
 			fmt.Sprintf("%064x", round+1),
 			filestate.LogicalFileProcessing,
+			int64(0),
 		).Scan(&danglingLogicalID)
 		if err != nil {
 			t.Fatalf("round %d inject dangling PROCESSING logical_file: %v", round, err)
@@ -6858,6 +7135,15 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 		t.Fatalf("insert file_chunk: %v", err)
 	}
 
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
+		 VALUES ($1, $2, FALSE)`,
+		"/tmp/interleaving.txt",
+		fileID,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -8406,10 +8692,18 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 	storeA := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", fileA, "--output", "json"), "store")
 	idA := testutils.JSONInt64(t, testutils.JSONMap(t, storeA, "data"), "file_id")
+	storedPathA, _ := testutils.JSONMap(t, storeA, "data")["stored_path"].(string)
+	if strings.TrimSpace(storedPathA) == "" {
+		t.Fatalf("storeA missing stored_path in payload: %v", storeA)
+	}
 
 	storeB := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store", fileB, "--output", "json"), "store")
 	idB := testutils.JSONInt64(t, testutils.JSONMap(t, storeB, "data"), "file_id")
+	storedPathB, _ := testutils.JSONMap(t, storeB, "data")["stored_path"].(string)
+	if strings.TrimSpace(storedPathB) == "" {
+		t.Fatalf("storeB missing stored_path in payload: %v", storeB)
+	}
 
 	t.Run("restore --dry-run", func(t *testing.T) {
 		outDir := filepath.Join(tmp, "restore_dry_run")
@@ -8676,6 +8970,331 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 		}
 		if int(summary["failed"].(float64)) < 1 {
 			t.Fatalf("expected invalid input failure from merged IDs, got summary=%v", summary)
+		}
+	})
+
+	t.Run("remove --stored-paths deterministic partial failure", func(t *testing.T) {
+		missingPath := "/nonexistent/path/for-batch-remove"
+		inputFile := filepath.Join(tmp, "remove_paths_merge.txt")
+		content := fmt.Sprintf("# remove paths\n%s\n%s\n%s\n", storedPathB, missingPath, storedPathA)
+		if err := os.WriteFile(inputFile, []byte(content), 0o644); err != nil {
+			t.Fatalf("write remove paths input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-paths", storedPathA, "--input", inputFile, "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove --stored-paths partial failure should return non-zero: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove --stored-paths produced no JSON stdout: %s", res.Stdout)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary in payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 2 || int(summary["failed"].(float64)) != 1 || int(summary["skipped"].(float64)) != 1 {
+			t.Fatalf("unexpected remove --stored-paths summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 4 {
+			t.Fatalf("unexpected results payload: %v", payload)
+		}
+
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		fourth, _ := results[3].(map[string]any)
+		if first["status"] != "success" || second["status"] != "success" || third["status"] != "failed" || fourth["status"] != "skipped" {
+			t.Fatalf("unexpected ordered statuses for remove --stored-paths: results=%v", results)
+		}
+		if raw, _ := fourth["raw_value"].(string); raw != storedPathA {
+			t.Fatalf("expected duplicate skip to carry raw_value=%q, got %v", storedPathA, fourth)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_stored_paths_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		removeAgainA := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathA, "--output", "json")
+		if removeAgainA.ExitCode == 0 {
+			t.Fatalf("storedPathA should no longer be removable after batch unlink: stdout=%s stderr=%s", removeAgainA.Stdout, removeAgainA.Stderr)
+		}
+		removeAgainB := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathB, "--output", "json")
+		if removeAgainB.ExitCode == 0 {
+			t.Fatalf("storedPathB should no longer be removable after batch unlink: stdout=%s stderr=%s", removeAgainB.Stdout, removeAgainB.Stderr)
+		}
+	})
+
+	t.Run("remove --stored-paths fail-fast", func(t *testing.T) {
+		fileFF1 := filepath.Join(inputDir, "batch_paths_ff_1.txt")
+		fileFF2 := filepath.Join(inputDir, "batch_paths_ff_2.txt")
+		if err := os.WriteFile(fileFF1, []byte("batch-paths-fail-fast-1"), 0o644); err != nil {
+			t.Fatalf("write fileFF1: %v", err)
+		}
+		if err := os.WriteFile(fileFF2, []byte("batch-paths-fail-fast-2"), 0o644); err != nil {
+			t.Fatalf("write fileFF2: %v", err)
+		}
+
+		storeFF1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileFF1, "--output", "json"), "store")
+		idFF1 := testutils.JSONInt64(t, testutils.JSONMap(t, storeFF1, "data"), "file_id")
+		storedPathFF1, _ := testutils.JSONMap(t, storeFF1, "data")["stored_path"].(string)
+
+		storeFF2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileFF2, "--output", "json"), "store")
+		idFF2 := testutils.JSONInt64(t, testutils.JSONMap(t, storeFF2, "data"), "file_id")
+		storedPathFF2, _ := testutils.JSONMap(t, storeFF2, "data")["stored_path"].(string)
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-paths", "/missing/fail-fast/path", storedPathFF1, storedPathFF2, "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("remove --stored-paths --fail-fast should fail: stdout=%s stderr=%s", res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("remove --stored-paths --fail-fast produced no JSON stdout: %s", res.Stdout)
+		}
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 1 {
+			t.Fatalf("expected fail-fast to stop after first failing item, results=%v payload=%v", results, payload)
+		}
+
+		checkDir := filepath.Join(tmp, "remove_stored_paths_failfast_check")
+		if err := os.MkdirAll(checkDir, 0o755); err != nil {
+			t.Fatalf("mkdir checkDir: %v", err)
+		}
+		restoreFF1 := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idFF1), checkDir, "--overwrite", "--output", "json")
+		if restoreFF1.ExitCode != 0 {
+			t.Fatalf("idFF1 should remain after fail-fast first-item failure: stdout=%s stderr=%s", restoreFF1.Stdout, restoreFF1.Stderr)
+		}
+		restoreFF2 := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", idFF2), checkDir, "--overwrite", "--output", "json")
+		if restoreFF2.ExitCode != 0 {
+			t.Fatalf("idFF2 should remain after fail-fast first-item failure: stdout=%s stderr=%s", restoreFF2.Stdout, restoreFF2.Stderr)
+		}
+
+		// Cleanup to avoid affecting later tests in this function.
+		_ = testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathFF1, "--output", "json")
+		_ = testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathFF2, "--output", "json")
+	})
+
+	t.Run("physical_file ownership transitions for stored-path removes", func(t *testing.T) {
+		fileP1 := filepath.Join(inputDir, "batch_paths_owned_1.txt")
+		fileP2 := filepath.Join(inputDir, "batch_paths_owned_2.txt")
+		sharedContent := []byte("v1.2-physical-file-shared-content")
+		if err := os.WriteFile(fileP1, sharedContent, 0o644); err != nil {
+			t.Fatalf("write fileP1: %v", err)
+		}
+		if err := os.WriteFile(fileP2, sharedContent, 0o644); err != nil {
+			t.Fatalf("write fileP2: %v", err)
+		}
+
+		storeP1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileP1, "--output", "json"), "store")
+		storeP2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileP2, "--output", "json"), "store")
+
+		idP1 := testutils.JSONInt64(t, testutils.JSONMap(t, storeP1, "data"), "file_id")
+		idP2 := testutils.JSONInt64(t, testutils.JSONMap(t, storeP2, "data"), "file_id")
+		if idP1 != idP2 {
+			t.Fatalf("expected identical logical_file id for same content, got idP1=%d idP2=%d", idP1, idP2)
+		}
+		storedPathP1, _ := testutils.JSONMap(t, storeP1, "data")["stored_path"].(string)
+		storedPathP2, _ := testutils.JSONMap(t, storeP2, "data")["stored_path"].(string)
+		if strings.TrimSpace(storedPathP1) == "" || strings.TrimSpace(storedPathP2) == "" {
+			t.Fatalf("expected non-empty stored paths: storeP1=%v storeP2=%v", storeP1, storeP2)
+		}
+
+		dbconnCheck, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("connect db for physical ownership assertions: %v", err)
+		}
+		defer dbconnCheck.Close()
+
+		var preMappings, preRefCount int64
+		if err := dbconnCheck.QueryRow(`
+			SELECT COUNT(*), COALESCE(MAX(lf.ref_count), -1)
+			FROM physical_file pf
+			JOIN logical_file lf ON lf.id = pf.logical_file_id
+			WHERE pf.logical_file_id = $1
+		`, idP1).Scan(&preMappings, &preRefCount); err != nil {
+			t.Fatalf("query pre-remove physical ownership state: %v", err)
+		}
+		if preMappings != 2 || preRefCount != 2 {
+			t.Fatalf("expected pre-remove mappings=2 ref_count=2, got mappings=%d ref_count=%d", preMappings, preRefCount)
+		}
+		assertPhysicalGraphCoherentIntegration(t, dbconnCheck)
+
+		removeFirst := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathP1, "--output", "json")
+		if removeFirst.ExitCode != 0 {
+			t.Fatalf("remove first stored-path failed: exit=%d stdout=%s stderr=%s", removeFirst.ExitCode, removeFirst.Stdout, removeFirst.Stderr)
+		}
+
+		var midMappings, midRefCount int64
+		if err := dbconnCheck.QueryRow(`
+			SELECT COUNT(*), COALESCE(MAX(lf.ref_count), -1)
+			FROM physical_file pf
+			JOIN logical_file lf ON lf.id = pf.logical_file_id
+			WHERE pf.logical_file_id = $1
+		`, idP1).Scan(&midMappings, &midRefCount); err != nil {
+			t.Fatalf("query mid-remove physical ownership state: %v", err)
+		}
+		if midMappings != 1 || midRefCount != 1 {
+			t.Fatalf("expected mid-remove mappings=1 ref_count=1, got mappings=%d ref_count=%d", midMappings, midRefCount)
+		}
+		assertPhysicalGraphCoherentIntegration(t, dbconnCheck)
+
+		removeSecond := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"remove", "--stored-path", storedPathP2, "--output", "json")
+		if removeSecond.ExitCode != 0 {
+			t.Fatalf("remove second stored-path failed: exit=%d stdout=%s stderr=%s", removeSecond.ExitCode, removeSecond.Stdout, removeSecond.Stderr)
+		}
+
+		var postMappings int64
+		if err := dbconnCheck.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, idP1).Scan(&postMappings); err != nil {
+			t.Fatalf("query post-remove physical mappings: %v", err)
+		}
+		if postMappings != 0 {
+			t.Fatalf("expected post-remove mappings=0, got %d", postMappings)
+		}
+
+		var postRefCount int64
+		err = dbconnCheck.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, idP1).Scan(&postRefCount)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("query post-remove ref_count: %v", err)
+		}
+		if err == nil && postRefCount != 0 {
+			t.Fatalf("expected post-remove logical ref_count=0 when row exists, got %d", postRefCount)
+		}
+		assertPhysicalGraphCoherentIntegration(t, dbconnCheck)
+	})
+
+	t.Run("repair --batch --input deterministic partial failure", func(t *testing.T) {
+		fileRepair := filepath.Join(inputDir, "batch_repair_input.txt")
+		if err := os.WriteFile(fileRepair, []byte("batch-repair-input"), 0o644); err != nil {
+			t.Fatalf("write fileRepair: %v", err)
+		}
+
+		storeRepair := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileRepair, "--output", "json"), "store")
+		repairID := testutils.JSONInt64(t, testutils.JSONMap(t, storeRepair, "data"), "file_id")
+
+		dbconnRepair, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("connectDB for repair drift: %v", err)
+		}
+		defer dbconnRepair.Close()
+		if _, err := dbconnRepair.Exec(`UPDATE logical_file SET ref_count = ref_count + 3 WHERE id = $1`, repairID); err != nil {
+			t.Fatalf("corrupt ref_count for repair batch test: %v", err)
+		}
+
+		repairInput := filepath.Join(tmp, "repair_targets_batch.txt")
+		if err := os.WriteFile(repairInput, []byte("ref-counts\nunknown-target\nref-counts\n"), 0o644); err != nil {
+			t.Fatalf("write repair input file: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"repair", "--batch", "--input", repairInput, "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("repair --batch --input expected usage-class partial failure exit=2, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("repair --batch --input produced no JSON stdout: %s", res.Stdout)
+		}
+		if got, _ := payload["status"].(string); got != "partial_failure" {
+			t.Fatalf("expected status=partial_failure, got payload=%v", payload)
+		}
+
+		summary, ok := payload["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("missing summary payload: %v", payload)
+		}
+		if int(summary["success"].(float64)) != 1 || int(summary["failed"].(float64)) != 1 || int(summary["skipped"].(float64)) != 1 {
+			t.Fatalf("unexpected repair batch summary: %v", summary)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 3 {
+			t.Fatalf("unexpected repair batch results payload: %v", payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		third, _ := results[2].(map[string]any)
+		if first["status"] != "success" || second["status"] != "failed" || third["status"] != "skipped" {
+			t.Fatalf("unexpected repair batch result ordering: results=%v", results)
+		}
+
+		verifyAfter := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"verify", "system", "--output", "json")
+		if verifyAfter.ExitCode != 0 {
+			t.Fatalf("verify should pass after first batch repair success item, got exit=%d stdout=%s stderr=%s", verifyAfter.ExitCode, verifyAfter.Stdout, verifyAfter.Stderr)
+		}
+	})
+
+	t.Run("repair --batch --fail-fast stops before execution", func(t *testing.T) {
+		fileRepairFF := filepath.Join(inputDir, "batch_repair_fail_fast.txt")
+		if err := os.WriteFile(fileRepairFF, []byte("batch-repair-fail-fast"), 0o644); err != nil {
+			t.Fatalf("write fileRepairFF: %v", err)
+		}
+
+		storeRepairFF := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"store", fileRepairFF, "--output", "json"), "store")
+		repairFFID := testutils.JSONInt64(t, testutils.JSONMap(t, storeRepairFF, "data"), "file_id")
+
+		dbconnRepairFF, err := db.ConnectDB()
+		if err != nil {
+			t.Fatalf("connectDB for repair fail-fast drift: %v", err)
+		}
+		defer dbconnRepairFF.Close()
+		if _, err := dbconnRepairFF.Exec(`UPDATE logical_file SET ref_count = ref_count + 2 WHERE id = $1`, repairFFID); err != nil {
+			t.Fatalf("corrupt ref_count for repair fail-fast test: %v", err)
+		}
+
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"repair", "--batch", "unknown-target", "ref-counts", "--fail-fast", "--output", "json")
+		if res.ExitCode != 2 {
+			t.Fatalf("repair --batch --fail-fast expected exit=2, got=%d stdout=%s stderr=%s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+
+		payload, ok := testutils.TryParseLastJSONLine(res.Stdout)
+		if !ok {
+			t.Fatalf("repair --batch --fail-fast produced no JSON stdout: %s", res.Stdout)
+		}
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 2 {
+			t.Fatalf("expected invalid target to fail and executable repair target to still run, results=%v payload=%v", results, payload)
+		}
+		first, _ := results[0].(map[string]any)
+		second, _ := results[1].(map[string]any)
+		if first["status"] != "failed" || second["status"] != "success" {
+			t.Fatalf("unexpected repair fail-fast result ordering: results=%v", results)
+		}
+
+		verifyFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"verify", "system", "--output", "json")
+		if verifyFail.ExitCode != 0 {
+			t.Fatalf("verify should pass because executable repair target still ran after invalid target precheck, got exit=%d stdout=%s stderr=%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
+		}
+
+		// Cleanup the induced drift so later subtests are unaffected.
+		repairCleanup := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"repair", "ref-counts", "--output", "json")
+		if repairCleanup.ExitCode != 0 {
+			t.Fatalf("cleanup repair ref-counts failed: exit=%d stdout=%s stderr=%s", repairCleanup.ExitCode, repairCleanup.Stdout, repairCleanup.Stderr)
 		}
 	})
 

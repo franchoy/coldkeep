@@ -9,11 +9,17 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 var gcAdvisoryUnlock = func(ctx context.Context, dbconn *sql.DB) error {
 	_, err := dbconn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", gcAdvisoryLockID)
 	return err
+}
+
+var gcPhysicalIntegrityCheck = func(dbconn *sql.DB) (verify.PhysicalFileIntegritySummary, error) {
+	return verify.CheckPhysicalFileGraphIntegrity(dbconn)
 }
 
 // GCResult contains structured metadata about a GC run.
@@ -30,6 +36,28 @@ func RunGCWithContainersDir(dryRun bool, containersDir string) error {
 	return err
 }
 
+// RunGCWithContainersDirResult implements GC under the v1.2 audited-root model
+// (Option A — conservative path):
+//
+//  1. Acquire advisory lock (singleton enforcement).
+//
+//  2. Pre-flight: run CheckPhysicalFileGraphIntegrity. GC is unconditionally
+//     refused if any of the following conditions are present:
+//     - orphan physical_file rows (no matching logical_file)
+//     - logical_file.ref_count mismatches vs COUNT(physical_file)
+//     - negative logical_file.ref_count values
+//     This guard ensures GC never reasons about container liveness on a drifted
+//     graph; the audited physical_file layer is the confirmed root of truth before
+//     any deletion decisions are made.
+//
+//  3. Identify sealed, non-quarantined containers and evaluate liveness using
+//     chunk.live_ref_count and chunk.pin_count as the immediate deletion
+//     criterion. This is correct because steps 1–2 guarantee the physical-root
+//     graph is coherent and chunk ref counts are trustworthy inputs.
+//
+// If integrity issues are found at step 2, the error message directs operators
+// to run 'repair ref-counts' before retrying GC.
+// Both real and dry-run GC are subject to the same pre-flight gate.
 func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCResult, err error) {
 	result.DryRun = dryRun
 
@@ -61,6 +89,37 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			log.Printf("warning: failed to release advisory lock: %v\n", unlockErr)
 		}
 	}()
+
+	// Pre-flight: refuse GC if the physical_file graph has integrity issues.
+	// Proceeding on a drifted graph risks treating live blocks as unreferenced.
+	integrity, err := gcPhysicalIntegrityCheck(dbconn)
+	if err != nil {
+		if _, ok := invariants.Code(err); ok {
+			return GCResult{}, invariants.New(
+				invariants.CodeGCRefusedIntegrity,
+				fmt.Sprintf(
+					"GC refused: physical_file graph integrity issues detected (orphan_rows=%d ref_count_mismatches=%d negative_ref_counts=%d); run 'repair ref-counts' first",
+					integrity.OrphanPhysicalFileRows,
+					integrity.LogicalRefCountMismatches,
+					integrity.NegativeLogicalRefCounts,
+				),
+				err,
+			)
+		}
+		return GCResult{}, fmt.Errorf("GC pre-flight integrity check failed: %w", err)
+	}
+	if integrity.OrphanPhysicalFileRows > 0 || integrity.LogicalRefCountMismatches > 0 || integrity.NegativeLogicalRefCounts > 0 {
+		return GCResult{}, invariants.New(
+			invariants.CodeGCRefusedIntegrity,
+			fmt.Sprintf(
+				"GC refused: physical_file graph integrity issues detected (orphan_rows=%d ref_count_mismatches=%d negative_ref_counts=%d); run 'repair ref-counts' first",
+				integrity.OrphanPhysicalFileRows,
+				integrity.LogicalRefCountMismatches,
+				integrity.NegativeLogicalRefCounts,
+			),
+			nil,
+		)
+	}
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename

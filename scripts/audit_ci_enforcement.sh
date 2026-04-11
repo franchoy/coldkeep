@@ -95,6 +95,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
   require_pattern "$WORKFLOW_FILE" '^  integration-long-run:$' 'integration long-run job'
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists'
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G9\)' 'adversarial workflow step names batch coverage through G9'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite'
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step'
@@ -118,6 +119,11 @@ check_local_workflow() {
     require_pattern "$VALIDATION_MATRIX_FILE" '^\| G6 \|' 'validation matrix safe in-process concurrency row (G6)'
     require_pattern "$VALIDATION_MATRIX_FILE" '^\| G7 \|' 'validation matrix deep corruption detection row (G7)'
     require_pattern "$VALIDATION_MATRIX_FILE" '^\| G8 \|' 'validation matrix doctor/health-gate row (G8)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G9 \|' 'validation matrix batch CLI orchestration row (G9)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G10 \|' 'validation matrix physical graph audit row (G10)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G11 \|' 'validation matrix audited GC root gate row (G11)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G12 \|' 'validation matrix invariant classification row (G12)'
+    require_pattern "$VALIDATION_MATRIX_FILE" '^\| G13 \|' 'validation matrix batch maintenance semantics row (G13)'
 }
 
 require_gh() {

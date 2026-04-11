@@ -25,7 +25,12 @@ func ExecutePrepared(op OperationType, dryRun bool, failFast bool, targets []Pre
 		}
 	}
 
-	return NewReport(op, dryRun, results)
+	report := NewReport(op, dryRun, results)
+	report.ExecutionMode = ExecutionModeContinueOnError
+	if failFast {
+		report.ExecutionMode = ExecutionModeFailFast
+	}
+	return report
 }
 
 // ExecutePlan runs a plan using a per-item execution callback.
@@ -77,7 +82,12 @@ func ExecutePlan(plan Plan, opts ExecuteOptions, execFunc func(id int64) (string
 		})
 	}
 
-	return NewReport(planOperation(plan), opts.DryRun, results)
+	report := NewReport(planOperation(plan), opts.DryRun, results)
+	report.ExecutionMode = ExecutionModeContinueOnError
+	if opts.FailFast {
+		report.ExecutionMode = ExecutionModeFailFast
+	}
+	return report
 }
 
 func planOperation(plan Plan) OperationType {

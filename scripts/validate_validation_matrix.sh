@@ -43,7 +43,7 @@ echo "[validation-matrix] checking required validation evidence rows"
 
 summary_bullet_count=$(awk '
   /^### Summary$/ { in_summary=1; next }
-  /^### Core invariants$/ { in_summary=0 }
+  in_summary && /^### / { in_summary=0 }
   in_summary && /^- / { count++ }
   END { print count + 0 }
 ' "$README_FILE")
@@ -53,6 +53,8 @@ if [[ "$summary_bullet_count" -ne 5 ]]; then
   exit 1
 fi
 echo "[validation-matrix] ok: README guarantee summary bullet count is 5"
+
+require_pattern "$README_FILE" '^### (Core invariants|Guarantees \(G[0-9]+-G[0-9]+\))$' 'README guarantees heading (legacy or ranged style)'
 
 require_readme_guarantee_bullet '- deterministic, byte-identical restore'
 require_readme_guarantee_bullet '- no exposure of partially written or inconsistent data'
@@ -71,6 +73,12 @@ require_pattern "$MATRIX_FILE" '^| G5 |' 'G5: atomic restore replacement row'
 require_pattern "$MATRIX_FILE" '^| G6 |' 'G6: safe in-process concurrency row'
 require_pattern "$MATRIX_FILE" '^| G7 |' 'G7: deep corruption detection row'
 require_pattern "$MATRIX_FILE" '^| G8 |' 'G8: doctor/health-gate row'
+require_pattern "$MATRIX_FILE" '^## Post-v1\.0 Extension Guarantees \(v1\.1\+\)$' 'post-v1.0 extension guarantees section'
+require_pattern "$MATRIX_FILE" '^| G9 |' 'G9: batch CLI orchestration row'
+require_pattern "$MATRIX_FILE" '^| G10 |' 'G10: physical graph audit row'
+require_pattern "$MATRIX_FILE" '^| G11 |' 'G11: audited GC root gate row'
+require_pattern "$MATRIX_FILE" '^| G12 |' 'G12: invariant classification row'
+require_pattern "$MATRIX_FILE" '^| G13 |' 'G13: batch maintenance semantics row'
 require_pattern "$MATRIX_FILE" '^## Exit Criteria$' 'exit criteria section'
 require_pattern "$MATRIX_FILE" '^1\. Every guarantee row remains mapped to at least one automated test and/or verify check\.$' 'exit criteria mapping guard'
 

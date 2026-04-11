@@ -25,9 +25,10 @@ func SearchFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error
 	}
 
 	query := `
-		SELECT id, original_name, file_hash, total_size, created_at
-		FROM logical_file
-		WHERE status = $1
+		SELECT lf.id, pf.path, lf.file_hash, lf.total_size, lf.created_at
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.status = $1
 	`
 	params := []interface{}{filestate.LogicalFileCompleted}
 	paramIndex := 2
@@ -39,7 +40,7 @@ func SearchFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error
 				return nil, fmt.Errorf("missing argument for --name")
 			}
 			i++
-			query += fmt.Sprintf(" AND original_name ILIKE $%d", paramIndex)
+			query += fmt.Sprintf(" AND LOWER(pf.path) LIKE LOWER($%d)", paramIndex)
 			params = append(params, "%"+args[i]+"%")
 			paramIndex++
 
@@ -77,7 +78,7 @@ func SearchFilesResultWithDB(dbconn *sql.DB, args []string) ([]FileRecord, error
 		}
 	}
 
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY pf.path ASC"
 	query, params = applyPagination(query, params, paramIndex, limit, offset)
 
 	rows, err := dbconn.QueryContext(ctx, query, params...)

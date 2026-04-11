@@ -116,10 +116,10 @@ func TestAdversarialG2DoctorAbortsInjectedProcessingRowsAndPreservesHealthyResto
 
 			var danglingLogicalID int64
 			if err := dbconn.QueryRow(`
-				INSERT INTO logical_file (original_name, total_size, file_hash, status)
-				VALUES ($1, $2, $3, $4) RETURNING id
+				INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+				VALUES ($1, $2, $3, $4, $5) RETURNING id
 			`, "g2_dangling_processing.bin", int64(4096),
-				fmt.Sprintf("%064x", 1), filestate.LogicalFileProcessing).Scan(&danglingLogicalID); err != nil {
+				fmt.Sprintf("%064x", 1), filestate.LogicalFileProcessing, int64(0)).Scan(&danglingLogicalID); err != nil {
 				t.Fatalf("inject dangling PROCESSING logical_file: %v", err)
 			}
 
@@ -255,12 +255,12 @@ func TestAdversarialG2RepeatedDoctorConvergesOnRecoverableState(t *testing.T) {
 			for round := 0; round < 3; round++ {
 				var danglingLogicalID int64
 				if err := dbconn.QueryRow(`
-					INSERT INTO logical_file (original_name, total_size, file_hash, status)
-					VALUES ($1, $2, $3, $4) RETURNING id
+					INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+					VALUES ($1, $2, $3, $4, $5) RETURNING id
 				`, fmt.Sprintf("g2_round_%02d_processing.bin", round),
 					int64(2048+round),
 					fmt.Sprintf("%064x", round+11),
-					filestate.LogicalFileProcessing).Scan(&danglingLogicalID); err != nil {
+					filestate.LogicalFileProcessing, int64(0)).Scan(&danglingLogicalID); err != nil {
 					t.Fatalf("round %d inject dangling PROCESSING logical_file: %v", round, err)
 				}
 

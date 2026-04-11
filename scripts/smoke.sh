@@ -17,6 +17,7 @@ SMOKE_TEMP_STORAGE_DIR=""
 
 cleanup() {
   rm -rf ./_smoke_out
+  rm -rf ./_smoke_out_dups
   if [[ -n "$SMOKE_TEMP_STORAGE_DIR" ]]; then
     rm -rf "$SMOKE_TEMP_STORAGE_DIR"
   fi
@@ -229,6 +230,44 @@ coldkeep list
 
 LIST_OUTPUT=$(coldkeep list --output json)
 
+echo "[smoke] duplicate-id regression test: restore remains valid when multiple paths share one id"
+DUPLICATE_ID_GROUPS=$(echo "$LIST_OUTPUT" | jq -r '[.files | group_by(.id)[] | select(length > 1)] | length')
+if [[ "$DUPLICATE_ID_GROUPS" -gt 0 ]]; then
+  rm -rf ./_smoke_out_dups
+  DUPLICATE_RESTORE_FAILED=0
+  while IFS=$'\t' read -r file_id expected_hash sample_count; do
+    dup_restore_dir="./_smoke_out_dups/${file_id}"
+    mkdir -p "$dup_restore_dir"
+    if ! coldkeep restore "${file_id}" "${dup_restore_dir}/"; then
+      echo "[smoke] ERROR: duplicate-id restore failed for id=${file_id} (paths=${sample_count})"
+      DUPLICATE_RESTORE_FAILED=1
+      continue
+    fi
+
+    restored="$(find "$dup_restore_dir" -mindepth 1 -maxdepth 1 -type f | head -n1)"
+    if [[ -z "$restored" || ! -f "$restored" ]]; then
+      echo "[smoke] ERROR: duplicate-id restore produced no output for id=${file_id} (paths=${sample_count})"
+      DUPLICATE_RESTORE_FAILED=1
+      continue
+    fi
+
+    rest_hash=$(sha256sum "$restored" | awk '{print $1}')
+    if [[ "$expected_hash" != "$rest_hash" ]]; then
+      echo "[smoke] ERROR: duplicate-id hash mismatch for id=${file_id}: want=${expected_hash} got=${rest_hash}"
+      DUPLICATE_RESTORE_FAILED=1
+    else
+      echo "[smoke]   ok: duplicate-id restore id=${file_id} paths=${sample_count} -> $(basename "$restored")"
+    fi
+  done < <(echo "$LIST_OUTPUT" | jq -r '.files | group_by(.id)[] | select(length > 1) | [(. [0].id | tostring), .[0].file_hash, (length | tostring)] | @tsv')
+
+  if [[ "$DUPLICATE_RESTORE_FAILED" -eq 1 ]]; then
+    exit 1
+  fi
+  echo "[smoke] duplicate-id regression PASSED"
+else
+  echo "[smoke] duplicate-id regression SKIPPED: no duplicate ids in this dataset"
+fi
+
 # Capture first ID before the restore loop (needed for the remove test below)
 FIRST_ID=$(echo "$LIST_OUTPUT" | jq -r 'if (.files | length) > 0 then .files[0].id else empty end')
 
@@ -243,9 +282,9 @@ while IFS=$'\t' read -r file_id file_name expected_hash; do
     RESTORE_ALL_FAILED=1
     continue
   fi
-  restored="${restore_dir}/${file_name}"
-  if [[ ! -f "$restored" ]]; then
-    echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+  restored="$(find "$restore_dir" -mindepth 1 -maxdepth 1 -type f | head -n1)"
+  if [[ -z "$restored" || ! -f "$restored" ]]; then
+    echo "[smoke] ERROR: restore produced no output file for id=${file_id} (sample name=${file_name})"
     RESTORE_ALL_FAILED=1
     continue
   fi
@@ -256,12 +295,12 @@ while IFS=$'\t' read -r file_id file_name expected_hash; do
   fi
   rest_hash=$(sha256sum "$restored" | awk '{print $1}')
   if [[ "$expected_hash" != "$rest_hash" ]]; then
-    echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
+    echo "[smoke] ERROR: hash mismatch for id=${file_id} (sample name=${file_name}): want=${expected_hash} got=${rest_hash}"
     RESTORE_ALL_FAILED=1
   else
-    echo "[smoke]   ok: id=${file_id} ${file_name}"
+    echo "[smoke]   ok: id=${file_id} ${file_name} -> $(basename "$restored")"
   fi
-done < <(echo "$LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
+done < <(echo "$LIST_OUTPUT" | jq -r '.files | unique_by(.id)[] | [(.id | tostring), .name, .file_hash] | @tsv')
 if [[ "$RESTORE_ALL_FAILED" -eq 1 ]]; then
   exit 1
 fi
@@ -355,9 +394,9 @@ else
       EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
-    restored="${restore_dir}/${file_name}"
-    if [[ ! -f "$restored" ]]; then
-      echo "[smoke] ERROR: restore produced no output file for id=${file_id} name=${file_name}"
+    restored="$(find "$restore_dir" -mindepth 1 -maxdepth 1 -type f | head -n1)"
+    if [[ -z "$restored" || ! -f "$restored" ]]; then
+      echo "[smoke] ERROR: restore produced no output file for id=${file_id} (sample name=${file_name})"
       EDGE_RESTORE_ALL_FAILED=1
       continue
     fi
@@ -368,12 +407,12 @@ else
     fi
     rest_hash=$(sha256sum "$restored" | awk '{print $1}')
     if [[ "$expected_hash" != "$rest_hash" ]]; then
-      echo "[smoke] ERROR: hash mismatch for id=${file_id} name=${file_name}: want=${expected_hash} got=${rest_hash}"
+      echo "[smoke] ERROR: hash mismatch for id=${file_id} (sample name=${file_name}): want=${expected_hash} got=${rest_hash}"
       EDGE_RESTORE_ALL_FAILED=1
     else
-      echo "[smoke]   ok: id=${file_id} ${file_name}"
+      echo "[smoke]   ok: id=${file_id} ${file_name} -> $(basename "$restored")"
     fi
-  done < <(echo "$EDGE_LIST_OUTPUT" | jq -r '.files[] | [(.id | tostring), .name, .file_hash] | @tsv')
+  done < <(echo "$EDGE_LIST_OUTPUT" | jq -r '.files | unique_by(.id)[] | [(.id | tostring), .name, .file_hash] | @tsv')
   if [[ "$EDGE_RESTORE_ALL_FAILED" -eq 1 ]]; then
     exit 1
   fi
@@ -575,6 +614,106 @@ if [[ "$DOCTOR_FULL_VERIFY_LEVEL" != "full" ]]; then
 fi
 
 echo "[smoke]   ok: doctor --full --output json produced complete operator health report (verify_level=$DOCTOR_FULL_VERIFY_LEVEL)"
+
+echo ""
+echo "[smoke] === V1.2 PHYSICAL-FILE SURFACES TEST ==="
+
+reset_smoke_state
+
+V12_SMOKE_DIR="./_smoke_v12_paths"
+V12_RESTORE_DIR="./_smoke_v12_restore"
+rm -rf "$V12_SMOKE_DIR" "$V12_RESTORE_DIR"
+mkdir -p "$V12_SMOKE_DIR" "$V12_RESTORE_DIR"
+
+printf 'v1.2-physical-file-smoke\n' > "$V12_SMOKE_DIR/path_a.txt"
+printf 'v1.2-physical-file-smoke\n' > "$V12_SMOKE_DIR/path_b.txt"
+
+STORE_V12_A=$(coldkeep store "$V12_SMOKE_DIR/path_a.txt" --output json)
+STORE_V12_A_PAYLOAD=$(echo "$STORE_V12_A" | grep -E '^\{.*\}$' | tail -n1)
+V12_ID_A=$(echo "$STORE_V12_A_PAYLOAD" | jq -r '.data.file_id // empty')
+V12_STORED_PATH_A=$(echo "$STORE_V12_A_PAYLOAD" | jq -r '.data.stored_path // empty')
+
+STORE_V12_B=$(coldkeep store "$V12_SMOKE_DIR/path_b.txt" --output json)
+STORE_V12_B_PAYLOAD=$(echo "$STORE_V12_B" | grep -E '^\{.*\}$' | tail -n1)
+V12_ID_B=$(echo "$STORE_V12_B_PAYLOAD" | jq -r '.data.file_id // empty')
+V12_STORED_PATH_B=$(echo "$STORE_V12_B_PAYLOAD" | jq -r '.data.stored_path // empty')
+
+if [[ -z "$V12_ID_A" || -z "$V12_ID_B" || -z "$V12_STORED_PATH_A" || -z "$V12_STORED_PATH_B" ]]; then
+  echo "[smoke] ERROR: v1.2 store payload missing file_id or stored_path"
+  echo "$STORE_V12_A"
+  echo "$STORE_V12_B"
+  exit 1
+fi
+if [[ "$V12_ID_A" != "$V12_ID_B" ]]; then
+  echo "[smoke] ERROR: identical content should map to one logical_file id, got ${V12_ID_A} and ${V12_ID_B}"
+  exit 1
+fi
+if [[ "$V12_STORED_PATH_A" == "$V12_STORED_PATH_B" ]]; then
+  echo "[smoke] ERROR: distinct physical paths should remain distinct in stored_path output"
+  exit 1
+fi
+echo "[smoke]   ok: deduplicated logical id=${V12_ID_A} with two distinct stored paths"
+
+REPAIR_V12=$(coldkeep repair ref-counts --output json)
+REPAIR_V12_PAYLOAD=$(echo "$REPAIR_V12" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$REPAIR_V12_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "repair"
+  and (.data.updated_logical_files != null)
+  and (.data.orphan_physical_file_rows == 0)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: repair ref-counts JSON contract invalid on healthy graph"
+  echo "$REPAIR_V12"
+  exit 1
+fi
+echo "[smoke]   ok: repair ref-counts succeeds on healthy graph"
+
+echo "[smoke] verifying remove --stored-path rejects unsupported --dry-run"
+if coldkeep remove --stored-path "$V12_STORED_PATH_A" --dry-run > /dev/null 2>&1; then
+  echo "[smoke] ERROR: remove --stored-path --dry-run should be rejected in v1.2"
+  exit 1
+fi
+echo "[smoke]   ok: remove --stored-path --dry-run is rejected as expected"
+
+REMOVE_V12_A=$(coldkeep remove --stored-path "$V12_STORED_PATH_A" --output json)
+REMOVE_V12_A_PAYLOAD=$(echo "$REMOVE_V12_A" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$REMOVE_V12_A_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "remove"
+  and (.data.stored_path != null)
+  and (.data.remaining_ref_count == 1)
+  and (.data.removed == true)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: remove --stored-path JSON contract invalid"
+  echo "$REMOVE_V12_A"
+  exit 1
+fi
+echo "[smoke]   ok: remove --stored-path decremented remaining_ref_count to 1"
+
+if ! coldkeep verify system --standard > /dev/null; then
+  echo "[smoke] ERROR: verify system --standard failed after single stored-path removal"
+  exit 1
+fi
+echo "[smoke]   ok: physical graph remains healthy after single stored-path removal"
+
+if ! coldkeep restore "$V12_ID_B" "$V12_RESTORE_DIR/" --overwrite > /dev/null; then
+  echo "[smoke] ERROR: restore failed after removing one physical mapping"
+  exit 1
+fi
+
+V12_RESTORED=$(find "$V12_RESTORE_DIR" -type f -print -quit)
+if [[ -z "$V12_RESTORED" ]]; then
+  echo "[smoke] ERROR: restore after stored-path removal produced no file"
+  exit 1
+fi
+
+V12_EXPECTED_HASH=$(sha256sum "$V12_SMOKE_DIR/path_b.txt" | awk '{print $1}')
+V12_RESTORED_HASH=$(sha256sum "$V12_RESTORED" | awk '{print $1}')
+if [[ "$V12_EXPECTED_HASH" != "$V12_RESTORED_HASH" ]]; then
+  echo "[smoke] ERROR: restore after stored-path removal hash mismatch: want=${V12_EXPECTED_HASH} got=${V12_RESTORED_HASH}"
+  exit 1
+fi
+echo "[smoke]   ok: surviving physical mapping remains restorable after single-path removal"
 
 echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="

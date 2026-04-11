@@ -1,0 +1,302 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/franchoy/coldkeep/internal/db"
+)
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type physicalFileRecord struct {
+	Path               string
+	LogicalFileID      int64
+	Mode               sql.NullInt64
+	MTime              sql.NullTime
+	UID                sql.NullInt64
+	GID                sql.NullInt64
+	IsMetadataComplete bool
+}
+
+type physicalFileMetadata struct {
+	Mode               sql.NullInt64
+	MTime              sql.NullTime
+	UID                sql.NullInt64
+	GID                sql.NullInt64
+	IsMetadataComplete bool
+}
+
+type physicalPathConflictError struct {
+	Path                  string
+	ExistingLogicalFileID int64
+	NewLogicalFileID      int64
+}
+
+func (e *physicalPathConflictError) Error() string {
+	return fmt.Sprintf(
+		"physical path conflict for %q: mapped to logical_file_id=%d, requested logical_file_id=%d",
+		e.Path,
+		e.ExistingLogicalFileID,
+		e.NewLogicalFileID,
+	)
+}
+
+func normalizePhysicalFilePath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("physical file path cannot be empty")
+	}
+
+	// Path identity policy (v1.2): canonicalize structure (absolute/clean/symlinks)
+	// but do not case-fold. This keeps identity aligned with case-sensitive
+	// filesystems and avoids collapsing distinct Linux paths such as A.txt/a.txt.
+	// Any cross-platform case policy change must be deliberate and versioned.
+
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute physical file path: %w", err)
+	}
+
+	cleaned := filepath.Clean(absPath)
+
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cleaned, nil
+		}
+		return "", fmt.Errorf("canonicalize physical file path: %w", err)
+	}
+
+	resolvedAbs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute canonical physical file path: %w", err)
+	}
+
+	return filepath.Clean(resolvedAbs), nil
+}
+
+func buildPhysicalFileMetadata(fileInfo os.FileInfo) physicalFileMetadata {
+	meta := physicalFileMetadata{}
+	if fileInfo == nil {
+		return meta
+	}
+
+	meta.Mode = sql.NullInt64{Int64: int64(fileInfo.Mode()), Valid: true}
+	meta.MTime = sql.NullTime{Time: fileInfo.ModTime().UTC(), Valid: true}
+
+	if stat, ok := fileInfo.Sys().(*syscall.Stat_t); ok {
+		meta.UID = sql.NullInt64{Int64: int64(stat.Uid), Valid: true}
+		meta.GID = sql.NullInt64{Int64: int64(stat.Gid), Valid: true}
+	}
+
+	meta.IsMetadataComplete = meta.Mode.Valid && meta.MTime.Valid && meta.UID.Valid && meta.GID.Valid
+	return meta
+}
+
+func insertPhysicalFileIfAbsent(ctx context.Context, ex execer, path string, logicalFileID int64, meta physicalFileMetadata) (bool, error) {
+	result, err := ex.ExecContext(
+		ctx,
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (path) DO NOTHING`,
+		path,
+		logicalFileID,
+		meta.Mode,
+		meta.MTime,
+		meta.UID,
+		meta.GID,
+		meta.IsMetadataComplete,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rowsAffected > 0, nil
+}
+
+func updatePhysicalFile(ctx context.Context, ex execer, path string, logicalFileID int64, meta physicalFileMetadata) error {
+	result, err := ex.ExecContext(
+		ctx,
+		`UPDATE physical_file
+		 SET logical_file_id = $2,
+		     mode = $3,
+		     mtime = $4,
+		     uid = $5,
+		     gid = $6,
+		     is_metadata_complete = $7
+		 WHERE path = $1`,
+		path,
+		logicalFileID,
+		meta.Mode,
+		meta.MTime,
+		meta.UID,
+		meta.GID,
+		meta.IsMetadataComplete,
+	)
+	if err != nil {
+		return err
+	}
+	_, _ = result.RowsAffected()
+	return nil
+}
+
+func incrementLogicalFileRefCount(ctx context.Context, ex execer, logicalFileID int64) error {
+	_, err := ex.ExecContext(ctx, `UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = $1`, logicalFileID)
+	return err
+}
+
+func decrementLogicalFileRefCount(ctx context.Context, ex execer, logicalFileID int64) error {
+	_, err := ex.ExecContext(
+		ctx,
+		`UPDATE logical_file
+		 SET ref_count = ref_count - 1
+		 WHERE id = $1 AND ref_count > 0`,
+		logicalFileID,
+	)
+	return err
+}
+
+func ensurePhysicalFileForPathDefaultPolicyWithTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata) (bool, error) {
+	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `
+		SELECT path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete
+		FROM physical_file
+		WHERE path = $1
+	`)
+
+	var existing physicalFileRecord
+	err := tx.QueryRowContext(ctx, selectQuery, path).Scan(
+		&existing.Path,
+		&existing.LogicalFileID,
+		&existing.Mode,
+		&existing.MTime,
+		&existing.UID,
+		&existing.GID,
+		&existing.IsMetadataComplete,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			inserted, err := insertPhysicalFileIfAbsent(ctx, tx, path, logicalFileID, meta)
+			if err != nil {
+				return false, fmt.Errorf("insert physical_file %q: %w", path, err)
+			}
+			if inserted {
+				if err := incrementLogicalFileRefCount(ctx, tx, logicalFileID); err != nil {
+					return false, fmt.Errorf("increment logical_file.ref_count id=%d: %w", logicalFileID, err)
+				}
+				return false, nil
+			}
+
+			// Another concurrent transaction inserted the row after our initial read.
+			err = tx.QueryRowContext(ctx, selectQuery, path).Scan(
+				&existing.Path,
+				&existing.LogicalFileID,
+				&existing.Mode,
+				&existing.MTime,
+				&existing.UID,
+				&existing.GID,
+				&existing.IsMetadataComplete,
+			)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return false, fmt.Errorf("insert physical_file %q raced but row is missing", path)
+				}
+				return false, err
+			}
+		} else {
+			return false, err
+		}
+	}
+
+	if existing.LogicalFileID != logicalFileID {
+		return false, &physicalPathConflictError{
+			Path:                  path,
+			ExistingLogicalFileID: existing.LogicalFileID,
+			NewLogicalFileID:      logicalFileID,
+		}
+	}
+
+	if err := updatePhysicalFile(ctx, tx, path, logicalFileID, meta); err != nil {
+		return true, fmt.Errorf("update physical_file metadata for %q: %w", path, err)
+	}
+
+	return true, nil
+}
+
+func ensurePhysicalFileForPathWithPolicyWithTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, logicalFileID int64, meta physicalFileMetadata, replace bool) (bool, error) {
+	alreadyMapped, err := ensurePhysicalFileForPathDefaultPolicyWithTx(ctx, dbconn, tx, path, logicalFileID, meta)
+	if err == nil {
+		return alreadyMapped, nil
+	}
+
+	if !replace {
+		return false, err
+	}
+
+	var conflictErr *physicalPathConflictError
+	if !errors.As(err, &conflictErr) {
+		return false, err
+	}
+
+	if err := replacePhysicalFileLogicalTargetTx(ctx, dbconn, tx, path, logicalFileID, meta); err != nil {
+		return false, err
+	}
+
+	return false, nil
+}
+
+func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx, path string, newLogicalFileID int64, meta physicalFileMetadata) error {
+	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `SELECT logical_file_id FROM physical_file WHERE path = $1`)
+
+	var oldLogicalFileID int64
+	if err := tx.QueryRowContext(ctx, selectQuery, path).Scan(&oldLogicalFileID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("physical_file row not found for replace path %q", path)
+		}
+		return err
+	}
+
+	if oldLogicalFileID == newLogicalFileID {
+		if err := updatePhysicalFile(ctx, tx, path, newLogicalFileID, meta); err != nil {
+			return fmt.Errorf("update physical_file metadata for %q: %w", path, err)
+		}
+		return nil
+	}
+
+	// TODO(v1.2+): Prefer an in-place UPDATE logical_file_id once we fully
+	// understand and resolve SQLite behavior observed in tests where UPDATE did
+	// not persist the logical target reliably in this replace path.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, path); err != nil {
+		return fmt.Errorf("delete physical_file row for replace path %q: %w", path, err)
+	}
+	inserted, err := insertPhysicalFileIfAbsent(ctx, tx, path, newLogicalFileID, meta)
+	if err != nil {
+		return fmt.Errorf("insert replacement physical_file row for %q: %w", path, err)
+	}
+	if !inserted {
+		return fmt.Errorf("insert replacement physical_file row for %q: raced with concurrent insert", path)
+	}
+
+	if err := decrementLogicalFileRefCount(ctx, tx, oldLogicalFileID); err != nil {
+		return fmt.Errorf("decrement old logical_file.ref_count id=%d: %w", oldLogicalFileID, err)
+	}
+	if err := incrementLogicalFileRefCount(ctx, tx, newLogicalFileID); err != nil {
+		return fmt.Errorf("increment new logical_file.ref_count id=%d: %w", newLogicalFileID, err)
+	}
+
+	return nil
+}

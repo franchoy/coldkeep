@@ -849,8 +849,8 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 
 	insErr := tx.QueryRowContext(
 		ctx,
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, $4, 0)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
 		RETURNING id`,
 		fileinfo.Name(),
@@ -1434,7 +1434,19 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 // StoreFileWithStorageContextAndCodecResult stores one file and returns
 // metadata suitable for CLI text and JSON output.
 func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
-	result.Path = path
+	return StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, path, codec, false)
+}
+
+// StoreFileWithStorageContextAndCodecResultWithPolicy stores one file and returns
+// metadata suitable for CLI text and JSON output, applying the given path-conflict policy.
+// When replace is false, existing path mapped to different logical content fails.
+// When replace is true, existing path mapping is atomically retargeted.
+func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, path string, codec blocks.Codec, replace bool) (result StoreFileResult, err error) {
+	normalizedPath, err := normalizePhysicalFilePath(path)
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+	result.Path = normalizedPath
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -1460,6 +1472,7 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	if err != nil {
 		return StoreFileResult{}, err
 	}
+	physicalMetadata := buildPhysicalFileMetadata(fileinfo)
 
 	// Compute full file hash
 	hasher := sha256.New()
@@ -1486,6 +1499,18 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	result.FileID = fileID
 
 	if filestatus == filestate.LogicalFileCompleted {
+		tx, err := sgctx.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return StoreFileResult{}, err
+		}
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, sgctx.DB, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+			_ = tx.Rollback()
+			return StoreFileResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			_ = tx.Rollback()
+			return StoreFileResult{}, err
+		}
 		result.AlreadyStored = true
 		return result, nil
 	}
@@ -1764,6 +1789,20 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 	if err := finalizeLogicalFileStorageWithContext(ctx, sgctx.DB, fileID, chunkOrder); err != nil {
 		return StoreFileResult{}, err
 	}
+
+	tx, err := sgctx.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, sgctx.DB, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+		_ = tx.Rollback()
+		return StoreFileResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return StoreFileResult{}, err
+	}
+
 	// Mark the operation as completed to avoid aborting it in the deferred function
 	completed = true
 
