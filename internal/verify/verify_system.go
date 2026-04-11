@@ -56,6 +56,12 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 		return err
 	}
 
+	// check that the current-state physical_file graph is coherent:
+	// no orphan mappings, no logical ref_count drift, and no impossible negative ref_count values.
+	if _, err = checkPhysicalFileGraphIntegrity(dbconn); err != nil {
+		return err
+	}
+
 	//check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
 	if err = checkReferenceCounts(dbconn); err != nil {
 		return err

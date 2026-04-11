@@ -84,6 +84,7 @@ type doctorReport struct {
 	RecoveryStatus string          `json:"recovery_status"`
 	VerifyStatus   string          `json:"verify_status"`
 	SchemaStatus   string          `json:"schema_status"`
+	physicalAudit  verify.PhysicalFileIntegritySummary
 }
 
 // Frozen v1.0 product contract: doctor is the fast corrective recovery + health gate.
@@ -95,6 +96,7 @@ const doctorOperationalHint = "After significant operations, run coldkeep doctor
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = querySchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
+var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 
 type cliError struct {
 	code int
@@ -194,6 +196,8 @@ func runCLI(args []string) int {
 		err = runRestoreCommand(parsed, outputMode)
 	case "remove":
 		err = runRemoveCommand(parsed, outputMode)
+	case "repair":
+		err = runRepairCommand(parsed, outputMode)
 	case "gc":
 		err = runGCCommand(parsed, outputMode)
 	case "simulate":
@@ -358,7 +362,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
 		return
 	}
 
@@ -437,6 +441,7 @@ var outputSupportedCommands = map[string]bool{
 	"store-folder": true,
 	"restore":      true,
 	"remove":       true,
+	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
 }
@@ -467,7 +472,7 @@ func shouldRunStartupRecovery(command string) bool {
 	switch command {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "gc", "stats", "list", "search", "verify":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify":
 		return true
 	default:
 		return false
@@ -1235,6 +1240,44 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	return nil
 }
 
+func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 1 || parsed.positionals[0] != "ref-counts" {
+		return usageErrorf("Usage: coldkeep repair ref-counts [--output <text|json>]")
+	}
+
+	result, err := repairLogicalRefCountsPhase()
+	if err != nil {
+		return verifyError(fmt.Errorf("repair ref-counts failed: %w", err))
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "repair",
+			"data": map[string]any{
+				"target":                    "ref-counts",
+				"scanned_logical_files":     result.ScannedLogicalFiles,
+				"updated_logical_files":     result.UpdatedLogicalFiles,
+				"orphan_physical_file_rows": result.OrphanPhysicalFileRows,
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Printf("Recomputed logical_file.ref_count from physical_file rows. scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d\n",
+		result.ScannedLogicalFiles,
+		result.UpdatedLogicalFiles,
+		result.OrphanPhysicalFileRows,
+	)
+	fmt.Printf("Hint: %s\n", doctorOperationalHint)
+	return nil
+}
+
 func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "limit", "offset", "output"); err != nil {
 		return err
@@ -1554,6 +1597,11 @@ func formatDoctorTextReport(report doctorReport) string {
 		report.Recovery.QuarantinedCorruptTail,
 		report.Recovery.QuarantinedOrphan,
 	))
+	b.WriteString(fmt.Sprintf("  Physical mapping integrity: orphan_physical_file_rows=%d logical_ref_count_mismatches=%d negative_logical_ref_count_rows=%d\n",
+		report.physicalAudit.OrphanPhysicalFileRows,
+		report.physicalAudit.LogicalRefCountMismatches,
+		report.physicalAudit.NegativeLogicalRefCounts,
+	))
 	b.WriteString(fmt.Sprintf("  Recommended next step: %s\n", recommendedNextStep))
 
 	return b.String()
@@ -1747,6 +1795,7 @@ func printHelp() {
 		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
 		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (legacy mode)"},
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
+		{"  repair ref-counts [--output <text|json>]", "Recompute logical_file.ref_count from physical_file rows (explicit repair)"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
@@ -1804,7 +1853,7 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
-	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, gc, stats, list, search, verify")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
 	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
 	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
@@ -1831,6 +1880,7 @@ func printHelp() {
 	fmt.Println("  coldkeep search --name report --min-size 1024 --limit 25")
 	fmt.Println("  coldkeep restore 12 ./restored")
 	fmt.Println("  coldkeep remove 12")
+	fmt.Println("  coldkeep repair ref-counts")
 	fmt.Println("  coldkeep verify system --full")
 	fmt.Println("  coldkeep verify file 12 --deep")
 	fmt.Println("  coldkeep gc --dry-run")

@@ -421,6 +421,61 @@ func TestDoctorCommand(t *testing.T) {
 	t.Logf("doctor command test passed: verify_level=%q recovery=%q verify=%q schema=%q", verifyLevel, recoveryStatus, verifyStatus, schemaStatus)
 }
 
+func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	defer dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "doctor_physical_graph.bin", 64*1024)
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = ref_count + 4 WHERE id = (SELECT id FROM logical_file LIMIT 1)`); err != nil {
+		t.Fatalf("corrupt logical_file.ref_count: %v", err)
+	}
+
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
+	if res.ExitCode != 3 {
+		t.Fatalf("doctor on physical mapping corruption should exit=3, got=%d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+	if !ok {
+		t.Fatalf("doctor physical mapping corruption produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+	}
+
+	if got, _ := errPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor physical mapping corruption error class mismatch: want VERIFY got %q payload=%v", got, errPayload)
+	}
+	msg, _ := errPayload["message"].(string)
+	if !strings.Contains(msg, "doctor verify phase failed") {
+		t.Fatalf("doctor physical mapping corruption message should mention verify phase: payload=%v", errPayload)
+	}
+	if !strings.Contains(msg, "logical ref_count mismatches=1") {
+		t.Fatalf("doctor physical mapping corruption message should surface ref_count mismatch summary: payload=%v", errPayload)
+	}
+}
+
 func TestDoctorJSONContractConsistency(t *testing.T) {
 	testgate.RequireDB(t)
 

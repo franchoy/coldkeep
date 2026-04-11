@@ -286,6 +286,30 @@ This is superior to "best-effort" deletion without verification. It ensures we f
 **Future expansions:**
 If batch operations are introduced in later phases (v1.4+), this invariant-driven pattern should remain the foundation, with verification pushed to the end of the batch operation rather than per-item.
 
+### Phase 5: Audited Physical Graph Coherence
+
+Phase 4 made the v1.2 physical layer correct on the write path. Phase 5 extends that into a read-side audited guarantee.
+
+Standard verify now audits the current-state physical graph for:
+
+- orphan `physical_file` rows whose `logical_file_id` points nowhere
+- `logical_file.ref_count` drift relative to `COUNT(physical_file rows)`
+- impossible negative `logical_file.ref_count` states
+
+This changes the trust model from “store/remove maintain the invariant when they run” to “the system can prove the invariant still holds now”.
+
+Doctor remains recovery-first, but its verify phase now includes these cheap metadata audits. Automatic repair inside doctor is still intentionally deferred.
+
+The explicit repair boundary is now defined:
+
+- `verify`: detect only
+- `doctor`: recover + detect, but no physical-layer auto-repair
+- `repair ref-counts`: explicit operator command that recomputes `logical_file.ref_count` from `physical_file` rows
+
+This preserves a clear source of truth: current-state `physical_file` rows win for ref-count reconstruction, while orphan `physical_file` rows remain a hard integrity failure that must be investigated rather than silently rewritten.
+
+This phase also prepares GC directionally: future GC logic can rely on audited physical roots rather than trusting write-path assumptions alone.
+
 ### Dry-run Support (Deferred to Phase 5)
 
 v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
