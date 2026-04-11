@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -192,6 +194,103 @@ func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
 	}
 	if _, exists := payload["data"]; exists {
 		t.Fatalf("unexpected data field in doctor failure payload: %v", payload["data"])
+	}
+	if _, exists := payload["invariant_code"]; exists {
+		t.Fatalf("unexpected invariant_code field for generic verify error: %v", payload["invariant_code"])
+	}
+	if _, exists := payload["recommended_action"]; exists {
+		t.Fatalf("unexpected recommended_action field for generic verify error: %v", payload["recommended_action"])
+	}
+}
+
+func TestDoctorJSONFailureIncludesInvariantCodeAndActionWhenAvailable(t *testing.T) {
+	err := verifyError(
+		fmt.Errorf(
+			"doctor verify phase failed: %w",
+			invariants.New(invariants.CodePhysicalGraphRefCountMismatch, "logical ref_count mismatches=1", nil),
+		),
+	)
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, _ := payload["invariant_code"].(string); got != invariants.CodePhysicalGraphRefCountMismatch {
+		t.Fatalf("invariant_code mismatch: got=%v payload=%v", payload["invariant_code"], payload)
+	}
+	action, _ := payload["recommended_action"].(string)
+	if !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("recommended_action should mention repair ref-counts: payload=%v", payload)
+	}
+}
+
+func TestDoctorTextFailureIncludesInvariantCodeAndActionWhenAvailable(t *testing.T) {
+	err := verifyError(
+		fmt.Errorf(
+			"doctor verify phase failed: %w",
+			invariants.New(invariants.CodePhysicalGraphOrphan, "orphan physical_file rows=1", nil),
+		),
+	)
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeText)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	if !strings.Contains(output, "INVARIANT_CODE: PHYSICAL_GRAPH_ORPHAN") {
+		t.Fatalf("expected invariant code line in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "Recommended action:") {
+		t.Fatalf("expected recommended action line in text output, got: %q", output)
+	}
+}
+
+func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
+	originalRepairPhase := repairLogicalRefCountsPhase
+	t.Cleanup(func() { repairLogicalRefCountsPhase = originalRepairPhase })
+
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		return maintenance.RepairLogicalRefCountsResult{}, invariants.New(
+			invariants.CodeRepairRefusedOrphanRows,
+			"ref_count repair refused: orphan physical_file rows=1",
+			nil,
+		)
+	}
+
+	stderr := captureStderr(t, func() {
+		code := runCLI([]string{"repair", "ref-counts", "--output", "json"})
+		if code != exitVerify {
+			t.Fatalf("expected exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	lastLine := lines[len(lines)-1]
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(lastLine), &payload); err != nil {
+		t.Fatalf("parse JSON payload: %v output=%q", err, stderr)
+	}
+
+	if got, _ := payload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("error_class mismatch: got=%v payload=%v", payload["error_class"], payload)
+	}
+	if got, _ := payload["invariant_code"].(string); got != invariants.CodeRepairRefusedOrphanRows {
+		t.Fatalf("invariant_code mismatch: got=%v payload=%v", payload["invariant_code"], payload)
+	}
+	action, _ := payload["recommended_action"].(string)
+	if !strings.Contains(action, "orphan physical_file") {
+		t.Fatalf("recommended_action should mention orphan physical_file handling: payload=%v", payload)
 	}
 }
 

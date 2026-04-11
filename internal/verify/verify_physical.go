@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -21,6 +22,23 @@ type PhysicalFileIntegritySummary struct {
 
 func (s PhysicalFileIntegritySummary) totalIssues() int64 {
 	return s.OrphanPhysicalFileRows + s.LogicalRefCountMismatches + s.NegativeLogicalRefCounts
+}
+
+func physicalGraphInvariantCode(summary PhysicalFileIntegritySummary) string {
+	onlyOrphans := summary.OrphanPhysicalFileRows > 0 && summary.LogicalRefCountMismatches == 0 && summary.NegativeLogicalRefCounts == 0
+	onlyMismatches := summary.OrphanPhysicalFileRows == 0 && summary.LogicalRefCountMismatches > 0 && summary.NegativeLogicalRefCounts == 0
+	onlyNegative := summary.OrphanPhysicalFileRows == 0 && summary.LogicalRefCountMismatches == 0 && summary.NegativeLogicalRefCounts > 0
+
+	switch {
+	case onlyOrphans:
+		return invariants.CodePhysicalGraphOrphan
+	case onlyMismatches:
+		return invariants.CodePhysicalGraphRefCountMismatch
+	case onlyNegative:
+		return invariants.CodePhysicalGraphNegativeRefCount
+	default:
+		return invariants.CodePhysicalGraphIntegrity
+	}
 }
 
 func CheckPhysicalFileGraphIntegrity(dbconn *sql.DB) (PhysicalFileIntegritySummary, error) {
@@ -144,13 +162,14 @@ func CheckPhysicalFileGraphIntegrity(dbconn *sql.DB) (PhysicalFileIntegritySumma
 		for _, err := range errorList {
 			log.Printf(" - %v", err)
 		}
-		return summary, fmt.Errorf(
+		message := fmt.Sprintf(
 			"found %d errors in checkPhysicalFileGraphIntegrity checks: orphan physical_file rows=%d logical ref_count mismatches=%d negative logical ref_count rows=%d",
 			summary.totalIssues(),
 			summary.OrphanPhysicalFileRows,
 			summary.LogicalRefCountMismatches,
 			summary.NegativeLogicalRefCounts,
 		)
+		return summary, invariants.New(physicalGraphInvariantCode(summary), message, nil)
 	}
 
 	log.Println(" SUCCESS ")

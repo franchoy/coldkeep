@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -64,6 +65,9 @@ func TestVerifySystemStandardDetectsOrphanPhysicalFileRows(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "orphan physical_file rows=1") {
 		t.Fatalf("expected orphan physical_file verification error, got: %v", err)
 	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphOrphan {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphOrphan, code, ok, err)
+	}
 }
 
 func TestVerifySystemStandardDetectsLogicalRefCountMismatch(t *testing.T) {
@@ -86,6 +90,9 @@ func TestVerifySystemStandardDetectsLogicalRefCountMismatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "logical ref_count mismatches=1") {
 		t.Fatalf("expected logical ref_count mismatch verification error, got: %v", err)
 	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphRefCountMismatch {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphRefCountMismatch, code, ok, err)
+	}
 }
 
 func TestVerifySystemStandardDetectsNegativeLogicalRefCount(t *testing.T) {
@@ -105,5 +112,8 @@ func TestVerifySystemStandardDetectsNegativeLogicalRefCount(t *testing.T) {
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "negative logical ref_count rows=1") {
 		t.Fatalf("expected negative logical ref_count verification error, got: %v", err)
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphIntegrity, code, ok, err)
 	}
 }

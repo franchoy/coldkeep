@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 )
 
 // RepairLogicalRefCountsResult captures the outcome of recomputing
@@ -46,9 +47,13 @@ func RepairLogicalRefCountsResultWithDB(dbconn *sql.DB) (result RepairLogicalRef
 		return RepairLogicalRefCountsResult{}, fmt.Errorf("query orphan physical_file rows before repair: %w", err)
 	}
 	if result.OrphanPhysicalFileRows > 0 {
-		return RepairLogicalRefCountsResult{}, fmt.Errorf(
-			"ref_count repair refused: orphan physical_file rows=%d",
-			result.OrphanPhysicalFileRows,
+		return RepairLogicalRefCountsResult{}, invariants.New(
+			invariants.CodeRepairRefusedOrphanRows,
+			fmt.Sprintf(
+				"ref_count repair refused: orphan physical_file rows=%d",
+				result.OrphanPhysicalFileRows,
+			),
+			nil,
 		)
 	}
 

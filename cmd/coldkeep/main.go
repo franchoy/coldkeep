@@ -21,6 +21,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -339,6 +340,8 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 
 func printCLIError(err error, mode cliOutputMode) int {
 	code := classifyExitCode(err)
+	invariantCode, hasInvariantCode := invariants.Code(err)
+	recommendedAction := invariants.RecommendedActionForError(err)
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"status":      "error",
@@ -346,12 +349,24 @@ func printCLIError(err error, mode cliOutputMode) int {
 			"exit_code":   code,
 			"message":     strings.TrimSpace(err.Error()),
 		}
+		if hasInvariantCode {
+			payload["invariant_code"] = invariantCode
+		}
+		if strings.TrimSpace(recommendedAction) != "" {
+			payload["recommended_action"] = recommendedAction
+		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Fprintln(os.Stderr, string(encoded))
 		return code
 	}
 
 	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), strings.TrimSpace(err.Error()))
+	if hasInvariantCode {
+		fmt.Fprintf(os.Stderr, "INVARIANT_CODE: %s\n", invariantCode)
+	}
+	if strings.TrimSpace(recommendedAction) != "" {
+		fmt.Fprintf(os.Stderr, "Recommended action: %s\n", recommendedAction)
+	}
 	return code
 }
 

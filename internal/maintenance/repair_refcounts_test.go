@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
@@ -110,5 +111,8 @@ func TestRepairLogicalRefCountsResultWithDBRefusesOrphanPhysicalRows(t *testing.
 	_, err := RepairLogicalRefCountsResultWithDB(dbconn)
 	if err == nil || !strings.Contains(err.Error(), "ref_count repair refused: orphan physical_file rows=1") {
 		t.Fatalf("expected orphan physical_file repair refusal, got: %v", err)
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodeRepairRefusedOrphanRows {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeRepairRefusedOrphanRows, code, ok, err)
 	}
 }

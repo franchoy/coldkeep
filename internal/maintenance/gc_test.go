@@ -12,6 +12,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -155,6 +156,9 @@ func TestRunGCRefusesOnPhysicalIntegrityIssues(t *testing.T) {
 	if gcErr == nil {
 		t.Fatal("expected GC to be refused but got no error")
 	}
+	if code, ok := invariants.Code(gcErr); !ok || code != invariants.CodeGCRefusedIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeGCRefusedIntegrity, code, ok, gcErr)
+	}
 	if !strings.Contains(gcErr.Error(), "GC refused") {
 		t.Fatalf("expected error to mention 'GC refused', got: %v", gcErr)
 	}
@@ -183,6 +187,9 @@ func TestRunGCRefusesOnOrphanPhysicalFileRows(t *testing.T) {
 	_, gcErr := RunGCWithContainersDirResult(false, t.TempDir())
 	if gcErr == nil {
 		t.Fatal("expected GC to be refused but got no error")
+	}
+	if code, ok := invariants.Code(gcErr); !ok || code != invariants.CodeGCRefusedIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeGCRefusedIntegrity, code, ok, gcErr)
 	}
 	if !strings.Contains(gcErr.Error(), "GC refused") {
 		t.Fatalf("expected 'GC refused' in error, got: %v", gcErr)

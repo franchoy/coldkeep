@@ -528,14 +528,59 @@ func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
 	if verifyFail.ExitCode != 3 {
 		t.Fatalf("verify should exit=3 on drifted graph, got=%d\nstdout:\n%s\nstderr:\n%s", verifyFail.ExitCode, verifyFail.Stdout, verifyFail.Stderr)
 	}
+	verifyErrPayload, ok := testutils.FindCLIErrorPayload(verifyFail.Stderr)
+	if !ok {
+		t.Fatalf("verify on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", verifyFail.Stdout, verifyFail.Stderr)
+	}
+	if got, _ := verifyErrPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("verify drifted-graph error class mismatch: want VERIFY got %q payload=%v", got, verifyErrPayload)
+	}
+	if got, _ := verifyErrPayload["invariant_code"].(string); got != "PHYSICAL_GRAPH_REFCOUNT_MISMATCH" {
+		t.Fatalf("verify drifted-graph invariant_code mismatch: want PHYSICAL_GRAPH_REFCOUNT_MISMATCH got %q payload=%v", got, verifyErrPayload)
+	}
+	if action, _ := verifyErrPayload["recommended_action"].(string); !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("verify drifted-graph recommended_action should mention repair ref-counts: payload=%v", verifyErrPayload)
+	}
 
 	// 4. doctor must fail in verify phase with exit=3.
 	doctorFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json")
 	if doctorFail.ExitCode != 3 {
 		t.Fatalf("doctor should exit=3 on drifted graph, got=%d\nstdout:\n%s\nstderr:\n%s", doctorFail.ExitCode, doctorFail.Stdout, doctorFail.Stderr)
 	}
+	doctorErrPayload, ok := testutils.FindCLIErrorPayload(doctorFail.Stderr)
+	if !ok {
+		t.Fatalf("doctor on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", doctorFail.Stdout, doctorFail.Stderr)
+	}
+	if got, _ := doctorErrPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("doctor drifted-graph error class mismatch: want VERIFY got %q payload=%v", got, doctorErrPayload)
+	}
+	if got, _ := doctorErrPayload["invariant_code"].(string); got != "PHYSICAL_GRAPH_REFCOUNT_MISMATCH" {
+		t.Fatalf("doctor drifted-graph invariant_code mismatch: want PHYSICAL_GRAPH_REFCOUNT_MISMATCH got %q payload=%v", got, doctorErrPayload)
+	}
+	if action, _ := doctorErrPayload["recommended_action"].(string); !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("doctor drifted-graph recommended_action should mention repair ref-counts: payload=%v", doctorErrPayload)
+	}
 
-	// 5. repair ref-counts must succeed and report UpdatedLogicalFiles=1.
+	// 5. gc must be refused before repair and include invariant guidance.
+	gcRefused := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--output", "json")
+	if gcRefused.ExitCode != 3 {
+		t.Fatalf("gc should exit=3 on drifted graph before repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcRefused.ExitCode, gcRefused.Stdout, gcRefused.Stderr)
+	}
+	gcErrPayload, ok := testutils.FindCLIErrorPayload(gcRefused.Stderr)
+	if !ok {
+		t.Fatalf("gc on drifted graph produced no error JSON payload\nstdout:\n%s\nstderr:\n%s", gcRefused.Stdout, gcRefused.Stderr)
+	}
+	if got, _ := gcErrPayload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("gc drifted-graph error class mismatch: want VERIFY got %q payload=%v", got, gcErrPayload)
+	}
+	if got, _ := gcErrPayload["invariant_code"].(string); got != "GC_REFUSED_INTEGRITY" {
+		t.Fatalf("gc drifted-graph invariant_code mismatch: want GC_REFUSED_INTEGRITY got %q payload=%v", got, gcErrPayload)
+	}
+	if action, _ := gcErrPayload["recommended_action"].(string); !strings.Contains(action, "repair ref-counts") {
+		t.Fatalf("gc drifted-graph recommended_action should mention repair ref-counts: payload=%v", gcErrPayload)
+	}
+
+	// 6. repair ref-counts must succeed and report UpdatedLogicalFiles=1.
 	repairRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "repair", "ref-counts", "--output", "json")
 	repairPayload := testutils.AssertCLIJSONOK(t, repairRes, "repair")
 	repairData := testutils.JSONMap(t, repairPayload, "data")
@@ -543,25 +588,55 @@ func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
 		t.Fatalf("repair: expected updated_logical_files=1, got=%d payload=%v", updated, repairData)
 	}
 
-	// 6. verify must now pass.
+	// 7. verify must now pass.
 	verifyOK := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify", "--output", "json")
 	if verifyOK.ExitCode != 0 {
 		t.Fatalf("verify should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", verifyOK.ExitCode, verifyOK.Stdout, verifyOK.Stderr)
 	}
+	verifyOKPayload, ok := testutils.TryParseLastJSONLine(verifyOK.Stdout)
+	if !ok {
+		t.Fatalf("verify success produced no JSON payload\nstdout:\n%s\nstderr:\n%s", verifyOK.Stdout, verifyOK.Stderr)
+	}
+	if _, exists := verifyOKPayload["invariant_code"]; exists {
+		t.Fatalf("verify success payload must not include invariant_code: payload=%v", verifyOKPayload)
+	}
+	if _, exists := verifyOKPayload["recommended_action"]; exists {
+		t.Fatalf("verify success payload must not include recommended_action: payload=%v", verifyOKPayload)
+	}
 
-	// 7. gc --dry-run must not be refused.
+	// 8. gc --dry-run must not be refused.
 	gcDryRun := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--dry-run", "--output", "json")
 	if gcDryRun.ExitCode != 0 {
 		t.Fatalf("gc --dry-run should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcDryRun.ExitCode, gcDryRun.Stdout, gcDryRun.Stderr)
 	}
+	gcDryRunPayload, ok := testutils.TryParseLastJSONLine(gcDryRun.Stdout)
+	if !ok {
+		t.Fatalf("gc --dry-run success produced no JSON payload\nstdout:\n%s\nstderr:\n%s", gcDryRun.Stdout, gcDryRun.Stderr)
+	}
+	if _, exists := gcDryRunPayload["invariant_code"]; exists {
+		t.Fatalf("gc --dry-run success payload must not include invariant_code: payload=%v", gcDryRunPayload)
+	}
+	if _, exists := gcDryRunPayload["recommended_action"]; exists {
+		t.Fatalf("gc --dry-run success payload must not include recommended_action: payload=%v", gcDryRunPayload)
+	}
 
-	// 8. gc must not be refused and must report no containers eligible.
+	// 9. gc must not be refused and must report no containers eligible.
 	gcFull := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--output", "json")
 	if gcFull.ExitCode != 0 {
 		t.Fatalf("gc should pass after repair, got=%d\nstdout:\n%s\nstderr:\n%s", gcFull.ExitCode, gcFull.Stdout, gcFull.Stderr)
 	}
+	gcFullPayload, ok := testutils.TryParseLastJSONLine(gcFull.Stdout)
+	if !ok {
+		t.Fatalf("gc success produced no JSON payload\nstdout:\n%s\nstderr:\n%s", gcFull.Stdout, gcFull.Stderr)
+	}
+	if _, exists := gcFullPayload["invariant_code"]; exists {
+		t.Fatalf("gc success payload must not include invariant_code: payload=%v", gcFullPayload)
+	}
+	if _, exists := gcFullPayload["recommended_action"]; exists {
+		t.Fatalf("gc success payload must not include recommended_action: payload=%v", gcFullPayload)
+	}
 
-	// 9. restore the stored file and verify content hash matches.
+	// 10. restore the stored file and verify content hash matches.
 	restoreDir := filepath.Join(tmp, "restored")
 	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
 		t.Fatalf("mkdir restore dir: %v", err)

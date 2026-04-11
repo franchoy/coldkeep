@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -93,14 +94,30 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	// Proceeding on a drifted graph risks treating live blocks as unreferenced.
 	integrity, err := gcPhysicalIntegrityCheck(dbconn)
 	if err != nil {
+		if _, ok := invariants.Code(err); ok {
+			return GCResult{}, invariants.New(
+				invariants.CodeGCRefusedIntegrity,
+				fmt.Sprintf(
+					"GC refused: physical_file graph integrity issues detected (orphan_rows=%d ref_count_mismatches=%d negative_ref_counts=%d); run 'repair ref-counts' first",
+					integrity.OrphanPhysicalFileRows,
+					integrity.LogicalRefCountMismatches,
+					integrity.NegativeLogicalRefCounts,
+				),
+				err,
+			)
+		}
 		return GCResult{}, fmt.Errorf("GC pre-flight integrity check failed: %w", err)
 	}
 	if integrity.OrphanPhysicalFileRows > 0 || integrity.LogicalRefCountMismatches > 0 || integrity.NegativeLogicalRefCounts > 0 {
-		return GCResult{}, fmt.Errorf(
-			"GC refused: physical_file graph integrity issues detected (orphan_rows=%d ref_count_mismatches=%d negative_ref_counts=%d); run 'repair ref-counts' first",
-			integrity.OrphanPhysicalFileRows,
-			integrity.LogicalRefCountMismatches,
-			integrity.NegativeLogicalRefCounts,
+		return GCResult{}, invariants.New(
+			invariants.CodeGCRefusedIntegrity,
+			fmt.Sprintf(
+				"GC refused: physical_file graph integrity issues detected (orphan_rows=%d ref_count_mismatches=%d negative_ref_counts=%d); run 'repair ref-counts' first",
+				integrity.OrphanPhysicalFileRows,
+				integrity.LogicalRefCountMismatches,
+				integrity.NegativeLogicalRefCounts,
+			),
+			nil,
 		)
 	}
 

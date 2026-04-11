@@ -335,6 +335,26 @@ physical_file rows (audited coherent)
 - `TestRunGCSucceedsAfterRepairLogicalRefCounts` — repair unblocks GC (unit)
 - `TestRepairThenVerifyThenGCSmoke` — full operator recovery loop (integration): store → corrupt → verify fails → doctor fails → repair succeeds → verify passes → gc dry-run passes → gc passes → restore matches
 
+### Phase 7 — Operator ergonomics and observability hardening
+
+Phase 7 adds an internal invariant taxonomy layer to make failures easier to consume in text output, JSON output, tests, and logs without changing command boundaries.
+
+- Added `internal/invariants` typed errors with stable codes.
+- Physical graph verify failures now carry machine-readable codes:
+    - `PHYSICAL_GRAPH_ORPHAN`
+    - `PHYSICAL_GRAPH_REFCOUNT_MISMATCH`
+    - `PHYSICAL_GRAPH_NEGATIVE_REFCOUNT`
+    - `PHYSICAL_GRAPH_INTEGRITY` (multi-issue aggregate)
+- GC refusal on drifted roots now carries `GC_REFUSED_INTEGRITY`.
+- Repair refusal on orphan rows now carries `REPAIR_REFUSED_ORPHAN_ROWS`.
+
+CLI error payloads now include optional advisory metadata when an invariant code is present:
+
+- JSON mode: `invariant_code`, `recommended_action`
+- Text mode: `INVARIANT_CODE: ...` and `Recommended action: ...`
+
+This improves operator guidance while keeping doctor detect-only for physical-layer drift and preserving the explicit repair boundary.
+
 ### Dry-run Support (Deferred to Phase 5)
 
 v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
