@@ -263,7 +263,7 @@ func TestRemoveByStoredPathReturnsNotFound(t *testing.T) {
 	}
 
 	err = RemoveFileByStoredPathWithStorageContext(StorageContext{DB: dbconn}, filepath.Join(t.TempDir(), "missing.txt"))
-	if err == nil || !strings.Contains(err.Error(), "physical file path") || !strings.Contains(err.Error(), "not found") {
+	if err == nil || !strings.Contains(err.Error(), "physical_file[") || !strings.Contains(err.Error(), "not found (never stored)") {
 		t.Fatalf("expected physical-path not found error, got: %v", err)
 	}
 }
@@ -297,7 +297,7 @@ func TestRemoveByStoredPathSecondRemoveFailsCleanly(t *testing.T) {
 	}
 
 	err = RemoveFileByStoredPathWithStorageContext(StorageContext{DB: dbconn}, storedPath)
-	if err == nil || !strings.Contains(err.Error(), "not found") {
+	if err == nil || !strings.Contains(err.Error(), "not found (never stored)") {
 		t.Fatalf("expected second remove to fail with not-found, got: %v", err)
 	}
 }

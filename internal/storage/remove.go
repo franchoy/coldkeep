@@ -99,7 +99,7 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 	if err := tx.QueryRowContext(ctx, selectQuery, result.StoredPath).Scan(&result.LogicalFileID); err != nil {
 		if err == sql.ErrNoRows {
 			// Path was never stored. This is the "not found" case: the path has no mapping in physical_file.
-			return fmt.Errorf("physical file path %q not found (never stored)", result.StoredPath)
+			return fmt.Errorf("physical_file[%q]: not found (never stored)", result.StoredPath)
 		}
 		return err
 	}
@@ -116,10 +116,10 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 	// transaction deleted it before our DELETE executed. Treat as clean "already removed" (race)
 	// rather than a conflict. This distinguishes from "not found" (never existed initially).
 	if rowsDeleted == 0 {
-		return fmt.Errorf("physical file path %q already removed (concurrent remove race)", result.StoredPath)
+		return fmt.Errorf("physical_file[%q]: already removed (concurrent race)", result.StoredPath)
 	}
 	if rowsDeleted != 1 {
-		return fmt.Errorf("physical file path %q unlink conflict (deleted=%d)", result.StoredPath, rowsDeleted)
+		return fmt.Errorf("physical_file[%q]: unlink conflict (deleted=%d)", result.StoredPath, rowsDeleted)
 	}
 
 	if err := tx.QueryRowContext(
