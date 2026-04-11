@@ -8,10 +8,11 @@ import (
 // NewReport builds a report and computes its summary.
 func NewReport(op OperationType, dryRun bool, results []ItemResult) Report {
 	return Report{
-		Operation: op,
-		DryRun:    dryRun,
-		Summary:   Summarize(results),
-		Results:   results,
+		Operation:     op,
+		DryRun:        dryRun,
+		ExecutionMode: ExecutionModeContinueOnError,
+		Summary:       Summarize(results),
+		Results:       results,
 	}
 }
 

@@ -185,7 +185,10 @@ Semantics (summary):
 - optional fail-fast for execution failures
 - duplicate target skipping
 - deterministic per-item report ordering
-- JSON status values: ok, partial_failure, error
+- JSON status values are intentionally two-layered:
+  - overall payload status: ok, partial_failure, error
+  - per-item result status: success, failed, skipped, planned
+- JSON execution mode is explicit: continue_on_error (default) or fail_fast
 - process exit is automation-friendly:
   - 0 when no item fails
   - 1 when one or more items fail

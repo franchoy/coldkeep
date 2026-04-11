@@ -3,10 +3,18 @@ package batch
 // OperationType identifies the command-level operation executed in a batch.
 type OperationType string
 
+// ExecutionMode identifies batch execution strategy semantics.
+type ExecutionMode string
+
 const (
 	OperationRestore OperationType = "restore"
 	OperationRemove  OperationType = "remove"
 	OperationRepair  OperationType = "repair"
+)
+
+const (
+	ExecutionModeContinueOnError ExecutionMode = "continue_on_error"
+	ExecutionModeFailFast        ExecutionMode = "fail_fast"
 )
 
 // RawTarget is a target as entered by the user, before normalization.
@@ -67,10 +75,11 @@ type Summary struct {
 
 // Report contains per-item outcomes and an aggregate summary.
 type Report struct {
-	Operation OperationType `json:"operation"`
-	DryRun    bool          `json:"dry_run"`
-	Summary   Summary       `json:"summary"`
-	Results   []ItemResult  `json:"results"`
+	Operation     OperationType `json:"operation"`
+	DryRun        bool          `json:"dry_run"`
+	ExecutionMode ExecutionMode `json:"execution_mode"`
+	Summary       Summary       `json:"summary"`
+	Results       []ItemResult  `json:"results"`
 }
 
 // Plan is a sequence of planned operations.

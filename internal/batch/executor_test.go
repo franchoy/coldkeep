@@ -16,6 +16,9 @@ func TestExecutePreparedPreservesInputOrderAndFailFast(t *testing.T) {
 		}
 		return ItemResult{ID: id, Status: ResultSuccess, Message: "ok"}
 	})
+	if report.ExecutionMode != ExecutionModeFailFast {
+		t.Fatalf("expected execution_mode=%s, got %s", ExecutionModeFailFast, report.ExecutionMode)
+	}
 
 	if len(report.Results) != 3 {
 		t.Fatalf("expected fail-fast to stop after third result, got %d", len(report.Results))
@@ -45,6 +48,9 @@ func TestExecutePreparedFailFastStopsOnlyOnExecutionFailure(t *testing.T) {
 		}
 		return ItemResult{ID: id, Status: ResultSuccess, Message: "ok"}
 	})
+	if report.ExecutionMode != ExecutionModeFailFast {
+		t.Fatalf("expected execution_mode=%s, got %s", ExecutionModeFailFast, report.ExecutionMode)
+	}
 
 	if len(report.Results) != 3 {
 		t.Fatalf("expected all three ordered results, got %d", len(report.Results))

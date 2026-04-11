@@ -1109,7 +1109,9 @@ func executeRestoreDryRunItem(dbconn *sql.DB, fileID int64, outputDir string, ov
 func executeRestoreItem(sgctx *storage.StorageContext, fileID int64, outputDir string, overwrite bool) batch.ItemResult {
 	result, err := storage.RestoreFileWithStorageContextResultOptions(*sgctx, fileID, outputDir, storage.RestoreOptions{Overwrite: overwrite})
 	if err != nil {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+		annotateBatchFailureFromError(err, &item)
+		return item
 	}
 
 	return batch.ItemResult{
@@ -1138,9 +1140,25 @@ func executeRemoveDryRunItem(dbconn *sql.DB, fileID int64) batch.ItemResult {
 func executeRemoveItem(sgctx *storage.StorageContext, fileID int64) batch.ItemResult {
 	result, err := storage.RemoveFileWithDBResult(sgctx.DB, fileID)
 	if err != nil {
-		return batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+		item := batch.ItemResult{ID: fileID, Status: batch.ResultFailed, Message: err.Error()}
+		annotateBatchFailureFromError(err, &item)
+		return item
 	}
 	return batch.ItemResult{ID: fileID, Status: batch.ResultSuccess, Message: fmt.Sprintf("removed mappings=%d", result.RemovedMappings)}
+}
+
+func annotateBatchFailureFromError(err error, item *batch.ItemResult) {
+	if err == nil || item == nil {
+		return
+	}
+
+	code, ok := invariants.Code(err)
+	if !ok {
+		return
+	}
+
+	item.InvariantCode = code
+	item.RecommendedAction = invariants.RecommendedActionForCode(code)
 }
 
 type preparedRemoveStoredPathTarget struct {
@@ -1225,7 +1243,12 @@ func executeRemoveStoredPathPrepared(dryRun bool, failFast bool, targets []prepa
 		}
 	}
 
-	return batch.NewReport(batch.OperationRemove, dryRun, results)
+	report := batch.NewReport(batch.OperationRemove, dryRun, results)
+	report.ExecutionMode = batch.ExecutionModeContinueOnError
+	if failFast {
+		report.ExecutionMode = batch.ExecutionModeFailFast
+	}
+	return report
 }
 
 func executeRemoveStoredPathDryRunItem(dbconn *sql.DB, storedPath string) batch.ItemResult {
@@ -1249,7 +1272,9 @@ func executeRemoveStoredPathDryRunItem(dbconn *sql.DB, storedPath string) batch.
 func executeRemoveStoredPathItem(sgctx *storage.StorageContext, storedPath string) batch.ItemResult {
 	result, err := storage.RemoveFileByStoredPathWithStorageContextResult(*sgctx, storedPath)
 	if err != nil {
-		return batch.ItemResult{RawValue: strings.TrimSpace(storedPath), Status: batch.ResultFailed, Message: err.Error()}
+		item := batch.ItemResult{RawValue: strings.TrimSpace(storedPath), Status: batch.ResultFailed, Message: err.Error()}
+		annotateBatchFailureFromError(err, &item)
+		return item
 	}
 
 	return batch.ItemResult{
@@ -1261,6 +1286,11 @@ func executeRemoveStoredPathItem(sgctx *storage.StorageContext, storedPath strin
 }
 
 func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode) error {
+	executionMode := report.ExecutionMode
+	if executionMode == "" {
+		executionMode = batch.ExecutionModeContinueOnError
+	}
+
 	if outputMode == outputModeJSON {
 		jsonResults := make([]map[string]any, 0, len(report.Results))
 		for _, item := range report.Results {
@@ -1300,11 +1330,12 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 		}
 
 		payload := map[string]any{
-			"status":  batchOverallStatus(report),
-			"command": command,
-			"dry_run": report.DryRun,
-			"summary": report.Summary,
-			"results": jsonResults,
+			"status":         batchOverallStatus(report),
+			"command":        command,
+			"dry_run":        report.DryRun,
+			"execution_mode": executionMode,
+			"summary":        report.Summary,
+			"results":        jsonResults,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -1598,7 +1629,12 @@ func executeRepairPrepared(failFast bool, targets []preparedRepairTarget) batch.
 		})
 	}
 
-	return batch.NewReport(batch.OperationRepair, false, results)
+	report := batch.NewReport(batch.OperationRepair, false, results)
+	report.ExecutionMode = batch.ExecutionModeContinueOnError
+	if failFast {
+		report.ExecutionMode = batch.ExecutionModeFailFast
+	}
+	return report
 }
 
 func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
