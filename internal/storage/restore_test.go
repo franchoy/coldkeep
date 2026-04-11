@@ -139,8 +139,8 @@ func TestRestoreFailsWhenLogicalFileNotFound(t *testing.T) {
 
 	outPath := filepath.Join(t.TempDir(), "out.bin")
 	err = RestoreFileWithDB(dbconn, 999, outPath)
-	if err == nil || !strings.Contains(err.Error(), "logical file 999 not found") {
-		t.Fatalf("expected \"logical file 999 not found\" error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "logical file id 999 not found") {
+		t.Fatalf("expected \"logical file id 999 not found\" error, got: %v", err)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestBuildRestoreDescriptorFromPhysicalPathNotFound(t *testing.T) {
 	defer cancel()
 
 	_, err = buildRestoreDescriptorFromPhysicalPath(ctx, dbconn, "/missing/path.bin")
-	if err == nil || !strings.Contains(err.Error(), "physical path \"/missing/path.bin\" not found") {
+	if err == nil || !strings.Contains(err.Error(), "physical file path \"/missing/path.bin\" not found") {
 		t.Fatalf("expected physical path not found error, got: %v", err)
 	}
 }

@@ -1283,7 +1283,7 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 }
 
 func printFileRecordsTable(records []listing.FileRecord) {
-	fmt.Printf("%-6s %-25s %-15s %-20s\n", "ID", "NAME", "SIZE(bytes)", "CREATED_AT")
+	fmt.Printf("%-6s %-25s %-15s %-20s\n", "ID", "PATH", "SIZE(bytes)", "CREATED_AT")
 	fmt.Println("---------------------------------------------------------------------")
 	for _, r := range records {
 		fmt.Printf("%-6d %-25s %-15d %-20s\n", r.ID, r.Name, r.SizeBytes, r.CreatedAt)

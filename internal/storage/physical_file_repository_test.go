@@ -409,3 +409,68 @@ func TestStoreFileNormalizesRelativeAndAbsolutePathsToSingleIdentity(t *testing.
 		t.Fatalf("expected logical ref_count=1 after repeated normalized path stores, got %d", refCount)
 	}
 }
+
+func TestStoreFileNormalizesSymlinkAndRealPathToSingleIdentity(t *testing.T) {
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "off")
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	workDir := t.TempDir()
+	realPath := filepath.Join(workDir, "real.txt")
+	symlinkPath := filepath.Join(workDir, "alias.txt")
+	if err := os.WriteFile(realPath, []byte("same-content"), 0o600); err != nil {
+		t.Fatalf("write real file: %v", err)
+	}
+	if err := os.Symlink(realPath, symlinkPath); err != nil {
+		t.Skipf("symlink not supported in test environment: %v", err)
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewSimulatedWriter(container.GetContainerMaxSize()),
+		ContainerDir: t.TempDir(),
+	}
+
+	first, err := StoreFileWithStorageContextAndCodecResult(sgctx, symlinkPath, codec)
+	if err != nil {
+		t.Fatalf("store with symlink path: %v", err)
+	}
+
+	second, err := StoreFileWithStorageContextAndCodecResult(sgctx, realPath, codec)
+	if err != nil {
+		t.Fatalf("store with real path: %v", err)
+	}
+
+	if first.Path != realPath || second.Path != realPath {
+		t.Fatalf("expected canonical path %q, got first=%q second=%q", realPath, first.Path, second.Path)
+	}
+
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, first.FileID).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical mappings: %v", err)
+	}
+	if physicalCount != 1 {
+		t.Fatalf("expected one physical mapping for canonicalized symlink/real paths, got %d", physicalCount)
+	}
+
+	var refCount int64
+	if err := dbconn.QueryRow(`SELECT ref_count FROM logical_file WHERE id = $1`, first.FileID).Scan(&refCount); err != nil {
+		t.Fatalf("read logical ref_count: %v", err)
+	}
+	if refCount != 1 {
+		t.Fatalf("expected logical ref_count=1 after canonicalized symlink/real stores, got %d", refCount)
+	}
+}

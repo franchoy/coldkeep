@@ -97,7 +97,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		fileID,
 	).Scan(&originalName, &expectedFileHash)
 	if err == sql.ErrNoRows {
-		return "", "", nil, nil, fmt.Errorf("logical file %d not found", fileID)
+		return "", "", nil, nil, fmt.Errorf("logical file id %d not found", fileID)
 	}
 	if err != nil {
 		return "", "", nil, nil, fmt.Errorf("query logical_file: %w", err)
@@ -257,7 +257,7 @@ func RestoreFileWithDB(dbconn *sql.DB, fileID int64, outputPath string) error {
 }
 
 func RestoreFileWithDBResult(dbconn *sql.DB, fileID int64, outputPath string) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir, RestoreOptions{Overwrite: true}, nil)
+	return restoreFileWithDBAndDir(dbconn, fileID, outputPath, container.ContainersDir, RestoreOptions{Overwrite: true})
 }
 
 func RestoreFileWithStorageContext(sgctx StorageContext, fileID int64, outputPath string) error {
@@ -270,7 +270,7 @@ func RestoreFileWithStorageContextResult(sgctx StorageContext, fileID int64, out
 }
 
 func RestoreFileWithStorageContextResultOptions(sgctx StorageContext, fileID int64, outputPath string, opts RestoreOptions) (RestoreFileResult, error) {
-	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts, nil)
+	return restoreFileWithDBAndDir(sgctx.DB, fileID, outputPath, sgctx.EffectiveContainerDir(), opts)
 }
 
 func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB, storedPath string) (RestoreDescriptor, error) {
@@ -301,7 +301,7 @@ func buildRestoreDescriptorFromPhysicalPath(ctx context.Context, dbconn *sql.DB,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return RestoreDescriptor{}, fmt.Errorf("physical path %q not found", storedPath)
+			return RestoreDescriptor{}, fmt.Errorf("physical file path %q not found", storedPath)
 		}
 		return RestoreDescriptor{}, fmt.Errorf("resolve restore descriptor for path %q: %w", storedPath, err)
 	}
@@ -329,6 +329,21 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
+
+	return restoreFromDescriptorWithStorageContextResultOptions(sgctx, descriptor, opts)
+}
+
+func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, descriptor RestoreDescriptor, opts RestoreOptions) (RestoreFileResult, error) {
+	if sgctx.DB == nil {
+		return RestoreFileResult{}, fmt.Errorf("db connection is nil")
+	}
+	if strings.TrimSpace(descriptor.Path) == "" {
+		return RestoreFileResult{}, fmt.Errorf("restore descriptor path cannot be empty")
+	}
+	if descriptor.LogicalFileID <= 0 {
+		return RestoreFileResult{}, fmt.Errorf("restore descriptor logical file id must be positive")
+	}
+
 	if opts.StrictMetadata && !opts.NoMetadata && !descriptor.IsMetadataComplete {
 		return RestoreFileResult{}, fmt.Errorf("metadata is incomplete for %q (use --no-metadata to bypass)", descriptor.Path)
 	}
@@ -338,7 +353,16 @@ func RestoreFileByStoredPathWithStorageContextResultOptions(sgctx StorageContext
 		return RestoreFileResult{}, err
 	}
 
-	return restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts, &descriptor)
+	result, err := restoreFileWithDBAndDir(sgctx.DB, descriptor.LogicalFileID, resolvedOutputPath, sgctx.EffectiveContainerDir(), opts)
+	if err != nil {
+		return RestoreFileResult{}, err
+	}
+
+	if err := applyPhysicalMetadata(result.OutputPath, descriptor, opts); err != nil {
+		return RestoreFileResult{}, err
+	}
+
+	return result, nil
 }
 
 func RestoreFileByStoredPathWithStorageContextResult(sgctx StorageContext, storedPath string) (RestoreFileResult, error) {
@@ -394,7 +418,7 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 	}
 }
 
-func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions, descriptor *RestoreDescriptor) (result RestoreFileResult, err error) {
+func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, containersDir string, opts RestoreOptions) (result RestoreFileResult, err error) {
 	result.FileID = fileID
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -662,17 +686,13 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	}
 	cleanupTemp = false
 
-	if err := applyPhysicalMetadata(outputPath, descriptor, opts); err != nil {
-		return RestoreFileResult{}, err
-	}
-
 	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
 }
 
-func applyPhysicalMetadata(outputPath string, descriptor *RestoreDescriptor, opts RestoreOptions) error {
-	if descriptor == nil || opts.NoMetadata {
+func applyPhysicalMetadata(outputPath string, descriptor RestoreDescriptor, opts RestoreOptions) error {
+	if opts.NoMetadata {
 		return nil
 	}
 

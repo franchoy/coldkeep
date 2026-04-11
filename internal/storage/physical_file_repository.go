@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,11 +73,6 @@ func normalizePhysicalFilePath(path string) (string, error) {
 		return "", errors.New("physical file path cannot be empty")
 	}
 
-	// TODO(v1.3+): Consider canonicalizing identity with filepath.EvalSymlinks
-	// so symlinked aliases of the same inode do not produce distinct
-	// physical_file identities. Keep deferred for now to avoid changing v1.2
-	// path semantics and to preserve current behavior on missing/late-bound links.
-
 	absPath, err := filepath.Abs(trimmed)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute physical file path: %w", err)
@@ -84,7 +80,20 @@ func normalizePhysicalFilePath(path string) (string, error) {
 
 	cleaned := filepath.Clean(absPath)
 
-	return cleaned, nil
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return cleaned, nil
+		}
+		return "", fmt.Errorf("canonicalize physical file path: %w", err)
+	}
+
+	resolvedAbs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute canonical physical file path: %w", err)
+	}
+
+	return filepath.Clean(resolvedAbs), nil
 }
 
 func buildPhysicalFileMetadata(fileInfo os.FileInfo) physicalFileMetadata {
