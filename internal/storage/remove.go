@@ -98,7 +98,8 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 	selectQuery := db.QueryWithOptionalForUpdate(dbconn, `SELECT logical_file_id FROM physical_file WHERE path = $1`)
 	if err := tx.QueryRowContext(ctx, selectQuery, result.StoredPath).Scan(&result.LogicalFileID); err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("physical file path %q not found", result.StoredPath)
+			// Path was never stored. This is the "not found" case: the path has no mapping in physical_file.
+			return fmt.Errorf("physical file path %q not found (never stored)", result.StoredPath)
 		}
 		return err
 	}
@@ -111,11 +112,11 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 	if err != nil {
 		return err
 	}
-	// Concurrent remove path: if another transaction deletes the mapping after
-	// we resolved it but before this DELETE executes, treat it as a clean
-	// already-removed outcome instead of a generic conflict.
+	// Concurrent remove race: the path existed when we SELECT-locked it above, but another
+	// transaction deleted it before our DELETE executed. Treat as clean "already removed" (race)
+	// rather than a conflict. This distinguishes from "not found" (never existed initially).
 	if rowsDeleted == 0 {
-		return fmt.Errorf("physical file path %q already removed", result.StoredPath)
+		return fmt.Errorf("physical file path %q already removed (concurrent remove race)", result.StoredPath)
 	}
 	if rowsDeleted != 1 {
 		return fmt.Errorf("physical file path %q unlink conflict (deleted=%d)", result.StoredPath, rowsDeleted)
