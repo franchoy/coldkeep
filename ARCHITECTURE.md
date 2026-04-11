@@ -264,4 +264,22 @@ The cascade design ensures that:
 **Migration Path:**
 This architecture enables future phases (v1.3+) to redefine higher-level remove commands entirely in terms of the physical_file → logical_file → chunk model without breaking storage guarantees.
 
+### Dry-run Support (Deferred to Phase 5)
+
+v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
+
+**Rationale:**
+- Dry-run requires a rollback-safe preview of transactional changes
+- The remove transaction is tightly coupled to the transactional remove-by-ID cascade path
+- Exposing dry-run now would require significant refactoring of the cascade logic
+- The overhead of implementing dry-run correctly (separate read-only simulation) is not justified for the initial release
+
+**Phase 5 Plan:**
+Dry-run support for `remove --stored-path` will be added when:
+1. The remove transaction primitive is refactored for independent preview semantics
+2. Integration tests validate that dry-run output accurately mirrors execute behavior
+3. Documentation clarifies the dry-run contract (what is previewed, what is guaranteed, what is advisory)
+
+Users can currently force-verify remove safety via explicit `verify` before `remove`, which provides correctness assurance without dry-run.
+
 This means architecture documentation should evolve by extension, not by rewrite.

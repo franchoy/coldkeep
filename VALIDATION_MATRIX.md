@@ -58,6 +58,7 @@ Use this section for branch-specific additions that are not yet fully covered.
 | Long-run randomized fault loop expansion | Stress-tier seeded randomized lifecycle loop (`TestStoreLifecycleSeededRandomizedOperationOrder`) plus dedicated long-run soak (`TestRandomizedLongRunLifecycleSoak`) and repeated CI long-run passes | TBD | completed |
 | Multi-process contention (non-goal for v1.0 baseline) | Separate post-v1.0 track | TBD | deferred |
 | Atomic restore explicit failure-mode and atomicity | Simulate restore failures before/after rename; verify original output file is preserved, no partial/corrupt final file is visible, and temp files are cleaned up; assert destination file is byte-identical and no temp files remain after failure | `TestRestoreFailurePreservesExistingOutput`, `TestRestoreAtomicityWithTestHook`, `TestRestoreAtomicityWithCorruption`, `TestRestoreFailureDoesNotCorruptDestination` | completed |
+| Dry-run support for `remove --stored-path` (v1.2 deferral) | Extend remove tx primitive to support rollback-safe preview mode; implement in CLI with `--dry-run` flag; add integration tests validating preview output matches dry-run semantics | Phase 5 planned feature | deferred |
 
 ## Exit Criteria
 
