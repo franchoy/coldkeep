@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 6
+const requiredPostgresSchemaVersion = 7
 
 func sqliteTableHasColumn(dbconn *sql.DB, ctx context.Context, tableName, columnName string) (bool, error) {
 	rows, err := dbconn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
@@ -191,6 +191,77 @@ func runSQLitePhysicalFileMigration(dbconn *sql.DB, ctx context.Context) error {
 	return nil
 }
 
+func runSQLiteSnapshotMigration(dbconn *sql.DB, ctx context.Context) error {
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS snapshot (
+			id TEXT PRIMARY KEY,
+			created_at TIMESTAMP NOT NULL,
+			type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
+			label TEXT
+		)
+	`); err != nil {
+		return fmt.Errorf("create snapshot table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_snapshot_created_at ON snapshot(created_at)
+	`); err != nil {
+		return fmt.Errorf("create idx_snapshot_created_at: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS snapshot_file (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
+			path TEXT NOT NULL CHECK (path != ''),
+			logical_file_id INTEGER NOT NULL REFERENCES logical_file(id),
+			size INTEGER,
+			mode INTEGER,
+			mtime TIMESTAMP
+		)
+	`); err != nil {
+		return fmt.Errorf("create snapshot_file table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id)
+	`); err != nil {
+		return fmt.Errorf("create idx_snapshot_file_snapshot_id: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_snapshot_file_path ON snapshot_file(path)
+	`); err != nil {
+		return fmt.Errorf("create idx_snapshot_file_path: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id)
+	`); err != nil {
+		return fmt.Errorf("create idx_snapshot_file_logical_file: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path)
+	`); err != nil {
+		return fmt.Errorf("create idx_snapshot_file_unique: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 7
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 7: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (7)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 7: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -301,6 +372,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLitePhysicalFileMigration(dbconn, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteSnapshotMigration(dbconn, ctx); err != nil {
 		return err
 	}
 

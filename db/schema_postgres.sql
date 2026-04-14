@@ -250,4 +250,31 @@ WHERE NOT EXISTS (
 
 UPDATE schema_version SET version = 6 WHERE version < 6;
 
+-- Schema version 7: snapshot tables.
+CREATE TABLE IF NOT EXISTS snapshot (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
+  label TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_created_at ON snapshot(created_at);
+
+CREATE TABLE IF NOT EXISTS snapshot_file (
+  id BIGSERIAL PRIMARY KEY,
+  snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
+  path TEXT NOT NULL CHECK (path <> ''),
+  logical_file_id BIGINT NOT NULL REFERENCES logical_file(id),
+  size BIGINT,
+  mode BIGINT,
+  mtime TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_path ON snapshot_file(path);
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path);
+
+UPDATE schema_version SET version = 7 WHERE version < 7;
+
 COMMIT;
