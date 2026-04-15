@@ -463,6 +463,11 @@ func loadSnapshotPathLogicalIDs(ctx context.Context, db *sql.DB, snapshotID stri
 	return result, nil
 }
 
+// DiffSnapshots computes the diff between two snapshots identified by baseID and targetID.
+//
+// Note: both snapshots are loaded fully into memory (O(N) memory, O(N log N) sort).
+// This is acceptable for typical workloads in v1.x. A future streaming diff implementation
+// may be introduced for very large snapshot sizes (e.g. millions of files).
 func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string) (*SnapshotDiffResult, error) {
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
