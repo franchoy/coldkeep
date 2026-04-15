@@ -991,7 +991,9 @@ func TestPlanSnapshotRestoreOutputsDoesNotCreateDestinationDirectories(t *testin
 
 // ---- End-to-end RestoreSnapshot tests ----
 
-func TestRestoreSnapshotFullRestore(t *testing.T) {
+// TestSnapshotRestoreSelectionFullNoFilters verifies that resolveSnapshotRestoreSelection
+// selects all snapshot_file rows when no path filters are provided.
+func TestSnapshotRestoreSelectionFullNoFilters(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -1022,7 +1024,9 @@ func TestRestoreSnapshotFullRestore(t *testing.T) {
 	}
 }
 
-func TestRestoreSnapshotPartialExactRestore(t *testing.T) {
+// TestSnapshotRestoreSelectionPartialExact verifies that an exact path filter selects only
+// the matching snapshot_file row.
+func TestSnapshotRestoreSelectionPartialExact(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -1050,7 +1054,9 @@ func TestRestoreSnapshotPartialExactRestore(t *testing.T) {
 	}
 }
 
-func TestRestoreSnapshotPartialDirectoryRestore(t *testing.T) {
+// TestSnapshotRestoreSelectionPartialDirectory verifies that a directory prefix filter
+// (trailing slash) selects all files under that directory.
+func TestSnapshotRestoreSelectionPartialDirectory(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -1104,7 +1110,9 @@ func TestRestoreSnapshotExactMissingPathFails(t *testing.T) {
 	}
 }
 
-func TestRestoreSnapshotMetadataApplied(t *testing.T) {
+// TestSnapshotFileRowPreservesMetadata verifies that mode and mtime stored in snapshot_file
+// are preserved and surfaced by resolveSnapshotRestoreSelection.
+func TestSnapshotFileRowPreservesMetadata(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -1136,7 +1144,9 @@ func TestRestoreSnapshotMetadataApplied(t *testing.T) {
 	}
 }
 
-func TestRestoreSnapshotNoMetadataFlag(t *testing.T) {
+// TestSnapshotRestoreSelectionReturnsRowsForNoMetadataOpts verifies that the selection
+// phase is independent of the NoMetadata flag (which only affects execution).
+func TestSnapshotRestoreSelectionReturnsRowsForNoMetadataOpts(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -1260,5 +1270,202 @@ func TestRestoreSnapshotNilStorageContext(t *testing.T) {
 	_, err := RestoreSnapshot(ctx, db, s.ID, []string{}, opts)
 	if err == nil || !strings.Contains(err.Error(), "storage context") {
 		t.Fatalf("expected storage context error, got: %v", err)
+	}
+}
+
+// ---- planSnapshotRestoreOutputs output-path tests ----
+
+// TestPlanSnapshotRestoreOutputsPrefixModeProducesCorrectPaths verifies that prefix mode
+// prepends the destination root to each snapshot-relative path, producing correct absolute
+// output paths.
+func TestPlanSnapshotRestoreOutputsPrefixModeProducesCorrectPaths(t *testing.T) {
+	tmp := t.TempDir()
+	prefixRoot := filepath.Join(tmp, "restore-out")
+	rows := []snapshotRestoreRow{
+		{Path: "docs/a.txt", LogicalFileID: 1},
+		{Path: "img/b.png", LogicalFileID: 2},
+	}
+
+	plans, err := planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("planSnapshotRestoreOutputs prefix: %v", err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("expected 2 plans, got %d", len(plans))
+	}
+
+	wantDocs := filepath.Join(prefixRoot, "docs", "a.txt")
+	wantImg := filepath.Join(prefixRoot, "img", "b.png")
+	if plans[0].OutputPath != wantDocs {
+		t.Fatalf("plan[0] output path: want %q got %q", wantDocs, plans[0].OutputPath)
+	}
+	if plans[1].OutputPath != wantImg {
+		t.Fatalf("plan[1] output path: want %q got %q", wantImg, plans[1].OutputPath)
+	}
+
+	// Verify snapshot paths are preserved in the plan items.
+	if plans[0].Path != "docs/a.txt" {
+		t.Fatalf("plan[0] snapshot path: want %q got %q", "docs/a.txt", plans[0].Path)
+	}
+	if plans[1].Path != "img/b.png" {
+		t.Fatalf("plan[1] snapshot path: want %q got %q", "img/b.png", plans[1].Path)
+	}
+}
+
+// TestPlanSnapshotRestoreOutputsOriginalModePreservesRelativePath verifies that original mode
+// keeps the snapshot-relative path unchanged as the output path.
+func TestPlanSnapshotRestoreOutputsOriginalModePreservesRelativePath(t *testing.T) {
+	rows := []snapshotRestoreRow{
+		{Path: "docs/a.txt", LogicalFileID: 1},
+	}
+
+	plans, err := planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("planSnapshotRestoreOutputs original: %v", err)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("expected 1 plan, got %d", len(plans))
+	}
+
+	// In original mode, output path equals the snapshot relative path (cleaned).
+	want := filepath.Clean("docs/a.txt")
+	if plans[0].OutputPath != want {
+		t.Fatalf("original mode output path: want %q got %q", want, plans[0].OutputPath)
+	}
+}
+
+// TestPlanSnapshotRestoreOutputsCollisionDetectionTriggers verifies that the planner rejects
+// two rows that resolve to the same output path (e.g., duplicate snapshot_file rows).
+// The selection phase deduplicates, but the planner enforces this as a safety net.
+func TestPlanSnapshotRestoreOutputsCollisionDetectionTriggers(t *testing.T) {
+	// Simulate duplicate rows that the selection phase failed to deduplicate.
+	rows := []snapshotRestoreRow{
+		{Path: "docs/a.txt", LogicalFileID: 1},
+		{Path: "docs/a.txt", LogicalFileID: 2}, // same output path → collision
+	}
+
+	_, err := planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "collision") {
+		t.Fatalf("expected output path collision error, got: %v", err)
+	}
+}
+
+// ---- applySnapshotMetadata unit tests ----
+
+// TestApplySnapshotMetadataAppliesChmodAndChtimes verifies that when both mode and mtime are
+// valid, applySnapshotMetadata writes them to the target file.
+func TestApplySnapshotMetadataAppliesChmodAndChtimes(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "target.txt")
+	if err := os.WriteFile(target, []byte("content"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	wantMode := os.FileMode(0o600)
+	wantMtime := time.Date(2020, 6, 15, 10, 30, 0, 0, time.UTC)
+
+	opts := RestoreSnapshotOptions{StrictMetadata: false, NoMetadata: false}
+	if err := applySnapshotMetadata(
+		target,
+		sql.NullInt64{Int64: int64(wantMode), Valid: true},
+		sql.NullTime{Time: wantMtime, Valid: true},
+		opts,
+	); err != nil {
+		t.Fatalf("applySnapshotMetadata: %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat target after metadata: %v", err)
+	}
+	if got := info.Mode().Perm(); got != wantMode {
+		t.Fatalf("mode: want %04o got %04o", wantMode, got)
+	}
+	if got := info.ModTime().UTC(); !got.Equal(wantMtime) {
+		t.Fatalf("mtime: want %v got %v", wantMtime, got)
+	}
+}
+
+// TestApplySnapshotMetadataNoMetadataSkipsChmodAndChtimes verifies that --no-metadata leaves
+// the file's existing mode and mtime untouched.
+func TestApplySnapshotMetadataNoMetadataSkipsChmodAndChtimes(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "target.txt")
+	if err := os.WriteFile(target, []byte("content"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	before, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+
+	// Pass mode 0o600 and an old mtime; both should be ignored.
+	opts := RestoreSnapshotOptions{NoMetadata: true}
+	if err := applySnapshotMetadata(
+		target,
+		sql.NullInt64{Int64: int64(0o600), Valid: true},
+		sql.NullTime{Time: time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
+		opts,
+	); err != nil {
+		t.Fatalf("applySnapshotMetadata with NoMetadata should not error: %v", err)
+	}
+
+	after, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if after.Mode() != before.Mode() {
+		t.Fatalf("--no-metadata must not change mode: before=%v after=%v", before.Mode(), after.Mode())
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("--no-metadata must not change mtime: before=%v after=%v", before.ModTime(), after.ModTime())
+	}
+}
+
+// TestApplySnapshotMetadataStrictPropagatesChmodError verifies that --strict causes
+// applySnapshotMetadata to return an error when chmod fails (e.g., path does not exist).
+func TestApplySnapshotMetadataStrictPropagatesChmodError(t *testing.T) {
+	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
+
+	opts := RestoreSnapshotOptions{StrictMetadata: true}
+	err := applySnapshotMetadata(
+		nonExistent,
+		sql.NullInt64{Int64: int64(0o600), Valid: true},
+		sql.NullTime{},
+		opts,
+	)
+	if err == nil {
+		t.Fatalf("expected --strict to propagate chmod error, got nil")
+	}
+	if !strings.Contains(err.Error(), "apply snapshot metadata") {
+		t.Fatalf("expected 'apply snapshot metadata' in error message, got: %v", err)
+	}
+}
+
+// TestApplySnapshotMetadataStrictNotSetLogsAndContinues verifies that without --strict,
+// a chmod failure is logged but does not cause applySnapshotMetadata to return an error.
+func TestApplySnapshotMetadataStrictNotSetLogsAndContinues(t *testing.T) {
+	nonExistent := filepath.Join(t.TempDir(), "does-not-exist.txt")
+
+	opts := RestoreSnapshotOptions{StrictMetadata: false}
+	err := applySnapshotMetadata(
+		nonExistent,
+		sql.NullInt64{Int64: int64(0o600), Valid: true},
+		sql.NullTime{},
+		opts,
+	)
+	if err != nil {
+		t.Fatalf("without --strict, chmod error should be logged not returned; got: %v", err)
 	}
 }
