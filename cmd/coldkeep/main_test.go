@@ -1447,6 +1447,13 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	if got, _ := payload["command"].(string); got != "snapshot" {
 		t.Fatalf("expected command snapshot in JSON payload, got=%v", payload["command"])
 	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in snapshot payload, got=%v", payload)
+	}
+	if _, ok := data["duration_ms"]; !ok {
+		t.Fatalf("expected duration_ms in snapshot payload data, got=%v", data)
+	}
 }
 
 func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {

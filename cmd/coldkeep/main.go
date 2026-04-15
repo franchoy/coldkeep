@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"text/tabwriter"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -2159,6 +2160,8 @@ func generateSnapshotID() (string, error) {
 }
 
 func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
 	if err := ensureAllowedFlags(parsed, "id", "label", "output"); err != nil {
 		return err
 	}
@@ -2213,6 +2216,15 @@ func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 		return err
 	}
 
+	var (
+		filesInserted      int64
+		hasFilesInserted   bool
+		snapshotDurationMS = time.Since(startedAt).Milliseconds()
+	)
+	if err := sgctx.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&filesInserted); err == nil {
+		hasFilesInserted = true
+	}
+
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
 			"status":  "ok",
@@ -2221,7 +2233,12 @@ func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 				"snapshot_id": snapshotID,
 				"type":        snapshotType,
 				"paths_count": len(paths),
+				"duration_ms": snapshotDurationMS,
 			},
+		}
+		if hasFilesInserted {
+			payloadData := payload["data"].(map[string]any)
+			payloadData["files_inserted"] = filesInserted
 		}
 		if labelPtr != nil {
 			payloadData := payload["data"].(map[string]any)
@@ -2237,6 +2254,10 @@ func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", snapshotID, snapshotType, len(paths))
 	}
+	if hasFilesInserted {
+		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", filesInserted)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", snapshotDurationMS)
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
