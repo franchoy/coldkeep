@@ -218,10 +218,10 @@ func CreateSnapshot(
 	}
 
 	var (
-		queryArgs     []any
-		whereClauses  []string
-		exactFilters  []string
-		dirPrefixes   []string
+		queryArgs      []any
+		whereClauses   []string
+		exactFilters   []string
+		dirPrefixes    []string
 		exactFilterSet = make(map[string]struct{})
 	)
 
