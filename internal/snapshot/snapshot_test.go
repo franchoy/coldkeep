@@ -2424,6 +2424,103 @@ func TestDiffSnapshotsWithRegexQuery(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsWithSizeQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-qsize-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-qsize-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	logRemoved := insertLogicalFileWithSize(t, db, "hash-dqsize-removed", 50)
+	logModifiedBase := insertLogicalFileWithSize(t, db, "hash-dqsize-mod-base", 120)
+	logModifiedTarget := insertLogicalFileWithSize(t, db, "hash-dqsize-mod-target", 260)
+	logAdded := insertLogicalFileWithSize(t, db, "hash-dqsize-added", 500)
+
+	insertSnapshotFileRowWithSize(t, db, base.ID, "docs/removed.txt", logRemoved, sql.NullInt64{Int64: 50, Valid: true}, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRowWithSize(t, db, base.ID, "docs/modified.txt", logModifiedBase, sql.NullInt64{Int64: 120, Valid: true}, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRowWithSize(t, db, target.ID, "docs/modified.txt", logModifiedTarget, sql.NullInt64{Int64: 260, Valid: true}, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRowWithSize(t, db, target.ID, "docs/added.txt", logAdded, sql.NullInt64{Int64: 500, Valid: true}, sql.NullInt64{}, sql.NullTime{})
+
+	t.Run("min-size uses diff-side metadata", func(t *testing.T) {
+		minSize := int64(300)
+		q := &SnapshotQuery{MinSize: &minSize}
+		result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+		if err != nil {
+			t.Fatalf("DiffSnapshots size query: %v", err)
+		}
+		if result.Summary.Added != 1 || result.Summary.Removed != 0 || result.Summary.Modified != 0 {
+			t.Fatalf("unexpected summary for min-size filter: %+v", result.Summary)
+		}
+		if len(result.Entries) != 1 || result.Entries[0].Path != "docs/added.txt" {
+			t.Fatalf("expected only docs/added.txt, got %+v", result.Entries)
+		}
+	})
+
+	t.Run("max-size can match removed via base metadata", func(t *testing.T) {
+		maxSize := int64(60)
+		q := &SnapshotQuery{MaxSize: &maxSize}
+		result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+		if err != nil {
+			t.Fatalf("DiffSnapshots size query: %v", err)
+		}
+		if result.Summary.Added != 0 || result.Summary.Removed != 1 || result.Summary.Modified != 0 {
+			t.Fatalf("unexpected summary for max-size filter: %+v", result.Summary)
+		}
+		if len(result.Entries) != 1 || result.Entries[0].Path != "docs/removed.txt" || result.Entries[0].Type != DiffRemoved {
+			t.Fatalf("expected only docs/removed.txt removed entry, got %+v", result.Entries)
+		}
+	})
+}
+
+func TestDiffSnapshotsWithMTimeQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-qtime-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-qtime-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	oldTime := time.Date(2024, 1, 10, 10, 0, 0, 0, time.UTC)
+	newTime := time.Date(2024, 1, 10, 11, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2024, 1, 10, 10, 30, 0, 0, time.UTC)
+
+	logRemoved := insertLogicalFileWithSize(t, db, "hash-dqtime-removed", 50)
+	logModifiedBase := insertLogicalFileWithSize(t, db, "hash-dqtime-mod-base", 120)
+	logModifiedTarget := insertLogicalFileWithSize(t, db, "hash-dqtime-mod-target", 260)
+	logAdded := insertLogicalFileWithSize(t, db, "hash-dqtime-added", 500)
+
+	insertSnapshotFileRowWithSize(t, db, base.ID, "docs/removed.txt", logRemoved, sql.NullInt64{Int64: 50, Valid: true}, sql.NullInt64{}, sql.NullTime{Time: oldTime, Valid: true})
+	insertSnapshotFileRowWithSize(t, db, base.ID, "docs/modified.txt", logModifiedBase, sql.NullInt64{Int64: 120, Valid: true}, sql.NullInt64{}, sql.NullTime{Time: oldTime, Valid: true})
+	insertSnapshotFileRowWithSize(t, db, target.ID, "docs/modified.txt", logModifiedTarget, sql.NullInt64{Int64: 260, Valid: true}, sql.NullInt64{}, sql.NullTime{Time: newTime, Valid: true})
+	insertSnapshotFileRowWithSize(t, db, target.ID, "docs/added.txt", logAdded, sql.NullInt64{Int64: 500, Valid: true}, sql.NullInt64{}, sql.NullTime{Time: newTime, Valid: true})
+
+	q := &SnapshotQuery{ModifiedAfter: &cutoff}
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+	if err != nil {
+		t.Fatalf("DiffSnapshots mtime query: %v", err)
+	}
+	if result.Summary.Added != 1 || result.Summary.Removed != 0 || result.Summary.Modified != 1 {
+		t.Fatalf("unexpected summary for modified-after filter: %+v", result.Summary)
+	}
+	if len(result.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(result.Entries), result.Entries)
+	}
+	for _, entry := range result.Entries {
+		if entry.Path == "docs/removed.txt" {
+			t.Fatalf("removed entry should be excluded by modified-after cutoff: %+v", entry)
+		}
+	}
+}
+
 func TestDiffSnapshotsQueryEmptyResult(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
