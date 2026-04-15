@@ -299,6 +299,7 @@ coldkeep snapshot restore snap-abc123 --prefix docs/ --pattern "docs/*.txt" --mo
 ### Diffing two snapshots
 
 `snapshot diff` compares two snapshots by path and logical file identity, classifying each change as `added`, `removed`, or `modified`.
+When query filters include size or mtime constraints, diff evaluates `added` and `modified` entries against target-snapshot metadata, and `removed` entries against base-snapshot metadata.
 
 ```bash
 # Show all changes between two snapshots
