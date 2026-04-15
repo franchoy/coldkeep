@@ -663,6 +663,14 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
 	}
 
+	diffPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "snap-it-1", "snap-it-2", "--output", "json"), "snapshot diff")
+	diffData := testutils.JSONMap(t, diffPayload, "data")
+	diffSummary := testutils.JSONMap(t, diffData, "summary")
+	if got := int64(diffSummary["removed"].(float64)); got < 1 {
+		t.Fatalf("snapshot diff should report at least one removed path between snap-it-1 and snap-it-2: payload=%v", diffPayload)
+	}
+
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "snap-it-partial", "--force", "--output", "json"), "snapshot")
 

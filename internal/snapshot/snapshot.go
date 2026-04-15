@@ -77,6 +77,26 @@ type SnapshotStats struct {
 	SnapshotID        string
 }
 
+type SnapshotDiffEntry struct {
+	Path            string        `json:"path"`
+	Type            string        `json:"type"` // added | removed | modified
+	BaseLogicalID   sql.NullInt64 `json:"base_logical_id"`
+	TargetLogicalID sql.NullInt64 `json:"target_logical_id"`
+}
+
+type SnapshotDiffSummary struct {
+	Added    int64 `json:"added"`
+	Removed  int64 `json:"removed"`
+	Modified int64 `json:"modified"`
+}
+
+type SnapshotDiffResult struct {
+	BaseSnapshotID   string              `json:"base_snapshot_id"`
+	TargetSnapshotID string              `json:"target_snapshot_id"`
+	Entries          []SnapshotDiffEntry `json:"entries"`
+	Summary          SnapshotDiffSummary `json:"summary"`
+}
+
 type snapshotRestoreRow struct {
 	Path          string
 	LogicalFileID int64
@@ -405,6 +425,128 @@ func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
 	}
 
 	return nil
+}
+
+func loadSnapshotPathLogicalIDs(ctx context.Context, db *sql.DB, snapshotID string) (map[string]int64, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT path, logical_file_id
+		FROM snapshot_file
+		WHERE snapshot_id = $1
+	`, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("query snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]int64)
+	for rows.Next() {
+		var rawPath string
+		var logicalID int64
+		if err := rows.Scan(&rawPath, &logicalID); err != nil {
+			return nil, fmt.Errorf("scan snapshot_file row snapshot_id=%s: %w", snapshotID, err)
+		}
+
+		normalizedPath, err := NormalizeSnapshotPath(rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("normalize snapshot_file path %q for snapshot_id=%s: %w", rawPath, snapshotID, err)
+		}
+
+		if existingLogicalID, exists := result[normalizedPath]; exists && existingLogicalID != logicalID {
+			return nil, fmt.Errorf("duplicate normalized path %q in snapshot %s with conflicting logical IDs %d and %d", normalizedPath, snapshotID, existingLogicalID, logicalID)
+		}
+		result[normalizedPath] = logicalID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
+	}
+
+	return result, nil
+}
+
+func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string) (*SnapshotDiffResult, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	baseID = strings.TrimSpace(baseID)
+	targetID = strings.TrimSpace(targetID)
+	if baseID == "" {
+		return nil, errors.New("base snapshot id cannot be empty")
+	}
+	if targetID == "" {
+		return nil, errors.New("target snapshot id cannot be empty")
+	}
+
+	if _, err := GetSnapshot(ctx, db, baseID); err != nil {
+		return nil, err
+	}
+	if _, err := GetSnapshot(ctx, db, targetID); err != nil {
+		return nil, err
+	}
+
+	baseRows, err := loadSnapshotPathLogicalIDs(ctx, db, baseID)
+	if err != nil {
+		return nil, err
+	}
+	targetRows, err := loadSnapshotPathLogicalIDs(ctx, db, targetID)
+	if err != nil {
+		return nil, err
+	}
+
+	allPaths := make(map[string]struct{}, len(baseRows)+len(targetRows))
+	for path := range baseRows {
+		allPaths[path] = struct{}{}
+	}
+	for path := range targetRows {
+		allPaths[path] = struct{}{}
+	}
+
+	paths := make([]string, 0, len(allPaths))
+	for path := range allPaths {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	entries := make([]SnapshotDiffEntry, 0)
+	summary := SnapshotDiffSummary{}
+
+	for _, path := range paths {
+		baseLogicalID, baseExists := baseRows[path]
+		targetLogicalID, targetExists := targetRows[path]
+
+		entry := SnapshotDiffEntry{Path: path}
+		if baseExists {
+			entry.BaseLogicalID = sql.NullInt64{Int64: baseLogicalID, Valid: true}
+		}
+		if targetExists {
+			entry.TargetLogicalID = sql.NullInt64{Int64: targetLogicalID, Valid: true}
+		}
+
+		switch {
+		case !baseExists && targetExists:
+			entry.Type = "added"
+			summary.Added++
+		case baseExists && !targetExists:
+			entry.Type = "removed"
+			summary.Removed++
+		case baseExists && targetExists:
+			if baseLogicalID == targetLogicalID {
+				continue
+			}
+			entry.Type = "modified"
+			summary.Modified++
+		default:
+			continue
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return &SnapshotDiffResult{
+		BaseSnapshotID:   baseID,
+		TargetSnapshotID: targetID,
+		Entries:          entries,
+		Summary:          summary,
+	}, nil
 }
 
 func normalizeSourcePathForSnapshot(path string) (string, error) {

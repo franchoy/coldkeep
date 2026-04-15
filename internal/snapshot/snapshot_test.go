@@ -1683,3 +1683,230 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 		t.Fatalf("expected logical_file rows untouched, got count=%d", logicalCount)
 	}
 }
+
+// ---- Phase 5 snapshot diff tests ----
+
+func TestDiffSnapshotsEmptyVsEmpty(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-empty-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-empty-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, item := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots empty vs empty: %v", err)
+	}
+	if len(result.Entries) != 0 {
+		t.Fatalf("expected no diff entries, got %d", len(result.Entries))
+	}
+	if result.Summary.Added != 0 || result.Summary.Removed != 0 || result.Summary.Modified != 0 {
+		t.Fatalf("expected zero summary, got %+v", result.Summary)
+	}
+}
+
+func TestDiffSnapshotsIdenticalNoChanges(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logical := insertLogicalFileWithSize(t, db, "hash-diff-identical", 10)
+	base := Snapshot{ID: "snap-diff-identical-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-identical-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, item := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logical, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logical, sql.NullInt64{Int64: int64(0o600), Valid: true}, sql.NullTime{Time: time.Now().UTC(), Valid: true})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots identical: %v", err)
+	}
+	if len(result.Entries) != 0 {
+		t.Fatalf("expected no diff entries for identical logical IDs, got %+v", result.Entries)
+	}
+}
+
+func TestDiffSnapshotsAddedRemovedModifiedMixed(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diff-base-only", 10)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diff-target-only", 11)
+	logicalModA := insertLogicalFileWithSize(t, db, "hash-diff-mod-a", 12)
+	logicalModB := insertLogicalFileWithSize(t, db, "hash-diff-mod-b", 13)
+
+	base := Snapshot{ID: "snap-diff-mixed-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-mixed-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, item := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/old.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/config.yaml", logicalModA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/new.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/config.yaml", logicalModB, sql.NullInt64{}, sql.NullTime{})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots mixed: %v", err)
+	}
+
+	if result.Summary.Added != 1 || result.Summary.Removed != 1 || result.Summary.Modified != 1 {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+	if len(result.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(result.Entries))
+	}
+
+	if result.Entries[0].Path != "docs/config.yaml" || result.Entries[0].Type != "modified" {
+		t.Fatalf("expected first entry modified docs/config.yaml, got %+v", result.Entries[0])
+	}
+	if result.Entries[1].Path != "docs/new.txt" || result.Entries[1].Type != "added" {
+		t.Fatalf("expected second entry added docs/new.txt, got %+v", result.Entries[1])
+	}
+	if result.Entries[2].Path != "docs/old.txt" || result.Entries[2].Type != "removed" {
+		t.Fatalf("expected third entry removed docs/old.txt, got %+v", result.Entries[2])
+	}
+}
+
+func TestDiffSnapshotsDeterministicAcrossInsertionOrder(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diff-det-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diff-det-b", 11)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-diff-det-c", 12)
+
+	base := Snapshot{ID: "snap-diff-det-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-det-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, item := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	// Intentionally unsorted insert order.
+	insertSnapshotFileRow(t, db, base.ID, "img/z.png", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logicalC, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	result1, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots first run: %v", err)
+	}
+	result2, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots second run: %v", err)
+	}
+
+	if len(result1.Entries) != len(result2.Entries) {
+		t.Fatalf("determinism mismatch in entry count: %d vs %d", len(result1.Entries), len(result2.Entries))
+	}
+	for i := range result1.Entries {
+		if result1.Entries[i].Path != result2.Entries[i].Path || result1.Entries[i].Type != result2.Entries[i].Type {
+			t.Fatalf("determinism mismatch at %d: %+v vs %+v", i, result1.Entries[i], result2.Entries[i])
+		}
+	}
+}
+
+func TestDiffSnapshotsPathNormalizationBackslashMatchesSlash(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logical := insertLogicalFileWithSize(t, db, "hash-diff-norm", 10)
+	base := Snapshot{ID: "snap-diff-norm-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-norm-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, item := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs\\a.txt", logical, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logical, sql.NullInt64{}, sql.NullTime{})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots normalization: %v", err)
+	}
+	if len(result.Entries) != 0 {
+		t.Fatalf("expected normalized path equality, got diff entries: %+v", result.Entries)
+	}
+}
+
+func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if _, err := DiffSnapshots(ctx, db, "", "snap-target"); err == nil || !strings.Contains(err.Error(), "base snapshot id cannot be empty") {
+		t.Fatalf("expected base empty id error, got: %v", err)
+	}
+	if _, err := DiffSnapshots(ctx, db, "snap-base", ""); err == nil || !strings.Contains(err.Error(), "target snapshot id cannot be empty") {
+		t.Fatalf("expected target empty id error, got: %v", err)
+	}
+	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target"); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+		t.Fatalf("expected missing base snapshot error, got: %v", err)
+	}
+
+	base := Snapshot{ID: "snap-diff-error-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target"); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+		t.Fatalf("expected missing target snapshot error, got: %v", err)
+	}
+}
+
+func TestDiffSnapshotsLargeDatasetPerformanceSanity(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-large-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-large-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, item := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	const files = 1200
+	for i := 0; i < files; i++ {
+		logicalBase := insertLogicalFileWithSize(t, db, fmt.Sprintf("hash-diff-large-base-%d", i), int64(10+i))
+		logicalTarget := logicalBase
+		if i%200 == 0 {
+			logicalTarget = insertLogicalFileWithSize(t, db, fmt.Sprintf("hash-diff-large-target-%d", i), int64(20+i))
+		}
+		path := fmt.Sprintf("docs/file-%04d.txt", i)
+		insertSnapshotFileRow(t, db, base.ID, path, logicalBase, sql.NullInt64{}, sql.NullTime{})
+		insertSnapshotFileRow(t, db, target.ID, path, logicalTarget, sql.NullInt64{}, sql.NullTime{})
+	}
+
+	// Add/Remove specific edge paths.
+	baseOnlyLogical := insertLogicalFileWithSize(t, db, "hash-diff-large-base-only", 999)
+	targetOnlyLogical := insertLogicalFileWithSize(t, db, "hash-diff-large-target-only", 998)
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", baseOnlyLogical, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/added.txt", targetOnlyLogical, sql.NullInt64{}, sql.NullTime{})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots large dataset: %v", err)
+	}
+	if result.Summary.Modified == 0 {
+		t.Fatalf("expected at least one modified entry in large dataset, got summary=%+v", result.Summary)
+	}
+	if result.Summary.Added == 0 || result.Summary.Removed == 0 {
+		t.Fatalf("expected added and removed entries in large dataset, got summary=%+v", result.Summary)
+	}
+}

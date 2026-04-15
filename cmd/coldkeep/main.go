@@ -48,6 +48,7 @@ var stdoutRedirectMu sync.Mutex
 var flagsWithValues = map[string]bool{
 	"codec":       true,
 	"destination": true,
+	"filter":      true,
 	"input":       true,
 	"limit":       true,
 	"mode":        true,
@@ -115,6 +116,7 @@ var getSnapshotPhase = snapshot.GetSnapshot
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = snapshot.GetSnapshotStats
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
+var diffSnapshotsPhase = snapshot.DiffSnapshots
 
 type cliError struct {
 	code int
@@ -2170,7 +2172,7 @@ func generateSnapshotID() (string, error) {
 
 func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep snapshot <create|restore|list|show|stats|delete> ...")
+		return usageErrorf("Usage: coldkeep snapshot <create|restore|list|show|stats|delete|diff> ...")
 	}
 
 	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
@@ -2187,6 +2189,8 @@ func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 		return runSnapshotStatsCommand(parsed, outputMode)
 	case "delete":
 		return runSnapshotDeleteCommand(parsed, outputMode)
+	case "diff":
+		return runSnapshotDiffCommand(parsed, outputMode)
 	default:
 		return usageErrorf("unknown snapshot subcommand: %s", parsed.positionals[0])
 	}
@@ -2568,6 +2572,122 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	return nil
 }
 
+func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "filter", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 3 {
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--output <text|json>]")
+	}
+
+	baseID := strings.TrimSpace(parsed.positionals[1])
+	targetID := strings.TrimSpace(parsed.positionals[2])
+	if baseID == "" {
+		return usageErrorf("baseSnapshotID cannot be empty")
+	}
+	if targetID == "" {
+		return usageErrorf("targetSnapshotID cannot be empty")
+	}
+
+	filterType := ""
+	if value, ok := parsed.lastFlagValue("filter"); ok {
+		filterType = strings.ToLower(strings.TrimSpace(value))
+		switch filterType {
+		case "added", "removed", "modified":
+		default:
+			return usageErrorf("invalid --filter value %q (allowed: added, removed, modified)", value)
+		}
+	}
+
+	sgctx, err := loadSnapshotDB()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID)
+	if err != nil {
+		return err
+	}
+
+	entries := make([]snapshot.SnapshotDiffEntry, 0, len(result.Entries))
+	summary := snapshot.SnapshotDiffSummary{}
+	for _, entry := range result.Entries {
+		if filterType != "" && entry.Type != filterType {
+			continue
+		}
+		entries = append(entries, entry)
+		switch entry.Type {
+		case "added":
+			summary.Added++
+		case "removed":
+			summary.Removed++
+		case "modified":
+			summary.Modified++
+		}
+	}
+
+	if outputMode == outputModeJSON {
+		jsonEntries := make([]map[string]any, 0, len(entries))
+		for _, entry := range entries {
+			jsonEntries = append(jsonEntries, map[string]any{
+				"path":              entry.Path,
+				"type":              entry.Type,
+				"base_logical_id":   snapshotIntJSONValue(entry.BaseLogicalID),
+				"target_logical_id": snapshotIntJSONValue(entry.TargetLogicalID),
+			})
+		}
+
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot diff",
+			"data": map[string]any{
+				"base":        baseID,
+				"target":      targetID,
+				"summary":     summary,
+				"entries":     jsonEntries,
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, "[SNAPSHOT DIFF]")
+	_, _ = fmt.Fprintf(os.Stdout, "\nBase:    %s\n", baseID)
+	_, _ = fmt.Fprintf(os.Stdout, "Target:  %s\n\n", targetID)
+	if len(entries) == 0 {
+		_, _ = fmt.Fprintln(os.Stdout, "(no changes)")
+	} else {
+		for _, entry := range entries {
+			prefix := "?"
+			switch entry.Type {
+			case "added":
+				prefix = "+"
+			case "removed":
+				prefix = "-"
+			case "modified":
+				prefix = "~"
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "%s %s\n", prefix, entry.Path)
+		}
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, "\nSummary:")
+	_, _ = fmt.Fprintf(os.Stdout, "  added: %d\n", summary.Added)
+	_, _ = fmt.Fprintf(os.Stdout, "  removed: %d\n", summary.Removed)
+	_, _ = fmt.Fprintf(os.Stdout, "  modified: %d\n", summary.Modified)
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
@@ -2811,6 +2931,7 @@ func printHelp() {
 		{"  snapshot show <snapshotID> [--limit <count>] [--output <text|json>]", "Inspect one snapshot and list its files"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -2897,6 +3018,8 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot stats")
 	fmt.Println("  coldkeep snapshot stats snap-123")
 	fmt.Println("  coldkeep snapshot delete snap-123 --force")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --filter modified")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
 	fmt.Println("  coldkeep simulate store myfile.bin")

@@ -1861,6 +1861,82 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandDiffForwardsAndFormatsJSON(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotBase, gotTarget string
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string) (*snapshot.SnapshotDiffResult, error) {
+		gotBase = baseID
+		gotTarget = targetID
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: "added", TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: "removed", BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: "modified", BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+			Summary: snapshot.SnapshotDiffSummary{Added: 1, Removed: 1, Modified: 1},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "snap-1", "snap-2"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+		}
+	})
+
+	if gotBase != "snap-1" || gotTarget != "snap-2" {
+		t.Fatalf("expected diff args snap-1/snap-2, got %q/%q", gotBase, gotTarget)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot diff JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "snapshot diff" {
+		t.Fatalf("expected command=snapshot diff, got payload=%v", payload)
+	}
+	data := payload["data"].(map[string]any)
+	summary := data["summary"].(map[string]any)
+	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 1 {
+		t.Fatalf("unexpected diff summary payload: %v", data)
+	}
+}
+
+func TestRunSnapshotCommandDiffFilterValidation(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "snap-1", "snap-2"},
+		flags: map[string][]string{
+			"filter": {"invalid"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --filter value") {
+		t.Fatalf("expected invalid filter usage error, got: %v", err)
+	}
+}
+
 func TestRunRepairCommandRejectsUnknownTarget(t *testing.T) {
 	err := runRepairCommand(parsedCommandLine{
 		method:      "repair",
