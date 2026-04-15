@@ -754,3 +754,32 @@ func TestCreateSnapshotPartialDeterministicAcrossInputOrder(t *testing.T) {
 		t.Fatalf("expected deterministic snapshots to match all 3 paths, got %d", joinedCount)
 	}
 }
+
+func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-exact-vs-dir-a", 31)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-exact-no-dir-expand", "partial", nil, []string{"docs"})
+	if err == nil {
+		t.Fatal("expected exact path 'docs' to fail when only docs/* files exist")
+	}
+	if !strings.Contains(err.Error(), "path not found") {
+		t.Fatalf("expected path-not-found error for exact path docs, got: %v", err)
+	}
+
+	err = CreateSnapshot(ctx, db, "snap-dir-expand", "partial", nil, []string{"docs/"})
+	if err != nil {
+		t.Fatalf("expected directory prefix docs/ to succeed, got: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-dir-expand").Scan(&count); err != nil {
+		t.Fatalf("count snapshot_file rows for docs/ snapshot: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected docs/ snapshot to include one row, got %d", count)
+	}
+}
