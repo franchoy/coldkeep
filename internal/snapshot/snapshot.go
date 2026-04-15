@@ -511,7 +511,7 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string) (*S
 	}
 	sort.Strings(paths)
 
-	entries := make([]SnapshotDiffEntry, 0)
+	entries := make([]SnapshotDiffEntry, 0, len(paths))
 	summary := SnapshotDiffSummary{}
 
 	for _, path := range paths {
