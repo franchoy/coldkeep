@@ -1744,6 +1744,38 @@ func TestRunSnapshotCommandRestoreRejectsInvalidQueryRanges(t *testing.T) {
 			t.Fatalf("expected prefix validation error, got: %v", err)
 		}
 	})
+
+	t.Run("invalid modified-after timestamp", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"modified-after": {"not-a-date"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --modified-after value") {
+			t.Fatalf("expected invalid-timestamp error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+
+	t.Run("invalid modified-before timestamp", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"modified-before": {"not-a-date"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --modified-before value") {
+			t.Fatalf("expected invalid-timestamp error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
 }
 
 func TestRunSnapshotCommandRestoreRejectsInvalidQueryFlagValues(t *testing.T) {

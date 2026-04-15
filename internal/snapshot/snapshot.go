@@ -198,6 +198,7 @@ func (q *SnapshotQuery) Match(e SnapshotFileEntry) bool {
 type snapshotRestoreRow struct {
 	Path          string
 	LogicalFileID int64
+	Size          sql.NullInt64
 	Mode          sql.NullInt64
 	MTime         sql.NullTime
 }
@@ -727,7 +728,7 @@ func resolveSnapshotRestoreSelection(
 	}
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT sf.path, sf.logical_file_id, sf.mode, sf.mtime
+		SELECT sf.path, sf.logical_file_id, sf.size, sf.mode, sf.mtime
 		FROM snapshot_file sf
 		WHERE sf.snapshot_id = $1
 		ORDER BY sf.path, sf.logical_file_id
@@ -745,7 +746,7 @@ func resolveSnapshotRestoreSelection(
 
 	for rows.Next() {
 		var row snapshotRestoreRow
-		if err := rows.Scan(&row.Path, &row.LogicalFileID, &row.Mode, &row.MTime); err != nil {
+		if err := rows.Scan(&row.Path, &row.LogicalFileID, &row.Size, &row.Mode, &row.MTime); err != nil {
 			return nil, nil, fmt.Errorf("scan snapshot restore row: %w", err)
 		}
 
@@ -783,6 +784,7 @@ func resolveSnapshotRestoreSelection(
 			fe := SnapshotFileEntry{
 				Path:          row.Path,
 				LogicalFileID: row.LogicalFileID,
+				Size:          row.Size,
 				Mode:          row.Mode,
 				MTime:         row.MTime,
 			}

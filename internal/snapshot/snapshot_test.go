@@ -792,12 +792,17 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 
 func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {
 	t.Helper()
+	insertSnapshotFileRowWithSize(t, db, snapshotID, path, logicalFileID, sql.NullInt64{Int64: 1, Valid: true}, mode, mtime)
+}
+
+func insertSnapshotFileRowWithSize(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, size sql.NullInt64, mode sql.NullInt64, mtime sql.NullTime) {
+	t.Helper()
 	_, err := db.Exec(
 		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
 		snapshotID,
 		path,
 		logicalFileID,
-		sql.NullInt64{Int64: 1, Valid: true},
+		size,
 		mode,
 		mtime,
 	)
@@ -2565,5 +2570,33 @@ func TestResolveSnapshotRestoreSelectionQueryAndPositionalCombined(t *testing.T)
 		if !strings.HasSuffix(row.Path, ".txt") {
 			t.Errorf("unexpected non-.txt path %q in combined filter result", row.Path)
 		}
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionSizeFilter(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	s := Snapshot{ID: "snap-rsel-size", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+
+	// Small file: 50 bytes, large file: 500 bytes
+	logSmall := insertLogicalFileWithSize(t, db, "hash-rsel-size-small", 50)
+	logLarge := insertLogicalFileWithSize(t, db, "hash-rsel-size-large", 500)
+
+	insertSnapshotFileRowWithSize(t, db, s.ID, "docs/small.txt", logSmall, sql.NullInt64{Int64: 50, Valid: true}, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRowWithSize(t, db, s.ID, "docs/large.txt", logLarge, sql.NullInt64{Int64: 500, Valid: true}, sql.NullInt64{}, sql.NullTime{})
+
+	// Filter: only files >= 100 bytes
+	minSize := int64(100)
+	q := &SnapshotQuery{MinSize: &minSize}
+	selected, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, nil, q)
+	if err != nil {
+		t.Fatalf("resolveSnapshotRestoreSelection size filter: %v", err)
+	}
+	if len(selected) != 1 || selected[0].Path != "docs/large.txt" {
+		t.Fatalf("expected only docs/large.txt (size>=100), got %+v", selected)
 	}
 }
