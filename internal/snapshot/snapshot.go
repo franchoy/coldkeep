@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,6 +35,11 @@ type SnapshotFile struct {
 }
 
 var multiSlash = regexp.MustCompile(`/{2,}`)
+
+type sqlExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
 
 // NormalizeSnapshotPath normalizes a snapshot-relative path:
 //   - rejects empty paths
@@ -79,6 +86,10 @@ func NormalizeSnapshotPath(path string) (string, error) {
 // InsertSnapshot inserts an immutable snapshot row. id must be non-empty.
 // snapshotType must be "full" or "partial".
 func InsertSnapshot(ctx context.Context, db *sql.DB, s Snapshot) error {
+	return insertSnapshot(ctx, db, s)
+}
+
+func insertSnapshot(ctx context.Context, exec sqlExecutor, s Snapshot) error {
 	if s.ID == "" {
 		return errors.New("snapshot id cannot be empty")
 	}
@@ -89,7 +100,7 @@ func InsertSnapshot(ctx context.Context, db *sql.DB, s Snapshot) error {
 		return errors.New("snapshot created_at cannot be zero")
 	}
 
-	_, err := db.ExecContext(
+	_, err := exec.ExecContext(
 		ctx,
 		`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
 		s.ID,
@@ -108,6 +119,10 @@ func InsertSnapshot(ctx context.Context, db *sql.DB, s Snapshot) error {
 // InsertSnapshotFile inserts a snapshot_file row. The path is normalized before
 // insert. The logical_file referenced by logicalFileID must exist.
 func InsertSnapshotFile(ctx context.Context, db *sql.DB, sf SnapshotFile) (int64, error) {
+	return insertSnapshotFile(ctx, db, sf)
+}
+
+func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) (int64, error) {
 	if sf.SnapshotID == "" {
 		return 0, errors.New("snapshot_file snapshot_id cannot be empty")
 	}
@@ -123,7 +138,7 @@ func InsertSnapshotFile(ctx context.Context, db *sql.DB, sf SnapshotFile) (int64
 
 	// Verify the logical_file exists before inserting.
 	var exists int
-	err = db.QueryRowContext(ctx, `SELECT 1 FROM logical_file WHERE id = $1`, sf.LogicalFileID).Scan(&exists)
+	err = exec.QueryRowContext(ctx, `SELECT 1 FROM logical_file WHERE id = $1`, sf.LogicalFileID).Scan(&exists)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, fmt.Errorf("snapshot_file references non-existent logical_file id=%d", sf.LogicalFileID)
@@ -132,7 +147,7 @@ func InsertSnapshotFile(ctx context.Context, db *sql.DB, sf SnapshotFile) (int64
 	}
 
 	var id int64
-	err = db.QueryRowContext(
+	err = exec.QueryRowContext(
 		ctx,
 		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, $6)
@@ -150,4 +165,182 @@ func InsertSnapshotFile(ctx context.Context, db *sql.DB, sf SnapshotFile) (int64
 
 	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, sf.SnapshotID, normalizedPath)
 	return id, nil
+}
+
+// CreateSnapshot creates an atomic point-in-time snapshot from current physical_file rows.
+// When paths is nil or empty, all physical_file rows are copied into the snapshot.
+// When paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
+func CreateSnapshot(
+	ctx context.Context,
+	db *sql.DB,
+	snapshotID string,
+	snapshotType string,
+	label *string,
+	paths []string,
+) error {
+	if db == nil {
+		return errors.New("snapshot db cannot be nil")
+	}
+	if snapshotID == "" {
+		return errors.New("snapshot id cannot be empty")
+	}
+	if snapshotType != "full" && snapshotType != "partial" {
+		return fmt.Errorf("snapshot type must be 'full' or 'partial', got %q", snapshotType)
+	}
+
+	hasPaths := len(paths) > 0
+	if hasPaths && snapshotType != "partial" {
+		return fmt.Errorf("snapshot type must be 'partial' when paths are provided, got %q", snapshotType)
+	}
+	if !hasPaths && snapshotType != "full" {
+		return fmt.Errorf("snapshot type must be 'full' when no paths are provided, got %q", snapshotType)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin snapshot transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	s := Snapshot{
+		ID:        snapshotID,
+		CreatedAt: time.Now().UTC(),
+		Type:      snapshotType,
+	}
+	if label != nil {
+		s.Label = sql.NullString{String: *label, Valid: true}
+	}
+
+	if err := insertSnapshot(ctx, tx, s); err != nil {
+		return err
+	}
+
+	var (
+		queryArgs     []any
+		whereClauses  []string
+		exactFilters  []string
+		dirPrefixes   []string
+		exactFilterSet = make(map[string]struct{})
+	)
+
+	if hasPaths {
+		seenInput := make(map[string]struct{})
+		for _, rawPath := range paths {
+			normalizedPath, normErr := NormalizeSnapshotPath(rawPath)
+			if normErr != nil {
+				return fmt.Errorf("normalize input path %q: %w", rawPath, normErr)
+			}
+			if _, exists := seenInput[normalizedPath]; exists {
+				continue
+			}
+			seenInput[normalizedPath] = struct{}{}
+
+			if strings.HasSuffix(normalizedPath, "/") {
+				dirPrefixes = append(dirPrefixes, normalizedPath)
+				continue
+			}
+
+			exactFilters = append(exactFilters, normalizedPath)
+			exactFilterSet[normalizedPath] = struct{}{}
+		}
+
+		sort.Strings(exactFilters)
+		sort.Strings(dirPrefixes)
+
+		for _, exactPath := range exactFilters {
+			queryArgs = append(queryArgs, exactPath)
+			whereClauses = append(whereClauses, "pf.path = $"+strconv.Itoa(len(queryArgs)))
+		}
+		for _, prefix := range dirPrefixes {
+			queryArgs = append(queryArgs, prefix+"%")
+			whereClauses = append(whereClauses, "pf.path LIKE $"+strconv.Itoa(len(queryArgs)))
+		}
+
+		if len(whereClauses) == 0 {
+			return errors.New("partial snapshot requires at least one valid path filter")
+		}
+	}
+
+	query := `
+		SELECT pf.path, pf.logical_file_id, lf.total_size, pf.mode, pf.mtime
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+	`
+	if hasPaths {
+		query += " WHERE " + strings.Join(whereClauses, " OR ")
+	}
+	query += " ORDER BY pf.path, pf.logical_file_id"
+
+	rows, err := tx.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fmt.Errorf("query snapshot source rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	seenSnapshotPaths := make(map[string]struct{})
+	foundExact := make(map[string]struct{})
+	insertedCount := 0
+
+	for rows.Next() {
+		var (
+			path          string
+			logicalFileID int64
+			totalSize     int64
+			mode          sql.NullInt64
+			mtime         sql.NullTime
+		)
+		if err := rows.Scan(&path, &logicalFileID, &totalSize, &mode, &mtime); err != nil {
+			return fmt.Errorf("scan snapshot source row: %w", err)
+		}
+
+		normalizedPath, err := NormalizeSnapshotPath(path)
+		if err != nil {
+			return fmt.Errorf("normalize source physical_file path %q: %w", path, err)
+		}
+
+		if _, isExact := exactFilterSet[normalizedPath]; isExact {
+			foundExact[normalizedPath] = struct{}{}
+		}
+
+		if _, duplicate := seenSnapshotPaths[normalizedPath]; duplicate {
+			continue
+		}
+		seenSnapshotPaths[normalizedPath] = struct{}{}
+
+		_, err = insertSnapshotFile(ctx, tx, SnapshotFile{
+			SnapshotID:    snapshotID,
+			Path:          normalizedPath,
+			LogicalFileID: logicalFileID,
+			Size:          sql.NullInt64{Int64: totalSize, Valid: true},
+			Mode:          mode,
+			MTime:         mtime,
+		})
+		if err != nil {
+			return err
+		}
+		insertedCount++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate snapshot source rows: %w", err)
+	}
+
+	for _, exactPath := range exactFilters {
+		if _, ok := foundExact[exactPath]; !ok {
+			return fmt.Errorf("path not found in current state: %s", exactPath)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit snapshot transaction: %w", err)
+	}
+
+	if insertedCount == 0 {
+		log.Printf("snapshot: created id=%s type=%s files=0 (empty snapshot)", snapshotID, snapshotType)
+		return nil
+	}
+
+	log.Printf("snapshot: created id=%s type=%s files=%d", snapshotID, snapshotType, insertedCount)
+	return nil
 }

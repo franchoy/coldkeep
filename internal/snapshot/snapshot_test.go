@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,37 @@ func insertLogicalFile(t *testing.T, db *sql.DB, hash string) int64 {
 		t.Fatalf("last insert id: %v", err)
 	}
 	return id
+}
+
+func insertLogicalFileWithSize(t *testing.T, db *sql.DB, hash string, totalSize int64) int64 {
+	t.Helper()
+	res, err := db.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		fmt.Sprintf("%s.txt", hash), totalSize, hash, "COMPLETED",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file hash=%s size=%d: %v", hash, totalSize, err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	return id
+}
+
+func insertPhysicalFile(t *testing.T, db *sql.DB, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {
+	t.Helper()
+	_, err := db.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, is_metadata_complete) VALUES (?, ?, ?, ?, ?)`,
+		path,
+		logicalFileID,
+		mode,
+		mtime,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("insert physical_file path=%q logical_file_id=%d: %v", path, logicalFileID, err)
+	}
 }
 
 // ---- NormalizeSnapshotPath tests ----
@@ -335,5 +367,201 @@ func TestInsertSnapshotFileRejectsInvalidPath(t *testing.T) {
 	_, err := InsertSnapshotFile(ctx, db, sf)
 	if err == nil {
 		t.Fatal("expected error for absolute path, got nil")
+	}
+}
+
+// ---- CreateSnapshot tests ----
+
+func TestCreateSnapshotFullCopiesAllPhysicalFiles(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	mtimeA := time.Now().UTC().Truncate(time.Second)
+	mtimeB := mtimeA.Add(2 * time.Minute)
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-full-a", 101)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-full-b", 202)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-full-c", 303)
+
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{Int64: 0o644, Valid: true}, sql.NullTime{Time: mtimeA, Valid: true})
+	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{Int64: 0o600, Valid: true}, sql.NullTime{Time: mtimeB, Valid: true})
+	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	label := "phase2-full"
+	if err := CreateSnapshot(ctx, db, "snap-full-phase2", "full", &label, nil); err != nil {
+		t.Fatalf("CreateSnapshot full: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ? AND type = ?`, "snap-full-phase2", "full").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row: %v", err)
+	}
+	if snapshotCount != 1 {
+		t.Fatalf("expected 1 snapshot row, got %d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-full-phase2").Scan(&fileCount); err != nil {
+		t.Fatalf("count snapshot_file rows: %v", err)
+	}
+	if fileCount != 3 {
+		t.Fatalf("expected 3 snapshot_file rows, got %d", fileCount)
+	}
+
+	rows, err := db.Query(`
+		SELECT path, logical_file_id, size, mode
+		FROM snapshot_file
+		WHERE snapshot_id = ?
+	`, "snap-full-phase2")
+	if err != nil {
+		t.Fatalf("query snapshot_file rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var (
+			path          string
+			logicalFileID int64
+			size          sql.NullInt64
+			mode          sql.NullInt64
+		)
+		if err := rows.Scan(&path, &logicalFileID, &size, &mode); err != nil {
+			t.Fatalf("scan snapshot_file row: %v", err)
+		}
+		seen[path] = struct{}{}
+		if !size.Valid {
+			t.Fatalf("expected size to be preserved for path=%s", path)
+		}
+
+		switch path {
+		case "docs/a.txt":
+			if logicalFileID != logicalA || size.Int64 != 101 || !mode.Valid || mode.Int64 != 0o644 {
+				t.Fatalf("unexpected metadata for docs/a.txt: logical_file_id=%d size=%v mode=%v", logicalFileID, size, mode)
+			}
+		case "docs/b.txt":
+			if logicalFileID != logicalB || size.Int64 != 202 || !mode.Valid || mode.Int64 != 0o600 {
+				t.Fatalf("unexpected metadata for docs/b.txt: logical_file_id=%d size=%v mode=%v", logicalFileID, size, mode)
+			}
+		case "img/x.png":
+			if logicalFileID != logicalC || size.Int64 != 303 {
+				t.Fatalf("unexpected metadata for img/x.png: logical_file_id=%d size=%v", logicalFileID, size)
+			}
+		default:
+			t.Fatalf("unexpected snapshot path: %s", path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate snapshot_file rows: %v", err)
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("expected 3 unique paths in snapshot, got %d", len(seen))
+	}
+}
+
+func TestCreateSnapshotPartialFiltersExactAndDirectory(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-partial-a", 11)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-partial-b", 22)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-partial-c", 33)
+
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-partial-phase2", "partial", nil, []string{"img/x.png", "docs/"}); err != nil {
+		t.Fatalf("CreateSnapshot partial: %v", err)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-partial-phase2").Scan(&fileCount); err != nil {
+		t.Fatalf("count snapshot_file rows: %v", err)
+	}
+	if fileCount != 3 {
+		t.Fatalf("expected 3 snapshot_file rows for exact+directory filters, got %d", fileCount)
+	}
+}
+
+func TestCreateSnapshotPartialAllowsEmptyDirectoryMatch(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-empty-a", 9)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-empty-dir", "partial", nil, []string{"empty/"}); err != nil {
+		t.Fatalf("CreateSnapshot empty-directory partial should succeed: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-empty-dir").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row: %v", err)
+	}
+	if snapshotCount != 1 {
+		t.Fatalf("expected snapshot row to exist, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-empty-dir").Scan(&fileCount); err != nil {
+		t.Fatalf("count snapshot_file rows: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected empty snapshot_file set, got %d rows", fileCount)
+	}
+}
+
+func TestCreateSnapshotPartialMissingExactPathRollsBack(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-rollback-a", 17)
+	insertPhysicalFile(t, db, "a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-rollback-missing", "partial", nil, []string{"a.txt", "missing.txt"})
+	if err == nil {
+		t.Fatal("expected partial snapshot to fail when an exact path is missing")
+	}
+	if !strings.Contains(err.Error(), "path not found") {
+		t.Fatalf("expected path-not-found error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-rollback-missing").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected rollback to remove snapshot row, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-rollback-missing").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected rollback to remove snapshot_file rows, got count=%d", fileCount)
+	}
+}
+
+func TestCreateSnapshotPartialDeduplicatesInputPaths(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-dedupe-a", 44)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-dedupe", "partial", nil, []string{"docs/a.txt", "docs/a.txt", "./docs//a.txt"})
+	if err != nil {
+		t.Fatalf("CreateSnapshot partial with duplicate inputs: %v", err)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-dedupe").Scan(&fileCount); err != nil {
+		t.Fatalf("count snapshot_file rows: %v", err)
+	}
+	if fileCount != 1 {
+		t.Fatalf("expected 1 deduplicated snapshot_file row, got %d", fileCount)
 	}
 }
