@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,23 +47,29 @@ const (
 var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
-	"codec":       true,
-	"destination": true,
-	"filter":      true,
-	"input":       true,
-	"limit":       true,
-	"mode":        true,
-	"offset":      true,
-	"name":        true,
-	"id":          true,
-	"label":       true,
-	"since":       true,
-	"type":        true,
-	"until":       true,
-	"min-size":    true,
-	"max-size":    true,
-	"output":      true,
-	"stored-path": true,
+	"codec":           true,
+	"destination":     true,
+	"filter":          true,
+	"input":           true,
+	"limit":           true,
+	"mode":            true,
+	"offset":          true,
+	"name":            true,
+	"id":              true,
+	"label":           true,
+	"since":           true,
+	"type":            true,
+	"until":           true,
+	"min-size":        true,
+	"max-size":        true,
+	"output":          true,
+	"stored-path":     true,
+	"path":            true,
+	"prefix":          true,
+	"pattern":         true,
+	"regex":           true,
+	"modified-after":  true,
+	"modified-before": true,
 }
 
 type cliOutputMode string
@@ -2231,6 +2238,100 @@ func loadSnapshotDB() (storage.StorageContext, error) {
 	return sgctx, nil
 }
 
+// parseSnapshotQuery builds a SnapshotQuery from the query-related flags in parsed.
+// Returns nil if no query flags are set. Recognized flags:
+// --path, --prefix, --pattern, --regex, --min-size, --max-size,
+// --modified-after, --modified-before.
+func parseSnapshotQuery(parsed parsedCommandLine) (*snapshot.SnapshotQuery, error) {
+	q := &snapshot.SnapshotQuery{}
+	hasAny := false
+
+	if value, ok := parsed.lastFlagValue("path"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, usageErrorf("--path cannot be empty")
+		}
+		normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+		if err != nil {
+			return nil, usageErrorf("invalid --path value %q: %v", trimmed, err)
+		}
+		q.ExactPaths = map[string]struct{}{normalized: {}}
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("prefix"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, usageErrorf("--prefix cannot be empty")
+		}
+		q.Prefixes = []string{trimmed}
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("pattern"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, usageErrorf("--pattern cannot be empty")
+		}
+		q.Pattern = trimmed
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("regex"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, usageErrorf("--regex cannot be empty")
+		}
+		compiled, err := regexp.Compile(trimmed)
+		if err != nil {
+			return nil, usageErrorf("invalid --regex value %q: %v", trimmed, err)
+		}
+		q.Regex = compiled
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("min-size"); ok {
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || n < 0 {
+			return nil, usageErrorf("invalid --min-size value %q: must be a non-negative integer", value)
+		}
+		q.MinSize = &n
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("max-size"); ok {
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || n < 0 {
+			return nil, usageErrorf("invalid --max-size value %q: must be a non-negative integer", value)
+		}
+		q.MaxSize = &n
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("modified-after"); ok {
+		parsedTime, err := parseSnapshotDateFlag("modified-after", value, false)
+		if err != nil {
+			return nil, err
+		}
+		q.ModifiedAfter = parsedTime
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("modified-before"); ok {
+		parsedTime, err := parseSnapshotDateFlag("modified-before", value, true)
+		if err != nil {
+			return nil, err
+		}
+		q.ModifiedBefore = parsedTime
+		hasAny = true
+	}
+
+	if !hasAny {
+		return nil, nil
+	}
+	return q, nil
+}
+
 func snapshotLabelJSONValue(label sql.NullString) any {
 	if !label.Valid {
 		return nil
@@ -2379,11 +2480,11 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "limit", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "limit", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep snapshot show <snapshotID> [--limit <count>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot show <snapshotID> [--limit <count>] [--path <path>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
 	}
 	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
 		return err
@@ -2396,6 +2497,11 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	limit := 0
 	if value, ok := parsed.lastFlagValue("limit"); ok {
 		limit, _ = strconv.Atoi(value)
+	}
+
+	query, err := parseSnapshotQuery(parsed)
+	if err != nil {
+		return err
 	}
 
 	sgctx, err := loadSnapshotDB()
@@ -2411,7 +2517,7 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	if err != nil {
 		return err
 	}
-	files, err := listSnapshotFilesPhase(ctx, sgctx.DB, snapshotID, limit)
+	files, err := listSnapshotFilesPhase(ctx, sgctx.DB, snapshotID, limit, query)
 	if err != nil {
 		return err
 	}
@@ -2575,11 +2681,11 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "filter", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "filter", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 3 {
-		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--output <text|json>]")
 	}
 
 	baseID := strings.TrimSpace(parsed.positionals[1])
@@ -2601,6 +2707,11 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		}
 	}
 
+	query, err := parseSnapshotQuery(parsed)
+	if err != nil {
+		return err
+	}
+
 	sgctx, err := loadSnapshotDB()
 	if err != nil {
 		return err
@@ -2610,7 +2721,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID)
+	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
 	if err != nil {
 		return err
 	}
@@ -2789,11 +2900,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "mode", "destination", "overwrite", "strict", "no-metadata", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "mode", "destination", "overwrite", "strict", "no-metadata", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 2 {
-		return usageErrorf("Usage: coldkeep snapshot restore <snapshotID> [<path> ...] [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot restore <snapshotID> [<path> ...] [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
 	}
 
 	snapshotID := strings.TrimSpace(parsed.positionals[1])
@@ -2821,6 +2932,11 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 		return usageErrorf("--destination is required with --mode %s", destinationMode)
 	}
 
+	query, err := parseSnapshotQuery(parsed)
+	if err != nil {
+		return err
+	}
+
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
@@ -2846,6 +2962,7 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 			StrictMetadata:  strictMetadata,
 			NoMetadata:      noMetadata,
 			StorageContext:  &sgctx,
+			Query:           query,
 		},
 	)
 	if err != nil {
@@ -2926,12 +3043,12 @@ func printHelp() {
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
 		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
-		{"  snapshot restore <snapshotID> [<path> ...] [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
+		{"  snapshot restore <snapshotID> [<path> ...] [--mode ...] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
 		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]", "List snapshots with optional filters"},
-		{"  snapshot show <snapshotID> [--limit <count>] [--output <text|json>]", "Inspect one snapshot and list its files"},
+		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
-		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -3020,6 +3137,12 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot delete snap-123 --force")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --filter modified")
+	fmt.Println("  coldkeep snapshot show snap-123 --prefix docs/")
+	fmt.Println("  coldkeep snapshot show snap-123 --pattern \"*.txt\" --min-size 1024")
+	fmt.Println("  coldkeep snapshot restore snap-123 --prefix docs/ --mode prefix --destination ./restored")
+	fmt.Println("  coldkeep snapshot restore snap-123 --pattern \"*.txt\" --overwrite --mode original")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --prefix docs/ --filter added")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --regex \"\\.log$\"")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
 	fmt.Println("  coldkeep simulate store myfile.bin")

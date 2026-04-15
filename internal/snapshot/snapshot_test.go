@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -809,7 +810,7 @@ func TestResolveSnapshotRestoreSelectionMissingSnapshotFails(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
-	_, _, err := resolveSnapshotRestoreSelection(ctx, db, "snap-missing", nil)
+	_, _, err := resolveSnapshotRestoreSelection(ctx, db, "snap-missing", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
 		t.Fatalf("expected missing snapshot error, got: %v", err)
 	}
@@ -828,7 +829,7 @@ func TestResolveSnapshotRestoreSelectionExactAndDirectory(t *testing.T) {
 	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
-	selected, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/", "docs/a.txt"})
+	selected, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/", "docs/a.txt"}, nil)
 	if err != nil {
 		t.Fatalf("resolveSnapshotRestoreSelection: %v", err)
 	}
@@ -851,7 +852,7 @@ func TestResolveSnapshotRestoreSelectionExactMissingFails(t *testing.T) {
 	}
 	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	_, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/missing.txt"})
+	_, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/missing.txt"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "path not found in snapshot") {
 		t.Fatalf("expected exact missing path error, got: %v", err)
 	}
@@ -899,7 +900,7 @@ func TestResolveSnapshotRestoreSelectionExactOnly(t *testing.T) {
 	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
-	selected, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/a.txt"})
+	selected, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/a.txt"}, nil)
 	if err != nil {
 		t.Fatalf("resolveSnapshotRestoreSelection exact: %v", err)
 	}
@@ -922,7 +923,7 @@ func TestResolveSnapshotRestoreSelectionEmptyDirectoryPrefixSucceeds(t *testing.
 	}
 	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	selected, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"empty/"})
+	selected, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"empty/"}, nil)
 	if err != nil {
 		t.Fatalf("resolveSnapshotRestoreSelection empty directory should succeed: %v", err)
 	}
@@ -946,11 +947,11 @@ func TestResolveSnapshotRestoreSelectionDeterministicAcrossInputOrder(t *testing
 	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, s.ID, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	selectedA, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/", "img/x.png"})
+	selectedA, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/", "img/x.png"}, nil)
 	if err != nil {
 		t.Fatalf("resolve selection A: %v", err)
 	}
-	selectedB, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"img/x.png", "docs/"})
+	selectedB, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"img/x.png", "docs/"}, nil)
 	if err != nil {
 		t.Fatalf("resolve selection B: %v", err)
 	}
@@ -1015,7 +1016,7 @@ func TestSnapshotRestoreSelectionFullNoFilters(t *testing.T) {
 	// Note: Actual file restoration requires storage backend setup; this test validates the selection/planning logic
 
 	// Get the selection without running full restore (to avoid storage backend dependency)
-	rows, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{})
+	rows, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{}, nil)
 	if err != nil {
 		t.Fatalf("resolve selection for full restore: %v", err)
 	}
@@ -1042,7 +1043,7 @@ func TestSnapshotRestoreSelectionPartialExact(t *testing.T) {
 	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
 	// Test: Partial restore with exact path - verify selection works correctly
-	rows, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/a.txt"})
+	rows, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/a.txt"}, nil)
 	if err != nil {
 		t.Fatalf("RestoreSnapshot partial exact: %v", err)
 	}
@@ -1072,7 +1073,7 @@ func TestSnapshotRestoreSelectionPartialDirectory(t *testing.T) {
 	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
 	// Test: Partial restore with directory prefix (trailing slash) - verify selection matches multiple files
-	rows, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/"})
+	rows, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/"}, nil)
 	if err != nil {
 		t.Fatalf("RestoreSnapshot partial directory: %v", err)
 	}
@@ -1129,7 +1130,7 @@ func TestSnapshotFileRowPreservesMetadata(t *testing.T) {
 
 	// Note: We can't fully test metadata application without actual storage integration,
 	// but we can test that the metadata is preserved in snapshot_file rows and passed through planning
-	rows, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"secret.txt"})
+	rows, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"secret.txt"}, nil)
 	if err != nil {
 		t.Fatalf("resolve selection: %v", err)
 	}
@@ -1165,7 +1166,7 @@ func TestSnapshotRestoreSelectionReturnsRowsForNoMetadataOpts(t *testing.T) {
 	// (actual skipping is tested in the applySnapshotMetadata unit tests and integration tests)
 	// Verify that RestoreSnapshot setup phase accepts the NoMetadata option
 	// by calling resolveSnapshotRestoreSelection which doesn't validate metadata flags
-	rows, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{})
+	rows, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{}, nil)
 	if err != nil {
 		t.Fatalf("RestoreSnapshot with --no-metadata: %v", err)
 	}
@@ -1574,7 +1575,7 @@ func TestGetSnapshotAndListSnapshotFilesSortedAndLimited(t *testing.T) {
 		t.Fatalf("snapshot metadata mismatch: got=%+v want=%+v", gotSnapshot, s)
 	}
 
-	files, err := ListSnapshotFiles(ctx, db, s.ID, 2)
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 2, nil)
 	if err != nil {
 		t.Fatalf("ListSnapshotFiles: %v", err)
 	}
@@ -1590,7 +1591,7 @@ func TestListSnapshotFilesMissingSnapshotFails(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
-	_, err := ListSnapshotFiles(ctx, db, "snap-missing-show", 10)
+	_, err := ListSnapshotFiles(ctx, db, "snap-missing-show", 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
 		t.Fatalf("expected missing snapshot error, got: %v", err)
 	}
@@ -1698,7 +1699,7 @@ func TestDiffSnapshotsEmptyVsEmpty(t *testing.T) {
 		}
 	}
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots empty vs empty: %v", err)
 	}
@@ -1726,7 +1727,7 @@ func TestDiffSnapshotsIdenticalNoChanges(t *testing.T) {
 	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logical, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logical, sql.NullInt64{Int64: int64(0o600), Valid: true}, sql.NullTime{Time: time.Now().UTC(), Valid: true})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots identical: %v", err)
 	}
@@ -1757,7 +1758,7 @@ func TestDiffSnapshotsAddedRemovedModifiedMixed(t *testing.T) {
 	insertSnapshotFileRow(t, db, target.ID, "docs/new.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "docs/config.yaml", logicalModB, sql.NullInt64{}, sql.NullTime{})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots mixed: %v", err)
 	}
@@ -1802,11 +1803,11 @@ func TestDiffSnapshotsDeterministicAcrossInsertionOrder(t *testing.T) {
 	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logicalC, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
-	result1, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result1, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots first run: %v", err)
 	}
-	result2, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result2, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots second run: %v", err)
 	}
@@ -1837,7 +1838,7 @@ func TestDiffSnapshotsPathNormalizationBackslashMatchesSlash(t *testing.T) {
 	insertSnapshotFileRow(t, db, base.ID, "docs\\a.txt", logical, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logical, sql.NullInt64{}, sql.NullTime{})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots normalization: %v", err)
 	}
@@ -1850,13 +1851,13 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
-	if _, err := DiffSnapshots(ctx, db, "", "snap-target"); err == nil || !strings.Contains(err.Error(), "base snapshot id cannot be empty") {
+	if _, err := DiffSnapshots(ctx, db, "", "snap-target", nil); err == nil || !strings.Contains(err.Error(), "base snapshot id cannot be empty") {
 		t.Fatalf("expected base empty id error, got: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, "snap-base", ""); err == nil || !strings.Contains(err.Error(), "target snapshot id cannot be empty") {
+	if _, err := DiffSnapshots(ctx, db, "snap-base", "", nil); err == nil || !strings.Contains(err.Error(), "target snapshot id cannot be empty") {
 		t.Fatalf("expected target empty id error, got: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target"); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target", nil); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
 		t.Fatalf("expected missing base snapshot error, got: %v", err)
 	}
 
@@ -1864,7 +1865,7 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	if err := InsertSnapshot(ctx, db, base); err != nil {
 		t.Fatalf("InsertSnapshot base: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target"); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target", nil); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
 		t.Fatalf("expected missing target snapshot error, got: %v", err)
 	}
 }
@@ -1887,7 +1888,7 @@ func TestDiffSnapshotsOnlyAdded(t *testing.T) {
 	insertSnapshotFileRow(t, db, target.ID, "new/alpha.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "new/beta.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots only added: %v", err)
 	}
@@ -1919,7 +1920,7 @@ func TestDiffSnapshotsOnlyRemoved(t *testing.T) {
 	insertSnapshotFileRow(t, db, base.ID, "old/alpha.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, base.ID, "old/beta.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots only removed: %v", err)
 	}
@@ -1951,7 +1952,7 @@ func TestDiffSnapshotsOnlyModified(t *testing.T) {
 	insertSnapshotFileRow(t, db, base.ID, "data/file.bin", logicalOld, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "data/file.bin", logicalNew, sql.NullInt64{}, sql.NullTime{})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots only modified: %v", err)
 	}
@@ -1993,7 +1994,7 @@ func TestDiffSnapshotsLargeDatasetPerformanceSanity(t *testing.T) {
 	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", baseOnlyLogical, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, target.ID, "docs/added.txt", targetOnlyLogical, sql.NullInt64{}, sql.NullTime{})
 
-	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
 	if err != nil {
 		t.Fatalf("DiffSnapshots large dataset: %v", err)
 	}
@@ -2002,5 +2003,554 @@ func TestDiffSnapshotsLargeDatasetPerformanceSanity(t *testing.T) {
 	}
 	if result.Summary.Added == 0 || result.Summary.Removed == 0 {
 		t.Fatalf("expected added and removed entries in large dataset, got summary=%+v", result.Summary)
+	}
+}
+
+// ---- SnapshotQuery.Match() unit tests ----
+
+func TestSnapshotQueryMatchNilMatchesAll(t *testing.T) {
+	var q *SnapshotQuery
+	e := SnapshotFileEntry{Path: "docs/a.txt", Size: sql.NullInt64{Int64: 100, Valid: true}}
+	if !q.Match(e) {
+		t.Fatal("nil query should match all entries")
+	}
+}
+
+func TestSnapshotQueryMatchExactPath(t *testing.T) {
+	q := &SnapshotQuery{ExactPaths: map[string]struct{}{"docs/a.txt": {}}}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"docs/a.txt", true},
+		{"docs/b.txt", false},
+		{"docs/a.txt.bak", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match(%q) exact = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchPrefix(t *testing.T) {
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"docs/a.txt", true},
+		{"docs/sub/b.txt", true},
+		{"docs_backup/a.txt", false}, // boundary correctness: "docs_backup/" != "docs/"
+		{"img/a.png", false},
+		{"docs", false}, // no trailing slash means this is NOT under "docs/"
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match(%q) prefix = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchGlobPattern(t *testing.T) {
+	q := &SnapshotQuery{Pattern: "docs/*.txt"}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"docs/a.txt", true},
+		{"docs/readme.txt", true},
+		{"docs/a.md", false},
+		{"img/a.txt", false},
+		{"docs/sub/a.txt", false}, // glob * doesn't match /
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match(%q) glob = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchRegex(t *testing.T) {
+	re := regexp.MustCompile(`\.log$`)
+	q := &SnapshotQuery{Regex: re}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"app.log", true},
+		{"logs/app.log", true},
+		{"app.log.1", false},
+		{"docs/readme.txt", false},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match(%q) regex = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchSizeRange(t *testing.T) {
+	minSize := int64(100)
+	maxSize := int64(500)
+	q := &SnapshotQuery{MinSize: &minSize, MaxSize: &maxSize}
+
+	cases := []struct {
+		size  sql.NullInt64
+		want  bool
+		label string
+	}{
+		{sql.NullInt64{Int64: 100, Valid: true}, true, "at min boundary"},
+		{sql.NullInt64{Int64: 500, Valid: true}, true, "at max boundary"},
+		{sql.NullInt64{Int64: 300, Valid: true}, true, "within range"},
+		{sql.NullInt64{Int64: 99, Valid: true}, false, "below min"},
+		{sql.NullInt64{Int64: 501, Valid: true}, false, "above max"},
+		{sql.NullInt64{Valid: false}, true, "no size passes both bounds"},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: "file.txt", Size: tc.size}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match size %v (%s) = %v, want %v", tc.size, tc.label, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchTimeRange(t *testing.T) {
+	anchor := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	before := anchor.Add(-time.Hour)
+	after := anchor.Add(time.Hour)
+
+	q := &SnapshotQuery{ModifiedAfter: &before, ModifiedBefore: &after}
+
+	cases := []struct {
+		mtime sql.NullTime
+		want  bool
+		label string
+	}{
+		{sql.NullTime{Time: anchor, Valid: true}, true, "within range"},
+		{sql.NullTime{Time: before.Add(-time.Second), Valid: true}, false, "before lower bound"},
+		{sql.NullTime{Time: after.Add(time.Second), Valid: true}, false, "after upper bound"},
+		{sql.NullTime{Valid: false}, true, "no mtime passes both bounds"},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: "file.txt", MTime: tc.mtime}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match mtime %v (%s) = %v, want %v", tc.mtime, tc.label, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchCombinedFilters(t *testing.T) {
+	minSize := int64(50)
+	re := regexp.MustCompile(`\.txt$`)
+	q := &SnapshotQuery{
+		Prefixes: []string{"docs/"},
+		Regex:    re,
+		MinSize:  &minSize,
+	}
+
+	cases := []struct {
+		path  string
+		size  sql.NullInt64
+		want  bool
+		label string
+	}{
+		{"docs/readme.txt", sql.NullInt64{Int64: 100, Valid: true}, true, "all pass"},
+		{"img/readme.txt", sql.NullInt64{Int64: 100, Valid: true}, false, "wrong prefix"},
+		{"docs/readme.md", sql.NullInt64{Int64: 100, Valid: true}, false, "wrong extension (regex)"},
+		{"docs/readme.txt", sql.NullInt64{Int64: 10, Valid: true}, false, "too small"},
+		{"docs/readme.txt", sql.NullInt64{Valid: false}, true, "no size passes min check"},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path, Size: tc.size}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match combined (%s) = %v, want %v", tc.label, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchEmptyQueryMatchesAll(t *testing.T) {
+	q := &SnapshotQuery{} // non-nil but empty
+	e := SnapshotFileEntry{Path: "anything/file.txt", Size: sql.NullInt64{Int64: 9999, Valid: true}}
+	if !q.Match(e) {
+		t.Fatal("empty query should match all entries")
+	}
+}
+
+// ---- ListSnapshotFiles with query tests ----
+
+func TestListSnapshotFilesWithPrefixQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lsf-q-a", 100)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-lsf-q-b", 200)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-lsf-q-c", 300)
+
+	s := Snapshot{ID: "snap-lsf-query", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "img/c.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 0, q)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles with query: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files under docs/, got %d", len(files))
+	}
+	for _, f := range files {
+		if !strings.HasPrefix(f.Path, "docs/") {
+			t.Errorf("unexpected path %q not under docs/", f.Path)
+		}
+	}
+}
+
+func TestListSnapshotFilesWithPatternQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lsf-pat-a", 100)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-lsf-pat-b", 200)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-lsf-pat-c", 300)
+
+	s := Snapshot{ID: "snap-lsf-pattern", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.md", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "img/c.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	q := &SnapshotQuery{Pattern: "docs/*.txt"}
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 0, q)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles with pattern: %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "docs/a.txt" {
+		t.Fatalf("expected only docs/a.txt, got %+v", files)
+	}
+}
+
+func TestListSnapshotFilesQueryEmptyResult(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lsf-empty-q", 100)
+	s := Snapshot{ID: "snap-lsf-empty-q", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	q := &SnapshotQuery{Prefixes: []string{"nonexistent/"}}
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 0, q)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles empty result: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected 0 files, got %d", len(files))
+	}
+}
+
+func TestListSnapshotFilesQueryWithLimit(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	s := Snapshot{ID: "snap-lsf-qlimit", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		logical := insertLogicalFileWithSize(t, db, fmt.Sprintf("hash-lsf-ql-%d", i), int64(100+i))
+		insertSnapshotFileRow(t, db, s.ID, fmt.Sprintf("docs/file%d.txt", i), logical, sql.NullInt64{}, sql.NullTime{})
+	}
+
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 3, q)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles with limit: %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("expected 3 files with limit=3, got %d", len(files))
+	}
+}
+
+func TestListSnapshotFilesQueryDeterministicOrder(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	s := Snapshot{ID: "snap-lsf-qorder", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	for _, name := range []string{"z.txt", "a.txt", "m.txt"} {
+		logical := insertLogicalFileWithSize(t, db, "hash-lsf-qord-"+name, 100)
+		insertSnapshotFileRow(t, db, s.ID, "docs/"+name, logical, sql.NullInt64{}, sql.NullTime{})
+	}
+
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 0, q)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles order: %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(files))
+	}
+	// Order must be deterministic: a.txt < m.txt < z.txt
+	if files[0].Path != "docs/a.txt" || files[1].Path != "docs/m.txt" || files[2].Path != "docs/z.txt" {
+		t.Fatalf("unexpected order: %v", files)
+	}
+}
+
+// ---- DiffSnapshots with query tests ----
+
+func TestDiffSnapshotsWithPrefixQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-q-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-q-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	logA := insertLogicalFileWithSize(t, db, "hash-dq-a", 100)
+	logB := insertLogicalFileWithSize(t, db, "hash-dq-b", 200)
+	logC := insertLogicalFileWithSize(t, db, "hash-dq-c", 300)
+	logD := insertLogicalFileWithSize(t, db, "hash-dq-d", 400)
+
+	// base: docs/a.txt, img/x.png
+	// target: docs/b.txt (added), img/x.png (unchanged), docs/a.txt removed
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "img/x.png", logB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logC, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "img/x.png", logB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "img/y.png", logD, sql.NullInt64{}, sql.NullTime{})
+
+	// Filter to only docs/ — should see docs/a.txt removed, docs/b.txt added; img/ ignored
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+	if err != nil {
+		t.Fatalf("DiffSnapshots with query: %v", err)
+	}
+	if result.Summary.Added != 1 || result.Summary.Removed != 1 || result.Summary.Modified != 0 {
+		t.Fatalf("unexpected summary with docs/ query: %+v", result.Summary)
+	}
+	for _, e := range result.Entries {
+		if !strings.HasPrefix(e.Path, "docs/") {
+			t.Errorf("unexpected non-docs path in filtered diff: %s", e.Path)
+		}
+	}
+}
+
+func TestDiffSnapshotsWithRegexQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-qre-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-qre-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	logA := insertLogicalFileWithSize(t, db, "hash-dqre-a", 100)
+	logB := insertLogicalFileWithSize(t, db, "hash-dqre-b", 200)
+	logC := insertLogicalFileWithSize(t, db, "hash-dqre-c", 300)
+	logD := insertLogicalFileWithSize(t, db, "hash-dqre-d", 400)
+
+	insertSnapshotFileRow(t, db, base.ID, "app.log", logA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "config.yaml", logB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "app.log", logC, sql.NullInt64{}, sql.NullTime{})     // modified
+	insertSnapshotFileRow(t, db, target.ID, "config.yaml", logB, sql.NullInt64{}, sql.NullTime{}) // unchanged
+	insertSnapshotFileRow(t, db, target.ID, "error.log", logD, sql.NullInt64{}, sql.NullTime{})   // added
+
+	re := regexp.MustCompile(`\.log$`)
+	q := &SnapshotQuery{Regex: re}
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+	if err != nil {
+		t.Fatalf("DiffSnapshots with regex: %v", err)
+	}
+	// Only .log files: app.log modified, error.log added. config.yaml excluded.
+	if result.Summary.Added != 1 || result.Summary.Modified != 1 || result.Summary.Removed != 0 {
+		t.Fatalf("unexpected regex-filtered diff summary: %+v", result.Summary)
+	}
+	for _, e := range result.Entries {
+		if !strings.HasSuffix(e.Path, ".log") {
+			t.Errorf("unexpected non-.log path in filtered diff: %s", e.Path)
+		}
+	}
+}
+
+func TestDiffSnapshotsQueryEmptyResult(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-qempty-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-qempty-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	logA := insertLogicalFileWithSize(t, db, "hash-dqe-a", 100)
+	logB := insertLogicalFileWithSize(t, db, "hash-dqe-b", 200)
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logB, sql.NullInt64{}, sql.NullTime{})
+
+	q := &SnapshotQuery{Prefixes: []string{"nonexistent/"}}
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+	if err != nil {
+		t.Fatalf("DiffSnapshots empty query result: %v", err)
+	}
+	if len(result.Entries) != 0 {
+		t.Fatalf("expected 0 entries, got %d", len(result.Entries))
+	}
+	if result.Summary.Added != 0 || result.Summary.Removed != 0 || result.Summary.Modified != 0 {
+		t.Fatalf("expected zero summary, got %+v", result.Summary)
+	}
+}
+
+func TestDiffSnapshotsQuerySummaryMatchesFilteredEntries(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	base := Snapshot{ID: "snap-diff-qsum-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-qsum-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	logA := insertLogicalFileWithSize(t, db, "hash-dqsum-a", 100)
+	logB := insertLogicalFileWithSize(t, db, "hash-dqsum-b", 200)
+	logC := insertLogicalFileWithSize(t, db, "hash-dqsum-c", 300)
+	logD := insertLogicalFileWithSize(t, db, "hash-dqsum-d", 400)
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logA, sql.NullInt64{}, sql.NullTime{})    // removed
+	insertSnapshotFileRow(t, db, base.ID, "docs/b.txt", logB, sql.NullInt64{}, sql.NullTime{})    // modified
+	insertSnapshotFileRow(t, db, base.ID, "other/x.txt", logC, sql.NullInt64{}, sql.NullTime{})   // not in filter
+	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logD, sql.NullInt64{}, sql.NullTime{})  // modified
+	insertSnapshotFileRow(t, db, target.ID, "docs/c.txt", logC, sql.NullInt64{}, sql.NullTime{})  // added
+	insertSnapshotFileRow(t, db, target.ID, "other/x.txt", logC, sql.NullInt64{}, sql.NullTime{}) // not in filter
+
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID, q)
+	if err != nil {
+		t.Fatalf("DiffSnapshots: %v", err)
+	}
+
+	// Verify summary matches entries
+	var gotAdded, gotRemoved, gotModified int64
+	for _, e := range result.Entries {
+		switch e.Type {
+		case DiffAdded:
+			gotAdded++
+		case DiffRemoved:
+			gotRemoved++
+		case DiffModified:
+			gotModified++
+		}
+	}
+	if gotAdded != result.Summary.Added || gotRemoved != result.Summary.Removed || gotModified != result.Summary.Modified {
+		t.Fatalf("summary mismatch: summary=%+v entries counts: added=%d removed=%d modified=%d",
+			result.Summary, gotAdded, gotRemoved, gotModified)
+	}
+}
+
+// ---- resolveSnapshotRestoreSelection with query tests ----
+
+func TestResolveSnapshotRestoreSelectionWithQuery(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	s := Snapshot{ID: "snap-rsel-q", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+
+	logA := insertLogicalFile(t, db, "hash-rsel-qa")
+	logB := insertLogicalFile(t, db, "hash-rsel-qb")
+	logC := insertLogicalFile(t, db, "hash-rsel-qc")
+
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "img/x.png", logC, sql.NullInt64{}, sql.NullTime{})
+
+	// No positional paths, but query filters to docs/ only
+	q := &SnapshotQuery{Prefixes: []string{"docs/"}}
+	selected, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, nil, q)
+	if err != nil {
+		t.Fatalf("resolveSnapshotRestoreSelection with query: %v", err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("expected 2 selected rows, got %d", len(selected))
+	}
+	for _, row := range selected {
+		if !strings.HasPrefix(row.Path, "docs/") {
+			t.Errorf("unexpected path %q not under docs/", row.Path)
+		}
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionQueryAndPositionalCombined(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	s := Snapshot{ID: "snap-rsel-combined", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+
+	logA := insertLogicalFile(t, db, "hash-rsel-ca")
+	logB := insertLogicalFile(t, db, "hash-rsel-cb")
+	logC := insertLogicalFile(t, db, "hash-rsel-cc")
+	logD := insertLogicalFile(t, db, "hash-rsel-cd")
+
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.md", logB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/c.txt", logC, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "img/x.png", logD, sql.NullInt64{}, sql.NullTime{})
+
+	// Positional: docs/ (all docs); query: *.txt only
+	q := &SnapshotQuery{Pattern: "docs/*.txt"}
+	selected, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/"}, q)
+	if err != nil {
+		t.Fatalf("resolveSnapshotRestoreSelection combined: %v", err)
+	}
+	// Should get docs/a.txt and docs/c.txt, not docs/b.md
+	if len(selected) != 2 {
+		t.Fatalf("expected 2 .txt files, got %d: %+v", len(selected), selected)
+	}
+	for _, row := range selected {
+		if !strings.HasSuffix(row.Path, ".txt") {
+			t.Errorf("unexpected non-.txt path %q in combined filter result", row.Path)
+		}
 	}
 }

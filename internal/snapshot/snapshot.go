@@ -53,6 +53,9 @@ type RestoreSnapshotOptions struct {
 	StrictMetadata  bool
 	NoMetadata      bool
 	StorageContext  *storage.StorageContext
+	// Query is an optional filter applied on top of any path selections.
+	// A nil Query matches all entries.
+	Query *SnapshotQuery
 }
 
 type RestoreSnapshotResult struct {
@@ -104,6 +107,92 @@ type SnapshotDiffResult struct {
 	TargetSnapshotID string              `json:"target_snapshot_id"`
 	Entries          []SnapshotDiffEntry `json:"entries"`
 	Summary          SnapshotDiffSummary `json:"summary"`
+}
+
+// SnapshotQuery defines optional filter criteria applied to snapshot file entries.
+// All set criteria are ANDed together. A nil *SnapshotQuery matches all entries.
+// Criteria are evaluated fast-to-slow: exact → prefix → pattern → regex → size → time.
+type SnapshotQuery struct {
+	// ExactPaths is a set of normalized paths that must match exactly.
+	ExactPaths map[string]struct{}
+	// Prefixes matches entries whose path has any of the given prefixes.
+	Prefixes []string
+	// Pattern is a filepath.Match glob applied to the entry path.
+	Pattern string
+	// Regex is an optional compiled regular expression applied to the entry path.
+	Regex *regexp.Regexp
+	// MinSize filters out entries whose recorded size is below this threshold.
+	// Entries with no recorded size pass this check.
+	MinSize *int64
+	// MaxSize filters out entries whose recorded size is above this threshold.
+	// Entries with no recorded size pass this check.
+	MaxSize *int64
+	// ModifiedAfter filters out entries whose mtime is before this instant.
+	// Entries with no recorded mtime pass this check.
+	ModifiedAfter *time.Time
+	// ModifiedBefore filters out entries whose mtime is after this instant.
+	// Entries with no recorded mtime pass this check.
+	ModifiedBefore *time.Time
+}
+
+// Match reports whether entry e satisfies all criteria in q.
+// A nil query always returns true.
+func (q *SnapshotQuery) Match(e SnapshotFileEntry) bool {
+	if q == nil {
+		return true
+	}
+
+	// 1. Exact path match.
+	if len(q.ExactPaths) > 0 {
+		if _, ok := q.ExactPaths[e.Path]; !ok {
+			return false
+		}
+	}
+
+	// 2. Prefix match.
+	if len(q.Prefixes) > 0 {
+		matched := false
+		for _, p := range q.Prefixes {
+			if strings.HasPrefix(e.Path, p) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	// 3. Glob pattern match.
+	if q.Pattern != "" {
+		ok, _ := filepath.Match(q.Pattern, e.Path)
+		if !ok {
+			return false
+		}
+	}
+
+	// 4. Regex match.
+	if q.Regex != nil && !q.Regex.MatchString(e.Path) {
+		return false
+	}
+
+	// 5. Size range. Entries with no recorded size pass both bounds.
+	if q.MinSize != nil && e.Size.Valid && e.Size.Int64 < *q.MinSize {
+		return false
+	}
+	if q.MaxSize != nil && e.Size.Valid && e.Size.Int64 > *q.MaxSize {
+		return false
+	}
+
+	// 6. Time range. Entries with no recorded mtime pass both bounds.
+	if q.ModifiedAfter != nil && e.MTime.Valid && e.MTime.Time.Before(*q.ModifiedAfter) {
+		return false
+	}
+	if q.ModifiedBefore != nil && e.MTime.Valid && e.MTime.Time.After(*q.ModifiedBefore) {
+		return false
+	}
+
+	return true
 }
 
 type snapshotRestoreRow struct {
@@ -335,7 +424,7 @@ func GetSnapshot(ctx context.Context, db *sql.DB, snapshotID string) (*Snapshot,
 	return &item, nil
 }
 
-func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit int) ([]SnapshotFileEntry, error) {
+func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit int, query *SnapshotQuery) ([]SnapshotFileEntry, error) {
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
 	}
@@ -346,18 +435,13 @@ func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit
 		return nil, err
 	}
 
-	query := `
+	sqlQuery := `
 		SELECT path, logical_file_id, size, mode, mtime
 		FROM snapshot_file
 		WHERE snapshot_id = $1
 		ORDER BY path, logical_file_id`
-	args := []any{strings.TrimSpace(snapshotID)}
-	if limit > 0 {
-		query += ` LIMIT $2`
-		args = append(args, limit)
-	}
 
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, sqlQuery, strings.TrimSpace(snapshotID))
 	if err != nil {
 		return nil, fmt.Errorf("list snapshot files snapshot_id=%s: %w", snapshotID, err)
 	}
@@ -369,7 +453,13 @@ func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit
 		if err := rows.Scan(&item.Path, &item.LogicalFileID, &item.Size, &item.Mode, &item.MTime); err != nil {
 			return nil, fmt.Errorf("scan snapshot_file row: %w", err)
 		}
+		if !query.Match(item) {
+			continue
+		}
 		result = append(result, item)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate snapshot_file rows: %w", err)
@@ -473,11 +563,13 @@ func loadSnapshotPathLogicalIDs(ctx context.Context, db *sql.DB, snapshotID stri
 }
 
 // DiffSnapshots computes the diff between two snapshots identified by baseID and targetID.
+// An optional query filters the diff entries after classification (added/removed/modified).
+// The summary counts only the entries that pass the filter.
 //
 // Note: both snapshots are loaded fully into memory (O(N) memory, O(N log N) sort).
 // This is acceptable for typical workloads in v1.x. A future streaming diff implementation
 // may be introduced for very large snapshot sizes (e.g. millions of files).
-func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string) (*SnapshotDiffResult, error) {
+func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string, query *SnapshotQuery) (*SnapshotDiffResult, error) {
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
 	}
@@ -535,23 +627,38 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string) (*S
 			entry.TargetLogicalID = sql.NullInt64{Int64: targetLogicalID, Valid: true}
 		}
 
+		// Classify the entry BEFORE applying the query filter.
 		switch {
 		case !baseExists && targetExists:
 			entry.Type = DiffAdded
-			summary.Added++
 		case baseExists && !targetExists:
 			entry.Type = DiffRemoved
-			summary.Removed++
 		case baseExists && targetExists:
 			if baseLogicalID == targetLogicalID {
 				continue
 			}
 			entry.Type = DiffModified
-			summary.Modified++
 		default:
 			continue
 		}
 
+		// Apply query filter AFTER classification. Size and MTime are not available
+		// in the diff context; those criteria will be skipped (no-ops) for diff entries.
+		if query != nil {
+			fe := SnapshotFileEntry{Path: entry.Path}
+			if !query.Match(fe) {
+				continue
+			}
+		}
+
+		switch entry.Type {
+		case DiffAdded:
+			summary.Added++
+		case DiffRemoved:
+			summary.Removed++
+		case DiffModified:
+			summary.Modified++
+		}
 		entries = append(entries, entry)
 	}
 
@@ -604,6 +711,7 @@ func resolveSnapshotRestoreSelection(
 	db *sql.DB,
 	snapshotID string,
 	requestedPaths []string,
+	query *SnapshotQuery,
 ) ([]snapshotRestoreRow, []string, error) {
 	var snapshotExists int
 	if err := db.QueryRowContext(ctx, `SELECT 1 FROM snapshot WHERE id = $1`, snapshotID).Scan(&snapshotExists); err != nil {
@@ -666,6 +774,19 @@ func resolveSnapshotRestoreSelection(
 				}
 			}
 			if !matched {
+				continue
+			}
+		}
+
+		// Apply SnapshotQuery as an additional in-memory filter on top of path selections.
+		if query != nil {
+			fe := SnapshotFileEntry{
+				Path:          row.Path,
+				LogicalFileID: row.LogicalFileID,
+				Mode:          row.Mode,
+				MTime:         row.MTime,
+			}
+			if !query.Match(fe) {
 				continue
 			}
 		}
@@ -870,7 +991,7 @@ func RestoreSnapshot(
 		return nil, errors.New("storage context is required")
 	}
 
-	selected, normalizedExactPaths, err := resolveSnapshotRestoreSelection(ctx, db, snapshotID, paths)
+	selected, normalizedExactPaths, err := resolveSnapshotRestoreSelection(ctx, db, snapshotID, paths, opts.Query)
 	if err != nil {
 		return nil, err
 	}

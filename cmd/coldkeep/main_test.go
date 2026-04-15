@@ -1731,7 +1731,7 @@ func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
 		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
 	}
-	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, snapshotID string, limit int) ([]snapshot.SnapshotFileEntry, error) {
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, snapshotID string, limit int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
 		if snapshotID != "snap-show-1" || limit != 50 {
 			t.Fatalf("unexpected show args snapshotID=%q limit=%d", snapshotID, limit)
 		}
@@ -1878,7 +1878,7 @@ func TestRunSnapshotCommandDiffForwardsAndFormatsJSON(t *testing.T) {
 	}
 
 	var gotBase, gotTarget string
-	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string) (*snapshot.SnapshotDiffResult, error) {
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
 		gotBase = baseID
 		gotTarget = targetID
 		return &snapshot.SnapshotDiffResult{
