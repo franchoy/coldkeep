@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -1501,7 +1502,7 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
-		positionals: []string{"list"},
+		positionals: []string{"wat"},
 		flags:       map[string][]string{},
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "unknown snapshot subcommand") {
@@ -1641,6 +1642,222 @@ func TestRunSnapshotCommandRestoreRejectsInvalidModeCombination(t *testing.T) {
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSnapshotCommandListForwardsFilters(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotFilter snapshot.SnapshotListFilter
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		gotFilter = filter
+		return []snapshot.Snapshot{{ID: "snap-list-1", Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"type":   {"full"},
+				"label":  {"backup"},
+				"since":  {"2026-01-01"},
+				"until":  {"2026-12-31"},
+				"limit":  {"10"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list returned error: %v", err)
+		}
+	})
+
+	if gotFilter.Type == nil || *gotFilter.Type != "full" {
+		t.Fatalf("expected type filter full, got %+v", gotFilter)
+	}
+	if gotFilter.Label == nil || *gotFilter.Label != "backup" {
+		t.Fatalf("expected label filter backup, got %+v", gotFilter)
+	}
+	if gotFilter.Limit != 10 || gotFilter.Since == nil || gotFilter.Until == nil {
+		t.Fatalf("expected limit and date filters to be parsed, got %+v", gotFilter)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot list JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "list" {
+		t.Fatalf("expected action=list, got %v", data)
+	}
+	if got := int(data["count"].(float64)); got != 1 {
+		t.Fatalf("expected count=1, got %d", got)
+	}
+}
+
+func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
+	}
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, snapshotID string, limit int) ([]snapshot.SnapshotFileEntry, error) {
+		if snapshotID != "snap-show-1" || limit != 50 {
+			t.Fatalf("unexpected show args snapshotID=%q limit=%d", snapshotID, limit)
+		}
+		return []snapshot.SnapshotFileEntry{{Path: "docs/a.txt"}, {Path: "img/x.png"}}, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 2, TotalSizeBytes: 123}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"show", "snap-show-1"},
+			flags: map[string][]string{
+				"limit":  {"50"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand show returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot show JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "show" {
+		t.Fatalf("expected action=show, got %v", data)
+	}
+	files := data["files"].([]any)
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(files))
+	}
+}
+
+func TestRunSnapshotCommandStatsSupportsGlobalAndPerSnapshot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledWith := ""
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		calledWith = snapshotID
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 2, SnapshotFileCount: 4, TotalSizeBytes: 2048}, nil
+	}
+
+	if err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"stats", "snap-stats-1"},
+		flags:       map[string][]string{},
+	}, outputModeText); err != nil {
+		t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+	}
+	if calledWith != "snap-stats-1" {
+		t.Fatalf("expected per-snapshot stats call, got snapshotID=%q", calledWith)
+	}
+}
+
+func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "requires --force") {
+		t.Fatalf("expected --force requirement error, got: %v", err)
+	}
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledWith := ""
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		calledWith = snapshotID
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "snap-del-1"},
+			flags: map[string][]string{
+				"force":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete returned error: %v", err)
+		}
+	})
+	if calledWith != "snap-del-1" {
+		t.Fatalf("expected delete to be called with snap-del-1, got %q", calledWith)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "delete" {
+		t.Fatalf("expected action=delete, got %v", data)
 	}
 }
 

@@ -54,6 +54,29 @@ type RestoreSnapshotResult struct {
 	OutputPaths    []string
 }
 
+type SnapshotListFilter struct {
+	Type  *string
+	Label *string
+	Since *time.Time
+	Until *time.Time
+	Limit int
+}
+
+type SnapshotFileEntry struct {
+	Path          string
+	LogicalFileID int64
+	Size          sql.NullInt64
+	Mode          sql.NullInt64
+	MTime         sql.NullTime
+}
+
+type SnapshotStats struct {
+	SnapshotCount     int64
+	SnapshotFileCount int64
+	TotalSizeBytes    int64
+	SnapshotID        string
+}
+
 type snapshotRestoreRow struct {
 	Path          string
 	LogicalFileID int64
@@ -200,6 +223,188 @@ func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) 
 
 	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, sf.SnapshotID, normalizedPath)
 	return id, nil
+}
+
+func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) ([]Snapshot, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+
+	query := strings.Builder{}
+	query.WriteString(`
+		SELECT id, created_at, type, label
+		FROM snapshot
+		WHERE 1 = 1`)
+
+	args := make([]any, 0, 5)
+	argPos := 1
+	appendArg := func(value any) string {
+		args = append(args, value)
+		placeholder := fmt.Sprintf("$%d", argPos)
+		argPos++
+		return placeholder
+	}
+
+	if filter.Type != nil && strings.TrimSpace(*filter.Type) != "" {
+		query.WriteString(" AND type = " + appendArg(strings.TrimSpace(*filter.Type)))
+	}
+	if filter.Label != nil && strings.TrimSpace(*filter.Label) != "" {
+		query.WriteString(" AND label IS NOT NULL AND LOWER(label) LIKE LOWER(" + appendArg("%"+strings.TrimSpace(*filter.Label)+"%") + ")")
+	}
+	if filter.Since != nil {
+		sinceUTC := filter.Since.UTC()
+		query.WriteString(" AND created_at >= " + appendArg(sinceUTC))
+	}
+	if filter.Until != nil {
+		untilUTC := filter.Until.UTC()
+		query.WriteString(" AND created_at <= " + appendArg(untilUTC))
+	}
+
+	query.WriteString(" ORDER BY created_at DESC, id DESC")
+	if filter.Limit > 0 {
+		query.WriteString(" LIMIT " + appendArg(filter.Limit))
+	}
+
+	rows, err := db.QueryContext(ctx, query.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make([]Snapshot, 0)
+	for rows.Next() {
+		var item Snapshot
+		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label); err != nil {
+			return nil, fmt.Errorf("scan snapshot list row: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshot list rows: %w", err)
+	}
+
+	return result, nil
+}
+
+func GetSnapshot(ctx context.Context, db *sql.DB, snapshotID string) (*Snapshot, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	if strings.TrimSpace(snapshotID) == "" {
+		return nil, errors.New("snapshot id cannot be empty")
+	}
+
+	var item Snapshot
+	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label FROM snapshot WHERE id = $1`, strings.TrimSpace(snapshotID)).
+		Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("snapshot not found: %s", snapshotID)
+		}
+		return nil, fmt.Errorf("get snapshot id=%s: %w", snapshotID, err)
+	}
+	return &item, nil
+}
+
+func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit int) ([]SnapshotFileEntry, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	if strings.TrimSpace(snapshotID) == "" {
+		return nil, errors.New("snapshot id cannot be empty")
+	}
+	if _, err := GetSnapshot(ctx, db, snapshotID); err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT path, logical_file_id, size, mode, mtime
+		FROM snapshot_file
+		WHERE snapshot_id = $1
+		ORDER BY path, logical_file_id`
+	args := []any{strings.TrimSpace(snapshotID)}
+	if limit > 0 {
+		query += ` LIMIT $2`
+		args = append(args, limit)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list snapshot files snapshot_id=%s: %w", snapshotID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make([]SnapshotFileEntry, 0)
+	for rows.Next() {
+		var item SnapshotFileEntry
+		if err := rows.Scan(&item.Path, &item.LogicalFileID, &item.Size, &item.Mode, &item.MTime); err != nil {
+			return nil, fmt.Errorf("scan snapshot_file row: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshot_file rows: %w", err)
+	}
+
+	return result, nil
+}
+
+func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*SnapshotStats, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+
+	stats := &SnapshotStats{SnapshotID: strings.TrimSpace(snapshotID)}
+	if stats.SnapshotID == "" {
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot`).Scan(&stats.SnapshotCount); err != nil {
+			return nil, fmt.Errorf("count snapshots: %w", err)
+		}
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(size), 0) FROM snapshot_file`).Scan(&stats.SnapshotFileCount, &stats.TotalSizeBytes); err != nil {
+			return nil, fmt.Errorf("count snapshot files: %w", err)
+		}
+		return stats, nil
+	}
+
+	if _, err := GetSnapshot(ctx, db, stats.SnapshotID); err != nil {
+		return nil, err
+	}
+	stats.SnapshotCount = 1
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(size), 0) FROM snapshot_file WHERE snapshot_id = $1`, stats.SnapshotID).Scan(&stats.SnapshotFileCount, &stats.TotalSizeBytes); err != nil {
+		return nil, fmt.Errorf("count snapshot files snapshot_id=%s: %w", stats.SnapshotID, err)
+	}
+	return stats, nil
+}
+
+func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
+	if db == nil {
+		return errors.New("snapshot db cannot be nil")
+	}
+	if strings.TrimSpace(snapshotID) == "" {
+		return errors.New("snapshot id cannot be empty")
+	}
+	snapshotID = strings.TrimSpace(snapshotID)
+
+	if _, err := GetSnapshot(ctx, db, snapshotID); err != nil {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin snapshot delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM snapshot_file WHERE snapshot_id = $1`, snapshotID); err != nil {
+		return fmt.Errorf("delete snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM snapshot WHERE id = $1`, snapshotID); err != nil {
+		return fmt.Errorf("delete snapshot row id=%s: %w", snapshotID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit snapshot delete transaction: %w", err)
+	}
+
+	return nil
 }
 
 func normalizeSourcePathForSnapshot(path string) (string, error) {

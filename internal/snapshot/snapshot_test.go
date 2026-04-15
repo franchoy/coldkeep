@@ -1469,3 +1469,217 @@ func TestApplySnapshotMetadataStrictNotSetLogsAndContinues(t *testing.T) {
 		t.Fatalf("without --strict, chmod error should be logged not returned; got: %v", err)
 	}
 }
+
+// ---- Phase 4 snapshot visibility tests ----
+
+func TestListSnapshotsReturnsOrderedRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	older := Snapshot{ID: "snap-old", CreatedAt: time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC), Type: "full"}
+	newer := Snapshot{ID: "snap-new", CreatedAt: time.Date(2026, 1, 11, 8, 0, 0, 0, time.UTC), Type: "partial", Label: sql.NullString{String: "docs-backup", Valid: true}}
+	for _, item := range []Snapshot{older, newer} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	items, err := ListSnapshots(ctx, db, SnapshotListFilter{})
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(items))
+	}
+	if items[0].ID != "snap-new" || items[1].ID != "snap-old" {
+		t.Fatalf("expected created_at descending order, got ids=%v,%v", items[0].ID, items[1].ID)
+	}
+}
+
+func TestListSnapshotsFiltersByTypeLabelAndLimit(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	items := []Snapshot{
+		{ID: "snap-a", CreatedAt: time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC), Type: "full", Label: sql.NullString{String: "backup-2026", Valid: true}},
+		{ID: "snap-b", CreatedAt: time.Date(2026, 1, 11, 8, 0, 0, 0, time.UTC), Type: "partial", Label: sql.NullString{String: "docs-backup", Valid: true}},
+		{ID: "snap-c", CreatedAt: time.Date(2026, 1, 12, 8, 0, 0, 0, time.UTC), Type: "full", Label: sql.NullString{String: "backup-2027", Valid: true}},
+	}
+	for _, item := range items {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	typeFilter := "full"
+	labelFilter := "backup"
+	result, err := ListSnapshots(ctx, db, SnapshotListFilter{Type: &typeFilter, Label: &labelFilter, Limit: 1})
+	if err != nil {
+		t.Fatalf("ListSnapshots with filters: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 filtered snapshot, got %d", len(result))
+	}
+	if result[0].ID != "snap-c" {
+		t.Fatalf("expected latest matching snapshot snap-c, got %s", result[0].ID)
+	}
+}
+
+func TestListSnapshotsFiltersBySinceUntil(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	items := []Snapshot{
+		{ID: "snap-jan", CreatedAt: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "snap-feb", CreatedAt: time.Date(2026, 2, 1, 8, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "snap-mar", CreatedAt: time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC), Type: "full"},
+	}
+	for _, item := range items {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	since := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)
+	result, err := ListSnapshots(ctx, db, SnapshotListFilter{Since: &since, Until: &until})
+	if err != nil {
+		t.Fatalf("ListSnapshots since/until: %v", err)
+	}
+	if len(result) != 1 || result[0].ID != "snap-feb" {
+		t.Fatalf("expected only snap-feb in range, got %+v", result)
+	}
+}
+
+func TestGetSnapshotAndListSnapshotFilesSortedAndLimited(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-show-a", 5)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-show-b", 7)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-show-c", 9)
+	s := Snapshot{ID: "snap-show", CreatedAt: time.Now().UTC(), Type: "partial", Label: sql.NullString{String: "inspect", Valid: true}}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	gotSnapshot, err := GetSnapshot(ctx, db, s.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if gotSnapshot.ID != s.ID || gotSnapshot.Type != s.Type {
+		t.Fatalf("snapshot metadata mismatch: got=%+v want=%+v", gotSnapshot, s)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 2)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected 2 limited files, got %d", len(files))
+	}
+	if files[0].Path != "docs/a.txt" || files[1].Path != "docs/b.txt" {
+		t.Fatalf("expected sorted files docs/a.txt, docs/b.txt; got %+v", files)
+	}
+}
+
+func TestListSnapshotFilesMissingSnapshotFails(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	_, err := ListSnapshotFiles(ctx, db, "snap-missing-show", 10)
+	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+		t.Fatalf("expected missing snapshot error, got: %v", err)
+	}
+}
+
+func TestGetSnapshotStatsGlobalAndPerSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-stats-a", 5)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-stats-b", 7)
+	s1 := Snapshot{ID: "snap-stats-1", CreatedAt: time.Now().UTC(), Type: "full"}
+	s2 := Snapshot{ID: "snap-stats-2", CreatedAt: time.Now().UTC().Add(time.Second), Type: "partial"}
+	for _, item := range []Snapshot{s1, s2} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+	insertSnapshotFileRow(t, db, s1.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s1.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s2.ID, "img/x.png", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	globalStats, err := GetSnapshotStats(ctx, db, "")
+	if err != nil {
+		t.Fatalf("GetSnapshotStats global: %v", err)
+	}
+	if globalStats.SnapshotCount != 2 || globalStats.SnapshotFileCount != 3 || globalStats.TotalSizeBytes != 3 {
+		t.Fatalf("unexpected global stats: %+v", globalStats)
+	}
+
+	perSnapshot, err := GetSnapshotStats(ctx, db, s1.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats per snapshot: %v", err)
+	}
+	if perSnapshot.SnapshotCount != 1 || perSnapshot.SnapshotFileCount != 2 || perSnapshot.TotalSizeBytes != 2 {
+		t.Fatalf("unexpected per-snapshot stats: %+v", perSnapshot)
+	}
+}
+
+func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-delete-a", 5)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-delete-b", 7)
+	s1 := Snapshot{ID: "snap-delete-1", CreatedAt: time.Now().UTC(), Type: "full"}
+	s2 := Snapshot{ID: "snap-delete-2", CreatedAt: time.Now().UTC().Add(time.Second), Type: "partial"}
+	for _, item := range []Snapshot{s1, s2} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+	insertSnapshotFileRow(t, db, s1.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s1.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s2.ID, "img/x.png", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	if err := DeleteSnapshot(ctx, db, s1.ID); err != nil {
+		t.Fatalf("DeleteSnapshot: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, s1.ID).Scan(&snapshotCount); err != nil {
+		t.Fatalf("query deleted snapshot: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected deleted snapshot row to be gone, got count=%d", snapshotCount)
+	}
+
+	var deletedFileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, s1.ID).Scan(&deletedFileCount); err != nil {
+		t.Fatalf("query deleted snapshot files: %v", err)
+	}
+	if deletedFileCount != 0 {
+		t.Fatalf("expected deleted snapshot_file rows to be gone, got count=%d", deletedFileCount)
+	}
+
+	var survivingSnapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, s2.ID).Scan(&survivingSnapshotCount); err != nil {
+		t.Fatalf("query surviving snapshot: %v", err)
+	}
+	if survivingSnapshotCount != 1 {
+		t.Fatalf("expected other snapshot to remain, got count=%d", survivingSnapshotCount)
+	}
+
+	var logicalCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file`).Scan(&logicalCount); err != nil {
+		t.Fatalf("query logical_file count: %v", err)
+	}
+	if logicalCount != 2 {
+		t.Fatalf("expected logical_file rows untouched, got count=%d", logicalCount)
+	}
+}

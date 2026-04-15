@@ -631,6 +631,48 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	if _, err := os.Stat(restoredDocs); !os.IsNotExist(err) {
 		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
 	}
+
+	listPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--type", "full", "--limit", "10", "--output", "json"), "snapshot")
+	listData := testutils.JSONMap(t, listPayload, "data")
+	if got, _ := listData["action"].(string); got != "list" {
+		t.Fatalf("snapshot list JSON missing action=list: payload=%v", listPayload)
+	}
+	listItems, ok := listData["snapshots"].([]any)
+	if !ok || len(listItems) == 0 {
+		t.Fatalf("snapshot list JSON missing snapshots array: payload=%v", listPayload)
+	}
+
+	showPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-it-1", "--limit", "10", "--output", "json"), "snapshot")
+	showData := testutils.JSONMap(t, showPayload, "data")
+	if got, _ := showData["action"].(string); got != "show" {
+		t.Fatalf("snapshot show JSON missing action=show: payload=%v", showPayload)
+	}
+	if got := int64(showData["file_count"].(float64)); got != int64(snap1Count) {
+		t.Fatalf("snapshot show file_count mismatch: got=%d want=%d payload=%v", got, snap1Count, showPayload)
+	}
+
+	statsPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "stats", "snap-it-1", "--output", "json"), "snapshot")
+	statsData := testutils.JSONMap(t, statsPayload, "data")
+	if got, _ := statsData["action"].(string); got != "stats" {
+		t.Fatalf("snapshot stats JSON missing action=stats: payload=%v", statsPayload)
+	}
+	if got := int64(statsData["snapshot_file_count"].(float64)); got != int64(snap1Count) {
+		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-it-partial", "--force", "--output", "json"), "snapshot")
+
+	var deletedPartialCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = $1`, "snap-it-partial").Scan(&deletedPartialCount); err != nil {
+		t.Fatalf("query deleted partial snapshot: %v", err)
+	}
+	if deletedPartialCount != 0 {
+		t.Fatalf("expected deleted partial snapshot to be gone, got count=%d", deletedPartialCount)
+	}
 }
 
 func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
