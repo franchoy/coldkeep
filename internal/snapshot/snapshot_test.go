@@ -885,3 +885,106 @@ func TestPlanSnapshotRestoreOutputsRejectsConflictsWhenOverwriteOff(t *testing.T
 		t.Fatalf("expected overwrite-off conflict error, got: %v", err)
 	}
 }
+
+func TestResolveSnapshotRestoreSelectionExactOnly(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-rsel-exact-a", 1)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-rsel-exact-b", 2)
+	s := Snapshot{ID: "snap-rsel-exact-only", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	selected, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/a.txt"})
+	if err != nil {
+		t.Fatalf("resolveSnapshotRestoreSelection exact: %v", err)
+	}
+	if len(exact) != 1 || exact[0] != "docs/a.txt" {
+		t.Fatalf("exact filters mismatch: %v", exact)
+	}
+	if len(selected) != 1 || selected[0].Path != "docs/a.txt" {
+		t.Fatalf("expected only docs/a.txt selected, got %+v", selected)
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionEmptyDirectoryPrefixSucceeds(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-rsel-empty-dir", 1)
+	s := Snapshot{ID: "snap-rsel-empty-dir", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	selected, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"empty/"})
+	if err != nil {
+		t.Fatalf("resolveSnapshotRestoreSelection empty directory should succeed: %v", err)
+	}
+	if len(selected) != 0 {
+		t.Fatalf("expected zero selected rows for empty directory prefix, got %d", len(selected))
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionDeterministicAcrossInputOrder(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-rsel-det-a", 1)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-rsel-det-b", 2)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-rsel-det-c", 3)
+	s := Snapshot{ID: "snap-rsel-deterministic", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	selectedA, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/", "img/x.png"})
+	if err != nil {
+		t.Fatalf("resolve selection A: %v", err)
+	}
+	selectedB, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"img/x.png", "docs/"})
+	if err != nil {
+		t.Fatalf("resolve selection B: %v", err)
+	}
+
+	if len(selectedA) != len(selectedB) {
+		t.Fatalf("selection length mismatch: %d vs %d", len(selectedA), len(selectedB))
+	}
+	for i := range selectedA {
+		if selectedA[i].Path != selectedB[i].Path || selectedA[i].LogicalFileID != selectedB[i].LogicalFileID {
+			t.Fatalf("deterministic selection mismatch at %d: A=%+v B=%+v", i, selectedA[i], selectedB[i])
+		}
+	}
+}
+
+func TestPlanSnapshotRestoreOutputsPreflightCreatesDestinationDirectories(t *testing.T) {
+	tmp := t.TempDir()
+	prefix := filepath.Join(tmp, "restore-root")
+	targetDir := filepath.Join(prefix, "docs")
+	rows := []snapshotRestoreRow{{Path: "docs/a.txt", LogicalFileID: 1}}
+
+	if _, err := os.Stat(targetDir); !os.IsNotExist(err) {
+		t.Fatalf("expected target directory to not exist before preflight, err=%v", err)
+	}
+
+	_, err := planSnapshotRestoreOutputs(rows, []string{"docs/"}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationPrefix,
+		Destination:     prefix,
+		Overwrite:       true,
+	})
+	if err != nil {
+		t.Fatalf("planSnapshotRestoreOutputs should preflight destination dirs: %v", err)
+	}
+
+	if stat, err := os.Stat(targetDir); err != nil || !stat.IsDir() {
+		t.Fatalf("expected destination directory created during preflight, stat=%v err=%v", stat, err)
+	}
+}

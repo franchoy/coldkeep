@@ -403,6 +403,19 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 		}
 	}
 
+	validatedDirs := make(map[string]struct{})
+	for _, plan := range plans {
+		dir := filepath.Dir(plan.OutputPath)
+		if _, seen := validatedDirs[dir]; seen {
+			continue
+		}
+		validatedDirs[dir] = struct{}{}
+
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create destination directory %s: %w", dir, err)
+		}
+	}
+
 	return plans, nil
 }
 
