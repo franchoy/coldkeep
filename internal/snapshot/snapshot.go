@@ -222,6 +222,7 @@ func CreateSnapshot(
 		whereClauses   []string
 		exactFilters   []string
 		dirPrefixes    []string
+		filterVariants = make(map[string]struct{})
 		exactFilterSet = make(map[string]struct{})
 	)
 
@@ -249,13 +250,32 @@ func CreateSnapshot(
 		sort.Strings(exactFilters)
 		sort.Strings(dirPrefixes)
 
+		addFilter := func(operator string, value string) {
+			key := operator + "|" + value
+			if _, exists := filterVariants[key]; exists {
+				return
+			}
+			filterVariants[key] = struct{}{}
+
+			queryArgs = append(queryArgs, value)
+			whereClauses = append(whereClauses, "pf.path "+operator+" $"+strconv.Itoa(len(queryArgs)))
+		}
+
 		for _, exactPath := range exactFilters {
-			queryArgs = append(queryArgs, exactPath)
-			whereClauses = append(whereClauses, "pf.path = $"+strconv.Itoa(len(queryArgs)))
+			addFilter("=", exactPath)
+
+			backslashVariant := strings.ReplaceAll(exactPath, "/", "\\")
+			if backslashVariant != exactPath {
+				addFilter("=", backslashVariant)
+			}
 		}
 		for _, prefix := range dirPrefixes {
-			queryArgs = append(queryArgs, prefix+"%")
-			whereClauses = append(whereClauses, "pf.path LIKE $"+strconv.Itoa(len(queryArgs)))
+			addFilter("LIKE", prefix+"%")
+
+			backslashPrefix := strings.ReplaceAll(prefix, "/", "\\")
+			if backslashPrefix != prefix {
+				addFilter("LIKE", backslashPrefix+"%")
+			}
 		}
 
 		if len(whereClauses) == 0 {

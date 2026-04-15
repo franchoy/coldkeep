@@ -565,3 +565,78 @@ func TestCreateSnapshotPartialDeduplicatesInputPaths(t *testing.T) {
 		t.Fatalf("expected 1 deduplicated snapshot_file row, got %d", fileCount)
 	}
 }
+
+func TestCreateSnapshotPartialMatchesBackslashStoredExactPath(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-backslash-exact", 55)
+	insertPhysicalFile(t, db, "docs\\a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-backslash-exact", "partial", nil, []string{"docs/a.txt"})
+	if err != nil {
+		t.Fatalf("CreateSnapshot partial exact against backslash-stored path: %v", err)
+	}
+
+	var path string
+	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, "snap-backslash-exact").Scan(&path); err != nil {
+		t.Fatalf("query snapshot_file path: %v", err)
+	}
+	if path != "docs/a.txt" {
+		t.Fatalf("expected normalized snapshot path docs/a.txt, got %q", path)
+	}
+}
+
+func TestCreateSnapshotPartialMatchesBackslashStoredDirectory(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-backslash-dir-a", 12)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-backslash-dir-b", 13)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-backslash-dir-c", 14)
+
+	insertPhysicalFile(t, db, "docs\\a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "docs\\nested\\b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img\\x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-backslash-dir", "partial", nil, []string{"docs/"})
+	if err != nil {
+		t.Fatalf("CreateSnapshot partial directory against backslash-stored paths: %v", err)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-backslash-dir").Scan(&fileCount); err != nil {
+		t.Fatalf("count snapshot_file rows: %v", err)
+	}
+	if fileCount != 2 {
+		t.Fatalf("expected 2 matched rows from backslash-stored docs directory, got %d", fileCount)
+	}
+
+	rows, err := db.Query(`SELECT path FROM snapshot_file WHERE snapshot_id = ? ORDER BY path`, "snap-backslash-dir")
+	if err != nil {
+		t.Fatalf("query snapshot_file rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var got []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			t.Fatalf("scan snapshot_file path: %v", err)
+		}
+		got = append(got, path)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate snapshot_file rows: %v", err)
+	}
+
+	want := []string{"docs/a.txt", "docs/nested/b.txt"}
+	if len(got) != len(want) {
+		t.Fatalf("path count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("path mismatch at index %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
