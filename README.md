@@ -267,7 +267,7 @@ coldkeep snapshot stats
 coldkeep snapshot stats snap-abc123
 ```
 
-Snapshot file queries are reusable across `snapshot show`, `snapshot restore`, and `snapshot diff`.
+Snapshot file queries are reusable across `snapshot show` and `snapshot restore`, and path-based query filters are reusable in `snapshot diff`.
 
 Supported query flags:
 
@@ -279,6 +279,9 @@ Supported query flags:
 - `--modified-after <RFC3339|YYYY-MM-DD>` / `--modified-before <RFC3339|YYYY-MM-DD>`: inclusive mtime window
 
 All active criteria are ANDed together. Path and prefix inputs are normalized before matching, and result ordering remains deterministic.
+
+`snapshot diff` in v1.3 currently applies only path-based query flags (`--path`, `--prefix`, `--pattern`, `--regex`).
+`--min-size`, `--max-size`, `--modified-after`, and `--modified-before` are accepted for forward compatibility but are not yet applied to diff entries.
 
 ### Restoring from a snapshot
 
@@ -299,6 +302,7 @@ coldkeep snapshot restore snap-abc123 --prefix docs/ --pattern "docs/*.txt" --mo
 ### Diffing two snapshots
 
 `snapshot diff` compares two snapshots by path and logical file identity, classifying each change as `added`, `removed`, or `modified`.
+In v1.3, snapshot-query filtering for diff is path-based only (size and mtime filters are not yet applied).
 
 ```bash
 # Show all changes between two snapshots

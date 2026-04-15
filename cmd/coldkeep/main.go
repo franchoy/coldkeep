@@ -2710,7 +2710,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return err
 	}
 	if len(parsed.positionals) != 3 {
-		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>] (note: size/mtime query flags are currently not applied to diff entries)")
 	}
 
 	baseID := strings.TrimSpace(parsed.positionals[1])
@@ -3073,7 +3073,7 @@ func printHelp() {
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
-		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id (path-based query filters only in v1.3)"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -3085,6 +3085,9 @@ func printHelp() {
 	fmt.Println("    Snapshot path matching:")
 	fmt.Println("      exact path: snapshot create docs/file.txt")
 	fmt.Println("      directory prefix: snapshot create docs/")
+	fmt.Println("    Snapshot diff query note:")
+	fmt.Println("      v1.3 applies only --path/--prefix/--pattern/--regex to diff entries")
+	fmt.Println("      --min-size/--max-size/--modified-after/--modified-before are accepted but not yet applied in diff")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")

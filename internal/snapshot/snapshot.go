@@ -527,9 +527,9 @@ func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
 	return nil
 }
 
-func loadSnapshotPathLogicalIDs(ctx context.Context, db *sql.DB, snapshotID string) (map[string]int64, error) {
+func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string) (map[string]SnapshotFileEntry, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT path, logical_file_id
+		SELECT path, logical_file_id, size, mode, mtime
 		FROM snapshot_file
 		WHERE snapshot_id = $1
 	`, snapshotID)
@@ -538,23 +538,23 @@ func loadSnapshotPathLogicalIDs(ctx context.Context, db *sql.DB, snapshotID stri
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := make(map[string]int64)
+	result := make(map[string]SnapshotFileEntry)
 	for rows.Next() {
-		var rawPath string
-		var logicalID int64
-		if err := rows.Scan(&rawPath, &logicalID); err != nil {
+		var entry SnapshotFileEntry
+		if err := rows.Scan(&entry.Path, &entry.LogicalFileID, &entry.Size, &entry.Mode, &entry.MTime); err != nil {
 			return nil, fmt.Errorf("scan snapshot_file row snapshot_id=%s: %w", snapshotID, err)
 		}
 
-		normalizedPath, err := NormalizeSnapshotPath(rawPath)
+		normalizedPath, err := NormalizeSnapshotPath(entry.Path)
 		if err != nil {
-			return nil, fmt.Errorf("normalize snapshot_file path %q for snapshot_id=%s: %w", rawPath, snapshotID, err)
+			return nil, fmt.Errorf("normalize snapshot_file path %q for snapshot_id=%s: %w", entry.Path, snapshotID, err)
 		}
+		entry.Path = normalizedPath
 
-		if existingLogicalID, exists := result[normalizedPath]; exists && existingLogicalID != logicalID {
-			return nil, fmt.Errorf("duplicate normalized path %q in snapshot %s with conflicting logical IDs %d and %d", normalizedPath, snapshotID, existingLogicalID, logicalID)
+		if existing, exists := result[normalizedPath]; exists && existing.LogicalFileID != entry.LogicalFileID {
+			return nil, fmt.Errorf("duplicate normalized path %q in snapshot %s with conflicting logical IDs %d and %d", normalizedPath, snapshotID, existing.LogicalFileID, entry.LogicalFileID)
 		}
-		result[normalizedPath] = logicalID
+		result[normalizedPath] = entry
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
@@ -590,11 +590,11 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string, que
 		return nil, err
 	}
 
-	baseRows, err := loadSnapshotPathLogicalIDs(ctx, db, baseID)
+	baseRows, err := loadSnapshotFilesByPath(ctx, db, baseID)
 	if err != nil {
 		return nil, err
 	}
-	targetRows, err := loadSnapshotPathLogicalIDs(ctx, db, targetID)
+	targetRows, err := loadSnapshotFilesByPath(ctx, db, targetID)
 	if err != nil {
 		return nil, err
 	}
@@ -617,15 +617,15 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string, que
 	summary := SnapshotDiffSummary{}
 
 	for _, path := range paths {
-		baseLogicalID, baseExists := baseRows[path]
-		targetLogicalID, targetExists := targetRows[path]
+		baseEntry, baseExists := baseRows[path]
+		targetEntry, targetExists := targetRows[path]
 
 		entry := SnapshotDiffEntry{Path: path}
 		if baseExists {
-			entry.BaseLogicalID = sql.NullInt64{Int64: baseLogicalID, Valid: true}
+			entry.BaseLogicalID = sql.NullInt64{Int64: baseEntry.LogicalFileID, Valid: true}
 		}
 		if targetExists {
-			entry.TargetLogicalID = sql.NullInt64{Int64: targetLogicalID, Valid: true}
+			entry.TargetLogicalID = sql.NullInt64{Int64: targetEntry.LogicalFileID, Valid: true}
 		}
 
 		// Classify the entry BEFORE applying the query filter.
@@ -635,7 +635,7 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string, que
 		case baseExists && !targetExists:
 			entry.Type = DiffRemoved
 		case baseExists && targetExists:
-			if baseLogicalID == targetLogicalID {
+			if baseEntry.LogicalFileID == targetEntry.LogicalFileID {
 				continue
 			}
 			entry.Type = DiffModified
@@ -643,10 +643,13 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string, que
 			continue
 		}
 
-		// Apply query filter AFTER classification. Size and MTime are not available
-		// in the diff context; those criteria will be skipped (no-ops) for diff entries.
+		// Apply query filter AFTER classification using the target-side metadata for
+		// added/modified entries and base-side metadata for removed entries.
 		if query != nil {
-			fe := SnapshotFileEntry{Path: entry.Path}
+			fe := targetEntry
+			if entry.Type == DiffRemoved {
+				fe = baseEntry
+			}
 			if !query.Match(fe) {
 				continue
 			}
