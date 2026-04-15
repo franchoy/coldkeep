@@ -35,40 +35,48 @@ type SnapshotFile struct {
 var multiSlash = regexp.MustCompile(`/{2,}`)
 
 // NormalizeSnapshotPath normalizes a snapshot-relative path:
-//   - trims whitespace
 //   - rejects empty paths
+//   - rejects leading/trailing whitespace
+//   - converts Windows separators "\\" to "/"
 //   - removes leading "./"
 //   - collapses duplicate "/" separators into one
 //   - rejects absolute paths (paths starting with "/")
 func NormalizeSnapshotPath(path string) (string, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
+	if path == "" || strings.TrimSpace(path) == "" {
 		return "", errors.New("snapshot path cannot be empty")
 	}
 
+	if path != strings.TrimSpace(path) {
+		return "", fmt.Errorf("snapshot path cannot have leading or trailing whitespace, got %q", path)
+	}
+
+	normalized := path
+
+	// Normalize separators to ensure stable cross-platform snapshot paths.
+	normalized = strings.ReplaceAll(normalized, "\\", "/")
+
 	// Reject absolute paths – snapshots use relative paths.
-	if strings.HasPrefix(trimmed, "/") {
-		return "", fmt.Errorf("snapshot path must be relative, got %q", trimmed)
+	if strings.HasPrefix(normalized, "/") {
+		return "", fmt.Errorf("snapshot path must be relative, got %q", normalized)
 	}
 
 	// Strip leading "./"
-	for strings.HasPrefix(trimmed, "./") {
-		trimmed = trimmed[2:]
+	for strings.HasPrefix(normalized, "./") {
+		normalized = normalized[2:]
 	}
 
 	// Collapse consecutive slashes.
-	trimmed = multiSlash.ReplaceAllString(trimmed, "/")
+	normalized = multiSlash.ReplaceAllString(normalized, "/")
 
 	// After stripping, path must not be empty.
-	trimmed = strings.TrimSpace(trimmed)
-	if trimmed == "" {
+	if normalized == "" {
 		return "", errors.New("snapshot path cannot be empty after normalization")
 	}
 
-	return trimmed, nil
+	return normalized, nil
 }
 
-// InsertSnapshot inserts an immutable snapshot row. id must be a UUID string.
+// InsertSnapshot inserts an immutable snapshot row. id must be non-empty.
 // snapshotType must be "full" or "partial".
 func InsertSnapshot(ctx context.Context, db *sql.DB, s Snapshot) error {
 	if s.ID == "" {
@@ -123,24 +131,21 @@ func InsertSnapshotFile(ctx context.Context, db *sql.DB, sf SnapshotFile) (int64
 		return 0, fmt.Errorf("check logical_file existence id=%d: %w", sf.LogicalFileID, err)
 	}
 
-	result, err := db.ExecContext(
+	var id int64
+	err = db.QueryRowContext(
 		ctx,
 		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id`,
 		sf.SnapshotID,
 		normalizedPath,
 		sf.LogicalFileID,
 		sf.Size,
 		sf.Mode,
 		sf.MTime,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", sf.SnapshotID, normalizedPath, err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("read inserted snapshot_file id: %w", err)
 	}
 
 	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, sf.SnapshotID, normalizedPath)

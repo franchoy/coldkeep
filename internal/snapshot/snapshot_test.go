@@ -55,6 +55,8 @@ func TestNormalizeSnapshotPathValid(t *testing.T) {
 		{"a/b/c.txt", "a/b/c.txt"},
 		{"./././file.txt", "file.txt"},
 		{"a//b//c.txt", "a/b/c.txt"},
+		{"a\\b.txt", "a/b.txt"},
+		{".\\docs\\a.txt", "docs/a.txt"},
 	}
 	for _, tc := range cases {
 		got, err := NormalizeSnapshotPath(tc.input)
@@ -72,6 +74,8 @@ func TestNormalizeSnapshotPathInvalid(t *testing.T) {
 	cases := []string{
 		"",
 		"   ",
+		" docs/a.txt",
+		"docs/a.txt ",
 		"/absolute/path",
 		"/",
 	}
@@ -301,6 +305,19 @@ func TestInsertSnapshotFileRejectsNonExistentLogicalFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "non-existent logical_file") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInsertSnapshotFileRejectsNonExistentSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalID := insertLogicalFile(t, db, "hash-missing-snapshot")
+	sf := SnapshotFile{SnapshotID: "snap-does-not-exist", Path: "docs/missing.txt", LogicalFileID: logicalID}
+
+	_, err := InsertSnapshotFile(ctx, db, sf)
+	if err == nil {
+		t.Fatal("expected error for non-existent snapshot_id, got nil")
 	}
 }
 
