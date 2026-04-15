@@ -27,10 +27,10 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.2%20physical--file%20and%20operator%20semantics-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.3%20snapshot%20layer-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.2 adds the physical-file mapping layer, explicit repair boundaries, audited GC roots, and deterministic batch operator semantics on top of the v1.0/v1.1 correctness core.
+> Status: v1.3 adds the snapshot layer (immutable point-in-time captures, full/partial create, restore, list/show/stats, delete, and `snapshot diff` for change classification) on top of the v1.2 physical-file and operator semantics core.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -239,6 +239,107 @@ Example JSON payload:
 ```
 
 For full batch contract details and examples, see ARCHITECTURE.md and PRE_RELEASE_CHECKLIST.md.
+
+## Snapshot Layer (v1.3)
+
+coldkeep snapshots capture an immutable, point-in-time view of your stored files.
+
+### Creating snapshots
+
+```bash
+# Full snapshot (all physical_file entries)
+coldkeep snapshot create
+
+# Partial snapshot (exact paths and/or directory prefixes)
+coldkeep snapshot create docs/ report.txt --label release-2026-04
+```
+
+### Listing and inspecting
+
+```bash
+coldkeep snapshot list
+coldkeep snapshot list --type full --limit 10 --since 2026-01-01
+coldkeep snapshot show snap-abc123
+coldkeep snapshot show snap-abc123 --limit 50
+coldkeep snapshot stats
+coldkeep snapshot stats snap-abc123
+```
+
+### Restoring from a snapshot
+
+```bash
+# Restore all files to their original paths
+coldkeep snapshot restore snap-abc123
+
+# Restore a subdirectory under a new prefix
+coldkeep snapshot restore snap-abc123 docs/ --mode prefix --destination ./restored
+
+# Restore a single file to an explicit destination
+coldkeep snapshot restore snap-abc123 docs/report.txt --mode override --destination ./out/report.txt
+```
+
+### Diffing two snapshots
+
+`snapshot diff` compares two snapshots by path and logical file identity, classifying each change as `added`, `removed`, or `modified`.
+
+```bash
+# Show all changes between two snapshots
+coldkeep snapshot diff snap-1 snap-2
+
+# Show only added files
+coldkeep snapshot diff snap-1 snap-2 --filter added
+
+# Machine-readable JSON output
+coldkeep snapshot diff snap-1 snap-2 --output json
+```
+
+Text output example:
+
+```
+[SNAPSHOT DIFF]
+
+Base:    snap-1
+Target:  snap-2
+
++ docs/new.txt
+- docs/old.txt
+~ docs/config.yaml
+
+Summary:
+  added: 1
+  removed: 1
+  modified: 1
+```
+
+JSON output schema:
+
+```json
+{
+  "status": "ok",
+  "command": "snapshot diff",
+  "data": {
+    "base": "snap-1",
+    "target": "snap-2",
+    "summary": { "added": 1, "removed": 1, "modified": 1 },
+    "entries": [
+      { "path": "docs/new.txt",    "type": "added",    "base_logical_id": null, "target_logical_id": 2 },
+      { "path": "docs/old.txt",    "type": "removed",  "base_logical_id": 1,    "target_logical_id": null },
+      { "path": "docs/config.yaml","type": "modified", "base_logical_id": 3,    "target_logical_id": 4 }
+    ],
+    "duration_ms": 12
+  }
+}
+```
+
+`--filter` limits output to one change type (`added`, `removed`, or `modified`). Summary counts reflect the filtered set.
+
+### Deleting a snapshot
+
+```bash
+coldkeep snapshot delete snap-abc123 --force
+```
+
+Deletes only the snapshot row and its `snapshot_file` entries. The underlying logical files and blocks are not affected.
 
 ## Doctor (recommended health gate)
 
