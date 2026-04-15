@@ -25,6 +25,15 @@ type Snapshot struct {
 	Label     sql.NullString
 }
 
+// DiffType represents the kind of change in a snapshot diff entry.
+type DiffType string
+
+const (
+	DiffAdded    DiffType = "added"
+	DiffRemoved  DiffType = "removed"
+	DiffModified DiffType = "modified"
+)
+
 // SnapshotFile represents a single file entry within a snapshot.
 // SnapshotFile rows are insert-only.
 type SnapshotFile struct {
@@ -79,7 +88,7 @@ type SnapshotStats struct {
 
 type SnapshotDiffEntry struct {
 	Path            string        `json:"path"`
-	Type            string        `json:"type"` // added | removed | modified
+	Type            DiffType      `json:"type"` // DiffAdded | DiffRemoved | DiffModified
 	BaseLogicalID   sql.NullInt64 `json:"base_logical_id"`
 	TargetLogicalID sql.NullInt64 `json:"target_logical_id"`
 }
@@ -528,16 +537,16 @@ func DiffSnapshots(ctx context.Context, db *sql.DB, baseID, targetID string) (*S
 
 		switch {
 		case !baseExists && targetExists:
-			entry.Type = "added"
+			entry.Type = DiffAdded
 			summary.Added++
 		case baseExists && !targetExists:
-			entry.Type = "removed"
+			entry.Type = DiffRemoved
 			summary.Removed++
 		case baseExists && targetExists:
 			if baseLogicalID == targetLogicalID {
 				continue
 			}
-			entry.Type = "modified"
+			entry.Type = DiffModified
 			summary.Modified++
 		default:
 			continue

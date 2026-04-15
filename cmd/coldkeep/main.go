@@ -2618,16 +2618,16 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	entries := make([]snapshot.SnapshotDiffEntry, 0, len(result.Entries))
 	summary := snapshot.SnapshotDiffSummary{}
 	for _, entry := range result.Entries {
-		if filterType != "" && entry.Type != filterType {
+		if filterType != "" && entry.Type != snapshot.DiffType(filterType) {
 			continue
 		}
 		entries = append(entries, entry)
 		switch entry.Type {
-		case "added":
+		case snapshot.DiffAdded:
 			summary.Added++
-		case "removed":
+		case snapshot.DiffRemoved:
 			summary.Removed++
-		case "modified":
+		case snapshot.DiffModified:
 			summary.Modified++
 		}
 	}
@@ -2668,11 +2668,11 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		for _, entry := range entries {
 			prefix := "?"
 			switch entry.Type {
-			case "added":
+			case snapshot.DiffAdded:
 				prefix = "+"
-			case "removed":
+			case snapshot.DiffRemoved:
 				prefix = "-"
-			case "modified":
+			case snapshot.DiffModified:
 				prefix = "~"
 			}
 			_, _ = fmt.Fprintf(os.Stdout, "%s %s\n", prefix, entry.Path)
