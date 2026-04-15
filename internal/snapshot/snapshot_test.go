@@ -1174,7 +1174,7 @@ func TestSnapshotRestoreSelectionReturnsRowsForNoMetadataOpts(t *testing.T) {
 	}
 }
 
-func TestRestoreSnapshotStrictMetadataRejectedTogethterWithNoMetadata(t *testing.T) {
+func TestRestoreSnapshotStrictMetadataRejectedTogetherWithNoMetadata(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
