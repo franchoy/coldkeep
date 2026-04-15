@@ -294,6 +294,10 @@ func resolveSnapshotRestoreSelection(
 			}
 			if !matched {
 				for _, prefix := range dirPrefixes {
+					// SAFETY INVARIANT: All dirPrefixes end with "/" (enforced by
+					// normalizeSnapshotRestoreInputFilters). This ensures directory boundary
+					// correctness: "docs/" matches "docs/file.txt" but NOT "docs_backup/file.txt".
+					// HasPrefix is safe because the "/" separator is present in the prefix.
 					if strings.HasPrefix(row.Path, prefix) {
 						matched = true
 						break
