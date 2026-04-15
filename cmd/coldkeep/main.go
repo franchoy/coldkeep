@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/snapshot"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -49,6 +52,8 @@ var flagsWithValues = map[string]bool{
 	"mode":        true,
 	"offset":      true,
 	"name":        true,
+	"id":          true,
+	"label":       true,
 	"min-size":    true,
 	"max-size":    true,
 	"output":      true,
@@ -98,6 +103,8 @@ var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = querySchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
+var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
+var createSnapshotPhase = snapshot.CreateSnapshot
 
 type cliError struct {
 	code int
@@ -215,6 +222,8 @@ func runCLI(args []string) int {
 		err = runSearchCommand(parsed, outputMode)
 	case "verify":
 		err = runVerifyCommand(parsed, outputMode)
+	case "snapshot":
+		err = runSnapshotCommand(parsed, outputMode)
 	default:
 		err = usageErrorf("unknown command: %s", parsed.method)
 	}
@@ -377,7 +386,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version":
 		return
 	}
 
@@ -459,6 +468,7 @@ var outputSupportedCommands = map[string]bool{
 	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
+	"snapshot":     true,
 }
 
 func inferOutputModeFromArgs(args []string) cliOutputMode {
@@ -487,7 +497,7 @@ func shouldRunStartupRecovery(command string) bool {
 	switch command {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot":
 		return true
 	default:
 		return false
@@ -2140,6 +2150,97 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 	return nil
 }
 
+func generateSnapshotID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate snapshot id entropy: %w", err)
+	}
+	return "snap-" + hex.EncodeToString(b), nil
+}
+
+func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "id", "label", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]")
+	}
+
+	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
+	if subcommand != "create" {
+		return usageErrorf("unknown snapshot subcommand: %s", parsed.positionals[0])
+	}
+
+	paths := parsed.positionals[1:]
+	snapshotType := "full"
+	if len(paths) > 0 {
+		snapshotType = "partial"
+	}
+
+	snapshotID, hasSnapshotID := parsed.lastFlagValue("id")
+	snapshotID = strings.TrimSpace(snapshotID)
+	if !hasSnapshotID || snapshotID == "" {
+		generatedID, err := generateSnapshotID()
+		if err != nil {
+			return err
+		}
+		snapshotID = generatedID
+	}
+
+	var labelPtr *string
+	if label, hasLabel := parsed.lastFlagValue("label"); hasLabel {
+		trimmed := strings.TrimSpace(label)
+		if trimmed == "" {
+			return usageErrorf("--label cannot be empty")
+		}
+		labelPtr = &trimmed
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	if sgctx.DB == nil {
+		return errors.New("storage context DB is nil")
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, paths); err != nil {
+		return err
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data": map[string]any{
+				"snapshot_id": snapshotID,
+				"type":        snapshotType,
+				"paths_count": len(paths),
+			},
+		}
+		if labelPtr != nil {
+			payloadData := payload["data"].(map[string]any)
+			payloadData["label"] = *labelPtr
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if snapshotType == "full" {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s (all paths)\n", snapshotID, snapshotType)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", snapshotID, snapshotType, len(paths))
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
 func printHelp() {
 	fmt.Printf("coldkeep (v%s)\n", version.String())
 	fmt.Println()
@@ -2171,6 +2272,7 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
+		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -2214,7 +2316,7 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
-	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify, snapshot")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
 	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
 	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
@@ -2244,6 +2346,8 @@ func printHelp() {
 	fmt.Println("  coldkeep repair ref-counts")
 	fmt.Println("  coldkeep verify system --full")
 	fmt.Println("  coldkeep verify file 12 --deep")
+	fmt.Println("  coldkeep snapshot create")
+	fmt.Println("  coldkeep snapshot create docs/ report.txt --label release-2026-04")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
 	fmt.Println("  coldkeep simulate store myfile.bin")

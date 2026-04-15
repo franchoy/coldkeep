@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +16,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -1263,7 +1267,7 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 }
 
 func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
-	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify"}
+	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot"}
 
 	for _, command := range commands {
 		if !shouldRunStartupRecovery(command) {
@@ -1291,6 +1295,18 @@ func TestInferOutputModeFromArgsSupportsDoctorJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"doctor", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected doctor --output=json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsSnapshotJSON(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"snapshot", "create", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected snapshot --output json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"snapshot", "create", "--output=json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected snapshot --output=json to infer json mode, got %q", mode)
 	}
 }
 
@@ -1323,7 +1339,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -1351,6 +1367,140 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		if got, ok := payload["command"].(string); !ok || got != command {
 			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
 		}
+	}
+}
+
+func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var (
+		called       bool
+		gotID        string
+		gotType      string
+		gotLabel     *string
+		gotPaths     []string
+		gotDBNonNil  bool
+		gotCtxNonNil bool
+	)
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, snapshotType string, label *string, paths []string) error {
+		called = true
+		gotID = snapshotID
+		gotType = snapshotType
+		gotLabel = label
+		gotPaths = append([]string(nil), paths...)
+		gotDBNonNil = db != nil
+		gotCtxNonNil = ctx != nil
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"create", "docs/", "a.txt"},
+			flags: map[string][]string{
+				"id":     {"snap-phase2"},
+				"label":  {"release-candidate"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand returned error: %v", err)
+		}
+	})
+
+	if !called {
+		t.Fatal("expected createSnapshotPhase to be called")
+	}
+	if !gotCtxNonNil || !gotDBNonNil {
+		t.Fatalf("expected non-nil ctx and db, got ctx=%v db=%v", gotCtxNonNil, gotDBNonNil)
+	}
+	if gotID != "snap-phase2" {
+		t.Fatalf("snapshot ID mismatch: got=%q", gotID)
+	}
+	if gotType != "partial" {
+		t.Fatalf("snapshot type mismatch: got=%q", gotType)
+	}
+	if gotLabel == nil || *gotLabel != "release-candidate" {
+		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
+	}
+	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
+		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "snapshot" {
+		t.Fatalf("expected command snapshot in JSON payload, got=%v", payload["command"])
+	}
+}
+
+func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	gotType := ""
+	gotPathCount := -1
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, snapshotType string, _ *string, paths []string) error {
+		gotType = snapshotType
+		gotPathCount = len(paths)
+		return nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand returned error: %v", err)
+	}
+
+	if gotType != "full" {
+		t.Fatalf("expected full snapshot type, got %q", gotType)
+	}
+	if gotPathCount != 0 {
+		t.Fatalf("expected zero paths for full snapshot, got %d", gotPathCount)
+	}
+}
+
+func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"list"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown snapshot subcommand") {
+		t.Fatalf("expected unknown snapshot subcommand usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
