@@ -8,7 +8,6 @@ import (
 	"log"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -167,6 +166,14 @@ func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) 
 	return id, nil
 }
 
+func normalizeSourcePathForSnapshot(path string) (string, error) {
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	for strings.HasPrefix(normalized, "/") {
+		normalized = normalized[1:]
+	}
+	return NormalizeSnapshotPath(normalized)
+}
+
 // CreateSnapshot creates an atomic point-in-time snapshot from current physical_file rows.
 // When paths is nil or empty, all physical_file rows are copied into the snapshot.
 // When paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
@@ -218,11 +225,8 @@ func CreateSnapshot(
 	}
 
 	var (
-		queryArgs      []any
-		whereClauses   []string
 		exactFilters   []string
 		dirPrefixes    []string
-		filterVariants = make(map[string]struct{})
 		exactFilterSet = make(map[string]struct{})
 	)
 
@@ -250,35 +254,7 @@ func CreateSnapshot(
 		sort.Strings(exactFilters)
 		sort.Strings(dirPrefixes)
 
-		addFilter := func(operator string, value string) {
-			key := operator + "|" + value
-			if _, exists := filterVariants[key]; exists {
-				return
-			}
-			filterVariants[key] = struct{}{}
-
-			queryArgs = append(queryArgs, value)
-			whereClauses = append(whereClauses, "pf.path "+operator+" $"+strconv.Itoa(len(queryArgs)))
-		}
-
-		for _, exactPath := range exactFilters {
-			addFilter("=", exactPath)
-
-			backslashVariant := strings.ReplaceAll(exactPath, "/", "\\")
-			if backslashVariant != exactPath {
-				addFilter("=", backslashVariant)
-			}
-		}
-		for _, prefix := range dirPrefixes {
-			addFilter("LIKE", prefix+"%")
-
-			backslashPrefix := strings.ReplaceAll(prefix, "/", "\\")
-			if backslashPrefix != prefix {
-				addFilter("LIKE", backslashPrefix+"%")
-			}
-		}
-
-		if len(whereClauses) == 0 {
+		if len(exactFilters) == 0 && len(dirPrefixes) == 0 {
 			return errors.New("partial snapshot requires at least one valid path filter")
 		}
 	}
@@ -288,12 +264,9 @@ func CreateSnapshot(
 		FROM physical_file pf
 		JOIN logical_file lf ON lf.id = pf.logical_file_id
 	`
-	if hasPaths {
-		query += " WHERE " + strings.Join(whereClauses, " OR ")
-	}
 	query += " ORDER BY pf.path, pf.logical_file_id"
 
-	rows, err := tx.QueryContext(ctx, query, queryArgs...)
+	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("query snapshot source rows: %w", err)
 	}
@@ -315,13 +288,28 @@ func CreateSnapshot(
 			return fmt.Errorf("scan snapshot source row: %w", err)
 		}
 
-		normalizedPath, err := NormalizeSnapshotPath(path)
+		normalizedPath, err := normalizeSourcePathForSnapshot(path)
 		if err != nil {
 			return fmt.Errorf("normalize source physical_file path %q: %w", path, err)
 		}
 
-		if _, isExact := exactFilterSet[normalizedPath]; isExact {
-			foundExact[normalizedPath] = struct{}{}
+		if hasPaths {
+			matched := false
+			if _, isExact := exactFilterSet[normalizedPath]; isExact {
+				foundExact[normalizedPath] = struct{}{}
+				matched = true
+			}
+			if !matched {
+				for _, prefix := range dirPrefixes {
+					if strings.HasPrefix(normalizedPath, prefix) {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 
 		if _, duplicate := seenSnapshotPaths[normalizedPath]; duplicate {

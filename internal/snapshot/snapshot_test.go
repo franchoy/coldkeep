@@ -640,3 +640,117 @@ func TestCreateSnapshotPartialMatchesBackslashStoredDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateSnapshotFullNormalizesAbsoluteStoredPaths(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-abs-a", 77)
+	insertPhysicalFile(t, db, "/tmp/input/docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-abs-full", "full", nil, nil)
+	if err != nil {
+		t.Fatalf("CreateSnapshot full with absolute stored path: %v", err)
+	}
+
+	var path string
+	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, "snap-abs-full").Scan(&path); err != nil {
+		t.Fatalf("query snapshot_file path: %v", err)
+	}
+	if path != "tmp/input/docs/a.txt" {
+		t.Fatalf("expected absolute stored path to normalize into relative snapshot path, got %q", path)
+	}
+}
+
+func TestCreateSnapshotPartialRejectsInvalidInputPathAndRollsBack(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-invalid-input", 88)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-invalid-input", "partial", nil, []string{"/absolute/invalid"})
+	if err == nil {
+		t.Fatal("expected invalid-path error for partial snapshot input")
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-invalid-input").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected rollback to remove snapshot row on invalid input path, got count=%d", snapshotCount)
+	}
+}
+
+func TestCreateSnapshotPartialMixedValidInvalidPathRollsBack(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-mixed-invalid", 99)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	err := CreateSnapshot(ctx, db, "snap-mixed-invalid", "partial", nil, []string{"docs/a.txt", "/bad"})
+	if err == nil {
+		t.Fatal("expected mixed valid/invalid paths to fail")
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-mixed-invalid").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected rollback to remove snapshot row for mixed valid/invalid paths, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-mixed-invalid").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected rollback to remove snapshot_file rows for mixed valid/invalid paths, got count=%d", fileCount)
+	}
+}
+
+func TestCreateSnapshotPartialDeterministicAcrossInputOrder(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-deterministic-a", 21)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-deterministic-b", 22)
+	logicalC := insertLogicalFileWithSize(t, db, "hash-deterministic-c", 23)
+
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-deterministic-1", "partial", nil, []string{"docs/", "img/x.png"}); err != nil {
+		t.Fatalf("CreateSnapshot first ordering: %v", err)
+	}
+	if err := CreateSnapshot(ctx, db, "snap-deterministic-2", "partial", nil, []string{"img/x.png", "docs/"}); err != nil {
+		t.Fatalf("CreateSnapshot second ordering: %v", err)
+	}
+
+	rows, err := db.Query(`
+		SELECT a.path, a.logical_file_id, a.size, a.mode, a.mtime
+		FROM snapshot_file a
+		JOIN snapshot_file b ON b.path = a.path
+		WHERE a.snapshot_id = ? AND b.snapshot_id = ?
+		ORDER BY a.path
+	`, "snap-deterministic-1", "snap-deterministic-2")
+	if err != nil {
+		t.Fatalf("query joined deterministic snapshot rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var joinedCount int
+	for rows.Next() {
+		joinedCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate joined deterministic rows: %v", err)
+	}
+	if joinedCount != 3 {
+		t.Fatalf("expected deterministic snapshots to match all 3 paths, got %d", joinedCount)
+	}
+}

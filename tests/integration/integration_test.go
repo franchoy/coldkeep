@@ -454,6 +454,140 @@ func TestDoctorCommand(t *testing.T) {
 	t.Logf("doctor command test passed: verify_level=%q recovery=%q verify=%q schema=%q", verifyLevel, recoveryStatus, verifyStatus, schemaStatus)
 }
 
+func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img input: %v", err)
+	}
+	pathDocs := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "a.txt", 64*1024)
+	pathImg := testutils.CreateTempFile(t, filepath.Join(inputDir, "img"), "x.png", 48*1024)
+
+	storeDocs := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathDocs, "--output", "json"), "store")
+	storeDocsData := testutils.JSONMap(t, storeDocs, "data")
+	storedDocsPath, ok := storeDocsData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedDocsPath) == "" {
+		t.Fatalf("store docs JSON missing stored_path: payload=%v", storeDocs)
+	}
+
+	storeImg := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathImg, "--output", "json"), "store")
+	storeImgData := testutils.JSONMap(t, storeImg, "data")
+	storedImgPath, ok := storeImgData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedImgPath) == "" {
+		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
+	}
+
+	snap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-it-1", "--output", "json"), "snapshot")
+	snap1Data := testutils.JSONMap(t, snap1, "data")
+	if got, _ := snap1Data["snapshot_id"].(string); got != "snap-it-1" {
+		t.Fatalf("snapshot id mismatch for first snapshot: got=%q payload=%v", got, snap1)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB: %v", err)
+	}
+	defer dbconn.Close()
+
+	var physicalCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file`).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical_file rows: %v", err)
+	}
+
+	var snap1Count int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-1").Scan(&snap1Count); err != nil {
+		t.Fatalf("count snapshot_file rows for snap-it-1: %v", err)
+	}
+	if snap1Count != physicalCount {
+		t.Fatalf("snapshot row count mismatch: snapshot=%d physical=%d", snap1Count, physicalCount)
+	}
+
+	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+
+	var snap1DocsRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1 AND path = $2`, "snap-it-1", trimmedDocs).Scan(&snap1DocsRows); err != nil {
+		t.Fatalf("query docs path in first snapshot: %v", err)
+	}
+	if snap1DocsRows != 1 {
+		t.Fatalf("expected docs path in first snapshot, got count=%d path=%q", snap1DocsRows, trimmedDocs)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
+
+	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-it-2", "--output", "json"), "snapshot")
+	snap2Data := testutils.JSONMap(t, snap2, "data")
+	if got, _ := snap2Data["snapshot_id"].(string); got != "snap-it-2" {
+		t.Fatalf("snapshot id mismatch for second snapshot: got=%q payload=%v", got, snap2)
+	}
+
+	var snap2Count int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-2").Scan(&snap2Count); err != nil {
+		t.Fatalf("count snapshot_file rows for snap-it-2: %v", err)
+	}
+	if snap2Count >= snap1Count {
+		t.Fatalf("expected second snapshot to have fewer rows after remove, got first=%d second=%d", snap1Count, snap2Count)
+	}
+
+	var snap2DocsRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1 AND path = $2`, "snap-it-2", trimmedDocs).Scan(&snap2DocsRows); err != nil {
+		t.Fatalf("query docs path in second snapshot: %v", err)
+	}
+	if snap2DocsRows != 0 {
+		t.Fatalf("expected removed docs path to be absent from second snapshot, got count=%d", snap2DocsRows)
+	}
+
+	snapPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedImg, "--id", "snap-it-partial", "--output", "json"), "snapshot")
+	partialData := testutils.JSONMap(t, snapPartial, "data")
+	if got, _ := partialData["type"].(string); got != "partial" {
+		t.Fatalf("expected partial snapshot type, got %q payload=%v", got, snapPartial)
+	}
+
+	var partialCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-partial").Scan(&partialCount); err != nil {
+		t.Fatalf("count snapshot_file rows for partial snapshot: %v", err)
+	}
+	if partialCount != 1 {
+		t.Fatalf("expected exactly one row in partial snapshot, got %d", partialCount)
+	}
+
+	var partialPath string
+	if err := dbconn.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-partial").Scan(&partialPath); err != nil {
+		t.Fatalf("query partial snapshot path: %v", err)
+	}
+	if partialPath != trimmedImg {
+		t.Fatalf("partial snapshot path mismatch: got=%q want=%q", partialPath, trimmedImg)
+	}
+}
+
 func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
 	testgate.RequireDB(t)
 
