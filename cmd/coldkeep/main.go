@@ -106,6 +106,7 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshot
+var restoreSnapshotPhase = snapshot.RestoreSnapshot
 
 type cliError struct {
 	code int
@@ -2160,6 +2161,22 @@ func generateSnapshotID() (string, error) {
 }
 
 func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep snapshot <create|restore> ...")
+	}
+
+	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
+	switch subcommand {
+	case "create":
+		return runSnapshotCreateCommand(parsed, outputMode)
+	case "restore":
+		return runSnapshotRestoreCommand(parsed, outputMode)
+	default:
+		return usageErrorf("unknown snapshot subcommand: %s", parsed.positionals[0])
+	}
+}
+
+func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
 	if err := ensureAllowedFlags(parsed, "id", "label", "output"); err != nil {
@@ -2167,11 +2184,6 @@ func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	}
 	if len(parsed.positionals) < 1 {
 		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]")
-	}
-
-	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
-	if subcommand != "create" {
-		return usageErrorf("unknown snapshot subcommand: %s", parsed.positionals[0])
 	}
 
 	paths := parsed.positionals[1:]
@@ -2262,6 +2274,110 @@ func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	return nil
 }
 
+func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "mode", "destination", "overwrite", "strict", "no-metadata", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 2 {
+		return usageErrorf("Usage: coldkeep snapshot restore <snapshotID> [<path> ...] [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--output <text|json>]")
+	}
+
+	snapshotID := strings.TrimSpace(parsed.positionals[1])
+	if snapshotID == "" {
+		return usageErrorf("snapshotID cannot be empty")
+	}
+	paths := parsed.positionals[2:]
+
+	strictMetadata := parsed.hasFlag("strict")
+	noMetadata := parsed.hasFlag("no-metadata")
+	if strictMetadata && noMetadata {
+		return usageErrorf("--strict and --no-metadata cannot be used together")
+	}
+
+	destinationMode, err := parseRestoreDestinationMode(parsed)
+	if err != nil {
+		return err
+	}
+	destination, _ := parsed.lastFlagValue("destination")
+	destination = strings.TrimSpace(destination)
+	if destinationMode == storage.RestoreDestinationOriginal && destination != "" {
+		return usageErrorf("--destination is only supported with --mode prefix or --mode override")
+	}
+	if (destinationMode == storage.RestoreDestinationPrefix || destinationMode == storage.RestoreDestinationOverride) && destination == "" {
+		return usageErrorf("--destination is required with --mode %s", destinationMode)
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	if sgctx.DB == nil {
+		return errors.New("storage context DB is nil")
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	result, err := restoreSnapshotPhase(
+		ctx,
+		sgctx.DB,
+		snapshotID,
+		paths,
+		snapshot.RestoreSnapshotOptions{
+			DestinationMode: destinationMode,
+			Destination:     destination,
+			Overwrite:       parsed.hasFlag("overwrite"),
+			StrictMetadata:  strictMetadata,
+			NoMetadata:      noMetadata,
+			StorageContext:  &sgctx,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	durationMS := time.Since(startedAt).Milliseconds()
+	actionType := "full"
+	if len(paths) > 0 {
+		actionType = "partial_restore"
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data": map[string]any{
+				"action":                "restore",
+				"snapshot_id":           snapshotID,
+				"type":                  actionType,
+				"requested_paths_count": len(paths),
+				"restored_files":        result.RestoredFiles,
+				"duration_ms":           durationMS,
+			},
+		}
+		if destination != "" {
+			payloadData := payload["data"].(map[string]any)
+			payloadData["output_root"] = destination
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if len(paths) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s files=%d\n", snapshotID, result.RestoredFiles)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s requested_paths=%d restored_files=%d\n", snapshotID, len(paths), result.RestoredFiles)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", durationMS)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
 func printHelp() {
 	fmt.Printf("coldkeep (v%s)\n", version.String())
 	fmt.Println()
@@ -2294,6 +2410,7 @@ func printHelp() {
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
 		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
+		{"  snapshot restore <snapshotID> [<path> ...] [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -2372,6 +2489,9 @@ func printHelp() {
 	fmt.Println("  coldkeep verify file 12 --deep")
 	fmt.Println("  coldkeep snapshot create")
 	fmt.Println("  coldkeep snapshot create docs/ report.txt --label release-2026-04")
+	fmt.Println("  coldkeep snapshot restore snap-123 --mode prefix --destination ./restored")
+	fmt.Println("  coldkeep snapshot restore snap-123 docs/ --mode prefix --destination ./restored")
+	fmt.Println("  coldkeep snapshot restore snap-123 docs/a.txt --mode override --destination ./restored/a.txt")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
 	fmt.Println("  coldkeep simulate store myfile.bin")

@@ -586,6 +586,51 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	if partialPath != trimmedImg {
 		t.Fatalf("partial snapshot path mismatch: got=%q want=%q", partialPath, trimmedImg)
 	}
+
+	restoreRoot := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore root: %v", err)
+	}
+
+	restoreSnap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-1", "--mode", "prefix", "--destination", restoreRoot, "--output", "json"), "snapshot")
+	restoreSnap1Data := testutils.JSONMap(t, restoreSnap1, "data")
+	if got, _ := restoreSnap1Data["action"].(string); got != "restore" {
+		t.Fatalf("snapshot restore JSON missing action=restore: payload=%v", restoreSnap1)
+	}
+
+	restoredDocsFromSnap1 := filepath.Join(restoreRoot, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredDocsFromSnap1); err != nil {
+		t.Fatalf("expected docs file restored from first snapshot at %s: %v", restoredDocsFromSnap1, err)
+	}
+
+	// snap-it-2 was created after docs mapping removal; restoring it should not restore docs path.
+	restoreRoot2 := filepath.Join(tmp, "restored2")
+	if err := os.MkdirAll(restoreRoot2, 0o755); err != nil {
+		t.Fatalf("mkdir restore root2: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-2", "--mode", "prefix", "--destination", restoreRoot2, "--output", "json"), "snapshot")
+	restoredDocsFromSnap2 := filepath.Join(restoreRoot2, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredDocsFromSnap2); !os.IsNotExist(err) {
+		t.Fatalf("expected docs file to remain absent when restoring second snapshot, stat err=%v", err)
+	}
+
+	// Partial snapshot restore should restore only the requested exact path.
+	restoreRoot3 := filepath.Join(tmp, "restored3")
+	if err := os.MkdirAll(restoreRoot3, 0o755); err != nil {
+		t.Fatalf("mkdir restore root3: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-1", trimmedImg, "--mode", "prefix", "--destination", restoreRoot3, "--output", "json"), "snapshot")
+	restoredImg := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedImg))
+	restoredDocs := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredImg); err != nil {
+		t.Fatalf("expected exact requested image path restored, err=%v", err)
+	}
+	if _, err := os.Stat(restoredDocs); !os.IsNotExist(err) {
+		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
+	}
 }
 
 func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {

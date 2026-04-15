@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -781,5 +784,104 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 	}
 	if count != 1 {
 		t.Fatalf("expected docs/ snapshot to include one row, got %d", count)
+	}
+}
+
+// ---- RestoreSnapshot helper tests ----
+
+func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {
+	t.Helper()
+	_, err := db.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
+		snapshotID,
+		path,
+		logicalFileID,
+		sql.NullInt64{Int64: 1, Valid: true},
+		mode,
+		mtime,
+	)
+	if err != nil {
+		t.Fatalf("insert snapshot_file row snapshot_id=%s path=%s: %v", snapshotID, path, err)
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionMissingSnapshotFails(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	_, _, err := resolveSnapshotRestoreSelection(ctx, db, "snap-missing", nil)
+	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+		t.Fatalf("expected missing snapshot error, got: %v", err)
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionExactAndDirectory(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-rsel-a", 1)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-rsel-b", 2)
+	s := Snapshot{ID: "snap-rsel", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, s.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	selected, exact, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/", "docs/a.txt"})
+	if err != nil {
+		t.Fatalf("resolveSnapshotRestoreSelection: %v", err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("expected 2 selected rows, got %d", len(selected))
+	}
+	if len(exact) != 1 || exact[0] != "docs/a.txt" {
+		t.Fatalf("exact filters mismatch: %v", exact)
+	}
+}
+
+func TestResolveSnapshotRestoreSelectionExactMissingFails(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-rsel-missing", 1)
+	s := Snapshot{ID: "snap-rsel-missing", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+	insertSnapshotFileRow(t, db, s.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	_, _, err := resolveSnapshotRestoreSelection(ctx, db, s.ID, []string{"docs/missing.txt"})
+	if err == nil || !strings.Contains(err.Error(), "path not found in snapshot") {
+		t.Fatalf("expected exact missing path error, got: %v", err)
+	}
+}
+
+func TestPlanSnapshotRestoreOutputsRejectsOverrideForMultiFile(t *testing.T) {
+	rows := []snapshotRestoreRow{{Path: "docs/a.txt", LogicalFileID: 1}, {Path: "docs/b.txt", LogicalFileID: 2}}
+	_, err := planSnapshotRestoreOutputs(rows, []string{"docs/a.txt", "docs/b.txt"}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOverride,
+		Destination:     "./out.bin",
+	})
+	if err == nil || !strings.Contains(err.Error(), "single exact-path") {
+		t.Fatalf("expected override multi-file rejection, got: %v", err)
+	}
+}
+
+func TestPlanSnapshotRestoreOutputsRejectsConflictsWhenOverwriteOff(t *testing.T) {
+	tmp := t.TempDir()
+	conflictPath := filepath.Join(tmp, "conflict.txt")
+	if err := os.WriteFile(conflictPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write conflict file: %v", err)
+	}
+
+	rows := []snapshotRestoreRow{{Path: "docs/a.txt", LogicalFileID: 1}}
+	_, err := planSnapshotRestoreOutputs(rows, []string{"docs/a.txt"}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOverride,
+		Destination:     conflictPath,
+		Overwrite:       false,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected overwrite-off conflict error, got: %v", err)
 	}
 }

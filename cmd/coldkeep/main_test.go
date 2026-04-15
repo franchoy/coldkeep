@@ -16,6 +16,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
@@ -1505,6 +1506,138 @@ func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "unknown snapshot subcommand") {
 		t.Fatalf("expected unknown snapshot subcommand usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalRestore := restoreSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		restoreSnapshotPhase = originalRestore
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var (
+		called        bool
+		gotSnapshotID string
+		gotPaths      []string
+		gotOpts       snapshot.RestoreSnapshotOptions
+	)
+	restoreSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, paths []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		called = true
+		_ = ctx
+		_ = db
+		gotSnapshotID = snapshotID
+		gotPaths = append([]string(nil), paths...)
+		gotOpts = opts
+		return &snapshot.RestoreSnapshotResult{SnapshotID: snapshotID, RestoredFiles: 2, RequestedPaths: int64(len(paths))}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-restore-1", "docs/", "a.txt"},
+			flags: map[string][]string{
+				"mode":        {"prefix"},
+				"destination": {"./restored"},
+				"overwrite":   {""},
+				"output":      {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand restore returned error: %v", err)
+		}
+	})
+
+	if !called {
+		t.Fatal("expected restoreSnapshotPhase to be called")
+	}
+	if gotSnapshotID != "snap-restore-1" {
+		t.Fatalf("snapshot ID mismatch: got=%q", gotSnapshotID)
+	}
+	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
+		t.Fatalf("snapshot restore paths mismatch: got=%v", gotPaths)
+	}
+	if gotOpts.DestinationMode != storage.RestoreDestinationPrefix {
+		t.Fatalf("destination mode mismatch: got=%q", gotOpts.DestinationMode)
+	}
+	if gotOpts.Destination != "./restored" {
+		t.Fatalf("destination mismatch: got=%q", gotOpts.Destination)
+	}
+	if !gotOpts.Overwrite {
+		t.Fatal("expected overwrite=true")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot restore JSON output: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in snapshot restore payload, got=%v", payload)
+	}
+	if got, _ := data["action"].(string); got != "restore" {
+		t.Fatalf("expected action=restore, got=%v", data)
+	}
+}
+
+func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalRestore := restoreSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		restoreSnapshotPhase = originalRestore
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	gotPathCount := -1
+	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, paths []string, _ snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		gotPathCount = len(paths)
+		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-full-restore", RestoredFiles: 0}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"restore", "snap-full-restore"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand restore full returned error: %v", err)
+	}
+
+	if gotPathCount != 0 {
+		t.Fatalf("expected zero restore paths for full snapshot restore, got %d", gotPathCount)
+	}
+}
+
+func TestRunSnapshotCommandRestoreRejectsInvalidModeCombination(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"restore", "snap-1"},
+		flags: map[string][]string{
+			"mode": {"override"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--destination is required") {
+		t.Fatalf("expected destination-required error for override restore mode, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
