@@ -47,8 +47,9 @@ type RestoreSnapshotOptions struct {
 }
 
 type RestoreSnapshotResult struct {
-	SnapshotID     string
-	RestoredFiles  int64
+	SnapshotID    string
+	RestoredFiles int64
+	// RequestedPaths counts raw CLI input paths before normalization/deduplication.
 	RequestedPaths int64
 	OutputPaths    []string
 }
@@ -352,7 +353,7 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 	}
 
 	plans := make([]snapshotRestorePlanItem, 0, len(rows))
-	seenOutput := make(map[string]struct{})
+	seenOutput := make(map[string]string)
 
 	for _, row := range rows {
 		outputPath := row.Path
@@ -379,10 +380,10 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 		}
 
 		cleanOutputPath := filepath.Clean(outputPath)
-		if _, exists := seenOutput[cleanOutputPath]; exists {
-			return nil, fmt.Errorf("restore output path collision: %s", cleanOutputPath)
+		if firstPath, exists := seenOutput[cleanOutputPath]; exists {
+			return nil, fmt.Errorf("restore output path collision: snapshot paths %q and %q map to %s", firstPath, row.Path, cleanOutputPath)
 		}
-		seenOutput[cleanOutputPath] = struct{}{}
+		seenOutput[cleanOutputPath] = row.Path
 
 		plans = append(plans, snapshotRestorePlanItem{
 			Path:          row.Path,
@@ -400,19 +401,6 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 			} else if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("check output path %s: %w", plan.OutputPath, err)
 			}
-		}
-	}
-
-	validatedDirs := make(map[string]struct{})
-	for _, plan := range plans {
-		dir := filepath.Dir(plan.OutputPath)
-		if _, seen := validatedDirs[dir]; seen {
-			continue
-		}
-		validatedDirs[dir] = struct{}{}
-
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("create destination directory %s: %w", dir, err)
 		}
 	}
 
@@ -459,6 +447,19 @@ func executeSnapshotRestorePlan(ctx context.Context, plans []snapshotRestorePlan
 	result := &RestoreSnapshotResult{
 		RestoredFiles: int64(0),
 		OutputPaths:   make([]string, 0, len(plans)),
+	}
+
+	validatedDirs := make(map[string]struct{})
+	for _, plan := range plans {
+		dir := filepath.Dir(plan.OutputPath)
+		if _, seen := validatedDirs[dir]; seen {
+			continue
+		}
+		validatedDirs[dir] = struct{}{}
+
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create destination directory %s: %w", dir, err)
+		}
 	}
 
 	for _, plan := range plans {

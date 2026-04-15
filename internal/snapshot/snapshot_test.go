@@ -965,14 +965,14 @@ func TestResolveSnapshotRestoreSelectionDeterministicAcrossInputOrder(t *testing
 	}
 }
 
-func TestPlanSnapshotRestoreOutputsPreflightCreatesDestinationDirectories(t *testing.T) {
+func TestPlanSnapshotRestoreOutputsDoesNotCreateDestinationDirectories(t *testing.T) {
 	tmp := t.TempDir()
 	prefix := filepath.Join(tmp, "restore-root")
 	targetDir := filepath.Join(prefix, "docs")
 	rows := []snapshotRestoreRow{{Path: "docs/a.txt", LogicalFileID: 1}}
 
 	if _, err := os.Stat(targetDir); !os.IsNotExist(err) {
-		t.Fatalf("expected target directory to not exist before preflight, err=%v", err)
+		t.Fatalf("expected target directory to not exist before planning, err=%v", err)
 	}
 
 	_, err := planSnapshotRestoreOutputs(rows, []string{"docs/"}, RestoreSnapshotOptions{
@@ -981,10 +981,10 @@ func TestPlanSnapshotRestoreOutputsPreflightCreatesDestinationDirectories(t *tes
 		Overwrite:       true,
 	})
 	if err != nil {
-		t.Fatalf("planSnapshotRestoreOutputs should preflight destination dirs: %v", err)
+		t.Fatalf("planSnapshotRestoreOutputs should succeed without side effects: %v", err)
 	}
 
-	if stat, err := os.Stat(targetDir); err != nil || !stat.IsDir() {
-		t.Fatalf("expected destination directory created during preflight, stat=%v err=%v", stat, err)
+	if _, err := os.Stat(targetDir); !os.IsNotExist(err) {
+		t.Fatalf("expected planner to remain side-effect free, target dir stat err=%v", err)
 	}
 }

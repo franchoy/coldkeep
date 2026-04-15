@@ -2368,10 +2368,14 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 		return nil
 	}
 
+	emptyNote := ""
+	if result.RestoredFiles == 0 {
+		emptyNote = " (empty snapshot selection)"
+	}
 	if len(paths) == 0 {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s files=%d\n", snapshotID, result.RestoredFiles)
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s files=%d%s\n", snapshotID, result.RestoredFiles, emptyNote)
 	} else {
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s requested_paths=%d restored_files=%d\n", snapshotID, len(paths), result.RestoredFiles)
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s requested_paths=%d restored_files=%d%s\n", snapshotID, len(paths), result.RestoredFiles, emptyNote)
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", durationMS)
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
