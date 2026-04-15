@@ -1869,6 +1869,100 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsOnlyAdded(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diff-only-added-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diff-only-added-b", 11)
+
+	base := Snapshot{ID: "snap-diff-only-added-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-only-added-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	insertSnapshotFileRow(t, db, target.ID, "new/alpha.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "new/beta.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots only added: %v", err)
+	}
+	if result.Summary.Added != 2 || result.Summary.Removed != 0 || result.Summary.Modified != 0 {
+		t.Fatalf("expected 2 added, got summary=%+v", result.Summary)
+	}
+	for _, e := range result.Entries {
+		if e.Type != "added" {
+			t.Fatalf("expected all entries to be 'added', got %+v", e)
+		}
+	}
+}
+
+func TestDiffSnapshotsOnlyRemoved(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diff-only-removed-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diff-only-removed-b", 11)
+
+	base := Snapshot{ID: "snap-diff-only-removed-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-only-removed-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "old/alpha.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "old/beta.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots only removed: %v", err)
+	}
+	if result.Summary.Removed != 2 || result.Summary.Added != 0 || result.Summary.Modified != 0 {
+		t.Fatalf("expected 2 removed, got summary=%+v", result.Summary)
+	}
+	for _, e := range result.Entries {
+		if e.Type != "removed" {
+			t.Fatalf("expected all entries to be 'removed', got %+v", e)
+		}
+	}
+}
+
+func TestDiffSnapshotsOnlyModified(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalOld := insertLogicalFileWithSize(t, db, "hash-diff-only-mod-old", 10)
+	logicalNew := insertLogicalFileWithSize(t, db, "hash-diff-only-mod-new", 20)
+
+	base := Snapshot{ID: "snap-diff-only-modified-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diff-only-modified-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	for _, s := range []Snapshot{base, target} {
+		if err := InsertSnapshot(ctx, db, s); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", s.ID, err)
+		}
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "data/file.bin", logicalOld, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "data/file.bin", logicalNew, sql.NullInt64{}, sql.NullTime{})
+
+	result, err := DiffSnapshots(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshots only modified: %v", err)
+	}
+	if result.Summary.Modified != 1 || result.Summary.Added != 0 || result.Summary.Removed != 0 {
+		t.Fatalf("expected 1 modified, got summary=%+v", result.Summary)
+	}
+	if len(result.Entries) != 1 || result.Entries[0].Type != "modified" || result.Entries[0].Path != "data/file.bin" {
+		t.Fatalf("expected single modified entry for data/file.bin, got %+v", result.Entries)
+	}
+}
+
 func TestDiffSnapshotsLargeDatasetPerformanceSanity(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
