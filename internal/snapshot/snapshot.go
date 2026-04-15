@@ -249,7 +249,7 @@ func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) (
 		query.WriteString(" AND type = " + appendArg(strings.TrimSpace(*filter.Type)))
 	}
 	if filter.Label != nil && strings.TrimSpace(*filter.Label) != "" {
-		query.WriteString(" AND label IS NOT NULL AND LOWER(label) LIKE LOWER(" + appendArg("%"+strings.TrimSpace(*filter.Label)+"%") + ")")
+		query.WriteString(" AND LOWER(label) LIKE LOWER(" + appendArg("%"+strings.TrimSpace(*filter.Label)+"%") + ")")
 	}
 	if filter.Since != nil {
 		sinceUTC := filter.Since.UTC()
