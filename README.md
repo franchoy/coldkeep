@@ -261,9 +261,24 @@ coldkeep snapshot list
 coldkeep snapshot list --type full --limit 10 --since 2026-01-01
 coldkeep snapshot show snap-abc123
 coldkeep snapshot show snap-abc123 --limit 50
+coldkeep snapshot show snap-abc123 --prefix docs/
+coldkeep snapshot show snap-abc123 --pattern "docs/*.txt" --min-size 1024
 coldkeep snapshot stats
 coldkeep snapshot stats snap-abc123
 ```
+
+Snapshot file queries are reusable across `snapshot show`, `snapshot restore`, and `snapshot diff`.
+
+Supported query flags:
+
+- `--path <exact>`: exact normalized snapshot path match; repeatable
+- `--prefix <dir/>`: normalized directory prefix match; repeatable and must end with `/`
+- `--pattern <glob>`: `filepath.Match` glob against the snapshot path
+- `--regex <re>`: regular expression against the snapshot path
+- `--min-size <bytes>` / `--max-size <bytes>`: inclusive logical size range
+- `--modified-after <RFC3339|YYYY-MM-DD>` / `--modified-before <RFC3339|YYYY-MM-DD>`: inclusive mtime window
+
+All active criteria are ANDed together. Path and prefix inputs are normalized before matching, and result ordering remains deterministic.
 
 ### Restoring from a snapshot
 
@@ -276,6 +291,9 @@ coldkeep snapshot restore snap-abc123 docs/ --mode prefix --destination ./restor
 
 # Restore a single file to an explicit destination
 coldkeep snapshot restore snap-abc123 docs/report.txt --mode override --destination ./out/report.txt
+
+# Restore only matching files from the snapshot query layer
+coldkeep snapshot restore snap-abc123 --prefix docs/ --pattern "docs/*.txt" --mode prefix --destination ./restored
 ```
 
 ### Diffing two snapshots
@@ -288,6 +306,12 @@ coldkeep snapshot diff snap-1 snap-2
 
 # Show only added files
 coldkeep snapshot diff snap-1 snap-2 --filter added
+
+# Restrict the diff view to a path subset
+coldkeep snapshot diff snap-1 snap-2 --prefix docs/
+
+# Combine diff classification with snapshot query filters
+coldkeep snapshot diff snap-1 snap-2 --filter modified --regex "\\.yaml$"
 
 # Machine-readable JSON output
 coldkeep snapshot diff snap-1 snap-2 --output json
@@ -332,6 +356,8 @@ JSON output schema:
 ```
 
 `--filter` limits output to one change type (`added`, `removed`, or `modified`). Summary counts reflect the filtered set.
+
+The JSON contract for snapshot commands is unchanged. Query flags only reduce the returned `files` or `entries` collections and the derived counts; field names and envelope structure remain stable.
 
 ### Deleting a snapshot
 

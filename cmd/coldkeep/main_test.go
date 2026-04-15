@@ -1629,6 +1629,123 @@ func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalRestore := restoreSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		restoreSnapshotPhase = originalRestore
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotQuery *snapshot.SnapshotQuery
+	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, _ []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		gotQuery = opts.Query
+		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-query", RestoredFiles: 1}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"restore", "snap-query"},
+		flags: map[string][]string{
+			"path":            {"./docs/a.txt", "docs/b.txt"},
+			"prefix":          {"./docs//", "images/"},
+			"pattern":         {"*.txt"},
+			"regex":           {"^docs/"},
+			"min-size":        {"10"},
+			"max-size":        {"20"},
+			"modified-after":  {"2026-01-01"},
+			"modified-before": {"2026-01-31"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand restore returned error: %v", err)
+	}
+	if gotQuery == nil {
+		t.Fatal("expected restore query to be forwarded")
+	}
+	if len(gotQuery.ExactPaths) != 2 {
+		t.Fatalf("expected 2 exact paths, got %#v", gotQuery.ExactPaths)
+	}
+	if _, ok := gotQuery.ExactPaths["docs/a.txt"]; !ok {
+		t.Fatalf("expected normalized path docs/a.txt, got %#v", gotQuery.ExactPaths)
+	}
+	if _, ok := gotQuery.ExactPaths["docs/b.txt"]; !ok {
+		t.Fatalf("expected exact path docs/b.txt, got %#v", gotQuery.ExactPaths)
+	}
+	if len(gotQuery.Prefixes) != 2 || gotQuery.Prefixes[0] != "docs/" || gotQuery.Prefixes[1] != "images/" {
+		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotQuery.Prefixes)
+	}
+	if gotQuery.Pattern != "*.txt" {
+		t.Fatalf("expected pattern '*.txt', got %q", gotQuery.Pattern)
+	}
+	if gotQuery.Regex == nil || gotQuery.Regex.String() != "^docs/" {
+		t.Fatalf("expected regex '^docs/', got %#v", gotQuery.Regex)
+	}
+	if gotQuery.MinSize == nil || *gotQuery.MinSize != 10 {
+		t.Fatalf("expected min size 10, got %#v", gotQuery.MinSize)
+	}
+	if gotQuery.MaxSize == nil || *gotQuery.MaxSize != 20 {
+		t.Fatalf("expected max size 20, got %#v", gotQuery.MaxSize)
+	}
+	if gotQuery.ModifiedAfter == nil || gotQuery.ModifiedAfter.UTC().Format("2006-01-02") != "2026-01-01" {
+		t.Fatalf("expected modified-after date, got %#v", gotQuery.ModifiedAfter)
+	}
+	if gotQuery.ModifiedBefore == nil || gotQuery.ModifiedBefore.UTC().Format("2006-01-02") != "2026-01-31" {
+		t.Fatalf("expected modified-before date, got %#v", gotQuery.ModifiedBefore)
+	}
+}
+
+func TestRunSnapshotCommandRestoreRejectsInvalidQueryRanges(t *testing.T) {
+	t.Run("size range", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"min-size": {"20"},
+				"max-size": {"10"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "--min-size must be <= --max-size") {
+			t.Fatalf("expected min/max validation error, got: %v", err)
+		}
+	})
+
+	t.Run("time range", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"modified-after":  {"2026-02-01"},
+				"modified-before": {"2026-01-01"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "--modified-after must be <= --modified-before") {
+			t.Fatalf("expected modified range validation error, got: %v", err)
+		}
+	})
+
+	t.Run("prefix format", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"prefix": {"docs"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "must end with '/'") {
+			t.Fatalf("expected prefix validation error, got: %v", err)
+		}
+	})
+}
+
 func TestRunSnapshotCommandRestoreRejectsInvalidModeCombination(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
@@ -1766,6 +1883,61 @@ func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	files := data["files"].([]any)
 	if len(files) != 2 {
 		t.Fatalf("expected 2 files, got %d", len(files))
+	}
+}
+
+func TestRunSnapshotCommandShowForwardsSnapshotQuery(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Now().UTC()}, nil
+	}
+
+	var gotQuery *snapshot.SnapshotQuery
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, query *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		gotQuery = query
+		return nil, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 0}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"show", "snap-show-query"},
+		flags: map[string][]string{
+			"path":   {"./docs/a.txt"},
+			"prefix": {"./docs//"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand show returned error: %v", err)
+	}
+	if gotQuery == nil {
+		t.Fatal("expected show query to be forwarded")
+	}
+	if _, ok := gotQuery.ExactPaths["docs/a.txt"]; !ok {
+		t.Fatalf("expected normalized path docs/a.txt, got %#v", gotQuery.ExactPaths)
+	}
+	if len(gotQuery.Prefixes) != 1 || gotQuery.Prefixes[0] != "docs/" {
+		t.Fatalf("expected normalized prefix docs/, got %#v", gotQuery.Prefixes)
 	}
 }
 
@@ -1921,6 +2093,50 @@ func TestRunSnapshotCommandDiffForwardsAndFormatsJSON(t *testing.T) {
 	summary := data["summary"].(map[string]any)
 	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 1 {
 		t.Fatalf("unexpected diff summary payload: %v", data)
+	}
+}
+
+func TestRunSnapshotCommandDiffForwardsSnapshotQuery(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotQuery *snapshot.SnapshotQuery
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, _, _ string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		gotQuery = query
+		return &snapshot.SnapshotDiffResult{}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "snap-1", "snap-2"},
+		flags: map[string][]string{
+			"path":   {"./docs/a.txt", "docs/b.txt"},
+			"prefix": {"./docs//", "images/"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+	}
+	if gotQuery == nil {
+		t.Fatal("expected diff query to be forwarded")
+	}
+	if len(gotQuery.ExactPaths) != 2 {
+		t.Fatalf("expected 2 exact paths, got %#v", gotQuery.ExactPaths)
+	}
+	if len(gotQuery.Prefixes) != 2 || gotQuery.Prefixes[0] != "docs/" || gotQuery.Prefixes[1] != "images/" {
+		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotQuery.Prefixes)
 	}
 }
 

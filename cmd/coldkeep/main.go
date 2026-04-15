@@ -2246,25 +2246,38 @@ func parseSnapshotQuery(parsed parsedCommandLine) (*snapshot.SnapshotQuery, erro
 	q := &snapshot.SnapshotQuery{}
 	hasAny := false
 
-	if value, ok := parsed.lastFlagValue("path"); ok {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			return nil, usageErrorf("--path cannot be empty")
+	if values := parsed.flagValues("path"); len(values) > 0 {
+		q.ExactPaths = make(map[string]struct{}, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				return nil, usageErrorf("--path cannot be empty")
+			}
+			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+			if err != nil {
+				return nil, usageErrorf("invalid --path value %q: %v", trimmed, err)
+			}
+			q.ExactPaths[normalized] = struct{}{}
 		}
-		normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
-		if err != nil {
-			return nil, usageErrorf("invalid --path value %q: %v", trimmed, err)
-		}
-		q.ExactPaths = map[string]struct{}{normalized: {}}
 		hasAny = true
 	}
 
-	if value, ok := parsed.lastFlagValue("prefix"); ok {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			return nil, usageErrorf("--prefix cannot be empty")
+	if values := parsed.flagValues("prefix"); len(values) > 0 {
+		q.Prefixes = make([]string, 0, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				return nil, usageErrorf("--prefix cannot be empty")
+			}
+			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+			if err != nil {
+				return nil, usageErrorf("invalid --prefix value %q: %v", trimmed, err)
+			}
+			if !strings.HasSuffix(normalized, "/") {
+				return nil, usageErrorf("invalid --prefix value %q: must end with '/'", trimmed)
+			}
+			q.Prefixes = append(q.Prefixes, normalized)
 		}
-		q.Prefixes = []string{trimmed}
 		hasAny = true
 	}
 
@@ -2324,6 +2337,13 @@ func parseSnapshotQuery(parsed parsedCommandLine) (*snapshot.SnapshotQuery, erro
 		}
 		q.ModifiedBefore = parsedTime
 		hasAny = true
+	}
+
+	if q.MinSize != nil && q.MaxSize != nil && *q.MinSize > *q.MaxSize {
+		return nil, usageErrorf("--min-size must be <= --max-size")
+	}
+	if q.ModifiedAfter != nil && q.ModifiedBefore != nil && q.ModifiedAfter.After(*q.ModifiedBefore) {
+		return nil, usageErrorf("--modified-after must be <= --modified-before")
 	}
 
 	if !hasAny {
@@ -2685,7 +2705,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return err
 	}
 	if len(parsed.positionals) != 3 {
-		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
 	}
 
 	baseID := strings.TrimSpace(parsed.positionals[1])
@@ -3048,7 +3068,7 @@ func printHelp() {
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
-		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -3213,6 +3233,15 @@ func (parsed parsedCommandLine) lastFlagValue(name string) (string, bool) {
 	}
 
 	return values[len(values)-1], true
+}
+
+func (parsed parsedCommandLine) flagValues(name string) []string {
+	values, ok := parsed.flags[name]
+	if !ok || len(values) == 0 {
+		return nil
+	}
+
+	return append([]string(nil), values...)
 }
 
 func (parsed parsedCommandLine) hasFlag(names ...string) bool {
