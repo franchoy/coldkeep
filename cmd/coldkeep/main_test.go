@@ -1746,6 +1746,66 @@ func TestRunSnapshotCommandRestoreRejectsInvalidQueryRanges(t *testing.T) {
 	})
 }
 
+func TestRunSnapshotCommandRestoreRejectsInvalidQueryFlagValues(t *testing.T) {
+	t.Run("invalid regex", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"regex": {"[unclosed"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --regex value") {
+			t.Fatalf("expected invalid-regex error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+
+	t.Run("invalid pattern", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"pattern": {"[unclosed"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --pattern value") {
+			t.Fatalf("expected invalid-pattern error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+}
+
+func TestRunSnapshotCommandShowRejectsInvalidQueryFlagValues(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"show", "snap-1"},
+		flags: map[string][]string{
+			"regex": {"[unclosed"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --regex value") {
+		t.Fatalf("expected invalid-regex error from show command, got: %v", err)
+	}
+}
+
+func TestRunSnapshotCommandDiffRejectsInvalidQueryFlagValues(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "snap-1", "snap-2"},
+		flags: map[string][]string{
+			"pattern": {"[unclosed"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --pattern value") {
+		t.Fatalf("expected invalid-pattern error from diff command, got: %v", err)
+	}
+}
+
 func TestRunSnapshotCommandRestoreRejectsInvalidModeCombination(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",

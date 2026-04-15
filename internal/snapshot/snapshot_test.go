@@ -2193,6 +2193,19 @@ func TestSnapshotQueryMatchEmptyQueryMatchesAll(t *testing.T) {
 	}
 }
 
+// TestSnapshotQueryMatchBadPatternNoMatch documents that a malformed glob pattern
+// stored in Query.Pattern causes Match() to return false (no match) rather than
+// panicking or producing undefined behavior. In practice this state should never
+// be reached because parseSnapshotQuery validates the pattern with filepath.Match.
+func TestSnapshotQueryMatchBadPatternNoMatch(t *testing.T) {
+	q := &SnapshotQuery{Pattern: "[unclosed"}
+	e := SnapshotFileEntry{Path: "docs/a.txt"}
+	// Must not panic and must treat it as non-matching.
+	if q.Match(e) {
+		t.Fatal("malformed glob pattern should not match any path")
+	}
+}
+
 // ---- ListSnapshotFiles with query tests ----
 
 func TestListSnapshotFilesWithPrefixQuery(t *testing.T) {
