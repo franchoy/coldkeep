@@ -557,3 +557,56 @@ func TestRunGCDryRunRetainsContainerWhenAnotherSnapshotStillReferences(t *testin
 		t.Fatalf("expected 1 snapshot-retained container via second snapshot, got %d", result.SnapshotRetainedContainers)
 	}
 }
+
+// TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete
+// verifies that removing only current-state mapping does not make content
+// collectible while snapshot retention remains.
+func TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	setupSnapshotRetainedContainer(t, dbconn, containersDir)
+
+	var logicalID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE original_name = 'snap-retained.bin' LIMIT 1`).Scan(&logicalID); err != nil {
+		t.Fatalf("lookup retained logical_file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO physical_file (path, logical_file_id, is_metadata_complete)
+		VALUES ('/data/shared-current-and-snapshot.bin', $1, TRUE)
+	`, logicalID); err != nil {
+		t.Fatalf("insert current-state mapping: %v", err)
+	}
+
+	before, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
+	if gcErr != nil {
+		t.Fatalf("dry-run GC before removing current mapping should succeed: %v", gcErr)
+	}
+	if before.AffectedContainers != 0 {
+		t.Fatalf("expected 0 reclaimable containers before removing current mapping, got %d", before.AffectedContainers)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM physical_file WHERE logical_file_id = $1`, logicalID); err != nil {
+		t.Fatalf("delete current-state mapping: %v", err)
+	}
+
+	after, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
+	if gcErr != nil {
+		t.Fatalf("dry-run GC after removing current mapping should succeed: %v", gcErr)
+	}
+	if after.AffectedContainers != 0 {
+		t.Fatalf("expected 0 reclaimable containers after removing current mapping (snapshot still retains), got %d", after.AffectedContainers)
+	}
+	if after.SnapshotRetainedContainers != 1 {
+		t.Fatalf("expected 1 snapshot-retained container after removing current mapping, got %d", after.SnapshotRetainedContainers)
+	}
+}

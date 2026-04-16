@@ -138,6 +138,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
+		ORDER BY id ASC
 	`)
 	if err != nil {
 		return GCResult{}, err
