@@ -2117,6 +2117,47 @@ func TestSnapshotQueryMatchGlobPattern(t *testing.T) {
 	}
 }
 
+func TestSnapshotQueryMatchGlobPatternDoesNotCrossSlashBoundaries(t *testing.T) {
+	q := &SnapshotQuery{Pattern: "*.txt"}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"a.txt", true},
+		{"docs/a.txt", false},
+		{"docs/sub/a.txt", false},
+		{"a.txt.bak", false},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match(%q) glob boundary = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestSnapshotQueryMatchGlobPatternUsesNormalizedSlashPaths(t *testing.T) {
+	q := &SnapshotQuery{Pattern: "docs/*.txt"}
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"docs/a.txt", true},
+		{"docs/sub/a.txt", false},
+		{"docs\\a.txt", false},
+	}
+	for _, tc := range cases {
+		e := SnapshotFileEntry{Path: tc.path}
+		got := q.Match(e)
+		if got != tc.want {
+			t.Errorf("Match(%q) normalized slash glob = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestSnapshotQueryMatchRegex(t *testing.T) {
 	re := regexp.MustCompile(`\.log$`)
 	q := &SnapshotQuery{Regex: re}
@@ -2232,7 +2273,7 @@ func TestSnapshotQueryMatchEmptyQueryMatchesAll(t *testing.T) {
 // TestSnapshotQueryMatchBadPatternNoMatch documents that a malformed glob pattern
 // stored in Query.Pattern causes Match() to return false (no match) rather than
 // panicking or producing undefined behavior. In practice this state should never
-// be reached because parseSnapshotQuery validates the pattern with filepath.Match.
+// be reached because parseSnapshotQuery validates the pattern with path.Match.
 func TestSnapshotQueryMatchBadPatternNoMatch(t *testing.T) {
 	q := &SnapshotQuery{Pattern: "[unclosed"}
 	e := SnapshotFileEntry{Path: "docs/a.txt"}

@@ -273,7 +273,7 @@ Supported query flags:
 
 - `--path <exact>`: exact normalized snapshot path match; repeatable
 - `--prefix <dir/>`: normalized directory prefix match; repeatable and must end with `/`
-- `--pattern <glob>`: `filepath.Match` glob against the snapshot path
+- `--pattern <glob>`: slash-path glob (`path.Match`) against the normalized snapshot path
 - `--regex <re>`: regular expression against the snapshot path
 - `--min-size <bytes>` / `--max-size <bytes>`: inclusive logical size range
 - `--modified-after <RFC3339|YYYY-MM-DD>` / `--modified-before <RFC3339|YYYY-MM-DD>`: inclusive mtime window

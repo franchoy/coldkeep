@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -2317,8 +2318,8 @@ func parseSnapshotQuery(parsed parsedCommandLine) (*snapshot.SnapshotQuery, erro
 			return nil, usageErrorf("--pattern cannot be empty")
 		}
 		// Validate the glob syntax early so users get a clear error rather than
-		// a silent empty-result caused by filepath.ErrBadPattern at match time.
-		if _, err := filepath.Match(trimmed, ""); err != nil {
+		// a silent empty-result caused by path.ErrBadPattern at match time.
+		if _, err := path.Match(trimmed, ""); err != nil {
 			return nil, usageErrorf("invalid --pattern value %q: %v", trimmed, err)
 		}
 		q.Pattern = trimmed

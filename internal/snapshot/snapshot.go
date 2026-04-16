@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -117,7 +118,7 @@ type SnapshotQuery struct {
 	ExactPaths map[string]struct{}
 	// Prefixes matches entries whose path has any of the given prefixes.
 	Prefixes []string
-	// Pattern is a filepath.Match glob applied to the entry path.
+	// Pattern is a path.Match glob applied to the normalized slash entry path.
 	Pattern string
 	// Regex is an optional compiled regular expression applied to the entry path.
 	Regex *regexp.Regexp
@@ -165,7 +166,7 @@ func (q *SnapshotQuery) Match(e SnapshotFileEntry) bool {
 
 	// 3. Glob pattern match.
 	if q.Pattern != "" {
-		ok, _ := filepath.Match(q.Pattern, e.Path)
+		ok, _ := path.Match(q.Pattern, e.Path)
 		if !ok {
 			return false
 		}
