@@ -42,6 +42,22 @@ func insertLogical(t *testing.T, dbconn *sql.DB, name string) int64 {
 	return id
 }
 
+func insertLogicalWithSize(t *testing.T, dbconn *sql.DB, name string, size int64) int64 {
+	t.Helper()
+	res, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		name, size, name+"-hash", "COMPLETED",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file %q (size=%d): %v", name, size, err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	return id
+}
+
 func insertSnapshot(t *testing.T, dbconn *sql.DB, id string) {
 	t.Helper()
 	if _, err := dbconn.Exec(
@@ -229,5 +245,80 @@ func TestComputeReachabilitySummary(t *testing.T) {
 		if _, ok := set[logicalOrphaned]; ok {
 			t.Errorf("%s unexpectedly contains orphaned id=%d", name, logicalOrphaned)
 		}
+	}
+}
+
+func TestSnapshotReferenceCountAndByteHelpers(t *testing.T) {
+	dbconn := openTestDB(t)
+	ctx := context.Background()
+
+	logicalCurrentOnly := insertLogicalWithSize(t, dbconn, "helper-current-only", 100)
+	logicalSnapshotOnly := insertLogicalWithSize(t, dbconn, "helper-snapshot-only", 200)
+	logicalShared := insertLogicalWithSize(t, dbconn, "helper-shared", 300)
+	insertLogicalWithSize(t, dbconn, "helper-orphaned", 400)
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, 1), (?, ?, 1)`,
+		"/data/helper-current-only", logicalCurrentOnly,
+		"/data/helper-shared", logicalShared,
+	); err != nil {
+		t.Fatalf("insert physical_file rows: %v", err)
+	}
+
+	insertSnapshot(t, dbconn, "helper-snap-1")
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
+		"helper-snap-1", "/snap/helper-snapshot-only", logicalSnapshotOnly,
+		"helper-snap-1", "/snap/helper-shared", logicalShared,
+	); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
+
+	snapshotReferencedCount, err := CountSnapshotReferencedLogicalFiles(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("CountSnapshotReferencedLogicalFiles: %v", err)
+	}
+	if snapshotReferencedCount != 2 {
+		t.Fatalf("expected snapshot referenced logical count=2, got %d", snapshotReferencedCount)
+	}
+
+	snapshotOnlyCount, err := CountSnapshotOnlyLogicalFiles(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("CountSnapshotOnlyLogicalFiles: %v", err)
+	}
+	if snapshotOnlyCount != 1 {
+		t.Fatalf("expected snapshot-only logical count=1, got %d", snapshotOnlyCount)
+	}
+
+	snapshotReferencedBytes, err := SumSnapshotReferencedLogicalBytes(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("SumSnapshotReferencedLogicalBytes: %v", err)
+	}
+	if snapshotReferencedBytes != 500 {
+		t.Fatalf("expected snapshot referenced bytes=500, got %d", snapshotReferencedBytes)
+	}
+}
+
+func TestSnapshotHelperQueriesWithoutSnapshotTableReturnZero(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	snapshotReferencedCount, err := CountSnapshotReferencedLogicalFiles(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("CountSnapshotReferencedLogicalFiles without snapshot table: %v", err)
+	}
+	if snapshotReferencedCount != 0 {
+		t.Fatalf("expected snapshot referenced count=0 when snapshot table missing, got %d", snapshotReferencedCount)
+	}
+
+	snapshotReferencedBytes, err := SumSnapshotReferencedLogicalBytes(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("SumSnapshotReferencedLogicalBytes without snapshot table: %v", err)
+	}
+	if snapshotReferencedBytes != 0 {
+		t.Fatalf("expected snapshot referenced bytes=0 when snapshot table missing, got %d", snapshotReferencedBytes)
 	}
 }

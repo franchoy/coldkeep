@@ -50,6 +50,54 @@ func ListAllRetainedLogicalFileIDs(ctx context.Context, dbconn *sql.DB) (map[int
 	return all, nil
 }
 
+// CountSnapshotReferencedLogicalFiles returns the number of distinct logical
+// files referenced by retained snapshot_file rows.
+func CountSnapshotReferencedLogicalFiles(ctx context.Context, dbconn *sql.DB) (int64, error) {
+	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(snapshotIDs)), nil
+}
+
+// CountSnapshotOnlyLogicalFiles returns the number of distinct logical files
+// referenced by retained snapshot_file rows but absent from physical_file.
+func CountSnapshotOnlyLogicalFiles(ctx context.Context, dbconn *sql.DB) (int64, error) {
+	currentIDs, err := ListCurrentReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		return 0, err
+	}
+
+	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		return 0, err
+	}
+
+	var count int64
+	for id := range snapshotIDs {
+		if _, inCurrent := currentIDs[id]; !inCurrent {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
+// SumSnapshotReferencedLogicalBytes returns the sum(total_size) for distinct
+// logical files referenced by retained snapshot_file rows.
+func SumSnapshotReferencedLogicalBytes(ctx context.Context, dbconn *sql.DB) (int64, error) {
+	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(snapshotIDs) == 0 {
+		return 0, nil
+	}
+
+	return sumLogicalFileSizesByIDs(ctx, dbconn, snapshotIDs)
+}
+
 type snapshotQueryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -111,6 +159,38 @@ func listDistinctLogicalFileIDs(ctx context.Context, dbconn *sql.DB, query strin
 	}
 
 	return ids, nil
+}
+
+func sumLogicalFileSizesByIDs(ctx context.Context, dbconn *sql.DB, ids map[int64]struct{}) (int64, error) {
+	if dbconn == nil {
+		return 0, fmt.Errorf("db connection is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `SELECT id, total_size FROM logical_file`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var total int64
+	for rows.Next() {
+		var logicalFileID int64
+		var totalSize int64
+		if err := rows.Scan(&logicalFileID, &totalSize); err != nil {
+			return 0, err
+		}
+		if _, ok := ids[logicalFileID]; ok {
+			total += totalSize
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	return total, nil
 }
 
 // ReachabilitySummary aggregates logical-file reachability across all
