@@ -124,6 +124,7 @@ var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = snapshot.GetSnapshotStats
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var diffSnapshotsPhase = snapshot.DiffSnapshots
+var runStatsPhase = maintenance.RunStatsResult
 
 type cliError struct {
 	code int
@@ -1484,7 +1485,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 
 	if outputMode == outputModeJSON {
-		r, err := maintenance.RunStatsResult()
+		r, err := runStatsPhase()
 		if err != nil {
 			return err
 		}
@@ -1498,7 +1499,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return nil
 	}
 
-	r, err := maintenance.RunStatsResult()
+	r, err := runStatsPhase()
 	if err != nil {
 		return err
 	}
@@ -1795,6 +1796,11 @@ func printStatsReport(r *maintenance.StatsResult) {
 	if r.FragmentationRatioPct > 0 {
 		fmt.Printf("Fragmentation ratio:             %.2f%%\n", r.FragmentationRatioPct)
 	}
+	fmt.Println("Snapshot retention:")
+	fmt.Printf("  Current-only logical files:    %d (%.2f MB)\n", r.SnapshotRetention.CurrentOnlyLogicalFiles, bytesToMB(r.SnapshotRetention.CurrentOnlyBytes))
+	fmt.Printf("  Snapshot-referenced files:     %d (%.2f MB)\n", r.SnapshotRetention.SnapshotReferencedLogicalFiles, bytesToMB(r.SnapshotRetention.SnapshotReferencedBytes))
+	fmt.Printf("  Snapshot-only logical files:   %d (%.2f MB)\n", r.SnapshotRetention.SnapshotOnlyLogicalFiles, bytesToMB(r.SnapshotRetention.SnapshotOnlyBytes))
+	fmt.Printf("  Shared logical files:          %d (%.2f MB)\n", r.SnapshotRetention.SharedLogicalFiles, bytesToMB(r.SnapshotRetention.SharedBytes))
 	fmt.Printf("File retry stats:                total=%d, avg=%.2f, max=%d\n", r.TotalFileRetries, r.AvgFileRetries, r.MaxFileRetries)
 	fmt.Printf("Chunk retry stats:               total=%d, avg=%.2f, max=%d\n", r.TotalChunkRetries, r.AvgChunkRetries, r.MaxChunkRetries)
 	fmt.Println("============================")

@@ -2125,6 +2125,85 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}
 }
 
+func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
+	originalRunStats := runStatsPhase
+	t.Cleanup(func() {
+		runStatsPhase = originalRunStats
+	})
+
+	runStatsPhase = func() (*maintenance.StatsResult, error) {
+		return &maintenance.StatsResult{
+			TotalFiles: 7,
+			SnapshotRetention: maintenance.SnapshotRetentionStats{
+				CurrentOnlyLogicalFiles:        2,
+				CurrentOnlyBytes:               256,
+				SnapshotReferencedLogicalFiles: 3,
+				SnapshotReferencedBytes:        768,
+				SnapshotOnlyLogicalFiles:       1,
+				SnapshotOnlyBytes:              128,
+				SharedLogicalFiles:             2,
+				SharedBytes:                    640,
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object in payload: %v", payload)
+	}
+	retentionData, ok := data["snapshot_retention"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing snapshot_retention object in payload: %v", data)
+	}
+	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
+	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
+	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
+	assertJSONNumber(t, retentionData, "shared_logical_files", 2)
+	assertJSONNumber(t, retentionData, "snapshot_referenced_bytes", 768)
+	assertJSONNumber(t, retentionData, "snapshot_only_bytes", 128)
+	assertJSONNumber(t, retentionData, "shared_bytes", 640)
+	assertJSONNumber(t, retentionData, "current_only_bytes", 256)
+}
+
+func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
+	output := captureStdout(t, func() {
+		printStatsReport(&maintenance.StatsResult{
+			SnapshotRetention: maintenance.SnapshotRetentionStats{
+				CurrentOnlyLogicalFiles:        4,
+				CurrentOnlyBytes:               2 * 1024 * 1024,
+				SnapshotReferencedLogicalFiles: 3,
+				SnapshotReferencedBytes:        5 * 1024 * 1024,
+				SnapshotOnlyLogicalFiles:       1,
+				SnapshotOnlyBytes:              1 * 1024 * 1024,
+				SharedLogicalFiles:             2,
+				SharedBytes:                    4 * 1024 * 1024,
+			},
+		})
+	})
+
+	for _, want := range []string{
+		"Snapshot retention:",
+		"Current-only logical files:    4 (2.00 MB)",
+		"Snapshot-referenced files:     3 (5.00 MB)",
+		"Snapshot-only logical files:   1 (1.00 MB)",
+		"Shared logical files:          2 (4.00 MB)",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected stats report to contain %q, got output:\n%s", want, output)
+		}
+	}
+}
+
 func TestRunSnapshotCommandDiffForwardsAndFormatsJSON(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDiff := diffSnapshotsPhase
