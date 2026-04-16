@@ -272,16 +272,19 @@ For v1.2 physical path identity rules (canonicalization strategy, case behavior,
 v1.2 introduces a critical consistency guarantee between two remove entry points:
 
 **remove-by-stored-path (new)** and **remove-by-ID (legacy)** are now semantically symmetric:
+
 - Both cascade through all physical_file mappings before cleanup
 - Both maintain the invariant: `logical_file.ref_count == COUNT(physical_file rows)`
 - Both prevent orphan physical_file rows from pointing to deleted logical_file
 
 **Implementation:**
+
 - `remove-by-stored-path`: Removes one physical_file mapping, decrements logical_file.ref_count
 - `remove-by-ID`: Cascades through ALL physical_file mappings (using remove-by-stored-path primitive), then deletes logical_file and file_chunk records
 
 **Data Integrity:**
 The cascade design ensures that:
+
 1. No physical_file rows can exist after their logical_file is deleted
 2. At each step of removal, ref_count correctly reflects the number of remaining physical mappings
 3. References to deleted logical_file are impossible by construction
@@ -366,10 +369,10 @@ Phase 7 adds an internal invariant taxonomy layer to make failures easier to con
 
 - Added `internal/invariants` typed errors with stable codes.
 - Physical graph verify failures now carry machine-readable codes:
-    - `PHYSICAL_GRAPH_ORPHAN`
-    - `PHYSICAL_GRAPH_REFCOUNT_MISMATCH`
-    - `PHYSICAL_GRAPH_NEGATIVE_REFCOUNT`
-    - `PHYSICAL_GRAPH_INTEGRITY` (multi-issue aggregate)
+  - `PHYSICAL_GRAPH_ORPHAN`
+  - `PHYSICAL_GRAPH_REFCOUNT_MISMATCH`
+  - `PHYSICAL_GRAPH_NEGATIVE_REFCOUNT`
+  - `PHYSICAL_GRAPH_INTEGRITY` (multi-issue aggregate)
 - GC refusal on drifted roots now carries `GC_REFUSED_INTEGRITY`.
 - Repair refusal on orphan rows now carries `REPAIR_REFUSED_ORPHAN_ROWS`.
 
@@ -385,6 +388,7 @@ This improves operator guidance while keeping doctor detect-only for physical-la
 v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
 
 **Rationale:**
+
 - Dry-run requires a rollback-safe preview of transactional changes
 - The remove transaction is tightly coupled to the transactional remove-by-ID cascade path
 - Exposing dry-run now would require significant refactoring of the cascade logic
@@ -392,6 +396,7 @@ v1.2 intentionally does **not** support `--dry-run` with `remove --stored-path`.
 
 **Post-v1.2 plan:**
 Dry-run support for `remove --stored-path` will be added when:
+
 1. The remove transaction primitive is refactored for independent preview semantics
 2. Integration tests validate that dry-run output accurately mirrors execute behavior
 3. Documentation clarifies the dry-run contract (what is previewed, what is guaranteed, what is advisory)
