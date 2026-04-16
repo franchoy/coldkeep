@@ -2801,6 +2801,8 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			summary.Modified++
 		}
 	}
+	totalEntryCount := len(result.Entries)
+	matchedEntryCount := len(entries)
 
 	if outputMode == outputModeJSON {
 		jsonEntries := make([]map[string]any, 0, len(entries))
@@ -2817,11 +2819,14 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			"status":  "ok",
 			"command": "snapshot diff",
 			"data": map[string]any{
-				"base":        baseID,
-				"target":      targetID,
-				"summary":     summary,
-				"entries":     jsonEntries,
-				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"base":                   baseID,
+				"target":                 targetID,
+				"entry_count":            matchedEntryCount,
+				"matched_entry_count":    matchedEntryCount,
+				"total_diff_entry_count": totalEntryCount,
+				"summary":                summary,
+				"entries":                jsonEntries,
+				"duration_ms":            time.Since(startedAt).Milliseconds(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -2850,6 +2855,8 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout, "\nSummary:")
+	_, _ = fmt.Fprintf(os.Stdout, "  entries (matched): %d\n", matchedEntryCount)
+	_, _ = fmt.Fprintf(os.Stdout, "  entries (total): %d\n", totalEntryCount)
 	_, _ = fmt.Fprintf(os.Stdout, "  added: %d\n", summary.Added)
 	_, _ = fmt.Fprintf(os.Stdout, "  removed: %d\n", summary.Removed)
 	_, _ = fmt.Fprintf(os.Stdout, "  modified: %d\n", summary.Modified)

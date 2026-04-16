@@ -2374,9 +2374,129 @@ func TestRunSnapshotCommandDiffForwardsAndFormatsJSON(t *testing.T) {
 		t.Fatalf("expected command=snapshot diff, got payload=%v", payload)
 	}
 	data := payload["data"].(map[string]any)
+	if got := int(data["entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected entry_count=3, got %d", got)
+	}
+	if got := int(data["matched_entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected matched_entry_count=3, got %d", got)
+	}
+	if got := int(data["total_diff_entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected total_diff_entry_count=3, got %d", got)
+	}
 	summary := data["summary"].(map[string]any)
 	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 1 {
 		t.Fatalf("unexpected diff summary payload: %v", data)
+	}
+}
+
+func TestRunSnapshotCommandDiffFilterJSONShowsMatchedAndTotalCounts(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "snap-1", "snap-2"},
+			flags: map[string][]string{
+				"filter": {"added"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot diff JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got := int(data["entry_count"].(float64)); got != 1 {
+		t.Fatalf("expected filtered entry_count=1, got %d", got)
+	}
+	if got := int(data["matched_entry_count"].(float64)); got != 1 {
+		t.Fatalf("expected matched_entry_count=1, got %d", got)
+	}
+	if got := int(data["total_diff_entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected total_diff_entry_count=3, got %d", got)
+	}
+	summary := data["summary"].(map[string]any)
+	if int(summary["added"].(float64)) != 1 || int(summary["removed"].(float64)) != 0 || int(summary["modified"].(float64)) != 0 {
+		t.Fatalf("unexpected filtered summary: %v", summary)
+	}
+}
+
+func TestRunSnapshotCommandDiffTextShowsMatchedAndTotalCounts(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "snap-1", "snap-2"},
+			flags: map[string][]string{
+				"filter": {"added"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "entries (matched): 1") {
+		t.Fatalf("expected text output to include matched entry count, got: %q", output)
+	}
+	if !strings.Contains(output, "entries (total): 3") {
+		t.Fatalf("expected text output to include total entry count, got: %q", output)
 	}
 }
 
