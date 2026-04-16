@@ -462,3 +462,98 @@ func TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable(t *testin
 		t.Fatalf("expected 1 snapshot-retained container in dry-run result, got %d", result.SnapshotRetainedContainers)
 	}
 }
+
+// TestRunGCDryRunBecomesEligibleAfterSnapshotDelete verifies that content
+// retained only by a deleted snapshot becomes GC-eligible when no other refs
+// remain.
+func TestRunGCDryRunBecomesEligibleAfterSnapshotDelete(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	setupSnapshotRetainedContainer(t, dbconn, containersDir)
+
+	before, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
+	if gcErr != nil {
+		t.Fatalf("dry-run GC before snapshot delete should succeed: %v", gcErr)
+	}
+	if before.AffectedContainers != 0 || before.SnapshotRetainedContainers != 1 {
+		t.Fatalf("unexpected pre-delete dry-run result: %+v", before)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = 'snap-gc-guard-1'`); err != nil {
+		t.Fatalf("delete snapshot_file rows: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = 'snap-gc-guard-1'`); err != nil {
+		t.Fatalf("delete snapshot row: %v", err)
+	}
+
+	after, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
+	if gcErr != nil {
+		t.Fatalf("dry-run GC after snapshot delete should succeed: %v", gcErr)
+	}
+	if after.AffectedContainers != 1 {
+		t.Fatalf("expected 1 reclaimable container after snapshot delete, got %d", after.AffectedContainers)
+	}
+	if after.SnapshotRetainedContainers != 0 {
+		t.Fatalf("expected 0 snapshot-retained containers after snapshot delete, got %d", after.SnapshotRetainedContainers)
+	}
+}
+
+// TestRunGCDryRunRetainsContainerWhenAnotherSnapshotStillReferences verifies
+// shared retention semantics across multiple snapshots for the same logical
+// file.
+func TestRunGCDryRunRetainsContainerWhenAnotherSnapshotStillReferences(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	setupSnapshotRetainedContainer(t, dbconn, containersDir)
+
+	var logicalID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE original_name = 'snap-retained.bin' LIMIT 1`).Scan(&logicalID); err != nil {
+		t.Fatalf("lookup retained logical_file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-gc-guard-2', NOW(), 'full')`); err != nil {
+		t.Fatalf("insert second snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id)
+		VALUES ('snap-gc-guard-2', '/snap/also-retained.bin', $1)
+	`, logicalID); err != nil {
+		t.Fatalf("insert second snapshot_file row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = 'snap-gc-guard-1'`); err != nil {
+		t.Fatalf("delete first snapshot_file rows: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = 'snap-gc-guard-1'`); err != nil {
+		t.Fatalf("delete first snapshot row: %v", err)
+	}
+
+	result, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
+	if gcErr != nil {
+		t.Fatalf("dry-run GC should succeed: %v", gcErr)
+	}
+	if result.AffectedContainers != 0 {
+		t.Fatalf("expected 0 reclaimable containers while second snapshot still retains content, got %d", result.AffectedContainers)
+	}
+	if result.SnapshotRetainedContainers != 1 {
+		t.Fatalf("expected 1 snapshot-retained container via second snapshot, got %d", result.SnapshotRetainedContainers)
+	}
+}

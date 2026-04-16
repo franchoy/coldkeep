@@ -1457,6 +1457,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 	if result.AffectedContainers == 0 {
 		fmt.Println("GC completed. No containers eligible for deletion.")
+		if dryRun && result.SnapshotRetainedContainers > 0 {
+			fmt.Printf("GC skipped containers still retained by snapshots: %d\n", result.SnapshotRetainedContainers)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1466,6 +1469,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			fmt.Printf("[DRY-RUN] Would delete container: %s\n", filename)
 		}
 		fmt.Printf("GC dry-run completed. Containers eligible for deletion: %d\n", result.AffectedContainers)
+		if result.SnapshotRetainedContainers > 0 {
+			fmt.Printf("GC skipped containers still retained by snapshots: %d\n", result.SnapshotRetainedContainers)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
