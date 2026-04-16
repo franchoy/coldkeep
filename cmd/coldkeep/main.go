@@ -103,6 +103,7 @@ type doctorReport struct {
 	VerifyStatus   string          `json:"verify_status"`
 	SchemaStatus   string          `json:"schema_status"`
 	physicalAudit  verify.PhysicalFileIntegritySummary
+	snapshotAudit  verify.SnapshotReachabilityIntegritySummary
 }
 
 // Frozen v1.0 product contract: doctor is the fast corrective recovery + health gate.
@@ -114,6 +115,7 @@ const doctorOperationalHint = "After significant operations, run coldkeep doctor
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = querySchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
+var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshot
@@ -1937,6 +1939,13 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 	report.VerifyStatus = "ok"
 
+	auditSummary, auditErr := doctorSystemAuditPhase()
+	if auditErr != nil {
+		return verifyError(fmt.Errorf("doctor audit summary phase failed: %w", auditErr))
+	}
+	report.physicalAudit = auditSummary.Physical
+	report.snapshotAudit = auditSummary.Snapshot
+
 	// Intentional JSON contract (frozen v1.0):
 	// - Startup/preflight recovery diagnostics are emitted as stderr events
 	//   (`event=startup_recovery`) outside this doctor command payload.
@@ -1996,6 +2005,15 @@ func formatDoctorTextReport(report doctorReport) string {
 		report.physicalAudit.OrphanPhysicalFileRows,
 		report.physicalAudit.LogicalRefCountMismatches,
 		report.physicalAudit.NegativeLogicalRefCounts,
+	))
+	b.WriteString(fmt.Sprintf("  Snapshot retention integrity: snapshot_file_rows=%d snapshot_referenced_logical_files=%d snapshot_only_logical_files=%d shared_logical_files=%d orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d\n",
+		report.snapshotAudit.SnapshotFileRows,
+		report.snapshotAudit.SnapshotReferencedLogicalFiles,
+		report.snapshotAudit.SnapshotOnlyLogicalFiles,
+		report.snapshotAudit.SharedLogicalFiles,
+		report.snapshotAudit.OrphanSnapshotLogicalRefs,
+		report.snapshotAudit.InvalidSnapshotLifecycleStates,
+		report.snapshotAudit.RetainedMissingChunkGraph,
 	))
 	b.WriteString(fmt.Sprintf("  Recommended next step: %s\n", recommendedNextStep))
 

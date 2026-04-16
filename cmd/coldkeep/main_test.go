@@ -980,6 +980,7 @@ func TestFormatDoctorTextReportGoldenHealthy(t *testing.T) {
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0\n" +
 		"  Physical mapping integrity: orphan_physical_file_rows=0 logical_ref_count_mismatches=0 negative_logical_ref_count_rows=0\n" +
+		"  Snapshot retention integrity: snapshot_file_rows=0 snapshot_referenced_logical_files=0 snapshot_only_logical_files=0 shared_logical_files=0 orphan_snapshot_logical_refs=0 invalid_snapshot_lifecycle_states=0 retained_missing_chunk_graph=0\n" +
 		"  Recommended next step: none\n"
 
 	if got != want {
@@ -1013,6 +1014,7 @@ func TestFormatDoctorTextReportGoldenDegraded(t *testing.T) {
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=1 aborted_chunks=2 quarantined_missing_containers=3 quarantined_corrupt_tail_containers=4 quarantined_orphan_containers=5\n" +
 		"  Physical mapping integrity: orphan_physical_file_rows=0 logical_ref_count_mismatches=0 negative_logical_ref_count_rows=0\n" +
+		"  Snapshot retention integrity: snapshot_file_rows=0 snapshot_referenced_logical_files=0 snapshot_only_logical_files=0 shared_logical_files=0 orphan_snapshot_logical_refs=0 invalid_snapshot_lifecycle_states=0 retained_missing_chunk_graph=0\n" +
 		"  Recommended next step: inspect stderr / doctor output\n"
 
 	if got != want {

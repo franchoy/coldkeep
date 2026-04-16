@@ -58,6 +58,12 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 
 	// check that the current-state physical_file graph is coherent:
 	// no orphan mappings, no logical ref_count drift, and no impossible negative ref_count values.
+	if _, err = CheckSnapshotReachabilityIntegrity(dbconn); err != nil {
+		return err
+	}
+
+	// check that the current-state physical_file graph is coherent:
+	// no orphan mappings, no logical ref_count drift, and no impossible negative ref_count values.
 	if _, err = CheckPhysicalFileGraphIntegrity(dbconn); err != nil {
 		return err
 	}
