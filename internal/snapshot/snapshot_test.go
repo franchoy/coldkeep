@@ -12,6 +12,7 @@ import (
 	"time"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -1653,6 +1654,17 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	insertSnapshotFileRow(t, db, s1.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertSnapshotFileRow(t, db, s2.ID, "img/x.png", logicalA, sql.NullInt64{}, sql.NullTime{})
 
+	before, err := retention.ComputeReachabilitySummary(ctx, db)
+	if err != nil {
+		t.Fatalf("ComputeReachabilitySummary before delete: %v", err)
+	}
+	if _, ok := before.RetainedLogicalIDs[logicalA]; !ok {
+		t.Fatalf("expected logicalA=%d to be retained before delete", logicalA)
+	}
+	if _, ok := before.RetainedLogicalIDs[logicalB]; !ok {
+		t.Fatalf("expected logicalB=%d to be retained before delete", logicalB)
+	}
+
 	if err := DeleteSnapshot(ctx, db, s1.ID); err != nil {
 		t.Fatalf("DeleteSnapshot: %v", err)
 	}
@@ -1687,6 +1699,25 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	}
 	if logicalCount != 2 {
 		t.Fatalf("expected logical_file rows untouched, got count=%d", logicalCount)
+	}
+
+	var logicalBCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = ?`, logicalB).Scan(&logicalBCount); err != nil {
+		t.Fatalf("query logical_file logicalB=%d: %v", logicalB, err)
+	}
+	if logicalBCount != 1 {
+		t.Fatalf("expected snapshot delete to leave logicalB row intact, got count=%d", logicalBCount)
+	}
+
+	after, err := retention.ComputeReachabilitySummary(ctx, db)
+	if err != nil {
+		t.Fatalf("ComputeReachabilitySummary after delete: %v", err)
+	}
+	if _, ok := after.RetainedLogicalIDs[logicalA]; !ok {
+		t.Fatalf("expected logicalA=%d to remain retained after delete", logicalA)
+	}
+	if _, ok := after.RetainedLogicalIDs[logicalB]; ok {
+		t.Fatalf("expected logicalB=%d to become unretained after deleting snapshot %s", logicalB, s1.ID)
 	}
 }
 

@@ -495,6 +495,13 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 	return stats, nil
 }
 
+// DeleteSnapshot removes only snapshot metadata for snapshotID.
+//
+// This is intentionally a metadata-only lifecycle event: deleting a snapshot
+// removes the snapshot row and its snapshot_file rows, but it does not delete
+// logical content directly. The deletion may reduce logical-file reachability,
+// which can make content eligible for a later GC pass under the normal
+// reachability rules.
 func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
 	if db == nil {
 		return errors.New("snapshot db cannot be nil")
