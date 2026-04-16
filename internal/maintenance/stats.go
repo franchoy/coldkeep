@@ -253,13 +253,33 @@ func computeSnapshotRetentionStats(ctx context.Context, dbconn *sql.DB) (Snapsho
 		return SnapshotRetentionStats{}, err
 	}
 
+	snapshotReferencedCount, err := retention.CountSnapshotReferencedLogicalFiles(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	snapshotOnlyCount, err := retention.CountSnapshotOnlyLogicalFiles(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	snapshotReferencedBytes, err := retention.SumSnapshotReferencedLogicalBytes(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
 	rows, err := dbconn.QueryContext(ctx, `SELECT id, total_size FROM logical_file`)
 	if err != nil {
 		return SnapshotRetentionStats{}, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var stats SnapshotRetentionStats
+	stats := SnapshotRetentionStats{
+		SnapshotReferencedLogicalFiles: snapshotReferencedCount,
+		SnapshotReferencedBytes:        snapshotReferencedBytes,
+		SnapshotOnlyLogicalFiles:       snapshotOnlyCount,
+		SharedLogicalFiles:             snapshotReferencedCount - snapshotOnlyCount,
+	}
 	for rows.Next() {
 		var logicalFileID int64
 		var totalSize int64
@@ -270,17 +290,10 @@ func computeSnapshotRetentionStats(ctx context.Context, dbconn *sql.DB) (Snapsho
 		_, currentReferenced := summary.CurrentLogicalIDs[logicalFileID]
 		_, snapshotReferenced := summary.SnapshotLogicalIDs[logicalFileID]
 
-		if snapshotReferenced {
-			stats.SnapshotReferencedLogicalFiles++
-			stats.SnapshotReferencedBytes += totalSize
-		}
-
 		switch {
 		case currentReferenced && snapshotReferenced:
-			stats.SharedLogicalFiles++
 			stats.SharedBytes += totalSize
 		case snapshotReferenced:
-			stats.SnapshotOnlyLogicalFiles++
 			stats.SnapshotOnlyBytes += totalSize
 		case currentReferenced:
 			stats.CurrentOnlyLogicalFiles++
