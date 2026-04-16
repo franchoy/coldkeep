@@ -9,6 +9,7 @@ const (
 	CodePhysicalGraphNegativeRefCount = "PHYSICAL_GRAPH_NEGATIVE_REFCOUNT"
 	CodeGCRefusedIntegrity            = "GC_REFUSED_INTEGRITY"
 	CodeRepairRefusedOrphanRows       = "REPAIR_REFUSED_ORPHAN_ROWS"
+	CodeSnapshotRetainedDeleteBlocked = "SNAPSHOT_RETAINED_DELETE_BLOCKED"
 )
 
 // Error provides stable machine-readable classification for invariant failures
@@ -63,6 +64,8 @@ func RecommendedActionForCode(code string) string {
 		return "coldkeep repair ref-counts; then rerun coldkeep verify"
 	case CodeRepairRefusedOrphanRows:
 		return "investigate orphan physical_file rows; repair ref-counts is blocked until orphans are resolved"
+	case CodeSnapshotRetainedDeleteBlocked:
+		return "delete or prune snapshots that reference the logical file before removing it"
 	default:
 		return ""
 	}

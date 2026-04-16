@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/retention"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
@@ -254,6 +256,18 @@ func RemoveFileWithDBResult(dbconn *sql.DB, fileID int64) (result RemoveFileResu
 
 	if fileStatus == filestate.LogicalFileProcessing {
 		return RemoveFileResult{}, fmt.Errorf("file ID %d is still PROCESSING and cannot be removed", fileID)
+	}
+
+	retainedBySnapshot, err := retention.IsLogicalFileReferencedBySnapshot(ctx, tx, fileID)
+	if err != nil {
+		return RemoveFileResult{}, err
+	}
+	if retainedBySnapshot {
+		return RemoveFileResult{}, invariants.New(
+			invariants.CodeSnapshotRetainedDeleteBlocked,
+			fmt.Sprintf("remove refused: logical_file id=%d is retained by one or more snapshots", fileID),
+			nil,
+		)
 	}
 
 	// PHASE 1: Remove all physical_file mappings for this logical_file.
