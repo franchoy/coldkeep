@@ -159,3 +159,75 @@ func TestIsLogicalFileReferencedBySnapshotWithoutSnapshotTable(t *testing.T) {
 		t.Fatalf("expected retained=false when snapshot table is missing")
 	}
 }
+
+func TestComputeReachabilitySummary(t *testing.T) {
+	dbconn := openTestDB(t)
+	ctx := context.Background()
+
+	logicalCurrentOnly := insertLogical(t, dbconn, "rsum-current-only")
+	logicalSnapshotOnly := insertLogical(t, dbconn, "rsum-snapshot-only")
+	logicalShared := insertLogical(t, dbconn, "rsum-shared")
+	logicalOrphaned := insertLogical(t, dbconn, "rsum-orphaned") // referenced by neither
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, 1), (?, ?, 1)`,
+		"/data/rsum-current-only", logicalCurrentOnly,
+		"/data/rsum-shared", logicalShared,
+	); err != nil {
+		t.Fatalf("insert physical_file rows: %v", err)
+	}
+
+	insertSnapshot(t, dbconn, "rsum-snap-1")
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
+		"rsum-snap-1", "/snap/rsum-snapshot-only", logicalSnapshotOnly,
+		"rsum-snap-1", "/snap/rsum-shared", logicalShared,
+	); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
+
+	summary, err := ComputeReachabilitySummary(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("ComputeReachabilitySummary: %v", err)
+	}
+
+	// CurrentLogicalIDs must contain only physical_file-referenced IDs.
+	if _, ok := summary.CurrentLogicalIDs[logicalCurrentOnly]; !ok {
+		t.Errorf("CurrentLogicalIDs missing logicalCurrentOnly=%d", logicalCurrentOnly)
+	}
+	if _, ok := summary.CurrentLogicalIDs[logicalShared]; !ok {
+		t.Errorf("CurrentLogicalIDs missing logicalShared=%d", logicalShared)
+	}
+	if _, ok := summary.CurrentLogicalIDs[logicalSnapshotOnly]; ok {
+		t.Errorf("CurrentLogicalIDs unexpectedly contains logicalSnapshotOnly=%d", logicalSnapshotOnly)
+	}
+
+	// SnapshotLogicalIDs must contain only snapshot_file-referenced IDs.
+	if _, ok := summary.SnapshotLogicalIDs[logicalSnapshotOnly]; !ok {
+		t.Errorf("SnapshotLogicalIDs missing logicalSnapshotOnly=%d", logicalSnapshotOnly)
+	}
+	if _, ok := summary.SnapshotLogicalIDs[logicalShared]; !ok {
+		t.Errorf("SnapshotLogicalIDs missing logicalShared=%d", logicalShared)
+	}
+	if _, ok := summary.SnapshotLogicalIDs[logicalCurrentOnly]; ok {
+		t.Errorf("SnapshotLogicalIDs unexpectedly contains logicalCurrentOnly=%d", logicalCurrentOnly)
+	}
+
+	// RetainedLogicalIDs must be the union of both.
+	for _, id := range []int64{logicalCurrentOnly, logicalSnapshotOnly, logicalShared} {
+		if _, ok := summary.RetainedLogicalIDs[id]; !ok {
+			t.Errorf("RetainedLogicalIDs missing id=%d", id)
+		}
+	}
+
+	// Truly orphaned logical file must not appear in any set.
+	for name, set := range map[string]map[int64]struct{}{
+		"CurrentLogicalIDs":  summary.CurrentLogicalIDs,
+		"SnapshotLogicalIDs": summary.SnapshotLogicalIDs,
+		"RetainedLogicalIDs": summary.RetainedLogicalIDs,
+	} {
+		if _, ok := set[logicalOrphaned]; ok {
+			t.Errorf("%s unexpectedly contains orphaned id=%d", name, logicalOrphaned)
+		}
+	}
+}

@@ -113,6 +113,50 @@ func listDistinctLogicalFileIDs(ctx context.Context, dbconn *sql.DB, query strin
 	return ids, nil
 }
 
+// ReachabilitySummary aggregates logical-file reachability across all
+// retention dimensions at a single point in time.
+type ReachabilitySummary struct {
+	// CurrentLogicalIDs contains logical_file IDs referenced by current-state
+	// physical_file mappings.
+	CurrentLogicalIDs map[int64]struct{}
+	// SnapshotLogicalIDs contains logical_file IDs referenced by retained
+	// snapshot_file entries.
+	SnapshotLogicalIDs map[int64]struct{}
+	// RetainedLogicalIDs is the union of CurrentLogicalIDs and
+	// SnapshotLogicalIDs. A logical file ID present here must not be reclaimed
+	// by GC.
+	RetainedLogicalIDs map[int64]struct{}
+}
+
+// ComputeReachabilitySummary queries the database for all retained logical-file
+// IDs and returns a populated ReachabilitySummary for use in GC and other
+// retention decisions.
+func ComputeReachabilitySummary(ctx context.Context, dbconn *sql.DB) (*ReachabilitySummary, error) {
+	currentIDs, err := ListCurrentReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		return nil, fmt.Errorf("compute reachability summary: list current: %w", err)
+	}
+
+	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		return nil, fmt.Errorf("compute reachability summary: list snapshot: %w", err)
+	}
+
+	retained := make(map[int64]struct{}, len(currentIDs)+len(snapshotIDs))
+	for id := range currentIDs {
+		retained[id] = struct{}{}
+	}
+	for id := range snapshotIDs {
+		retained[id] = struct{}{}
+	}
+
+	return &ReachabilitySummary{
+		CurrentLogicalIDs:  currentIDs,
+		SnapshotLogicalIDs: snapshotIDs,
+		RetainedLogicalIDs: retained,
+	}, nil
+}
+
 func isMissingSnapshotTableError(err error) bool {
 	if err == nil {
 		return false

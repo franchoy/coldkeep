@@ -127,7 +127,7 @@ These invariants should hold across store, restore, GC, recovery, and verificati
 - live_ref_count > 0 protects a chunk from GC deletion
 - pin_count > 0 protects a chunk from concurrent deletion while restore-like operations are active
 - committed metadata implies referenced bytes are already durable on disk
-- G14 snapshot-retained content is GC-safe: any logical file reachable from either current state (`physical_file`) or retained snapshot history (`snapshot_file`) must be treated as live and must not be reclaimed
+- G14 snapshot-retained content is GC-safe: any logical file reachable from either current state (`physical_file`) or retained snapshot history (`snapshot_file`) must be treated as live and must not be reclaimed; GC computes a `ReachabilitySummary` before the container sweep and applies it as an additional safety net (`containerHasRetainedChunks`) independent of `live_ref_count`
 
 ## Validity and Restorability Model
 
