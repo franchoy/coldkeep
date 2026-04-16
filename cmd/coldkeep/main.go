@@ -2580,17 +2580,20 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	if err != nil {
 		return err
 	}
+	matchedFileCount := len(files)
 
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
 			"data": map[string]any{
-				"action":      "show",
-				"snapshot":    snapshotSummaryJSON(*item),
-				"file_count":  stats.SnapshotFileCount,
-				"files":       snapshotFilesJSON(files),
-				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"action":                    "show",
+				"snapshot":                  snapshotSummaryJSON(*item),
+				"file_count":                matchedFileCount,
+				"matched_file_count":        matchedFileCount,
+				"total_snapshot_file_count": stats.SnapshotFileCount,
+				"files":                     snapshotFilesJSON(files),
+				"duration_ms":               time.Since(startedAt).Milliseconds(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -2604,7 +2607,8 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	if item.Label.Valid {
 		_, _ = fmt.Fprintf(os.Stdout, "  Label: %s\n", item.Label.String)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", stats.SnapshotFileCount)
+	_, _ = fmt.Fprintf(os.Stdout, "  Files (matched): %d\n", matchedFileCount)
+	_, _ = fmt.Fprintf(os.Stdout, "  Files (total): %d\n", stats.SnapshotFileCount)
 	_, _ = fmt.Fprintln(os.Stdout)
 	if len(files) == 0 {
 		_, _ = fmt.Fprintln(os.Stdout, "  (no files)")

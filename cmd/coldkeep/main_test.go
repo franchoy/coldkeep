@@ -2035,6 +2035,117 @@ func TestRunSnapshotCommandShowForwardsSnapshotQuery(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandShowJSONUsesFilteredFileCount(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
+	}
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		return []snapshot.SnapshotFileEntry{{Path: "docs/a.txt"}}, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 3, TotalSizeBytes: 123}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"show", "snap-show-filtered-json"},
+			flags: map[string][]string{
+				"prefix": {"docs/"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand show returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot show JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got := int(data["file_count"].(float64)); got != 1 {
+		t.Fatalf("expected file_count=1 (filtered), got %d", got)
+	}
+	if got := int(data["matched_file_count"].(float64)); got != 1 {
+		t.Fatalf("expected matched_file_count=1, got %d", got)
+	}
+	if got := int(data["total_snapshot_file_count"].(float64)); got != 3 {
+		t.Fatalf("expected total_snapshot_file_count=3, got %d", got)
+	}
+}
+
+func TestRunSnapshotCommandShowTextDisplaysMatchedAndTotalCounts(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
+	}
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		return []snapshot.SnapshotFileEntry{{Path: "docs/a.txt"}}, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 3, TotalSizeBytes: 123}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"show", "snap-show-filtered-text"},
+			flags: map[string][]string{
+				"prefix": {"docs/"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand show returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Files (matched): 1") {
+		t.Fatalf("expected text output to include matched file count, got: %q", output)
+	}
+	if !strings.Contains(output, "Files (total): 3") {
+		t.Fatalf("expected text output to include total file count, got: %q", output)
+	}
+}
+
 func TestRunSnapshotCommandStatsSupportsGlobalAndPerSnapshot(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalStats := snapshotStatsPhase
