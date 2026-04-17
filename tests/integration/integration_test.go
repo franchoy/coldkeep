@@ -539,6 +539,70 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("expected docs path in first snapshot, got count=%d path=%q", snap1DocsRows, trimmedDocs)
 	}
 
+	// Validate snap-it-1 metadata while it still exists.
+	showPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-it-1", "--limit", "10", "--output", "json"), "snapshot")
+	showData := testutils.JSONMap(t, showPayload, "data")
+	if got, _ := showData["action"].(string); got != "show" {
+		t.Fatalf("snapshot show JSON missing action=show: payload=%v", showPayload)
+	}
+	if got := int64(showData["file_count"].(float64)); got != int64(snap1Count) {
+		t.Fatalf("snapshot show file_count mismatch: got=%d want=%d payload=%v", got, snap1Count, showPayload)
+	}
+
+	statsPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "stats", "snap-it-1", "--output", "json"), "snapshot")
+	statsData := testutils.JSONMap(t, statsPayload, "data")
+	if got, _ := statsData["action"].(string); got != "stats" {
+		t.Fatalf("snapshot stats JSON missing action=stats: payload=%v", statsPayload)
+	}
+	if got := int64(statsData["snapshot_file_count"].(float64)); got != int64(snap1Count) {
+		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
+	}
+
+	// Retention contract: remove --stored-path must be refused while a snapshot retains the file.
+	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedDocsPath, "--output", "json")
+	if removeBlocked.ExitCode == 0 {
+		t.Fatalf("expected remove --stored-path to be blocked while snapshot-retained, but it succeeded: stdout=%s", removeBlocked.Stdout)
+	}
+
+	// Restore snap-it-1 while it still exists.
+	restoreRoot := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore root: %v", err)
+	}
+	restoreSnap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-1", "--mode", "prefix", "--destination", restoreRoot, "--output", "json"), "snapshot")
+	restoreSnap1Data := testutils.JSONMap(t, restoreSnap1, "data")
+	if got, _ := restoreSnap1Data["action"].(string); got != "restore" {
+		t.Fatalf("snapshot restore JSON missing action=restore: payload=%v", restoreSnap1)
+	}
+	restoredDocsFromSnap1 := filepath.Join(restoreRoot, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredDocsFromSnap1); err != nil {
+		t.Fatalf("expected docs file restored from first snapshot at %s: %v", restoredDocsFromSnap1, err)
+	}
+
+	// Partial snapshot restore: restore only trimmedImg from snap-it-1.
+	restoreRoot3 := filepath.Join(tmp, "restored3")
+	if err := os.MkdirAll(restoreRoot3, 0o755); err != nil {
+		t.Fatalf("mkdir restore root3: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-1", trimmedImg, "--mode", "prefix", "--destination", restoreRoot3, "--output", "json"), "snapshot")
+	restoredImg3 := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedImg))
+	restoredDocs3 := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredImg3); err != nil {
+		t.Fatalf("expected exact requested image path restored, err=%v", err)
+	}
+	if _, err := os.Stat(restoredDocs3); !os.IsNotExist(err) {
+		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
+	}
+
+	// Clear retention by deleting snap-it-1, then remove docs.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-it-1", "--force", "--output", "json"), "snapshot")
+
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
 
@@ -588,24 +652,7 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("partial snapshot path mismatch: got=%q want=%q", partialPath, trimmedImg)
 	}
 
-	restoreRoot := filepath.Join(tmp, "restored")
-	if err := os.MkdirAll(restoreRoot, 0o755); err != nil {
-		t.Fatalf("mkdir restore root: %v", err)
-	}
-
-	restoreSnap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "restore", "snap-it-1", "--mode", "prefix", "--destination", restoreRoot, "--output", "json"), "snapshot")
-	restoreSnap1Data := testutils.JSONMap(t, restoreSnap1, "data")
-	if got, _ := restoreSnap1Data["action"].(string); got != "restore" {
-		t.Fatalf("snapshot restore JSON missing action=restore: payload=%v", restoreSnap1)
-	}
-
-	restoredDocsFromSnap1 := filepath.Join(restoreRoot, filepath.FromSlash(trimmedDocs))
-	if _, err := os.Stat(restoredDocsFromSnap1); err != nil {
-		t.Fatalf("expected docs file restored from first snapshot at %s: %v", restoredDocsFromSnap1, err)
-	}
-
-	// snap-it-2 was created after docs mapping removal; restoring it should not restore docs path.
+	// Restoring snap-it-2 must not include the removed docs path.
 	restoreRoot2 := filepath.Join(tmp, "restored2")
 	if err := os.MkdirAll(restoreRoot2, 0o755); err != nil {
 		t.Fatalf("mkdir restore root2: %v", err)
@@ -617,22 +664,6 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("expected docs file to remain absent when restoring second snapshot, stat err=%v", err)
 	}
 
-	// Partial snapshot restore should restore only the requested exact path.
-	restoreRoot3 := filepath.Join(tmp, "restored3")
-	if err := os.MkdirAll(restoreRoot3, 0o755); err != nil {
-		t.Fatalf("mkdir restore root3: %v", err)
-	}
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "restore", "snap-it-1", trimmedImg, "--mode", "prefix", "--destination", restoreRoot3, "--output", "json"), "snapshot")
-	restoredImg := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedImg))
-	restoredDocs := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedDocs))
-	if _, err := os.Stat(restoredImg); err != nil {
-		t.Fatalf("expected exact requested image path restored, err=%v", err)
-	}
-	if _, err := os.Stat(restoredDocs); !os.IsNotExist(err) {
-		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
-	}
-
 	listPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "list", "--type", "full", "--limit", "10", "--output", "json"), "snapshot")
 	listData := testutils.JSONMap(t, listPayload, "data")
@@ -642,34 +673,6 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	listItems, ok := listData["snapshots"].([]any)
 	if !ok || len(listItems) == 0 {
 		t.Fatalf("snapshot list JSON missing snapshots array: payload=%v", listPayload)
-	}
-
-	showPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "show", "snap-it-1", "--limit", "10", "--output", "json"), "snapshot")
-	showData := testutils.JSONMap(t, showPayload, "data")
-	if got, _ := showData["action"].(string); got != "show" {
-		t.Fatalf("snapshot show JSON missing action=show: payload=%v", showPayload)
-	}
-	if got := int64(showData["file_count"].(float64)); got != int64(snap1Count) {
-		t.Fatalf("snapshot show file_count mismatch: got=%d want=%d payload=%v", got, snap1Count, showPayload)
-	}
-
-	statsPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "stats", "snap-it-1", "--output", "json"), "snapshot")
-	statsData := testutils.JSONMap(t, statsPayload, "data")
-	if got, _ := statsData["action"].(string); got != "stats" {
-		t.Fatalf("snapshot stats JSON missing action=stats: payload=%v", statsPayload)
-	}
-	if got := int64(statsData["snapshot_file_count"].(float64)); got != int64(snap1Count) {
-		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
-	}
-
-	diffPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "diff", "snap-it-1", "snap-it-2", "--output", "json"), "snapshot diff")
-	diffData := testutils.JSONMap(t, diffPayload, "data")
-	diffSummary := testutils.JSONMap(t, diffData, "summary")
-	if got := int64(diffSummary["removed"].(float64)); got < 1 {
-		t.Fatalf("snapshot diff should report at least one removed path between snap-it-1 and snap-it-2: payload=%v", diffPayload)
 	}
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,

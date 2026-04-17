@@ -418,8 +418,8 @@ func TestAdversarialG16SnapshotQueryContractChaos(t *testing.T) {
 	_, p2, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, filepath.Join(inputDir, "docs"), "g16-b.txt", 14*1024)
 	_, p3, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, filepath.Join(inputDir, "img"), "g16-c.png", 12*1024)
 
-	snapshotCreateWithID(t, repoRoot, binPath, env, "g16-snap-1", p1, p2)
-	snapshotCreateWithID(t, repoRoot, binPath, env, "g16-snap-2", p2, p3)
+	snapshotCreateWithID(t, repoRoot, binPath, env, "g16-snap-1", strings.TrimLeft(filepath.ToSlash(p1), "/"), strings.TrimLeft(filepath.ToSlash(p2), "/"))
+	snapshotCreateWithID(t, repoRoot, binPath, env, "g16-snap-2", strings.TrimLeft(filepath.ToSlash(p2), "/"), strings.TrimLeft(filepath.ToSlash(p3), "/"))
 
 	exactPaths := []string{strings.TrimLeft(filepath.ToSlash(p1), "/"), strings.TrimLeft(filepath.ToSlash(p2), "/"), strings.TrimLeft(filepath.ToSlash(p3), "/")}
 	prefixes := []string{filepath.ToSlash(filepath.Dir(exactPaths[0])) + "/", filepath.ToSlash(filepath.Dir(exactPaths[2])) + "/"}

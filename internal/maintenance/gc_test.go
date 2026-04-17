@@ -635,6 +635,11 @@ func TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete(t *te
 	`, logicalID); err != nil {
 		t.Fatalf("insert current-state mapping: %v", err)
 	}
+	// Keep ref_count in sync: the logical_file was created with ref_count=0 in
+	// setupSnapshotRetainedContainer; adding a physical_file row must increment it.
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = $1`, logicalID); err != nil {
+		t.Fatalf("increment ref_count for added physical_file: %v", err)
+	}
 
 	before, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
 	if gcErr != nil {
@@ -646,6 +651,10 @@ func TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete(t *te
 
 	if _, err := dbconn.Exec(`DELETE FROM physical_file WHERE logical_file_id = $1`, logicalID); err != nil {
 		t.Fatalf("delete current-state mapping: %v", err)
+	}
+	// Decrement ref_count to match the deleted physical_file rows.
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = 0 WHERE id = $1`, logicalID); err != nil {
+		t.Fatalf("reset ref_count after deleting physical_file: %v", err)
 	}
 
 	after, gcErr := RunGCWithContainersDirResult(true /* dryRun */, containersDir)
