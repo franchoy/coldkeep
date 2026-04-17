@@ -381,6 +381,39 @@ VALIDATION_MATRIX:
 - [ ] Evidence names match actual tests
 - [ ] No stale "covered" claims remain
 
+Quick evidence-name consistency check (G14-G17):
+
+```bash
+for t in \
+	TestListRetainedLogicalFileIDs \
+	TestIsLogicalFileReferencedBySnapshot \
+	TestComputeReachabilitySummary \
+	TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot \
+	TestRunGCDoesNotDeleteSnapshotRetainedContainer \
+	TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable \
+	TestAdversarialG14SnapshotRetainedGCGuardUnderChurn \
+	TestDeleteSnapshotRemovesSnapshotRowsOnly \
+	TestAdversarialG17RetentionRootTransitionChurn \
+	TestRunStatsResultIncludesSnapshotRetentionVisibility \
+	TestRunStatsCommandJSONIncludesSnapshotRetention \
+	TestPrintStatsReportIncludesSnapshotRetention \
+	TestAdversarialG16SnapshotQueryContractChaos \
+	TestVerifySystemStandardPassesWithConsistentSnapshotReachability \
+	TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference \
+	TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState \
+	TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph \
+	TestFormatDoctorTextReportGoldenHealthy \
+	TestFormatDoctorTextReportGoldenDegraded \
+	TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC
+do
+	grep -R --line-number --include='*.go' "func ${t}(" . >/dev/null || {
+		echo "missing evidence: ${t}";
+		exit 1;
+	}
+done
+echo "G14-G17 evidence names: OK"
+```
+
 ## 14) v1.3 snapshot CLI/contract checklist
 
 Commands in scope:
