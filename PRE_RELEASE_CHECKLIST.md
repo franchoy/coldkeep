@@ -401,4 +401,6 @@ Additional CLI validation and policy checks:
 - [ ] CLI contract stability verified
 - [ ] Batch CLI contract stability verified
 - [ ] v1.2 physical-file contract verified (G10–G13)
+- [ ] v1.3 snapshot phase checklist verified (Phases 1-7)
+- [ ] v1.3 C. test surface checklist verified
 
