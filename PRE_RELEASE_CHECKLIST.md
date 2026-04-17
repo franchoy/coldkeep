@@ -258,6 +258,77 @@ Confirm:
 - [ ] Full local CI matrix simulation passed (both codecs)
 - [ ] Smoke passed
 - [ ] Integration suite passed
+
+## 13) v1.3 snapshot sign-off checklist (Phases 1-7)
+
+Use this as the final release gate before tagging `v1.3.x`.
+
+### Phase 1 - schema / invariants
+
+- [ ] `snapshot` and `snapshot_file` tables exist in both SQLite and PostgreSQL paths
+- [ ] Unique `(snapshot_id, path)` constraint exists
+- [ ] Migration version is correct and idempotent
+- [ ] Path normalization rules are centralized and tested
+- [ ] No regression to pre-v1.3 schema behavior
+
+### Phase 2 - snapshot creation
+
+- [ ] Full snapshot copies all current `physical_file` rows
+- [ ] Partial snapshot supports exact paths and directory prefixes
+- [ ] Exact missing path causes rollback
+- [ ] Empty directory prefix is allowed and deterministic
+- [ ] Duplicate inputs are deduplicated
+- [ ] Normalized slash-path semantics are enforced
+
+### Phase 3 - snapshot restore
+
+- [ ] Restore reads from `snapshot_file`, not current state
+- [ ] Full snapshot restore works
+- [ ] Partial restore exact/path-prefix semantics match snapshot create semantics
+- [ ] Overwrite rules are preflight-validated
+- [ ] Metadata handling is correct for normal, `--no-metadata`, and `--strict`
+- [ ] Restore planning is side-effect free until execution
+- [ ] Destination modes behave consistently
+
+### Phase 4 - snapshot visibility / lifecycle
+
+- [ ] Snapshot list works with filtering and ordering
+- [ ] Snapshot show returns metadata plus file list
+- [ ] Snapshot stats works globally and per snapshot
+- [ ] `snapshot delete --force` only removes snapshot metadata
+- [ ] Delete does not directly delete retained content
+
+### Phase 5 - snapshot diff
+
+- [ ] Diff classification is path-based and logical-ID-based
+- [ ] Added/removed/modified semantics are correct
+- [ ] Unchanged content is omitted
+- [ ] Output ordering is deterministic
+- [ ] Summary matches returned diff entries
+- [ ] JSON/text contracts are stable
+
+### Phase 6 - snapshot query/filtering
+
+- [ ] Single `SnapshotQuery` abstraction is used across show/restore/diff
+- [ ] Exact/prefix/glob/regex/size/time filters all validate correctly
+- [ ] Query criteria are ANDed
+- [ ] Filtered counts match returned collections
+- [ ] Slash-path glob behavior is documented and implemented consistently
+- [ ] Diff query filtering is applied after classification
+- [ ] Diff size/mtime semantics are documented and stable
+
+### Phase 7 - snapshot-aware retention / GC
+
+- [ ] Retained logical roots are computed from `physical_file` union `snapshot_file`
+- [ ] Snapshot-only retained content is GC-safe
+- [ ] Deleting a snapshot changes only future GC eligibility
+- [ ] Stats expose snapshot retention pressure
+- [ ] Verify audits persisted snapshot reachability anomalies
+- [ ] Doctor/reporting surfaces snapshot-retention integrity context
+- [ ] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
+
+## 14) Final global sign-off
+
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
 - [ ] Bootstrap on/off behavior verified
