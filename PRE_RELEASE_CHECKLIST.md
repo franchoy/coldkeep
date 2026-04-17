@@ -97,7 +97,7 @@ Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-cor
 ## 4) Run integration umbrella suite (optional extra confidence)
 
 ```bash
-go test ./tests -count=1 -v -timeout 20m
+go test ./tests/... -count=1 -v -timeout 20m
 ```
 
 ## 5) Run doctor
@@ -243,8 +243,8 @@ Manual spot-checks against a populated DB (run after step 1 and step 3):
 # confirm restore-by-stored-path works
 ./coldkeep restore --stored-path <stored-path> --mode override --destination ./out/restored.txt --output json
 
-# confirm repair --batch executes and emits per-item results
-./coldkeep repair --batch --output json
+# confirm repair ref-counts --batch executes and emits per-item results
+./coldkeep repair ref-counts --batch --output json
 ```
 
 Confirm:
@@ -254,7 +254,7 @@ Confirm:
 - `repair ref-counts --output json` success payload contains `updated_logical_files` and `scanned_logical_files`
 - `remove --stored-path --output json` success payload contains `remaining_ref_count`
 - After all mappings are removed, `verify system --standard --output json` still passes (ref_count=0 logical_file is valid)
-- `repair --batch --output json` emits `execution_mode` field and per-item results array
+- `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
 - GC correctly refuses when ref_count drift is present: `error_class=GENERAL`, `invariant_code=GC_REFUSED_INTEGRITY`
 - `repair ref-counts` unblocks subsequent GC and verify
 - Dry-run for `remove --stored-path` correctly returns usage exit code `2` (deferred per design)
