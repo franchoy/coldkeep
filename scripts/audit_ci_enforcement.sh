@@ -96,7 +96,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
   require_pattern "$WORKFLOW_FILE" '^  integration-long-run:$' 'integration long-run job'
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists'
-  require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G9\)' 'adversarial workflow step names batch coverage through G9'
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite'
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step'
