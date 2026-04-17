@@ -92,6 +92,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*Audit validation matrix coverage' 'validation matrix CI audit step'
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_SMOKE_RESET_DB:\s*1' 'isolated smoke reset toggle'
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/integration/\.\.\.' 'integration correctness race run (integration only)'
+  require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/integration/... -run 'TestPhase7SnapshotRetentionLifecycleCLIIntegration'" 'explicit Phase 7 snapshot retention lifecycle gate'
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job'
   require_pattern "$WORKFLOW_FILE" '^  integration-long-run:$' 'integration long-run job'
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists'

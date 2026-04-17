@@ -136,6 +136,20 @@ jobs:
           DB_SSLMODE: disable
         run: go test -race -count=1 -short ./tests/integration/...
 
+      - name: Run Phase 7 snapshot retention lifecycle gate
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: ${{ matrix.codec }}
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: go test -race -count=1 ./tests/integration/... -run 'TestPhase7SnapshotRetentionLifecycleCLIIntegration'
+
   integration-stress:
     runs-on: ubuntu-latest
     needs: integration-correctness
