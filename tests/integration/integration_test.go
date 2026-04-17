@@ -49,9 +49,10 @@ import (
 //
 //	COLDKEEP_TEST_DB=1 go test ./tests/... -v -timeout 10m
 //
-// Run the dedicated long-run tier:
+// Run the dedicated long-run tier (includes TestStoreGCVerifyRestoreDeleteLoopStability,
+// TestRandomizedLongRunLifecycleSoak, and TestSnapshotRetentionChurnLongRun):
 //
-//	COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -v -timeout 20m
+//	COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun' -v -timeout 30m
 //
 // Run correctness only (skip stress regardless of environment):
 //
@@ -11877,6 +11878,294 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 		restoredHash := testutils.SHA256File(t, outPath)
 		if restoredHash != fileHashes[i] {
 			t.Fatalf("file %d: Hash mismatch after restore", i)
+		}
+	}
+
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
+}
+
+// TestSnapshotRetentionChurnLongRun is a long-run soak test that stresses the
+// snapshot-retention model by exercising snapshot create, delete, restore, and
+// GC cycles under high churn. It catches:
+//   - retention-count drift
+//   - stale metadata transitions
+//   - GC/retention race-like logical mistakes
+//   - ref-count inconsistencies
+func TestSnapshotRetentionChurnLongRun(t *testing.T) {
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	const iterations = 70
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(5 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	// Build the coldkeep CLI binary for snapshot operations
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+
+	rng := rand.New(rand.NewSource(20260417 + 42))
+
+	type FileRecord struct {
+		id   int64
+		hash string
+		path string
+	}
+
+	type SnapshotRecord struct {
+		id    string
+		files map[int64]bool // map of file IDs captured in this snapshot
+	}
+
+	liveFiles := make(map[int64]FileRecord)
+	snapshots := make(map[string]SnapshotRecord)
+	snapshotIDCounter := 0
+
+	assertRetentionConsistent := func(label string) {
+		t.Helper()
+
+		// Count retained logical files from snapshots + check against DB
+		var snapshotRetainedCount int64
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(DISTINCT sf.logical_file_id)
+			FROM snapshot_file sf
+		`).Scan(&snapshotRetainedCount); err != nil {
+			t.Fatalf("%s: count snapshot-retained logical files: %v", label, err)
+		}
+
+		var snapshotCount int64
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot`).Scan(&snapshotCount); err != nil {
+			t.Fatalf("%s: count snapshots: %v", label, err)
+		}
+
+		// If no active snapshots, retention should be 0
+		if snapshotCount == 0 && snapshotRetainedCount != 0 {
+			t.Fatalf("%s: expected 0 snapshot-retained files when no snapshots exist, got %d", label, snapshotRetainedCount)
+		}
+
+		// Verify no orphan snapshot_file references
+		var orphanSnapshotFiles int64
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(*)
+			FROM snapshot_file sf
+			LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
+			WHERE lf.id IS NULL
+		`).Scan(&orphanSnapshotFiles); err != nil {
+			t.Fatalf("%s: count orphan snapshot_file rows: %v", label, err)
+		}
+		if orphanSnapshotFiles != 0 {
+			t.Fatalf("%s: expected 0 orphan snapshot_file rows, got %d", label, orphanSnapshotFiles)
+		}
+
+		// Verify no orphan physical_file references
+		var orphanPhysicalFiles int64
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(*)
+			FROM physical_file pf
+			LEFT JOIN logical_file lf ON lf.id = pf.logical_file_id
+			WHERE lf.id IS NULL
+		`).Scan(&orphanPhysicalFiles); err != nil {
+			t.Fatalf("%s: count orphan physical_file rows: %v", label, err)
+		}
+		if orphanPhysicalFiles != 0 {
+			t.Fatalf("%s: expected 0 orphan physical_file rows, got %d", label, orphanPhysicalFiles)
+		}
+	}
+
+	assertVerifyPasses := func(label string, verifyLevel verify.VerifyLevel) {
+		t.Helper()
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verifyLevel); err != nil {
+			t.Fatalf("%s: verify %v: %v", label, verifyLevel, err)
+		}
+	}
+
+	for iteration := 0; iteration < iterations; iteration++ {
+		// 60% chance: Store a new file
+		if rng.Intn(100) < 60 {
+			fileSize := 256*1024 + rng.Intn(2*1024*1024)
+			filePath := filepath.Join(inputDir, fmt.Sprintf("churn-%03d-%.5d.bin", iteration, rng.Intn(99999)))
+
+			wantBytes := make([]byte, fileSize)
+			for j := range wantBytes {
+				wantBytes[j] = byte((j*19 + iteration*23 + j/4096 + 7) % 251)
+			}
+			if err := os.WriteFile(filePath, wantBytes, 0o644); err != nil {
+				t.Fatalf("iteration %d: write input file: %v", iteration, err)
+			}
+			wantHash := testutils.SHA256File(t, filePath)
+
+			if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), filePath); err != nil {
+				t.Fatalf("iteration %d: store: %v", iteration, err)
+			}
+
+			fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
+			liveFiles[fileID] = FileRecord{id: fileID, hash: wantHash, path: filePath}
+		}
+
+		// 50% chance: Run GC (dry-run or real)
+		if rng.Intn(100) < 50 {
+			isDryRun := rng.Intn(100) < 40
+			gcResult, err := maintenance.RunGCWithContainersDirResult(isDryRun, container.ContainersDir)
+			if err != nil {
+				t.Fatalf("iteration %d: gc (dry=%v): %v", iteration, isDryRun, err)
+			}
+
+			// Validate retention counts from GC result
+			snapshotLen := len(snapshots)
+			if snapshotLen > 0 {
+				if gcResult.SnapshotRetainedLogicalFiles == 0 {
+					t.Fatalf("iteration %d: expected SnapshotRetainedLogicalFiles > 0 when %d snapshots exist, got 0", iteration, snapshotLen)
+				}
+			}
+		}
+
+		// 40% chance: Create a snapshot
+		if rng.Intn(100) < 40 && len(liveFiles) > 0 {
+			snapshotIDCounter++
+			snapID := fmt.Sprintf("snapshot-churn-%03d", snapshotIDCounter)
+
+			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "create", "--id", snapID, "--output", "json")
+			if result.ExitCode != 0 {
+				t.Fatalf("iteration %d: snapshot create failed: %s", iteration, result.Stderr)
+			}
+
+			// Parse snapshot creation result to verify it succeeded
+			snapData, ok := testutils.TryParseLastJSONLine(result.Stdout)
+			if !ok {
+				t.Fatalf("iteration %d: failed to parse snapshot create JSON: %s", iteration, result.Stdout)
+			}
+			if gotID, _ := snapData["snapshot_id"].(string); gotID != snapID {
+				t.Fatalf("iteration %d: snapshot id mismatch: want %q got %q", iteration, snapID, gotID)
+			}
+
+			// Record which files are retained by this snapshot
+			capturedFiles := make(map[int64]bool)
+			for fid := range liveFiles {
+				capturedFiles[fid] = true
+			}
+			snapshots[snapID] = SnapshotRecord{id: snapID, files: capturedFiles}
+		}
+
+		// 30% chance: Restore a file from an active snapshot (verify hash match)
+		if rng.Intn(100) < 30 && len(snapshots) > 0 {
+			var randomSnap SnapshotRecord
+			for _, snap := range snapshots {
+				randomSnap = snap
+				break
+			}
+
+			if len(randomSnap.files) > 0 {
+				var sampleFileID int64
+				for fid := range randomSnap.files {
+					sampleFileID = fid
+					break
+				}
+
+				if rec, exists := liveFiles[sampleFileID]; exists {
+					result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "restore", "--snapshot-id", randomSnap.id, "--file-id", fmt.Sprintf("%d", sampleFileID), "--output", "json")
+					if result.ExitCode != 0 {
+						t.Logf("iteration %d: snapshot restore of file %d from %s: %s (may be expected if file was removed)", iteration, sampleFileID, randomSnap.id, result.Stderr)
+						continue
+					}
+
+					// Verify restored file matches original
+					restoredPath := filepath.Join(restoreDir, fmt.Sprintf("churn-restore-%03d-%.5d.bin", iteration, sampleFileID))
+					result2 := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "restore-by-id", fmt.Sprintf("%d", sampleFileID), "--output-path", restoredPath)
+					if result2.ExitCode == 0 {
+						restoredHash := testutils.SHA256File(t, restoredPath)
+						if restoredHash != rec.hash {
+							t.Fatalf("iteration %d: restored file hash mismatch for file %d: want %s got %s", iteration, sampleFileID, rec.hash, restoredHash)
+						}
+					}
+				}
+			}
+		}
+
+		// 20% chance: Remove a live file (if not retained by snapshot)
+		if rng.Intn(100) < 20 && len(liveFiles) > 0 {
+			// Find a file not locked by any snapshot, or remove anyway and let the CLI handle it
+			var fileToRemove int64
+			for fid := range liveFiles {
+				fileToRemove = fid
+				break
+			}
+
+			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "remove", "--file-id", fmt.Sprintf("%d", fileToRemove))
+			if result.ExitCode == 0 {
+				delete(liveFiles, fileToRemove)
+			} else if strings.Contains(result.Stderr, "SNAPSHOT_RETAINED_DELETE_BLOCKED") {
+				// Expected: file is retained by snapshot, keep it in liveFiles
+			} else {
+				t.Fatalf("iteration %d: remove file %d failed unexpectedly: %s", iteration, fileToRemove, result.Stderr)
+			}
+		}
+
+		// 25% chance: Delete a snapshot
+		if rng.Intn(100) < 25 && len(snapshots) > 0 {
+			var snapToDelete string
+			for snapID := range snapshots {
+				snapToDelete = snapID
+				break
+			}
+
+			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "delete", "--snapshot-id", snapToDelete)
+			if result.ExitCode != 0 {
+				t.Fatalf("iteration %d: snapshot delete %s failed: %s", iteration, snapToDelete, result.Stderr)
+			}
+
+			delete(snapshots, snapToDelete)
+		}
+
+		// Every 10 iterations: Verify standard + check retention consistency
+		if iteration > 0 && iteration%10 == 0 {
+			assertVerifyPasses(fmt.Sprintf("iteration %d", iteration), verify.VerifyStandard)
+			assertRetentionConsistent(fmt.Sprintf("iteration %d", iteration))
+		}
+
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
+	}
+
+	// Final deep verify and retention check
+	assertVerifyPasses("final", verify.VerifyFull)
+	assertRetentionConsistent("final")
+
+	// Verify we can restore all remaining live files
+	for _, rec := range liveFiles {
+		outPath := filepath.Join(restoreDir, fmt.Sprintf("churn-final-%.5d.bin", rec.id))
+		if err := storage.RestoreFileWithDB(dbconn, rec.id, outPath); err != nil {
+			t.Fatalf("final restore of file %d: %v", rec.id, err)
+		}
+
+		restoredHash := testutils.SHA256File(t, outPath)
+		if restoredHash != rec.hash {
+			t.Fatalf("final restore hash mismatch for file %d: want %s got %s", rec.id, rec.hash, restoredHash)
 		}
 	}
 

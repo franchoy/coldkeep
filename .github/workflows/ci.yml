@@ -249,7 +249,7 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
+        run: go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
   
   adversarial:
     runs-on: ubuntu-latest
