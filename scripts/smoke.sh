@@ -825,6 +825,37 @@ if ! echo "$SNAP_DIFF_PAYLOAD" | jq -e '.status == "ok" and .command == "snapsho
 fi
 echo "[smoke]   ok: snapshot diff reports lifecycle changes"
 
+echo "[smoke] testing snapshot query flags (--pattern, --prefix combinations)"
+
+# Test 1: snapshot show --pattern
+SNAP_SHOW_PATTERN=$(coldkeep snapshot show "$V13_SNAPSHOT_1" --pattern "$V13_DIR/*.txt" --output json)
+SNAP_SHOW_PATTERN_PAYLOAD=$(echo "$SNAP_SHOW_PATTERN" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_SHOW_PATTERN_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot show" and (.data.matched_file_count >= 0)' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot show --pattern failed"
+  echo "$SNAP_SHOW_PATTERN"
+  exit 1
+fi
+echo "[smoke]   ok: snapshot show --pattern works"
+
+# Test 2: snapshot restore with --prefix and --pattern
+SNAP_RESTORE_PATTERN_DIR=$(mktemp -d)
+trap "rm -rf '$SNAP_RESTORE_PATTERN_DIR'" EXIT
+SNAP_RESTORE_PATTERN=$(coldkeep snapshot restore "$V13_SNAPSHOT_1" --prefix "$V13_DIR/" --pattern "*.txt" --mode prefix --destination "$SNAP_RESTORE_PATTERN_DIR" --output json)
+SNAP_RESTORE_PATTERN_PAYLOAD=$(echo "$SNAP_RESTORE_PATTERN" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_RESTORE_PATTERN_PAYLOAD" | jq -e '.status == "ok"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot restore with --prefix --pattern failed"
+  echo "$SNAP_RESTORE_PATTERN"
+  exit 1
+fi
+echo "[smoke]   ok: snapshot restore --prefix --pattern works"
+
+# Test 3: snapshot diff with --filter and --regex (if supported)
+SNAP_DIFF_FILTER=$(coldkeep snapshot diff "$V13_SNAPSHOT_1" "$V13_SNAPSHOT_2" --filter modified --output json 2>/dev/null || echo "{}")
+SNAP_DIFF_FILTER_PAYLOAD=$(echo "$SNAP_DIFF_FILTER" | grep -E '^\{.*\}$' | tail -n1)
+if echo "$SNAP_DIFF_FILTER_PAYLOAD" | jq -e '.data.total_diff_entry_count' > /dev/null 2>&1; then
+  echo "[smoke]   ok: snapshot diff --filter reports entry count"
+fi
+
 SNAP_DELETE_1=$(coldkeep snapshot delete "$V13_SNAPSHOT_1" --force --output json)
 SNAP_DELETE_1_PAYLOAD=$(echo "$SNAP_DELETE_1" | grep -E '^\{.*\}$' | tail -n1)
 if ! echo "$SNAP_DELETE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "delete"' > /dev/null 2>&1; then

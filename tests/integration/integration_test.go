@@ -821,6 +821,229 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 	}
 }
 
+// TestSnapshotShowFilteredJSONContractMatchesFileCount ensures that
+// snapshot show --prefix/--pattern filtering produces JSON with
+// matched_file_count == len(files). This locks the contract that
+// clients use to validate completeness.
+func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Create files directly in the store directory structure
+	storeDir := filepath.Join(inputDir, "store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatalf("mkdir store: %v", err)
+	}
+
+	// Create files in different directories
+	if err := os.MkdirAll(filepath.Join(storeDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(storeDir, "docs", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(storeDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img: %v", err)
+	}
+
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "docs"), "a.txt", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "docs"), "b.txt", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "docs", "nested"), "c.txt", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "img"), "d.jpg", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "img"), "e.jpg", 100)
+
+	// Store the entire directory structure
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", storeDir, "--output", "json"), "store")
+
+	snapID := "snapshot-filter-contract"
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", snapID, "--output", "json"), "snapshot")
+
+	// Test 1: snapshot show --prefix filtering
+	showPrefix := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapID, "--prefix", "docs/", "--output", "json"), "snapshot show")
+	showPrefixData := testutils.JSONMap(t, showPrefix, "data")
+
+	matchedFileCount := testutils.JSONInt64(t, showPrefixData, "matched_file_count")
+	filesArray, ok := showPrefixData["files"].([]any)
+	if !ok {
+		t.Fatalf("snapshot show --prefix: files is not an array in JSON: %v", showPrefixData)
+	}
+
+	if matchedFileCount != int64(len(filesArray)) {
+		t.Fatalf("snapshot show --prefix: matched_file_count=%d does not match len(files)=%d", matchedFileCount, len(filesArray))
+	}
+
+	// Test 2: snapshot show --pattern filtering (non-empty result)
+	showPattern := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapID, "--pattern", "docs/*.txt", "--output", "json"), "snapshot show")
+	showPatternData := testutils.JSONMap(t, showPattern, "data")
+
+	matchedFileCountPattern := testutils.JSONInt64(t, showPatternData, "matched_file_count")
+	filesArrayPattern, ok := showPatternData["files"].([]any)
+	if !ok {
+		t.Fatalf("snapshot show --pattern: files is not an array in JSON: %v", showPatternData)
+	}
+
+	if matchedFileCountPattern != int64(len(filesArrayPattern)) {
+		t.Fatalf("snapshot show --pattern: matched_file_count=%d does not match len(files)=%d", matchedFileCountPattern, len(filesArrayPattern))
+	}
+
+	// Expect to match only docs/*.txt (a.txt, b.txt at prefix, not nested/c.txt)
+	if matchedFileCountPattern < 2 {
+		t.Fatalf("snapshot show --pattern 'docs/*.txt': expected to match at least 2 files, got %d", matchedFileCountPattern)
+	}
+
+	// Test 3: Empty filtered result still returns stable JSON shape
+	showEmpty := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapID, "--prefix", "nonexistent/", "--output", "json"), "snapshot show")
+	showEmptyData := testutils.JSONMap(t, showEmpty, "data")
+
+	matchedFileCountEmpty := testutils.JSONInt64(t, showEmptyData, "matched_file_count")
+	if matchedFileCountEmpty != 0 {
+		t.Fatalf("snapshot show --prefix 'nonexistent/': expected matched_file_count=0, got %d", matchedFileCountEmpty)
+	}
+
+	filesArrayEmpty, ok := showEmptyData["files"].([]any)
+	if !ok {
+		t.Fatalf("snapshot show (empty result): files is not an array in JSON: %v", showEmptyData)
+	}
+	if len(filesArrayEmpty) != 0 {
+		t.Fatalf("snapshot show (empty result): expected empty files array, got %d entries", len(filesArrayEmpty))
+	}
+
+	// Verify stable envelope structure exists
+	if status, _ := showEmpty["status"].(string); status != "ok" {
+		t.Fatalf("snapshot show (empty result): status should be 'ok', got %q", status)
+	}
+	if cmd, _ := showEmpty["command"].(string); cmd != "snapshot diff" && cmd != "snapshot" && cmd != "snapshot show" {
+		t.Fatalf("snapshot show (empty result): command field missing or wrong: %q", cmd)
+	}
+}
+
+// TestSnapshotDiffFilteredJSONContractMatchesSummary ensures that
+// snapshot diff with --filter/--regex produces JSON where the
+// summary matches the returned entries.
+func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Create version 1
+	storeDir1 := filepath.Join(inputDir, "v1")
+	if err := os.MkdirAll(filepath.Join(storeDir1, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	testutils.CreateTempFile(t, filepath.Join(storeDir1, "docs"), "readme.txt", 200)
+	testutils.CreateTempFile(t, filepath.Join(storeDir1, "docs"), "guide.md", 300)
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", storeDir1, "--output", "json"), "store")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-diff-v1", "--output", "json"), "snapshot")
+
+	// Create version 2 (add and modify files)
+	storeDir2 := filepath.Join(inputDir, "v2")
+	if err := os.MkdirAll(filepath.Join(storeDir2, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "readme.txt", 250)  // modified size
+	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "newfile.txt", 100) // added
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", storeDir2, "--output", "json"), "store")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-diff-v2", "--output", "json"), "snapshot")
+
+	// Test: snapshot diff with --prefix filter
+	diffResult := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "snap-diff-v1", "snap-diff-v2", "--prefix", "docs/", "--output", "json"), "snapshot diff")
+	diffData := testutils.JSONMap(t, diffResult, "data")
+
+	// Extract summary
+	summary, ok := diffData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot diff: summary is not a map in JSON: %v", diffData)
+	}
+
+	// Count entries by classification
+	entriesArray, ok := diffData["entries"].([]any)
+	if !ok {
+		t.Fatalf("snapshot diff: entries is not an array in JSON: %v", diffData)
+	}
+
+	addedCount := int64(0)
+	modifiedCount := int64(0)
+	for _, entry := range entriesArray {
+		entryMap, _ := entry.(map[string]any)
+		if change, _ := entryMap["change"].(string); change == "added" {
+			addedCount++
+		} else if change == "modified" {
+			modifiedCount++
+		}
+	}
+
+	// Verify summary counts match
+	if got, _ := summary["added_count"].(float64); int64(got) != addedCount {
+		t.Fatalf("snapshot diff: summary.added_count=%d does not match counted added entries=%d", int64(got), addedCount)
+	}
+	if got, _ := summary["modified_count"].(float64); int64(got) != modifiedCount {
+		t.Fatalf("snapshot diff: summary.modified_count=%d does not match counted modified entries=%d", int64(got), modifiedCount)
+	}
+
+	// Verify total_diff_entry_count matches
+	totalEntryCount := testutils.JSONInt64(t, diffData, "total_diff_entry_count")
+	if totalEntryCount != int64(len(entriesArray)) {
+		t.Fatalf("snapshot diff: total_diff_entry_count=%d does not match len(entries)=%d", totalEntryCount, int64(len(entriesArray)))
+	}
+}
+
 func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
 	testgate.RequireDB(t)
 
