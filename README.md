@@ -254,7 +254,8 @@ coldkeep snapshot create
 coldkeep snapshot create docs/ report.txt --label release-2026-04
 ```
 
-- `--label <string>`: optional user-defined label for snapshot identification.
+- `--id <snapshotID>`: snapshot system identifier used by snapshot subcommands (`show`, `restore`, `stats`, `diff`, `delete`).
+- `--label <string>`: optional user-facing metadata only (not an identifier and not required for command targeting).
 
 ### Listing and inspecting
 
