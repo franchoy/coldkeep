@@ -368,6 +368,28 @@ coldkeep snapshot delete snap-abc123 --force
 
 Deletes only the snapshot row and its `snapshot_file` entries. The underlying logical files and blocks are not affected.
 
+### v1.3 release gate (operator quick checklist)
+
+Before tagging a `v1.3.x` release, run the dedicated snapshot/retention contract gate in `PRE_RELEASE_CHECKLIST.md`.
+
+Manual lifecycle expected in the release gate:
+
+- create snapshot
+- remove current mapping
+- confirm GC dry-run reports snapshot-retained logical files
+- restore from snapshot
+- diff two snapshots
+- delete snapshot
+- confirm GC eligibility changes only after delete
+
+For the full release criteria, use the v1.3 sections in `PRE_RELEASE_CHECKLIST.md`:
+
+- `13) v1.3 snapshot sign-off checklist (Phases 1-7)`
+- `C. Test surface checklist`
+- `D. Documentation / release checklist`
+- `15) Verify v1.3 snapshot / retention contract (manual gate)`
+- `16) Final global sign-off`
+
 ## Doctor (recommended health gate)
 
 coldkeep doctor is the operator health gate:
