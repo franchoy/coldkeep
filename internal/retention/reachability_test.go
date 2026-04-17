@@ -322,3 +322,126 @@ func TestSnapshotHelperQueriesWithoutSnapshotTableReturnZero(t *testing.T) {
 		t.Fatalf("expected snapshot referenced bytes=0 when snapshot table missing, got %d", snapshotReferencedBytes)
 	}
 }
+
+func TestClassifyRetention(t *testing.T) {
+t.Run("all three buckets populated", func(t *testing.T) {
+currentOnly := int64(1)
+snapshotOnly := int64(2)
+shared := int64(3)
+
+summary := &ReachabilitySummary{
+CurrentLogicalIDs: map[int64]struct{}{
+currentOnly: {},
+shared:      {},
+},
+SnapshotLogicalIDs: map[int64]struct{}{
+snapshotOnly: {},
+shared:       {},
+},
+RetainedLogicalIDs: map[int64]struct{}{
+currentOnly:  {},
+snapshotOnly: {},
+shared:       {},
+},
+}
+
+c := ClassifyRetention(summary)
+
+if !reflect.DeepEqual(c.CurrentOnly, map[int64]struct{}{currentOnly: {}}) {
+t.Errorf("CurrentOnly unexpected: %v", c.CurrentOnly)
+}
+if !reflect.DeepEqual(c.SnapshotOnly, map[int64]struct{}{snapshotOnly: {}}) {
+t.Errorf("SnapshotOnly unexpected: %v", c.SnapshotOnly)
+}
+if !reflect.DeepEqual(c.Shared, map[int64]struct{}{shared: {}}) {
+t.Errorf("Shared unexpected: %v", c.Shared)
+}
+})
+
+t.Run("no snapshots — all current-only", func(t *testing.T) {
+summary := &ReachabilitySummary{
+CurrentLogicalIDs:  map[int64]struct{}{1: {}, 2: {}},
+SnapshotLogicalIDs: map[int64]struct{}{},
+RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}},
+}
+
+c := ClassifyRetention(summary)
+
+if len(c.CurrentOnly) != 2 {
+t.Errorf("expected 2 CurrentOnly, got %d", len(c.CurrentOnly))
+}
+if len(c.SnapshotOnly) != 0 {
+t.Errorf("expected 0 SnapshotOnly, got %d", len(c.SnapshotOnly))
+}
+if len(c.Shared) != 0 {
+t.Errorf("expected 0 Shared, got %d", len(c.Shared))
+}
+})
+
+t.Run("no current state — all snapshot-only", func(t *testing.T) {
+summary := &ReachabilitySummary{
+CurrentLogicalIDs:  map[int64]struct{}{},
+SnapshotLogicalIDs: map[int64]struct{}{10: {}, 20: {}},
+RetainedLogicalIDs: map[int64]struct{}{10: {}, 20: {}},
+}
+
+c := ClassifyRetention(summary)
+
+if len(c.CurrentOnly) != 0 {
+t.Errorf("expected 0 CurrentOnly, got %d", len(c.CurrentOnly))
+}
+if !reflect.DeepEqual(c.SnapshotOnly, map[int64]struct{}{10: {}, 20: {}}) {
+t.Errorf("SnapshotOnly unexpected: %v", c.SnapshotOnly)
+}
+if len(c.Shared) != 0 {
+t.Errorf("expected 0 Shared, got %d", len(c.Shared))
+}
+})
+
+t.Run("empty summary — all buckets empty", func(t *testing.T) {
+summary := &ReachabilitySummary{
+CurrentLogicalIDs:  map[int64]struct{}{},
+SnapshotLogicalIDs: map[int64]struct{}{},
+RetainedLogicalIDs: map[int64]struct{}{},
+}
+
+c := ClassifyRetention(summary)
+
+if len(c.CurrentOnly) != 0 || len(c.SnapshotOnly) != 0 || len(c.Shared) != 0 {
+t.Errorf("expected all empty buckets for empty summary")
+}
+})
+
+t.Run("buckets are mutually exclusive and exhaustive", func(t *testing.T) {
+summary := &ReachabilitySummary{
+CurrentLogicalIDs:  map[int64]struct{}{1: {}, 3: {}},
+SnapshotLogicalIDs: map[int64]struct{}{2: {}, 3: {}},
+RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}, 3: {}},
+}
+
+c := ClassifyRetention(summary)
+
+all := make(map[int64]int)
+for id := range c.CurrentOnly {
+all[id]++
+}
+for id := range c.SnapshotOnly {
+all[id]++
+}
+for id := range c.Shared {
+all[id]++
+}
+
+// Every retained ID must appear in exactly one bucket.
+for id := range summary.RetainedLogicalIDs {
+if all[id] != 1 {
+t.Errorf("id=%d appears in %d buckets, expected exactly 1", id, all[id])
+}
+}
+// Total across buckets must equal the retained set.
+total := len(c.CurrentOnly) + len(c.SnapshotOnly) + len(c.Shared)
+if total != len(summary.RetainedLogicalIDs) {
+t.Errorf("bucket total=%d != retained set size=%d", total, len(summary.RetainedLogicalIDs))
+}
+})
+}

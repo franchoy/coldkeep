@@ -237,6 +237,44 @@ func ComputeReachabilitySummary(ctx context.Context, dbconn *sql.DB) (*Reachabil
 	}, nil
 }
 
+// RetentionClassification partitions the retained logical-file ID set into
+// three mutually exclusive buckets useful for operator-facing reporting.
+type RetentionClassification struct {
+	// CurrentOnly contains logical_file IDs referenced by current-state
+	// physical_file mappings only (not by any snapshot).
+	CurrentOnly map[int64]struct{}
+	// SnapshotOnly contains logical_file IDs referenced by retained
+	// snapshot_file entries only (not by any current-state physical_file).
+	SnapshotOnly map[int64]struct{}
+	// Shared contains logical_file IDs referenced by both current-state
+	// physical_file mappings and retained snapshot_file entries.
+	Shared map[int64]struct{}
+}
+
+// ClassifyRetention partitions the logical-file IDs in summary into the three
+// mutually exclusive buckets of RetentionClassification.
+// It does not query the database; all inputs come from the pre-computed summary.
+func ClassifyRetention(summary *ReachabilitySummary) *RetentionClassification {
+	c := &RetentionClassification{
+		CurrentOnly:  make(map[int64]struct{}),
+		SnapshotOnly: make(map[int64]struct{}),
+		Shared:       make(map[int64]struct{}),
+	}
+	for id := range summary.CurrentLogicalIDs {
+		if _, inSnapshot := summary.SnapshotLogicalIDs[id]; inSnapshot {
+			c.Shared[id] = struct{}{}
+		} else {
+			c.CurrentOnly[id] = struct{}{}
+		}
+	}
+	for id := range summary.SnapshotLogicalIDs {
+		if _, inCurrent := summary.CurrentLogicalIDs[id]; !inCurrent {
+			c.SnapshotOnly[id] = struct{}{}
+		}
+	}
+	return c
+}
+
 func isMissingSnapshotTableError(err error) bool {
 	if err == nil {
 		return false
