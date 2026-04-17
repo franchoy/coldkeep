@@ -537,3 +537,141 @@ CREATE TABLE IF NOT EXISTS snapshot_file (id INTEGER PRIMARY KEY AUTOINCREMENT, 
 		t.Fatalf("expected phantom logical_file_id=%d to be conservatively retained, got snapshotIDs=%v", phantomLogicalID, snapshotIDs)
 	}
 }
+
+// TestRetainedUnionIsInsertionOrderIndependent verifies plan item 4: the
+// retained classification is deterministic regardless of the order in which
+// logical_file, physical_file, and snapshot_file rows are inserted.
+func TestRetainedUnionIsInsertionOrderIndependent(t *testing.T) {
+	ctx := context.Background()
+
+	// Run the same scenario twice with different insertion orders and assert
+	// that both produce identical classification results.
+	type result struct {
+		currentOnly  int
+		snapshotOnly int
+		shared       int
+		retained     int
+	}
+
+	runScenario := func(t *testing.T, insertCurrentFirst bool) result {
+		t.Helper()
+		dbconn := openTestDB(t)
+
+		idA := insertLogical(t, dbconn, "order-a")
+		idB := insertLogical(t, dbconn, "order-b")
+		idC := insertLogical(t, dbconn, "order-c")
+
+		insertSnapshotAndFiles := func() {
+			insertSnapshot(t, dbconn, "snap-order-1")
+			if _, err := dbconn.Exec(
+				`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
+				"snap-order-1", "/snap/b", idB,
+				"snap-order-1", "/snap/c", idC,
+			); err != nil {
+				t.Fatalf("insert snapshot_file rows: %v", err)
+			}
+		}
+		insertCurrentFiles := func() {
+			if _, err := dbconn.Exec(
+				`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, 1), (?, ?, 1)`,
+				"/data/a", idA,
+				"/data/c", idC,
+			); err != nil {
+				t.Fatalf("insert physical_file rows: %v", err)
+			}
+		}
+
+		if insertCurrentFirst {
+			insertCurrentFiles()
+			insertSnapshotAndFiles()
+		} else {
+			insertSnapshotAndFiles()
+			insertCurrentFiles()
+		}
+
+		summary, err := ComputeReachabilitySummary(ctx, dbconn)
+		if err != nil {
+			t.Fatalf("ComputeReachabilitySummary: %v", err)
+		}
+		c := ClassifyRetention(summary)
+		return result{
+			currentOnly:  len(c.CurrentOnly),
+			snapshotOnly: len(c.SnapshotOnly),
+			shared:       len(c.Shared),
+			retained:     len(summary.RetainedLogicalIDs),
+		}
+	}
+
+	r1 := runScenario(t, true)
+	r2 := runScenario(t, false)
+
+	if r1 != r2 {
+		t.Fatalf("retention classification differs by insertion order: currentFirst=%+v snapshotFirst=%+v", r1, r2)
+	}
+	// idA: current-only, idB: snapshot-only, idC: shared
+	if r1.currentOnly != 1 || r1.snapshotOnly != 1 || r1.shared != 1 || r1.retained != 3 {
+		t.Fatalf("unexpected classification: %+v", r1)
+	}
+}
+
+// TestSharedRetentionSurvivesSnapshotDeleteWhenCurrentExists verifies plan
+// item 8 second half: when a logical file is shared (referenced by both
+// current state and a snapshot), deleting only the snapshot must leave the
+// file retained through the current-state root.
+func TestSharedRetentionSurvivesSnapshotDeleteWhenCurrentExists(t *testing.T) {
+	dbconn := openTestDB(t)
+	ctx := context.Background()
+
+	logicalID := insertLogical(t, dbconn, "shared-survive-snap-delete")
+
+	// Current-state reference.
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, 1)`,
+		"/data/shared-survive.txt", logicalID,
+	); err != nil {
+		t.Fatalf("insert physical_file row: %v", err)
+	}
+
+	// Snapshot reference to the same logical file.
+	insertSnapshot(t, dbconn, "snap-shared-survive")
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?)`,
+		"snap-shared-survive", "/snap/shared-survive.txt", logicalID,
+	); err != nil {
+		t.Fatalf("insert snapshot_file row: %v", err)
+	}
+
+	// Before delete: shared.
+	before, err := ComputeReachabilitySummary(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("ComputeReachabilitySummary before delete: %v", err)
+	}
+	if _, ok := before.RetainedLogicalIDs[logicalID]; !ok {
+		t.Fatalf("expected logicalID=%d retained before snapshot delete", logicalID)
+	}
+	bc := ClassifyRetention(before)
+	if len(bc.Shared) != 1 {
+		t.Fatalf("expected shared=1 before snapshot delete, got %+v", bc)
+	}
+
+	// Delete the snapshot (metadata only).
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = ?`, "snap-shared-survive"); err != nil {
+		t.Fatalf("delete snapshot_file rows: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = ?`, "snap-shared-survive"); err != nil {
+		t.Fatalf("delete snapshot row: %v", err)
+	}
+
+	// After snapshot delete: still retained through current-state root.
+	after, err := ComputeReachabilitySummary(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("ComputeReachabilitySummary after delete: %v", err)
+	}
+	if _, ok := after.RetainedLogicalIDs[logicalID]; !ok {
+		t.Fatalf("expected logicalID=%d still retained after snapshot delete (current_state still holds ref)", logicalID)
+	}
+	ac := ClassifyRetention(after)
+	if len(ac.CurrentOnly) != 1 || len(ac.Shared) != 0 || len(ac.SnapshotOnly) != 0 {
+		t.Fatalf("expected current-only after snapshot delete, got %+v", ac)
+	}
+}
