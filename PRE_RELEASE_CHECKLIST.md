@@ -327,6 +327,44 @@ Use this as the final release gate before tagging `v1.3.x`.
 - [ ] Doctor/reporting surfaces snapshot-retention integrity context
 - [ ] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
 
+### C. Test surface checklist
+
+Package tests:
+
+- [ ] `internal/snapshot` covers create / restore / diff / query behavior
+- [ ] `internal/retention` covers current-only / snapshot-only / shared retention
+- [ ] `internal/maintenance/gc` covers snapshot-retained container protection
+- [ ] `internal/verify` covers snapshot reachability anomalies
+- [ ] Stats/reporting tests include snapshot retention visibility
+
+Integration tests:
+
+- [ ] Snapshot lifecycle end-to-end works
+- [ ] Filtered snapshot show returns correct matched counts
+- [ ] Filtered snapshot diff summary matches returned entries
+- [ ] Snapshot-retained content blocks GC until snapshot delete
+- [ ] Long-run snapshot churn test remains green
+
+Adversarial tests:
+
+- [ ] G14 snapshot-retained GC guard
+- [ ] G15 corrupted snapshot metadata detection with conservative GC
+- [ ] G16 snapshot query contract chaos
+- [ ] G17 retention root transition churn
+- [ ] Older G1-G13 adversarial tests still pass
+
+Smoke:
+
+- [ ] Smoke includes v1.3 snapshot lifecycle gate
+- [ ] Smoke resets v1.3 tables too
+- [ ] Smoke exercises:
+- [ ] `snapshot create`
+- [ ] `snapshot show`
+- [ ] `snapshot restore`
+- [ ] `snapshot diff`
+- [ ] `snapshot delete`
+- [ ] GC dry-run before/after delete
+
 ## 14) v1.3 snapshot CLI/contract checklist
 
 Commands in scope:
