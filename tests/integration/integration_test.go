@@ -683,6 +683,143 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	}
 }
 
+// TestPhase7SnapshotRetentionLifecycleCLIIntegration validates the complete
+// Phase 7 retention lifecycle at CLI/system level:
+//
+//  1. store file A
+//  2. create snapshot S1 retaining A
+//  3. remove --stored-path is refused while snapshot-retained
+//  4. restore by ID still works
+//  5. gc --dry-run reports snapshot protection
+//  6. verify system --standard passes
+//  7. delete snapshot S1
+//  8. remove --stored-path succeeds
+//  9. gc --dry-run shows snapshot-retained roots dropped (eligibility gate)
+func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	// Ensure a fully clean v1.3 state for deterministic snapshot/physical checks.
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate v1.3 tables: %v", err)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "phase7_a.bin", 96*1024)
+	originalHash := testutils.SHA256File(t, inPath)
+
+	storePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	fileID := testutils.JSONInt64(t, storeData, "file_id")
+	storedPath, ok := storeData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedPath) == "" {
+		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase7-e2e", "--output", "json"), "snapshot")
+
+	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json")
+	if removeBlocked.ExitCode == 0 {
+		t.Fatalf("remove --stored-path should be refused while snapshot-retained\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
+	}
+	errPayload, ok := testutils.FindCLIErrorPayload(removeBlocked.Stderr)
+	if !ok {
+		errPayload, ok = testutils.FindCLIErrorPayload(removeBlocked.Stdout + "\n" + removeBlocked.Stderr)
+	}
+	if !ok {
+		t.Fatalf("remove blocked path produced no machine-readable error payload\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
+	}
+	if got, _ := errPayload["invariant_code"].(string); got != "SNAPSHOT_RETAINED_DELETE_BLOCKED" {
+		t.Fatalf("expected invariant_code SNAPSHOT_RETAINED_DELETE_BLOCKED, got %q payload=%v", got, errPayload)
+	}
+
+	restoreDir := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restoreDir: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileID), restoreDir, "--output", "json"), "restore")
+
+	var restoredPath string
+	if walkErr := filepath.WalkDir(restoreDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		restoredPath = path
+		return errors.New("done")
+	}); walkErr != nil && !strings.Contains(walkErr.Error(), "done") {
+		t.Fatalf("walk restore dir: %v", walkErr)
+	}
+	if strings.TrimSpace(restoredPath) == "" {
+		t.Fatalf("restore produced no output file in %s", restoreDir)
+	}
+	if restoredHash := testutils.SHA256File(t, restoredPath); restoredHash != originalHash {
+		t.Fatalf("restore-by-id hash mismatch: want=%s got=%s", originalHash, restoredHash)
+	}
+
+	gcBefore := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+	gcBeforeData := testutils.JSONMap(t, gcBefore, "data")
+	snapshotRetainedBefore := testutils.JSONInt64(t, gcBeforeData, "snapshot_retained_logical_files")
+	if snapshotRetainedBefore < 1 {
+		t.Fatalf("expected snapshot_retained_logical_files > 0 before snapshot delete, got %d payload=%v", snapshotRetainedBefore, gcBefore)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-phase7-e2e", "--force", "--output", "json"), "snapshot")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
+
+	gcAfter := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+	gcAfterData := testutils.JSONMap(t, gcAfter, "data")
+	snapshotRetainedAfter := testutils.JSONInt64(t, gcAfterData, "snapshot_retained_logical_files")
+	if snapshotRetainedAfter != 0 {
+		t.Fatalf("expected snapshot_retained_logical_files=0 after snapshot delete and remove, got %d payload=%v", snapshotRetainedAfter, gcAfter)
+	}
+	if snapshotRetainedAfter >= snapshotRetainedBefore {
+		t.Fatalf("expected snapshot-retained roots to decrease after snapshot delete: before=%d after=%d", snapshotRetainedBefore, snapshotRetainedAfter)
+	}
+}
+
 func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
 	testgate.RequireDB(t)
 
