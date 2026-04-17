@@ -324,124 +324,216 @@ func TestSnapshotHelperQueriesWithoutSnapshotTableReturnZero(t *testing.T) {
 }
 
 func TestClassifyRetention(t *testing.T) {
-t.Run("all three buckets populated", func(t *testing.T) {
-currentOnly := int64(1)
-snapshotOnly := int64(2)
-shared := int64(3)
+	t.Run("all three buckets populated", func(t *testing.T) {
+		currentOnly := int64(1)
+		snapshotOnly := int64(2)
+		shared := int64(3)
 
-summary := &ReachabilitySummary{
-CurrentLogicalIDs: map[int64]struct{}{
-currentOnly: {},
-shared:      {},
-},
-SnapshotLogicalIDs: map[int64]struct{}{
-snapshotOnly: {},
-shared:       {},
-},
-RetainedLogicalIDs: map[int64]struct{}{
-currentOnly:  {},
-snapshotOnly: {},
-shared:       {},
-},
+		summary := &ReachabilitySummary{
+			CurrentLogicalIDs: map[int64]struct{}{
+				currentOnly: {},
+				shared:      {},
+			},
+			SnapshotLogicalIDs: map[int64]struct{}{
+				snapshotOnly: {},
+				shared:       {},
+			},
+			RetainedLogicalIDs: map[int64]struct{}{
+				currentOnly:  {},
+				snapshotOnly: {},
+				shared:       {},
+			},
+		}
+
+		c := ClassifyRetention(summary)
+
+		if !reflect.DeepEqual(c.CurrentOnly, map[int64]struct{}{currentOnly: {}}) {
+			t.Errorf("CurrentOnly unexpected: %v", c.CurrentOnly)
+		}
+		if !reflect.DeepEqual(c.SnapshotOnly, map[int64]struct{}{snapshotOnly: {}}) {
+			t.Errorf("SnapshotOnly unexpected: %v", c.SnapshotOnly)
+		}
+		if !reflect.DeepEqual(c.Shared, map[int64]struct{}{shared: {}}) {
+			t.Errorf("Shared unexpected: %v", c.Shared)
+		}
+	})
+
+	t.Run("no snapshots — all current-only", func(t *testing.T) {
+		summary := &ReachabilitySummary{
+			CurrentLogicalIDs:  map[int64]struct{}{1: {}, 2: {}},
+			SnapshotLogicalIDs: map[int64]struct{}{},
+			RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}},
+		}
+
+		c := ClassifyRetention(summary)
+
+		if len(c.CurrentOnly) != 2 {
+			t.Errorf("expected 2 CurrentOnly, got %d", len(c.CurrentOnly))
+		}
+		if len(c.SnapshotOnly) != 0 {
+			t.Errorf("expected 0 SnapshotOnly, got %d", len(c.SnapshotOnly))
+		}
+		if len(c.Shared) != 0 {
+			t.Errorf("expected 0 Shared, got %d", len(c.Shared))
+		}
+	})
+
+	t.Run("no current state — all snapshot-only", func(t *testing.T) {
+		summary := &ReachabilitySummary{
+			CurrentLogicalIDs:  map[int64]struct{}{},
+			SnapshotLogicalIDs: map[int64]struct{}{10: {}, 20: {}},
+			RetainedLogicalIDs: map[int64]struct{}{10: {}, 20: {}},
+		}
+
+		c := ClassifyRetention(summary)
+
+		if len(c.CurrentOnly) != 0 {
+			t.Errorf("expected 0 CurrentOnly, got %d", len(c.CurrentOnly))
+		}
+		if !reflect.DeepEqual(c.SnapshotOnly, map[int64]struct{}{10: {}, 20: {}}) {
+			t.Errorf("SnapshotOnly unexpected: %v", c.SnapshotOnly)
+		}
+		if len(c.Shared) != 0 {
+			t.Errorf("expected 0 Shared, got %d", len(c.Shared))
+		}
+	})
+
+	t.Run("empty summary — all buckets empty", func(t *testing.T) {
+		summary := &ReachabilitySummary{
+			CurrentLogicalIDs:  map[int64]struct{}{},
+			SnapshotLogicalIDs: map[int64]struct{}{},
+			RetainedLogicalIDs: map[int64]struct{}{},
+		}
+
+		c := ClassifyRetention(summary)
+
+		if len(c.CurrentOnly) != 0 || len(c.SnapshotOnly) != 0 || len(c.Shared) != 0 {
+			t.Errorf("expected all empty buckets for empty summary")
+		}
+	})
+
+	t.Run("buckets are mutually exclusive and exhaustive", func(t *testing.T) {
+		summary := &ReachabilitySummary{
+			CurrentLogicalIDs:  map[int64]struct{}{1: {}, 3: {}},
+			SnapshotLogicalIDs: map[int64]struct{}{2: {}, 3: {}},
+			RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}, 3: {}},
+		}
+
+		c := ClassifyRetention(summary)
+
+		all := make(map[int64]int)
+		for id := range c.CurrentOnly {
+			all[id]++
+		}
+		for id := range c.SnapshotOnly {
+			all[id]++
+		}
+		for id := range c.Shared {
+			all[id]++
+		}
+
+		// Every retained ID must appear in exactly one bucket.
+		for id := range summary.RetainedLogicalIDs {
+			if all[id] != 1 {
+				t.Errorf("id=%d appears in %d buckets, expected exactly 1", id, all[id])
+			}
+		}
+		// Total across buckets must equal the retained set.
+		total := len(c.CurrentOnly) + len(c.SnapshotOnly) + len(c.Shared)
+		if total != len(summary.RetainedLogicalIDs) {
+			t.Errorf("bucket total=%d != retained set size=%d", total, len(summary.RetainedLogicalIDs))
+		}
+	})
 }
 
-c := ClassifyRetention(summary)
+// TestRetentionByLogicalIDNotPath verifies Case 5: the same logical file
+// referenced at different paths across multiple snapshots is counted exactly
+// once in every retained set — no double counting, no path dependency.
+func TestRetentionByLogicalIDNotPath(t *testing.T) {
+	dbconn := openTestDB(t)
+	ctx := context.Background()
 
-if !reflect.DeepEqual(c.CurrentOnly, map[int64]struct{}{currentOnly: {}}) {
-t.Errorf("CurrentOnly unexpected: %v", c.CurrentOnly)
-}
-if !reflect.DeepEqual(c.SnapshotOnly, map[int64]struct{}{snapshotOnly: {}}) {
-t.Errorf("SnapshotOnly unexpected: %v", c.SnapshotOnly)
-}
-if !reflect.DeepEqual(c.Shared, map[int64]struct{}{shared: {}}) {
-t.Errorf("Shared unexpected: %v", c.Shared)
-}
-})
+	logicalID := insertLogical(t, dbconn, "path-independent")
 
-t.Run("no snapshots — all current-only", func(t *testing.T) {
-summary := &ReachabilitySummary{
-CurrentLogicalIDs:  map[int64]struct{}{1: {}, 2: {}},
-SnapshotLogicalIDs: map[int64]struct{}{},
-RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}},
-}
+	insertSnapshot(t, dbconn, "snap-path-a")
+	insertSnapshot(t, dbconn, "snap-path-b")
 
-c := ClassifyRetention(summary)
+	// Same logical file retained under different paths across two snapshots.
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
+		"snap-path-a", "docs/version1.txt", logicalID,
+		"snap-path-b", "archive/version2.txt", logicalID,
+	); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
 
-if len(c.CurrentOnly) != 2 {
-t.Errorf("expected 2 CurrentOnly, got %d", len(c.CurrentOnly))
-}
-if len(c.SnapshotOnly) != 0 {
-t.Errorf("expected 0 SnapshotOnly, got %d", len(c.SnapshotOnly))
-}
-if len(c.Shared) != 0 {
-t.Errorf("expected 0 Shared, got %d", len(c.Shared))
-}
-})
+	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("ListSnapshotReferencedLogicalFileIDs: %v", err)
+	}
+	if len(snapshotIDs) != 1 {
+		t.Fatalf("expected exactly 1 distinct logical ID (no double counting), got %d: %v", len(snapshotIDs), snapshotIDs)
+	}
+	if _, ok := snapshotIDs[logicalID]; !ok {
+		t.Fatalf("expected logicalID=%d in snapshot retained set", logicalID)
+	}
 
-t.Run("no current state — all snapshot-only", func(t *testing.T) {
-summary := &ReachabilitySummary{
-CurrentLogicalIDs:  map[int64]struct{}{},
-SnapshotLogicalIDs: map[int64]struct{}{10: {}, 20: {}},
-RetainedLogicalIDs: map[int64]struct{}{10: {}, 20: {}},
-}
+	allIDs, err := ListAllRetainedLogicalFileIDs(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("ListAllRetainedLogicalFileIDs: %v", err)
+	}
+	if len(allIDs) != 1 {
+		t.Fatalf("expected exactly 1 retained logical ID in union, got %d: %v", len(allIDs), allIDs)
+	}
 
-c := ClassifyRetention(summary)
-
-if len(c.CurrentOnly) != 0 {
-t.Errorf("expected 0 CurrentOnly, got %d", len(c.CurrentOnly))
-}
-if !reflect.DeepEqual(c.SnapshotOnly, map[int64]struct{}{10: {}, 20: {}}) {
-t.Errorf("SnapshotOnly unexpected: %v", c.SnapshotOnly)
-}
-if len(c.Shared) != 0 {
-t.Errorf("expected 0 Shared, got %d", len(c.Shared))
-}
-})
-
-t.Run("empty summary — all buckets empty", func(t *testing.T) {
-summary := &ReachabilitySummary{
-CurrentLogicalIDs:  map[int64]struct{}{},
-SnapshotLogicalIDs: map[int64]struct{}{},
-RetainedLogicalIDs: map[int64]struct{}{},
+	summary, err := ComputeReachabilitySummary(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("ComputeReachabilitySummary: %v", err)
+	}
+	if len(summary.SnapshotLogicalIDs) != 1 {
+		t.Fatalf("expected SnapshotLogicalIDs size=1, got %d", len(summary.SnapshotLogicalIDs))
+	}
+	if len(summary.RetainedLogicalIDs) != 1 {
+		t.Fatalf("expected RetainedLogicalIDs size=1, got %d", len(summary.RetainedLogicalIDs))
+	}
 }
 
-c := ClassifyRetention(summary)
+// TestDanglingSnapshotRefIsConservativelyRetained verifies Case 6: a
+// snapshot_file row whose logical_file_id no longer exists in logical_file
+// is included in SnapshotLogicalIDs by the reachability helper. The phantom ID
+// is inert — no live file_chunk rows exist for it — so GC is unaffected.
+// The correct detection path for this condition is verify, not GC.
+// This test documents that the retention layer behaves conservatively (phantom
+// IDs are retained rather than silently dropped) rather than masking bad state.
+func TestDanglingSnapshotRefIsConservativelyRetained(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
 
-if len(c.CurrentOnly) != 0 || len(c.SnapshotOnly) != 0 || len(c.Shared) != 0 {
-t.Errorf("expected all empty buckets for empty summary")
-}
-})
+	if _, err := dbconn.Exec(`
+CREATE TABLE IF NOT EXISTS snapshot (id TEXT PRIMARY KEY, created_at TIMESTAMP, type TEXT);
+CREATE TABLE IF NOT EXISTS snapshot_file (id INTEGER PRIMARY KEY AUTOINCREMENT, snapshot_id TEXT, path TEXT, logical_file_id INTEGER);
+`); err != nil {
+		t.Fatalf("create minimal tables: %v", err)
+	}
 
-t.Run("buckets are mutually exclusive and exhaustive", func(t *testing.T) {
-summary := &ReachabilitySummary{
-CurrentLogicalIDs:  map[int64]struct{}{1: {}, 3: {}},
-SnapshotLogicalIDs: map[int64]struct{}{2: {}, 3: {}},
-RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}, 3: {}},
-}
+	// Insert a snapshot_file row pointing to a nonexistent logical_file_id.
+	phantomLogicalID := int64(9999)
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?)`,
+		"snap-dangling", "docs/ghost.txt", phantomLogicalID,
+	); err != nil {
+		t.Fatalf("insert dangling snapshot_file row: %v", err)
+	}
 
-c := ClassifyRetention(summary)
-
-all := make(map[int64]int)
-for id := range c.CurrentOnly {
-all[id]++
-}
-for id := range c.SnapshotOnly {
-all[id]++
-}
-for id := range c.Shared {
-all[id]++
-}
-
-// Every retained ID must appear in exactly one bucket.
-for id := range summary.RetainedLogicalIDs {
-if all[id] != 1 {
-t.Errorf("id=%d appears in %d buckets, expected exactly 1", id, all[id])
-}
-}
-// Total across buckets must equal the retained set.
-total := len(c.CurrentOnly) + len(c.SnapshotOnly) + len(c.Shared)
-if total != len(summary.RetainedLogicalIDs) {
-t.Errorf("bucket total=%d != retained set size=%d", total, len(summary.RetainedLogicalIDs))
-}
-})
+	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("ListSnapshotReferencedLogicalFileIDs with dangling ref: %v", err)
+	}
+	// Conservative: the phantom ID is included, not silently dropped.
+	if _, ok := snapshotIDs[phantomLogicalID]; !ok {
+		t.Fatalf("expected phantom logical_file_id=%d to be conservatively retained, got snapshotIDs=%v", phantomLogicalID, snapshotIDs)
+	}
 }
