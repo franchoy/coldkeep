@@ -12,7 +12,39 @@ production stability.
 
 ## [Unreleased]
 
-Nothing pending beyond v1.2.
+v1.3 snapshot-layer release-candidate alignment.
+
+### Scope alignment (v1.3)
+
+- Snapshot command surface is in scope: `snapshot create`, `snapshot restore`,
+  `snapshot list`, `snapshot show`, `snapshot stats`, `snapshot diff`,
+  `snapshot delete --force`.
+- Snapshot query semantics are part of the contract surface across
+  `snapshot show`, `snapshot restore`, and `snapshot diff`:
+  exact path, prefix, glob pattern, regex, size window, and modified-time
+  window criteria with AND semantics.
+- `snapshot diff` filtering semantics are explicit and stable:
+  `--filter added|removed|modified` reduces returned entries and summary counts
+  to the selected classification.
+- Snapshot delete semantics are explicit and stable:
+  delete removes snapshot metadata (`snapshot` + `snapshot_file`) only;
+  underlying logical files/blocks are not directly removed by snapshot delete.
+
+### Snapshot-retention / GC contract alignment
+
+- Snapshot-retained content remains GC-ineligible until the retaining snapshot
+  is deleted.
+- Removing current-state mappings alone does not make snapshot-retained content
+  collectible.
+- GC eligibility transition is expected only after snapshot delete.
+
+### Validation and release-gate alignment
+
+- `VALIDATION_MATRIX.md` is expected to list and cover G14-G17 for v1.3.
+- v1.3 release gating explicitly includes:
+  - test surface coverage (package/integration/adversarial/smoke)
+  - documentation/release checklist consistency (README + validation matrix)
+  - manual snapshot/retention lifecycle gate in `PRE_RELEASE_CHECKLIST.md`
 
 ------------------------------------------------------------------------
 
