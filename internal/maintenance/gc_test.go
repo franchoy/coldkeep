@@ -344,16 +344,16 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO chunk (hash, size, live_ref_count, pin_count)
-		VALUES ('deadbeef01chunk', 512, 0, 0)
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		VALUES ('deadbeef01chunk', 512, 'COMPLETED', 0, 0)
 		RETURNING id
 	`).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
 	}
 
 	if _, err := dbconn.Exec(`
-		INSERT INTO file_chunk (logical_file_id, chunk_id, sequence_index, offset_in_file)
-		VALUES ($1, $2, 0, 0)
+		INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		VALUES ($1, $2, 0)
 	`, logicalID, chunkID); err != nil {
 		t.Fatalf("insert file_chunk: %v", err)
 	}
@@ -373,9 +373,9 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 	}
 
 	if _, err := dbconn.Exec(`
-		INSERT INTO blocks (container_id, chunk_id, offset_in_container, compressed_size)
-		VALUES ($1, $2, 0, 512)
-	`, containerID, chunkID); err != nil {
+		INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		VALUES ($1, 'plain', 1, 512, 512, $2, 0)
+	`, chunkID, containerID); err != nil {
 		t.Fatalf("insert blocks: %v", err)
 	}
 
