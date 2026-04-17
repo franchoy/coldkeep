@@ -9,6 +9,16 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For v1.3 tags, treat sections 13-16 as required release gates after sections 1-12.
 
+## Prerequisite: PostgreSQL assumptions and operator surface
+
+Review this before starting Step 1.
+
+Operator expectation surface for supported PostgreSQL deployments:
+
+- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. With `COLDKEEP_DB_AUTO_BOOTSTRAP=true`, it may create/validate required schema objects; with bootstrap disabled, missing schema should fail fast.
+- Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
+- Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
+
 ## 1) Start PostgreSQL and set CI-compatible environment
 
 ```bash
@@ -94,7 +104,10 @@ done
 
 Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`) across both codecs.
 
-## 4) Run integration umbrella suite (optional extra confidence)
+## 4) Run integration umbrella suite (optional extra confidence, not a release gate)
+
+This step is intentionally non-blocking for release sign-off.
+Use it to catch broader regressions outside the required CI-equivalent gate set in steps 2-3.
 
 ```bash
 go test ./tests/... -count=1 -v -timeout 20m
@@ -149,14 +162,6 @@ docker compose run --rm coldkeep doctor
 ```
 
 Expected: no manual local state is required beyond documented setup, and basic commands succeed.
-
-## 9) PostgreSQL assumptions note
-
-Operator expectation surface for supported PostgreSQL deployments:
-
-- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. With `COLDKEEP_DB_AUTO_BOOTSTRAP=true`, it may create/validate required schema objects; with bootstrap disabled, missing schema should fail fast.
-- Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
-- Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
 
 ## 10) Verify CLI contract stability
 
