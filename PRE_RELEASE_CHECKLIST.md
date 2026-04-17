@@ -365,6 +365,22 @@ Smoke:
 - [ ] `snapshot delete`
 - [ ] GC dry-run before/after delete
 
+### D. Documentation / release checklist
+
+README:
+
+- [ ] v1.3 status line matches actual feature set
+- [ ] Snapshot command examples are accurate
+- [ ] Query semantics are documented
+- [ ] Diff filtering semantics are documented
+- [ ] Delete semantics are documented
+
+VALIDATION_MATRIX:
+
+- [ ] G14-G17 are listed and covered
+- [ ] Evidence names match actual tests
+- [ ] No stale "covered" claims remain
+
 ## 14) v1.3 snapshot CLI/contract checklist
 
 Commands in scope:
@@ -392,7 +408,44 @@ Additional CLI validation and policy checks:
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
 - [ ] `snapshot delete` requires `--force`
 
-## 15) Final global sign-off
+## 15) Verify v1.3 snapshot / retention contract (manual gate)
+
+Run this manual lifecycle gate after core CI/test gates pass.
+
+```bash
+# create snapshot
+./coldkeep snapshot create --name pre-gc-gate --output json
+
+# remove current mapping (example path)
+./coldkeep remove --path samples/hello.txt --output json
+
+# confirm GC dry-run reports snapshot-retained logical files
+./coldkeep gc --dry-run --output json
+
+# restore from snapshot
+./coldkeep snapshot restore --snapshot pre-gc-gate --destination ./out --output json
+
+# diff two snapshots
+./coldkeep snapshot diff --from pre-gc-gate --to <second-snapshot> --output json
+
+# delete snapshot
+./coldkeep snapshot delete --snapshot pre-gc-gate --force --output json
+
+# confirm GC eligibility changes only after delete
+./coldkeep gc --dry-run --output json
+```
+
+Confirm:
+
+- [ ] Snapshot create succeeds
+- [ ] Removing current mapping does not immediately make snapshot-retained data GC-eligible
+- [ ] GC dry-run reports snapshot-retained logical files before snapshot delete
+- [ ] Snapshot restore succeeds from retained snapshot data
+- [ ] Snapshot diff works and output is consistent with returned entries
+- [ ] Snapshot delete succeeds only with `--force`
+- [ ] GC eligibility changes only after snapshot delete
+
+## 16) Final global sign-off
 
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
@@ -403,4 +456,6 @@ Additional CLI validation and policy checks:
 - [ ] v1.2 physical-file contract verified (G10–G13)
 - [ ] v1.3 snapshot phase checklist verified (Phases 1-7)
 - [ ] v1.3 C. test surface checklist verified
+- [ ] v1.3 D. documentation/release checklist verified
+- [ ] v1.3 snapshot/retention manual gate verified
 
