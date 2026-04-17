@@ -2238,6 +2238,101 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}
 }
 
+func TestRunGCCommandJSONIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+		return maintenance.GCResult{
+			DryRun:                       false,
+			AffectedContainers:           2,
+			ContainerFilenames:           []string{"a.bin", "b.bin"},
+			SnapshotRetainedContainers:   1,
+			SnapshotRetainedLogicalFiles: 4,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object in payload: %v", payload)
+	}
+	assertJSONNumber(t, data, "snapshot_retained_logical_files", 4)
+	assertJSONNumber(t, data, "snapshot_retained_containers", 1)
+	assertJSONNumber(t, data, "affected_containers", 2)
+}
+
+func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	t.Run("appears in non-dry-run output when non-zero", func(t *testing.T) {
+		runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+			return maintenance.GCResult{
+				DryRun:                       false,
+				AffectedContainers:           1,
+				ContainerFilenames:           []string{"c.bin"},
+				SnapshotRetainedLogicalFiles: 3,
+			}, nil
+		}
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeText); err != nil {
+				t.Fatalf("runGCCommand text returned error: %v", err)
+			}
+		})
+		if !strings.Contains(output, "GC retained snapshot-protected logical files: 3") {
+			t.Fatalf("expected snapshot-retained logical files line in output:\n%s", output)
+		}
+	})
+
+	t.Run("appears in dry-run output when non-zero", func(t *testing.T) {
+		runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+			return maintenance.GCResult{
+				DryRun:                       true,
+				AffectedContainers:           1,
+				ContainerFilenames:           []string{"d.bin"},
+				SnapshotRetainedLogicalFiles: 5,
+			}, nil
+		}
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{"dry-run": {"true"}}}, outputModeText); err != nil {
+				t.Fatalf("runGCCommand dry-run text returned error: %v", err)
+			}
+		})
+		if !strings.Contains(output, "GC retained snapshot-protected logical files: 5") {
+			t.Fatalf("expected snapshot-retained logical files line in dry-run output:\n%s", output)
+		}
+	})
+
+	t.Run("absent when zero", func(t *testing.T) {
+		runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+			return maintenance.GCResult{
+				DryRun:                       false,
+				AffectedContainers:           1,
+				ContainerFilenames:           []string{"e.bin"},
+				SnapshotRetainedLogicalFiles: 0,
+			}, nil
+		}
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeText); err != nil {
+				t.Fatalf("runGCCommand text returned error: %v", err)
+			}
+		})
+		if strings.Contains(output, "snapshot-protected") {
+			t.Fatalf("expected snapshot-retained line to be absent when zero, got output:\n%s", output)
+		}
+	})
+}
+
 func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	originalRunStats := runStatsPhase
 	t.Cleanup(func() {

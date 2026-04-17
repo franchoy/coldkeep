@@ -118,6 +118,7 @@ var doctorSchemaVersionPhase = querySchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
+var runGCPhase = maintenance.RunGCWithContainersDirResult
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshot
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
@@ -1440,7 +1441,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return usageErrorf("Usage: coldkeep gc [--dry-run]")
 	}
 
-	result, err := maintenance.RunGCWithContainersDirResult(dryRun, container.ContainersDir)
+	result, err := runGCPhase(dryRun, container.ContainersDir)
 	if err != nil {
 		return err
 	}
@@ -1461,6 +1462,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		if dryRun && result.SnapshotRetainedContainers > 0 {
 			fmt.Printf("GC skipped containers still retained by snapshots: %d\n", result.SnapshotRetainedContainers)
 		}
+		if result.SnapshotRetainedLogicalFiles > 0 {
+			fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1473,6 +1477,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		if result.SnapshotRetainedContainers > 0 {
 			fmt.Printf("GC skipped containers still retained by snapshots: %d\n", result.SnapshotRetainedContainers)
 		}
+		if result.SnapshotRetainedLogicalFiles > 0 {
+			fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1481,6 +1488,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		fmt.Printf("Deleted container: %s\n", filename)
 	}
 	fmt.Printf("GC completed. Containers deleted: %d\n", result.AffectedContainers)
+	if result.SnapshotRetainedLogicalFiles > 0 {
+		fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+	}
 	fmt.Printf("Hint: %s\n", doctorOperationalHint)
 	return nil
 }

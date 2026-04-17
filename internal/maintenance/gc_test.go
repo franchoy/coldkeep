@@ -13,6 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -460,6 +461,45 @@ func TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable(t *testin
 	}
 	if result.SnapshotRetainedContainers != 1 {
 		t.Fatalf("expected 1 snapshot-retained container in dry-run result, got %d", result.SnapshotRetainedContainers)
+	}
+}
+
+// TestRunGCResultPopulatesSnapshotRetainedLogicalFiles verifies that
+// GCResult.SnapshotRetainedLogicalFiles is populated from the reachability
+// summary without requiring the container sweep to fire.
+func TestRunGCResultPopulatesSnapshotRetainedLogicalFiles(t *testing.T) {
+	// Stub gcComputeReachability to return a known set of snapshot-retained IDs.
+	originalReachability := gcComputeReachability
+	t.Cleanup(func() { gcComputeReachability = originalReachability })
+
+	gcComputeReachability = func(_ context.Context, _ *sql.DB) (*retention.ReachabilitySummary, error) {
+		return &retention.ReachabilitySummary{
+			CurrentLogicalIDs: map[int64]struct{}{1: {}, 2: {}},
+			SnapshotLogicalIDs: map[int64]struct{}{
+				3: {},
+				4: {},
+				5: {},
+			},
+			RetainedLogicalIDs: map[int64]struct{}{1: {}, 2: {}, 3: {}, 4: {}, 5: {}},
+		}, nil
+	}
+
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	result, gcErr := RunGCWithContainersDirResult(false, t.TempDir())
+	if gcErr != nil {
+		t.Fatalf("GC should succeed: %v", gcErr)
+	}
+	if result.SnapshotRetainedLogicalFiles != 3 {
+		t.Fatalf("expected SnapshotRetainedLogicalFiles=3, got %d", result.SnapshotRetainedLogicalFiles)
 	}
 }
 

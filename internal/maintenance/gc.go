@@ -31,10 +31,11 @@ var gcComputeReachability = func(ctx context.Context, dbconn *sql.DB) (*retentio
 // Non-dry-run GC is state-changing: it deletes unreferenced metadata rows and
 // container files. Dry-run is read-only and only reports what would be removed.
 type GCResult struct {
-	DryRun                     bool     `json:"dry_run"`
-	AffectedContainers         int      `json:"affected_containers"`
-	ContainerFilenames         []string `json:"container_filenames"`
-	SnapshotRetainedContainers int      `json:"snapshot_retained_containers"`
+	DryRun                       bool     `json:"dry_run"`
+	AffectedContainers           int      `json:"affected_containers"`
+	ContainerFilenames           []string `json:"container_filenames"`
+	SnapshotRetainedContainers   int      `json:"snapshot_retained_containers"`
+	SnapshotRetainedLogicalFiles int      `json:"snapshot_retained_logical_files"`
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
@@ -134,6 +135,10 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	if err != nil {
 		return GCResult{}, fmt.Errorf("GC pre-flight: failed to compute reachability summary: %w", err)
 	}
+
+	// Snapshot-retained logical file count is a fixed property of the retained
+	// root set at the time GC runs. Populate it once, before the container loop.
+	result.SnapshotRetainedLogicalFiles = len(reachability.SnapshotLogicalIDs)
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
