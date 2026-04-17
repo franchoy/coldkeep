@@ -324,8 +324,12 @@ func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) 
 		return 0, fmt.Errorf("check logical_file existence id=%d: %w", sf.LogicalFileID, err)
 	}
 
+	return insertSnapshotFileDirect(ctx, exec, sf, normalizedPath)
+}
+
+func insertSnapshotFileDirect(ctx context.Context, exec sqlExecutor, sf SnapshotFile, normalizedPath string) (int64, error) {
 	var id int64
-	err = exec.QueryRowContext(
+	err := exec.QueryRowContext(
 		ctx,
 		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, $6)
@@ -343,6 +347,26 @@ func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) 
 
 	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, sf.SnapshotID, normalizedPath)
 	return id, nil
+}
+
+func insertSnapshotFileDirectNoReturning(ctx context.Context, exec sqlExecutor, sf SnapshotFile, normalizedPath string) error {
+	_, err := exec.ExecContext(
+		ctx,
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		sf.SnapshotID,
+		normalizedPath,
+		sf.LogicalFileID,
+		sf.Size,
+		sf.Mode,
+		sf.MTime,
+	)
+	if err != nil {
+		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", sf.SnapshotID, normalizedPath, err)
+	}
+
+	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", sf.SnapshotID, normalizedPath)
+	return nil
 }
 
 func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) ([]Snapshot, error) {
@@ -1124,7 +1148,15 @@ func CreateSnapshot(
 
 	seenSnapshotPaths := make(map[string]struct{})
 	foundExact := make(map[string]struct{})
-	insertedCount := 0
+
+	type pendingSnapshotFile struct {
+		normalizedPath string
+		logicalFileID  int64
+		totalSize      int64
+		mode           sql.NullInt64
+		mtime          sql.NullTime
+	}
+	pending := make([]pendingSnapshotFile, 0, 128)
 
 	for rows.Next() {
 		var (
@@ -1166,19 +1198,13 @@ func CreateSnapshot(
 			continue
 		}
 		seenSnapshotPaths[normalizedPath] = struct{}{}
-
-		_, err = insertSnapshotFile(ctx, tx, SnapshotFile{
-			SnapshotID:    snapshotID,
-			Path:          normalizedPath,
-			LogicalFileID: logicalFileID,
-			Size:          sql.NullInt64{Int64: totalSize, Valid: true},
-			Mode:          mode,
-			MTime:         mtime,
+		pending = append(pending, pendingSnapshotFile{
+			normalizedPath: normalizedPath,
+			logicalFileID:  logicalFileID,
+			totalSize:      totalSize,
+			mode:           mode,
+			mtime:          mtime,
 		})
-		if err != nil {
-			return err
-		}
-		insertedCount++
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate snapshot source rows: %w", err)
@@ -1188,6 +1214,22 @@ func CreateSnapshot(
 		if _, ok := foundExact[exactPath]; !ok {
 			return fmt.Errorf("path not found in current state: %s", exactPath)
 		}
+	}
+
+	insertedCount := 0
+	for _, entry := range pending {
+		err = insertSnapshotFileDirectNoReturning(ctx, tx, SnapshotFile{
+			SnapshotID:    snapshotID,
+			Path:          entry.normalizedPath,
+			LogicalFileID: entry.logicalFileID,
+			Size:          sql.NullInt64{Int64: entry.totalSize, Valid: true},
+			Mode:          entry.mode,
+			MTime:         entry.mtime,
+		}, entry.normalizedPath)
+		if err != nil {
+			return err
+		}
+		insertedCount++
 	}
 
 	if err := tx.Commit(); err != nil {

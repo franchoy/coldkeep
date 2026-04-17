@@ -876,7 +876,7 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 
 	// Store the entire directory structure
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"store", storeDir, "--output", "json"), "store")
+		"store-folder", storeDir, "--output", "json"), "store-folder")
 
 	snapID := "snapshot-filter-contract"
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
@@ -884,7 +884,7 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 
 	// Test 1: snapshot show --prefix filtering
 	showPrefix := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "show", snapID, "--prefix", "docs/", "--output", "json"), "snapshot show")
+		"snapshot", "show", snapID, "--prefix", "docs/", "--output", "json"), "snapshot")
 	showPrefixData := testutils.JSONMap(t, showPrefix, "data")
 
 	matchedFileCount := testutils.JSONInt64(t, showPrefixData, "matched_file_count")
@@ -897,9 +897,13 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 		t.Fatalf("snapshot show --prefix: matched_file_count=%d does not match len(files)=%d", matchedFileCount, len(filesArray))
 	}
 
-	// Test 2: snapshot show --pattern filtering (non-empty result)
+	// Test 2: snapshot show --pattern filtering (non-empty result).
+	// Snapshot paths are normalized slash paths rooted at stored physical paths,
+	// so derive the glob from storeDir for backend-agnostic matching.
+	normalizedStoreDir := strings.TrimPrefix(filepath.ToSlash(storeDir), "/")
+	pattern := normalizedStoreDir + "/docs/*.txt"
 	showPattern := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "show", snapID, "--pattern", "docs/*.txt", "--output", "json"), "snapshot show")
+		"snapshot", "show", snapID, "--pattern", pattern, "--output", "json"), "snapshot")
 	showPatternData := testutils.JSONMap(t, showPattern, "data")
 
 	matchedFileCountPattern := testutils.JSONInt64(t, showPatternData, "matched_file_count")
@@ -914,12 +918,12 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 
 	// Expect to match only docs/*.txt (a.txt, b.txt at prefix, not nested/c.txt)
 	if matchedFileCountPattern < 2 {
-		t.Fatalf("snapshot show --pattern 'docs/*.txt': expected to match at least 2 files, got %d", matchedFileCountPattern)
+		t.Fatalf("snapshot show --pattern %q: expected to match at least 2 files, got %d", pattern, matchedFileCountPattern)
 	}
 
 	// Test 3: Empty filtered result still returns stable JSON shape
 	showEmpty := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "show", snapID, "--prefix", "nonexistent/", "--output", "json"), "snapshot show")
+		"snapshot", "show", snapID, "--prefix", "nonexistent/", "--output", "json"), "snapshot")
 	showEmptyData := testutils.JSONMap(t, showEmpty, "data")
 
 	matchedFileCountEmpty := testutils.JSONInt64(t, showEmptyData, "matched_file_count")
@@ -982,7 +986,7 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.CreateTempFile(t, filepath.Join(storeDir1, "docs"), "guide.md", 300)
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"store", storeDir1, "--output", "json"), "store")
+		"store-folder", storeDir1, "--output", "json"), "store-folder")
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v1", "--output", "json"), "snapshot")
@@ -996,7 +1000,7 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "newfile.txt", 100) // added
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"store", storeDir2, "--output", "json"), "store")
+		"store-folder", storeDir2, "--output", "json"), "store-folder")
 
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "create", "--id", "snap-diff-v2", "--output", "json"), "snapshot")

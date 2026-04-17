@@ -106,6 +106,18 @@ func removePhysicalFileByPathTx(ctx context.Context, dbconn *sql.DB, tx *sql.Tx,
 		return err
 	}
 
+	retainedBySnapshot, err := retention.IsLogicalFileReferencedBySnapshot(ctx, tx, result.LogicalFileID)
+	if err != nil {
+		return err
+	}
+	if retainedBySnapshot {
+		return invariants.New(
+			invariants.CodeSnapshotRetainedDeleteBlocked,
+			fmt.Sprintf("remove refused: logical_file id=%d is retained by one or more snapshots", result.LogicalFileID),
+			nil,
+		)
+	}
+
 	deleteRes, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, result.StoredPath)
 	if err != nil {
 		return err
