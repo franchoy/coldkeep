@@ -2249,6 +2249,9 @@ func TestRunGCCommandJSONIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
 			ContainerFilenames:           []string{"a.bin", "b.bin"},
 			SnapshotRetainedContainers:   1,
 			SnapshotRetainedLogicalFiles: 4,
+			RetainedCurrentOnlyLogical:   2,
+			RetainedSnapshotOnlyLogical:  1,
+			RetainedSharedLogical:        3,
 		}, nil
 	}
 
@@ -2268,6 +2271,9 @@ func TestRunGCCommandJSONIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
 	}
 	assertJSONNumber(t, data, "snapshot_retained_logical_files", 4)
 	assertJSONNumber(t, data, "snapshot_retained_containers", 1)
+	assertJSONNumber(t, data, "retained_current_only_logical_files", 2)
+	assertJSONNumber(t, data, "retained_snapshot_only_logical_files", 1)
+	assertJSONNumber(t, data, "retained_shared_logical_files", 3)
 	assertJSONNumber(t, data, "affected_containers", 2)
 }
 
@@ -2282,6 +2288,9 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 				AffectedContainers:           1,
 				ContainerFilenames:           []string{"c.bin"},
 				SnapshotRetainedLogicalFiles: 3,
+				RetainedCurrentOnlyLogical:   4,
+				RetainedSnapshotOnlyLogical:  1,
+				RetainedSharedLogical:        2,
 			}, nil
 		}
 		output := captureStdout(t, func() {
@@ -2292,6 +2301,9 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 		if !strings.Contains(output, "GC retained snapshot-protected logical files: 3") {
 			t.Fatalf("expected snapshot-retained logical files line in output:\n%s", output)
 		}
+		if !strings.Contains(output, "GC retention roots (logical files): current_only=4 snapshot_only=1 shared=2") {
+			t.Fatalf("expected retention roots line in output:\n%s", output)
+		}
 	})
 
 	t.Run("appears in dry-run output when non-zero", func(t *testing.T) {
@@ -2301,6 +2313,9 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 				AffectedContainers:           1,
 				ContainerFilenames:           []string{"d.bin"},
 				SnapshotRetainedLogicalFiles: 5,
+				RetainedCurrentOnlyLogical:   1,
+				RetainedSnapshotOnlyLogical:  5,
+				RetainedSharedLogical:        0,
 			}, nil
 		}
 		output := captureStdout(t, func() {
@@ -2311,6 +2326,9 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 		if !strings.Contains(output, "GC retained snapshot-protected logical files: 5") {
 			t.Fatalf("expected snapshot-retained logical files line in dry-run output:\n%s", output)
 		}
+		if !strings.Contains(output, "GC retention roots (logical files): current_only=1 snapshot_only=5 shared=0") {
+			t.Fatalf("expected retention roots line in dry-run output:\n%s", output)
+		}
 	})
 
 	t.Run("absent when zero", func(t *testing.T) {
@@ -2320,6 +2338,9 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 				AffectedContainers:           1,
 				ContainerFilenames:           []string{"e.bin"},
 				SnapshotRetainedLogicalFiles: 0,
+				RetainedCurrentOnlyLogical:   0,
+				RetainedSnapshotOnlyLogical:  0,
+				RetainedSharedLogical:        0,
 			}, nil
 		}
 		output := captureStdout(t, func() {
@@ -2329,6 +2350,9 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 		})
 		if strings.Contains(output, "snapshot-protected") {
 			t.Fatalf("expected snapshot-retained line to be absent when zero, got output:\n%s", output)
+		}
+		if strings.Contains(output, "GC retention roots (logical files):") {
+			t.Fatalf("expected retention roots line to be absent when all buckets are zero, got output:\n%s", output)
 		}
 	})
 }

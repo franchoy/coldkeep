@@ -36,6 +36,9 @@ type GCResult struct {
 	ContainerFilenames           []string `json:"container_filenames"`
 	SnapshotRetainedContainers   int      `json:"snapshot_retained_containers"`
 	SnapshotRetainedLogicalFiles int      `json:"snapshot_retained_logical_files"`
+	RetainedCurrentOnlyLogical   int      `json:"retained_current_only_logical_files"`
+	RetainedSnapshotOnlyLogical  int      `json:"retained_snapshot_only_logical_files"`
+	RetainedSharedLogical        int      `json:"retained_shared_logical_files"`
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
@@ -139,6 +142,10 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	// Snapshot-retained logical file count is a fixed property of the retained
 	// root set at the time GC runs. Populate it once, before the container loop.
 	result.SnapshotRetainedLogicalFiles = len(reachability.SnapshotLogicalIDs)
+	classification := retention.ClassifyRetention(reachability)
+	result.RetainedCurrentOnlyLogical = len(classification.CurrentOnly)
+	result.RetainedSnapshotOnlyLogical = len(classification.SnapshotOnly)
+	result.RetainedSharedLogical = len(classification.Shared)
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename

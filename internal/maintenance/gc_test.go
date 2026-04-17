@@ -501,6 +501,15 @@ func TestRunGCResultPopulatesSnapshotRetainedLogicalFiles(t *testing.T) {
 	if result.SnapshotRetainedLogicalFiles != 3 {
 		t.Fatalf("expected SnapshotRetainedLogicalFiles=3, got %d", result.SnapshotRetainedLogicalFiles)
 	}
+	if result.RetainedCurrentOnlyLogical != 2 {
+		t.Fatalf("expected RetainedCurrentOnlyLogical=2, got %d", result.RetainedCurrentOnlyLogical)
+	}
+	if result.RetainedSnapshotOnlyLogical != 3 {
+		t.Fatalf("expected RetainedSnapshotOnlyLogical=3, got %d", result.RetainedSnapshotOnlyLogical)
+	}
+	if result.RetainedSharedLogical != 0 {
+		t.Fatalf("expected RetainedSharedLogical=0, got %d", result.RetainedSharedLogical)
+	}
 }
 
 // TestRunGCDryRunBecomesEligibleAfterSnapshotDelete verifies that content

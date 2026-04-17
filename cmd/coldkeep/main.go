@@ -1465,6 +1465,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		if result.SnapshotRetainedLogicalFiles > 0 {
 			fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
 		}
+		if result.RetainedCurrentOnlyLogical > 0 || result.RetainedSnapshotOnlyLogical > 0 || result.RetainedSharedLogical > 0 {
+			fmt.Printf("GC retention roots (logical files): current_only=%d snapshot_only=%d shared=%d\n", result.RetainedCurrentOnlyLogical, result.RetainedSnapshotOnlyLogical, result.RetainedSharedLogical)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1480,6 +1483,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		if result.SnapshotRetainedLogicalFiles > 0 {
 			fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
 		}
+		if result.RetainedCurrentOnlyLogical > 0 || result.RetainedSnapshotOnlyLogical > 0 || result.RetainedSharedLogical > 0 {
+			fmt.Printf("GC retention roots (logical files): current_only=%d snapshot_only=%d shared=%d\n", result.RetainedCurrentOnlyLogical, result.RetainedSnapshotOnlyLogical, result.RetainedSharedLogical)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1490,6 +1496,9 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	fmt.Printf("GC completed. Containers deleted: %d\n", result.AffectedContainers)
 	if result.SnapshotRetainedLogicalFiles > 0 {
 		fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+	}
+	if result.RetainedCurrentOnlyLogical > 0 || result.RetainedSnapshotOnlyLogical > 0 || result.RetainedSharedLogical > 0 {
+		fmt.Printf("GC retention roots (logical files): current_only=%d snapshot_only=%d shared=%d\n", result.RetainedCurrentOnlyLogical, result.RetainedSnapshotOnlyLogical, result.RetainedSharedLogical)
 	}
 	fmt.Printf("Hint: %s\n", doctorOperationalHint)
 	return nil
