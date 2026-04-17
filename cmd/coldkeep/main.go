@@ -2947,23 +2947,22 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	}
 
 	if outputMode == outputModeJSON {
+		data := map[string]any{
+			"snapshot_id": snapshotID,
+			"type":        snapshotType,
+			"paths_count": len(paths),
+			"duration_ms": snapshotDurationMS,
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
-			"data": map[string]any{
-				"snapshot_id": snapshotID,
-				"type":        snapshotType,
-				"paths_count": len(paths),
-				"duration_ms": snapshotDurationMS,
-			},
+			"data":    data,
 		}
 		if hasFilesInserted {
-			payloadData := payload["data"].(map[string]any)
-			payloadData["files_inserted"] = filesInserted
+			data["files_inserted"] = filesInserted
 		}
 		if labelPtr != nil {
-			payloadData := payload["data"].(map[string]any)
-			payloadData["label"] = *labelPtr
+			data["label"] = *labelPtr
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -3062,21 +3061,21 @@ func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMod
 	}
 
 	if outputMode == outputModeJSON {
+		data := map[string]any{
+			"action":                "restore",
+			"snapshot_id":           snapshotID,
+			"type":                  actionType,
+			"requested_paths_count": len(paths),
+			"restored_files":        result.RestoredFiles,
+			"duration_ms":           durationMS,
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
-			"data": map[string]any{
-				"action":                "restore",
-				"snapshot_id":           snapshotID,
-				"type":                  actionType,
-				"requested_paths_count": len(paths),
-				"restored_files":        result.RestoredFiles,
-				"duration_ms":           durationMS,
-			},
+			"data":    data,
 		}
 		if destination != "" {
-			payloadData := payload["data"].(map[string]any)
-			payloadData["output_root"] = destination
+			data["output_root"] = destination
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))

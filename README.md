@@ -374,6 +374,8 @@ Deletes only the snapshot row and its `snapshot_file` entries. The underlying lo
 
 Before tagging a `v1.3.x` release, run the dedicated snapshot/retention contract gate in `PRE_RELEASE_CHECKLIST.md`.
 
+Run the checklist step-by-step and in order. For the manual snapshot lifecycle gate, use a stable snapshot identifier (for example via `snapshot create --id pre-gc-gate`) and pass snapshot IDs positionally in `snapshot restore`, `snapshot diff`, and `snapshot delete`.
+
 Manual lifecycle expected in the release gate:
 
 - create snapshot

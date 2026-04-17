@@ -47,6 +47,10 @@ v1.3 snapshot-layer release-candidate alignment.
   - test surface coverage (package/integration/adversarial/smoke)
   - documentation/release checklist consistency (README + validation matrix)
   - manual snapshot/retention lifecycle gate in `PRE_RELEASE_CHECKLIST.md`
+- Manual snapshot lifecycle gate examples are aligned to CLI contracts:
+  use `snapshot create --id <snapshotID>`, use positional snapshot IDs for
+  `snapshot restore`/`snapshot diff`/`snapshot delete`, and use
+  `remove --stored-path` for current-state mapping removal.
 
 ------------------------------------------------------------------------
 

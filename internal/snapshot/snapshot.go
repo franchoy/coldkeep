@@ -816,13 +816,7 @@ func resolveSnapshotRestoreSelection(
 
 		// Apply SnapshotQuery as an additional in-memory filter on top of path selections.
 		if query != nil {
-			fe := SnapshotFileEntry{
-				Path:          row.Path,
-				LogicalFileID: row.LogicalFileID,
-				Size:          row.Size,
-				Mode:          row.Mode,
-				MTime:         row.MTime,
-			}
+			fe := SnapshotFileEntry(row)
 			if !query.Match(fe) {
 				continue
 			}
@@ -879,7 +873,7 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 	seenOutput := make(map[string]string)
 
 	for _, row := range rows {
-		outputPath := row.Path
+		var outputPath string
 		switch mode {
 		case storage.RestoreDestinationOriginal:
 			// Snapshot path is already normalized and relative.

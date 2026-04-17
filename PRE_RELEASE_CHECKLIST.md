@@ -2,6 +2,13 @@
 
 Use this checklist before cutting a release tag.
 
+Execution model (step-by-step):
+
+- Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.
+- Capture evidence as you go (command output snippets, failing/success states, and any remediation notes).
+- If a step fails, fix the issue and re-run that step before moving forward.
+- For v1.3 tags, treat sections 13-16 as required release gates after sections 1-12.
+
 ## 1) Start PostgreSQL and set CI-compatible environment
 
 ```bash
@@ -447,28 +454,28 @@ Run this manual lifecycle gate after core CI/test gates pass.
 
 ```bash
 # create snapshot
-./coldkeep snapshot create --name pre-gc-gate --output json
+./coldkeep snapshot create --id pre-gc-gate --output json
 
-# remove current mapping (example path)
-./coldkeep remove --path samples/hello.txt --output json
+# remove current mapping (use an existing stored path from store output)
+./coldkeep remove --stored-path <stored-path-from-store-output> --output json
 
 # confirm GC dry-run reports snapshot-retained logical files
 ./coldkeep gc --dry-run --output json
 
 # restore from snapshot
-./coldkeep snapshot restore --snapshot pre-gc-gate --destination ./out --output json
+./coldkeep snapshot restore pre-gc-gate --destination ./out --output json
 
 # diff two snapshots
-./coldkeep snapshot diff --from pre-gc-gate --to <second-snapshot> --output json
+./coldkeep snapshot diff pre-gc-gate <second-snapshot-id> --output json
 
 # delete snapshot
-./coldkeep snapshot delete --snapshot pre-gc-gate --force --output json
+./coldkeep snapshot delete pre-gc-gate --force --output json
 
 # confirm GC eligibility changes only after delete
 ./coldkeep gc --dry-run --output json
 ```
 
-Naming note: in this gate, `pre-gc-gate` is treated as the snapshot identifier used by subsequent `--snapshot/--from` references (not a separate display-only label).
+Naming note: in this gate, `pre-gc-gate` is the snapshot identifier. It is created explicitly with `--id` and then passed positionally to `snapshot restore`, `snapshot diff`, and `snapshot delete`.
 
 Confirm:
 
