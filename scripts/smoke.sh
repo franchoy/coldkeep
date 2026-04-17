@@ -18,6 +18,8 @@ SMOKE_TEMP_STORAGE_DIR=""
 cleanup() {
   rm -rf ./_smoke_out
   rm -rf ./_smoke_out_dups
+  rm -rf ./_smoke_v13_snapshot_data
+  rm -rf ./_smoke_v13_snapshot_restore
   if [[ -n "$SMOKE_TEMP_STORAGE_DIR" ]]; then
     rm -rf "$SMOKE_TEMP_STORAGE_DIR"
   fi
@@ -102,7 +104,7 @@ reset_smoke_state() {
   PGPASSWORD="${DB_PASSWORD:-}" psql \
     -h "$host" -p "$port" -U "$user" -d "$name" \
     -v ON_ERROR_STOP=1 \
-    -c "TRUNCATE TABLE file_chunk, blocks, chunk, logical_file, container RESTART IDENTITY CASCADE;" >/dev/null
+    -c "TRUNCATE TABLE snapshot_file, snapshot, physical_file, file_chunk, blocks, chunk, logical_file, container RESTART IDENTITY CASCADE;" >/dev/null
 
   echo "[smoke] resetting storage dir: $COLDKEEP_STORAGE_DIR"
   find "$COLDKEEP_STORAGE_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -714,6 +716,150 @@ if [[ "$V12_EXPECTED_HASH" != "$V12_RESTORED_HASH" ]]; then
   exit 1
 fi
 echo "[smoke]   ok: surviving physical mapping remains restorable after single-path removal"
+
+echo ""
+echo "[smoke] === V1.3 SNAPSHOT LIFECYCLE GATE ==="
+
+reset_smoke_state
+
+V13_DIR="${PWD}/_smoke_v13_snapshot_data"
+V13_RESTORE_DIR="${PWD}/_smoke_v13_snapshot_restore"
+V13_SNAPSHOT_1="smoke-v13-snap-1"
+V13_SNAPSHOT_2="smoke-v13-snap-2"
+rm -rf "$V13_DIR" "$V13_RESTORE_DIR"
+mkdir -p "$V13_DIR" "$V13_RESTORE_DIR"
+
+printf 'snapshot-alpha-%s\n' "$(date +%s%N)" > "$V13_DIR/alpha.txt"
+printf 'snapshot-beta-%s\n' "$(date +%s%N)" > "$V13_DIR/beta.txt"
+printf 'snapshot-gamma-%s\n' "$(date +%s%N)" > "$V13_DIR/gamma.txt"
+
+STORE_V13_ALPHA=$(coldkeep store "$V13_DIR/alpha.txt" --output json)
+STORE_V13_ALPHA_PAYLOAD=$(echo "$STORE_V13_ALPHA" | grep -E '^\{.*\}$' | tail -n1)
+V13_ALPHA_STORED_PATH=$(echo "$STORE_V13_ALPHA_PAYLOAD" | jq -r '.data.stored_path // empty')
+
+STORE_V13_BETA=$(coldkeep store "$V13_DIR/beta.txt" --output json)
+STORE_V13_BETA_PAYLOAD=$(echo "$STORE_V13_BETA" | grep -E '^\{.*\}$' | tail -n1)
+V13_BETA_STORED_PATH=$(echo "$STORE_V13_BETA_PAYLOAD" | jq -r '.data.stored_path // empty')
+
+if [[ -z "$V13_ALPHA_STORED_PATH" || -z "$V13_BETA_STORED_PATH" ]]; then
+  echo "[smoke] ERROR: v1.3 store payload missing stored_path"
+  echo "$STORE_V13_ALPHA"
+  echo "$STORE_V13_BETA"
+  exit 1
+fi
+
+SNAP_CREATE_1=$(coldkeep snapshot create "$V13_DIR/alpha.txt" "$V13_DIR/beta.txt" --id "$V13_SNAPSHOT_1" --label smoke-v13 --output json)
+SNAP_CREATE_1_PAYLOAD=$(echo "$SNAP_CREATE_1" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_CREATE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "create"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot create (v1.3) failed"
+  echo "$SNAP_CREATE_1"
+  exit 1
+fi
+
+SNAP_SHOW_1=$(coldkeep snapshot show "$V13_SNAPSHOT_1" --prefix "$V13_DIR/" --output json)
+SNAP_SHOW_1_PAYLOAD=$(echo "$SNAP_SHOW_1" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_SHOW_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "show" and (.data.matched_file_count >= 2)' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot show (v1.3) failed expected matched_file_count>=2"
+  echo "$SNAP_SHOW_1"
+  exit 1
+fi
+
+echo "[smoke] verifying remove --stored-path is blocked while snapshot-retained"
+if REMOVE_BLOCKED_OUTPUT=$(coldkeep remove --stored-path "$V13_ALPHA_STORED_PATH" --output json 2>&1); then
+  echo "[smoke] ERROR: remove --stored-path should fail while file is snapshot-retained"
+  exit 1
+fi
+if ! echo "$REMOVE_BLOCKED_OUTPUT" | grep -q "SNAPSHOT_RETAINED_DELETE_BLOCKED"; then
+  echo "[smoke] ERROR: expected snapshot-retained invariant code in remove failure"
+  echo "$REMOVE_BLOCKED_OUTPUT"
+  exit 1
+fi
+echo "[smoke]   ok: remove blocked with SNAPSHOT_RETAINED_DELETE_BLOCKED"
+
+GC_V13_BEFORE=$(coldkeep gc --dry-run --output json)
+GC_V13_BEFORE_PAYLOAD=$(echo "$GC_V13_BEFORE" | grep -E '^\{.*\}$' | tail -n1)
+V13_SNAPSHOT_RETAINED_BEFORE=$(echo "$GC_V13_BEFORE_PAYLOAD" | jq -r '.data.snapshot_retained_logical_files // 0')
+if [[ "$V13_SNAPSHOT_RETAINED_BEFORE" -le 0 ]]; then
+  echo "[smoke] ERROR: gc --dry-run should report snapshot_retained_logical_files > 0"
+  echo "$GC_V13_BEFORE"
+  exit 1
+fi
+echo "[smoke]   ok: gc --dry-run reports snapshot-protected retention (${V13_SNAPSHOT_RETAINED_BEFORE})"
+
+SNAP_RESTORE_1=$(coldkeep snapshot restore "$V13_SNAPSHOT_1" --prefix "$V13_DIR/" --mode prefix --destination "$V13_RESTORE_DIR" --output json)
+SNAP_RESTORE_1_PAYLOAD=$(echo "$SNAP_RESTORE_1" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_RESTORE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "restore" and (.data.restored_files >= 1)' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot restore (v1.3) failed"
+  echo "$SNAP_RESTORE_1"
+  exit 1
+fi
+
+if [[ -z "$(find "$V13_RESTORE_DIR" -type f -print -quit)" ]]; then
+  echo "[smoke] ERROR: snapshot restore reported success but no files were written"
+  exit 1
+fi
+echo "[smoke]   ok: snapshot restore wrote files to destination prefix"
+
+STORE_V13_GAMMA=$(coldkeep store "$V13_DIR/gamma.txt" --output json)
+STORE_V13_GAMMA_PAYLOAD=$(echo "$STORE_V13_GAMMA" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$STORE_V13_GAMMA_PAYLOAD" | jq -e '.status == "ok" and .command == "store" and (.data.file_id != null)' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.3 gamma store failed"
+  echo "$STORE_V13_GAMMA"
+  exit 1
+fi
+
+SNAP_CREATE_2=$(coldkeep snapshot create "$V13_DIR/gamma.txt" --id "$V13_SNAPSHOT_2" --label smoke-v13-diff --output json)
+SNAP_CREATE_2_PAYLOAD=$(echo "$SNAP_CREATE_2" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_CREATE_2_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "create"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: second snapshot create (v1.3) failed"
+  echo "$SNAP_CREATE_2"
+  exit 1
+fi
+
+SNAP_DIFF=$(coldkeep snapshot diff "$V13_SNAPSHOT_1" "$V13_SNAPSHOT_2" --output json)
+SNAP_DIFF_PAYLOAD=$(echo "$SNAP_DIFF" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_DIFF_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot diff" and (.data.total_diff_entry_count >= 1)' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot diff (v1.3) failed to report entries"
+  echo "$SNAP_DIFF"
+  exit 1
+fi
+echo "[smoke]   ok: snapshot diff reports lifecycle changes"
+
+SNAP_DELETE_1=$(coldkeep snapshot delete "$V13_SNAPSHOT_1" --force --output json)
+SNAP_DELETE_1_PAYLOAD=$(echo "$SNAP_DELETE_1" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_DELETE_1_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "delete"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: snapshot delete (v1.3) failed"
+  echo "$SNAP_DELETE_1"
+  exit 1
+fi
+
+echo "[smoke] verifying remove becomes eligible only after snapshot delete"
+if ! coldkeep remove --stored-path "$V13_ALPHA_STORED_PATH" --output json > /dev/null; then
+  echo "[smoke] ERROR: remove --stored-path should succeed after deleting retaining snapshot"
+  exit 1
+fi
+
+GC_V13_AFTER=$(coldkeep gc --dry-run --output json)
+GC_V13_AFTER_PAYLOAD=$(echo "$GC_V13_AFTER" | grep -E '^\{.*\}$' | tail -n1)
+V13_SNAPSHOT_RETAINED_AFTER=$(echo "$GC_V13_AFTER_PAYLOAD" | jq -r '.data.snapshot_retained_logical_files // 0')
+
+if [[ "$V13_SNAPSHOT_RETAINED_AFTER" -ge "$V13_SNAPSHOT_RETAINED_BEFORE" ]]; then
+  echo "[smoke] ERROR: expected snapshot_retained_logical_files to decrease after deleting snapshot and removing current mapping"
+  echo "[smoke] before=${V13_SNAPSHOT_RETAINED_BEFORE} after=${V13_SNAPSHOT_RETAINED_AFTER}"
+  echo "$GC_V13_AFTER"
+  exit 1
+fi
+echo "[smoke]   ok: snapshot-retained count decreased only after snapshot delete + remove"
+
+SNAP_DELETE_2=$(coldkeep snapshot delete "$V13_SNAPSHOT_2" --force --output json)
+SNAP_DELETE_2_PAYLOAD=$(echo "$SNAP_DELETE_2" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_DELETE_2_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "delete"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: cleanup snapshot delete for second snapshot failed"
+  echo "$SNAP_DELETE_2"
+  exit 1
+fi
+
+echo "[smoke] v1.3 snapshot lifecycle gate PASSED"
 
 echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="
