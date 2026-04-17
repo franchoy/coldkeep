@@ -327,7 +327,34 @@ Use this as the final release gate before tagging `v1.3.x`.
 - [ ] Doctor/reporting surfaces snapshot-retention integrity context
 - [ ] G14-G17 are reflected in `VALIDATION_MATRIX.md` as covered
 
-## 14) Final global sign-off
+## 14) v1.3 snapshot CLI/contract checklist
+
+Commands in scope:
+
+- [ ] `snapshot create`
+- [ ] `snapshot restore`
+- [ ] `snapshot list`
+- [ ] `snapshot show`
+- [ ] `snapshot stats`
+- [ ] `snapshot delete`
+- [ ] `snapshot diff`
+
+For each command above, confirm:
+
+- [ ] Text mode output is understandable
+- [ ] JSON output keeps stable envelope structure
+- [ ] `command`/action fields are correct
+- [ ] Error classification follows frozen CLI behavior
+- [ ] Filtered counts and returned arrays remain consistent
+
+Additional CLI validation and policy checks:
+
+- [ ] `snapshot diff --filter added|removed|modified` works as specified
+- [ ] `--path`, `--prefix`, `--pattern`, `--regex`, `--min-size`, `--max-size`, `--modified-after`, and `--modified-before` validate at CLI level
+- [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
+- [ ] `snapshot delete` requires `--force`
+
+## 15) Final global sign-off
 
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
