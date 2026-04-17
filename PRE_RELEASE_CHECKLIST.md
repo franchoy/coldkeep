@@ -52,9 +52,9 @@ go mod tidy && git diff --exit-code
 
 unformatted=$(gofmt -l $(git ls-files '*.go'))
 if [ -n "$unformatted" ]; then
-	echo "Unformatted Go files detected:"
-	echo "$unformatted"
-	exit 1
+  echo "Unformatted Go files detected:"
+  echo "$unformatted"
+  exit 1
 fi
 
 bash -n scripts/*.sh
@@ -77,28 +77,28 @@ Expected: local quality checks match CI intent and produce no diff or lint/forma
 
 ```bash
 for codec in plain aes-gcm; do
-	echo "=== Codec: ${codec} ==="
-	export COLDKEEP_CODEC="$codec"
+  echo "=== Codec: ${codec} ==="
+  export COLDKEEP_CODEC="$codec"
 
-	# integration-correctness
-	go test -race -count=1 -short ./tests/integration/...
+  # integration-correctness
+  go test -race -count=1 -short ./tests/integration/...
 
-	# integration-stress
-	go test -race -count=1 ./tests/integration/...
+  # integration-stress
+  go test -race -count=1 ./tests/integration/...
 
-	# integration-long-run
-	COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
+  # integration-long-run
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
 
-	# adversarial
-	COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
+  # adversarial
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
 
-	# smoke
-	COLDKEEP_SMOKE_RESET_DB=1 \
-	COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql \
-	COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/${codec}" \
-	COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1 \
-	PATH="$PWD:$PATH" \
-	scripts/smoke.sh
+  # smoke
+  COLDKEEP_SMOKE_RESET_DB=1 \
+  COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql \
+  COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/${codec}" \
+  COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE=1 \
+  PATH="$PWD:$PATH" \
+  scripts/smoke.sh
 done
 ```
 
@@ -270,6 +270,7 @@ Confirm:
 - [ ] Full local CI matrix simulation passed (both codecs)
 - [ ] Smoke passed
 - [ ] Integration suite passed
+- Note: Step 4 integration umbrella suite is optional (non-gating) and was triaged separately.
 
 ## 13) v1.3 snapshot sign-off checklist (Phases 1-7)
 
@@ -397,31 +398,31 @@ Quick evidence-name consistency check (G14-G17):
 
 ```bash
 for t in \
-	TestListRetainedLogicalFileIDs \
-	TestIsLogicalFileReferencedBySnapshot \
-	TestComputeReachabilitySummary \
-	TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot \
-	TestRunGCDoesNotDeleteSnapshotRetainedContainer \
-	TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable \
-	TestAdversarialG14SnapshotRetainedGCGuardUnderChurn \
-	TestDeleteSnapshotRemovesSnapshotRowsOnly \
-	TestAdversarialG17RetentionRootTransitionChurn \
-	TestRunStatsResultIncludesSnapshotRetentionVisibility \
-	TestRunStatsCommandJSONIncludesSnapshotRetention \
-	TestPrintStatsReportIncludesSnapshotRetention \
-	TestAdversarialG16SnapshotQueryContractChaos \
-	TestVerifySystemStandardPassesWithConsistentSnapshotReachability \
-	TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference \
-	TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState \
-	TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph \
-	TestFormatDoctorTextReportGoldenHealthy \
-	TestFormatDoctorTextReportGoldenDegraded \
-	TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC
+  TestListRetainedLogicalFileIDs \
+  TestIsLogicalFileReferencedBySnapshot \
+  TestComputeReachabilitySummary \
+  TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot \
+  TestRunGCDoesNotDeleteSnapshotRetainedContainer \
+  TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable \
+  TestAdversarialG14SnapshotRetainedGCGuardUnderChurn \
+  TestDeleteSnapshotRemovesSnapshotRowsOnly \
+  TestAdversarialG17RetentionRootTransitionChurn \
+  TestRunStatsResultIncludesSnapshotRetentionVisibility \
+  TestRunStatsCommandJSONIncludesSnapshotRetention \
+  TestPrintStatsReportIncludesSnapshotRetention \
+  TestAdversarialG16SnapshotQueryContractChaos \
+  TestVerifySystemStandardPassesWithConsistentSnapshotReachability \
+  TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference \
+  TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState \
+  TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph \
+  TestFormatDoctorTextReportGoldenHealthy \
+  TestFormatDoctorTextReportGoldenDegraded \
+  TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC
 do
-	grep -R --line-number --include='*.go' "func ${t}(" . >/dev/null || {
-		echo "missing evidence: ${t}";
-		exit 1;
-	}
+  grep -R --line-number --include='*.go' "func ${t}(" . >/dev/null || {
+    echo "missing evidence: ${t}";
+    exit 1;
+  }
 done
 echo "G14-G17 evidence names: OK"
 ```
@@ -505,4 +506,3 @@ Confirm:
 - [ ] v1.3 C. test surface checklist verified
 - [ ] v1.3 D. documentation/release checklist verified
 - [ ] v1.3 snapshot/retention manual gate verified
-
