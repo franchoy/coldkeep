@@ -468,6 +468,8 @@ Run this manual lifecycle gate after core CI/test gates pass.
 ./coldkeep gc --dry-run --output json
 ```
 
+Naming note: in this gate, `pre-gc-gate` is treated as the snapshot identifier used by subsequent `--snapshot/--from` references (not a separate display-only label).
+
 Confirm:
 
 - [ ] Snapshot create succeeds

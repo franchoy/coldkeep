@@ -8,6 +8,8 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
+v1.3 establishes snapshot-based retention as part of the correctness model.
+
 ------------------------------------------------------------------------
 
 ## [Unreleased]

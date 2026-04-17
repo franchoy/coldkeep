@@ -254,6 +254,8 @@ coldkeep snapshot create
 coldkeep snapshot create docs/ report.txt --label release-2026-04
 ```
 
+- `--label <string>`: optional user-defined label for snapshot identification.
+
 ### Listing and inspecting
 
 ```bash
