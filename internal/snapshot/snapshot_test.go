@@ -1022,6 +1022,63 @@ func TestCreateSnapshotRejectsSelfParenting(t *testing.T) {
 	}
 }
 
+func TestCreateSnapshotWithoutParentStoresNullParentID(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-null-parent-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-null-parent", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot full without parent: %v", err)
+	}
+
+	var storedParentID sql.NullString
+	if err := db.QueryRow(`SELECT parent_id FROM snapshot WHERE id = ?`, "snap-null-parent").Scan(&storedParentID); err != nil {
+		t.Fatalf("query snapshot parent_id: %v", err)
+	}
+	if storedParentID.Valid {
+		t.Fatalf("expected NULL parent_id when parent is omitted, got %+v", storedParentID)
+	}
+}
+
+func TestCreateSnapshotWithParentFailureLeavesNoChildRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-parent-rollback-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-ok", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	parentID := "snap-parent-ok"
+	err := CreateSnapshot(ctx, db, "snap-child-rollback", "partial", nil, &parentID, []string{"docs/"})
+	if err == nil {
+		t.Fatal("expected child snapshot create with parent to fail for unsupported partial lineage")
+	}
+	if !strings.Contains(err.Error(), "parent lineage is only supported for full snapshots") {
+		t.Fatalf("expected full-only lineage error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-rollback").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no snapshot row after rollback, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-child-rollback").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected no snapshot_file rows after rollback, got count=%d", fileCount)
+	}
+}
+
 // ---- RestoreSnapshot helper tests ----
 
 func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {
