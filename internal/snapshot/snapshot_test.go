@@ -894,6 +894,72 @@ func TestCreateSnapshotStoresParentIDWithoutChangingSelectionBehavior(t *testing
 	}
 }
 
+func TestCreateSnapshotRejectsMissingParentAndRollsBack(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-missing-parent-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	parentID := "snap-parent-missing"
+	err := CreateSnapshot(ctx, db, "snap-child-missing-parent", "full", nil, &parentID, nil)
+	if err == nil {
+		t.Fatal("expected missing parent snapshot to fail")
+	}
+	if !strings.Contains(err.Error(), `parent snapshot "snap-parent-missing" not found`) {
+		t.Fatalf("expected parent-not-found error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-missing-parent").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no snapshot row when parent is missing, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-child-missing-parent").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected no snapshot_file rows when parent is missing, got count=%d", fileCount)
+	}
+}
+
+func TestCreateSnapshotRejectsSelfParenting(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-self-parent-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	parentID := "snap-self-parent"
+	err := CreateSnapshot(ctx, db, "snap-self-parent", "full", nil, &parentID, nil)
+	if err == nil {
+		t.Fatal("expected self-parent snapshot to fail")
+	}
+	if !strings.Contains(err.Error(), `parent snapshot "snap-self-parent" cannot reference itself`) {
+		t.Fatalf("expected self-parent validation error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-self-parent").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no snapshot row for self-parent failure, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-self-parent").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected no snapshot_file rows for self-parent failure, got count=%d", fileCount)
+	}
+}
+
 // ---- RestoreSnapshot helper tests ----
 
 func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {

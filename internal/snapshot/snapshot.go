@@ -1147,7 +1147,21 @@ func CreateSnapshotWithOptions(
 		s.Label = sql.NullString{String: *label, Valid: true}
 	}
 	if parentID != nil && strings.TrimSpace(*parentID) != "" {
-		s.ParentID = sql.NullString{String: strings.TrimSpace(*parentID), Valid: true}
+		trimmedParentID := strings.TrimSpace(*parentID)
+		if trimmedParentID == snapshotID {
+			return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
+		}
+
+		var parentExists int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM snapshot WHERE id = $1`, trimmedParentID).Scan(&parentExists)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("parent snapshot %q not found", trimmedParentID)
+			}
+			return fmt.Errorf("validate parent snapshot %q: %w", trimmedParentID, err)
+		}
+
+		s.ParentID = sql.NullString{String: trimmedParentID, Valid: true}
 	}
 
 	if err := insertSnapshot(ctx, tx, s); err != nil {
