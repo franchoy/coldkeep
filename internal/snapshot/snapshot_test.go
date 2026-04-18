@@ -2514,6 +2514,158 @@ func TestDiffSnapshotsSummarySQLNoChanges(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsSummarySQLParentChildCountsRemainCorrect(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-child-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-child-a2", 10)
+	logicalAdded := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-child-added", 11)
+
+	base := Snapshot{ID: "snap-diffsql-parent-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalAdded, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-diffsql-parent-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: base.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "docs/added.txt", logicalAdded, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, child.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL parent-child: %v", err)
+	}
+	if summary.Added != 1 || summary.Removed != 1 || summary.Modified != 1 {
+		t.Fatalf("unexpected parent-child SQL summary counts: %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLMissingBaseReturnsNotFound(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	target := Snapshot{ID: "snap-diffsql-target-missing-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, "snap-diffsql-missing-base", target.ID); err != nil {
+		t.Fatalf("inject missing base parent_id metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	_, err := DiffSnapshotsSummarySQL(ctx, db, "snap-diffsql-missing-base", target.ID)
+	if err == nil || !strings.Contains(err.Error(), "snapshot not found: snap-diffsql-missing-base") {
+		t.Fatalf("expected missing base error, got: %v", err)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLOneEmptySnapshotDirectionality(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-empty-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-empty-b", 11)
+
+	empty := Snapshot{ID: "snap-diffsql-empty", CreatedAt: time.Now().UTC(), Type: "full"}
+	nonEmpty := Snapshot{ID: "snap-diffsql-nonempty", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, empty); err != nil {
+		t.Fatalf("InsertSnapshot empty: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, nonEmpty); err != nil {
+		t.Fatalf("InsertSnapshot non-empty: %v", err)
+	}
+	insertSnapshotFileRow(t, db, nonEmpty.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, nonEmpty.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	summaryAdded, err := DiffSnapshotsSummarySQL(ctx, db, empty.ID, nonEmpty.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL empty->nonEmpty: %v", err)
+	}
+	if summaryAdded.Added != 2 || summaryAdded.Removed != 0 || summaryAdded.Modified != 0 {
+		t.Fatalf("expected all files added when base empty, got %+v", summaryAdded)
+	}
+
+	summaryRemoved, err := DiffSnapshotsSummarySQL(ctx, db, nonEmpty.ID, empty.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL nonEmpty->empty: %v", err)
+	}
+	if summaryRemoved.Added != 0 || summaryRemoved.Removed != 2 || summaryRemoved.Modified != 0 {
+		t.Fatalf("expected all files removed when target empty, got %+v", summaryRemoved)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLSameSnapshotZeroDiff(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-same-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-same-b", 11)
+
+	same := Snapshot{ID: "snap-diffsql-same", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, same); err != nil {
+		t.Fatalf("InsertSnapshot same: %v", err)
+	}
+	insertSnapshotFileRow(t, db, same.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, same.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, same.ID, same.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL same->same: %v", err)
+	}
+	if summary.Added != 0 || summary.Removed != 0 || summary.Modified != 0 {
+		t.Fatalf("expected zero diff for same snapshot, got %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLParentMetadataMissingStillWorks(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-missing-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-missing-b", 11)
+
+	base := Snapshot{ID: "snap-diffsql-parent-missing-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-parent-missing-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/new.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, "snap-deleted-parent", target.ID); err != nil {
+		t.Fatalf("inject missing parent metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL should ignore missing parent metadata while diffing existing snapshots: %v", err)
+	}
+	if summary.Added != 1 || summary.Removed != 0 || summary.Modified != 0 {
+		t.Fatalf("unexpected summary with missing parent metadata: %+v", summary)
+	}
+}
+
 // ---- Phase 5 snapshot diff tests ----
 
 func TestDiffSnapshotsEmptyVsEmpty(t *testing.T) {

@@ -742,12 +742,26 @@ func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID s
 		return nil, errors.New("target snapshot id cannot be empty")
 	}
 
-	if _, err := GetSnapshot(ctx, db, baseID); err != nil {
-		return nil, err
+	var targetParentID sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT parent_id FROM snapshot WHERE id = $1`, targetID).Scan(&targetParentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("snapshot not found: %s", targetID)
+		}
+		return nil, fmt.Errorf("query target snapshot id=%s: %w", targetID, err)
 	}
-	if _, err := GetSnapshot(ctx, db, targetID); err != nil {
-		return nil, err
+
+	var baseExists int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot WHERE id = $1`, baseID).Scan(&baseExists); err != nil {
+		return nil, fmt.Errorf("check base snapshot id=%s: %w", baseID, err)
 	}
+	if baseExists == 0 {
+		return nil, fmt.Errorf("snapshot not found: %s", baseID)
+	}
+
+	// Common case optimization marker: direct parent-child diff.
+	// We intentionally keep identical SQL summary semantics regardless of this
+	// relationship and avoid introducing special delta logic in v1.x.
+	_ = targetParentID.Valid && targetParentID.String == baseID
 
 	summary := &SnapshotDiffSummary{}
 
