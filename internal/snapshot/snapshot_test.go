@@ -1510,6 +1510,49 @@ func TestListSnapshotsReturnsOrderedRows(t *testing.T) {
 	}
 }
 
+func TestSnapshotParentIDRoundTripsInListAndGet(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	parent := Snapshot{ID: "snap-parent-model", CreatedAt: time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC), Type: "full"}
+	child := Snapshot{
+		ID:        "snap-child-model",
+		CreatedAt: time.Date(2026, 1, 11, 8, 0, 0, 0, time.UTC),
+		Type:      "partial",
+		ParentID:  sql.NullString{String: parent.ID, Valid: true},
+	}
+	for _, item := range []Snapshot{parent, child} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	listed, err := ListSnapshots(ctx, db, SnapshotListFilter{})
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(listed))
+	}
+	if listed[0].ID != child.ID {
+		t.Fatalf("expected child snapshot first by created_at, got %s", listed[0].ID)
+	}
+	if !listed[0].ParentID.Valid || listed[0].ParentID.String != parent.ID {
+		t.Fatalf("expected child parent_id=%q in list, got %+v", parent.ID, listed[0].ParentID)
+	}
+	if listed[1].ParentID.Valid {
+		t.Fatalf("expected parent snapshot parent_id NULL in list, got %+v", listed[1].ParentID)
+	}
+
+	gotChild, err := GetSnapshot(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshot child: %v", err)
+	}
+	if !gotChild.ParentID.Valid || gotChild.ParentID.String != parent.ID {
+		t.Fatalf("expected child parent_id=%q in get, got %+v", parent.ID, gotChild.ParentID)
+	}
+}
+
 func TestListSnapshotsFiltersByTypeLabelAndLimit(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()

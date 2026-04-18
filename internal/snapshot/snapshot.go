@@ -50,6 +50,28 @@ type SnapshotFile struct {
 	MTime         sql.NullTime
 }
 
+// snapshotFileDBRow models the persisted snapshot_file shape.
+// This stays internal so higher layers can continue working with path strings.
+type snapshotFileDBRow struct {
+	SnapshotID    string
+	PathID        int64
+	LogicalFileID int64
+	Size          sql.NullInt64
+	Mode          sql.NullInt64
+	MTime         sql.NullTime
+}
+
+func newSnapshotFileDBRow(sf SnapshotFile, pathID int64) snapshotFileDBRow {
+	return snapshotFileDBRow{
+		SnapshotID:    sf.SnapshotID,
+		PathID:        pathID,
+		LogicalFileID: sf.LogicalFileID,
+		Size:          sf.Size,
+		Mode:          sf.Mode,
+		MTime:         sf.MTime,
+	}
+}
+
 type RestoreSnapshotOptions struct {
 	DestinationMode storage.RestoreDestinationMode
 	Destination     string
@@ -334,52 +356,52 @@ func insertSnapshotFile(ctx context.Context, exec pathResolverDB, sf SnapshotFil
 		return 0, fmt.Errorf("resolve snapshot_path for %q: %w", normalizedPath, err)
 	}
 
-	return insertSnapshotFileByPathID(ctx, exec, sf, normalizedPath, pathID)
+	return insertSnapshotFileByPathID(ctx, exec, newSnapshotFileDBRow(sf, pathID), normalizedPath)
 }
 
 // insertSnapshotFileByPathID inserts a snapshot_file row using an already-resolved
 // path_id. normalizedPath is used only for log/error messages.
-func insertSnapshotFileByPathID(ctx context.Context, exec sqlExecutor, sf SnapshotFile, normalizedPath string, pathID int64) (int64, error) {
+func insertSnapshotFileByPathID(ctx context.Context, exec sqlExecutor, row snapshotFileDBRow, normalizedPath string) (int64, error) {
 	var id int64
 	err := exec.QueryRowContext(
 		ctx,
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id`,
-		sf.SnapshotID,
-		pathID,
-		sf.LogicalFileID,
-		sf.Size,
-		sf.Mode,
-		sf.MTime,
+		row.SnapshotID,
+		row.PathID,
+		row.LogicalFileID,
+		row.Size,
+		row.Mode,
+		row.MTime,
 	).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", sf.SnapshotID, normalizedPath, err)
+		return 0, fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
 	}
 
-	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, sf.SnapshotID, normalizedPath)
+	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, row.SnapshotID, normalizedPath)
 	return id, nil
 }
 
 // insertSnapshotFileByPathIDNoReturning inserts a snapshot_file row using an
 // already-resolved path_id without needing RETURNING support (SQLite-compatible).
-func insertSnapshotFileByPathIDNoReturning(ctx context.Context, exec sqlExecutor, sf SnapshotFile, normalizedPath string, pathID int64) error {
+func insertSnapshotFileByPathIDNoReturning(ctx context.Context, exec sqlExecutor, row snapshotFileDBRow, normalizedPath string) error {
 	_, err := exec.ExecContext(
 		ctx,
 		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		sf.SnapshotID,
-		pathID,
-		sf.LogicalFileID,
-		sf.Size,
-		sf.Mode,
-		sf.MTime,
+		row.SnapshotID,
+		row.PathID,
+		row.LogicalFileID,
+		row.Size,
+		row.Mode,
+		row.MTime,
 	)
 	if err != nil {
-		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", sf.SnapshotID, normalizedPath, err)
+		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
 	}
 
-	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", sf.SnapshotID, normalizedPath)
+	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", row.SnapshotID, normalizedPath)
 	return nil
 }
 
@@ -390,7 +412,7 @@ func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) (
 
 	query := strings.Builder{}
 	query.WriteString(`
-		SELECT id, created_at, type, label
+		SELECT id, created_at, type, label, parent_id
 		FROM snapshot
 		WHERE 1 = 1`)
 
@@ -432,7 +454,7 @@ func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) (
 	result := make([]Snapshot, 0)
 	for rows.Next() {
 		var item Snapshot
-		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label); err != nil {
+		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label, &item.ParentID); err != nil {
 			return nil, fmt.Errorf("scan snapshot list row: %w", err)
 		}
 		result = append(result, item)
@@ -453,8 +475,8 @@ func GetSnapshot(ctx context.Context, db *sql.DB, snapshotID string) (*Snapshot,
 	}
 
 	var item Snapshot
-	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label FROM snapshot WHERE id = $1`, strings.TrimSpace(snapshotID)).
-		Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label)
+	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label, parent_id FROM snapshot WHERE id = $1`, strings.TrimSpace(snapshotID)).
+		Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label, &item.ParentID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("snapshot not found: %s", snapshotID)
@@ -1257,13 +1279,15 @@ func CreateSnapshot(
 		if !ok {
 			return fmt.Errorf("no path_id resolved for %q in snapshot %s", entry.normalizedPath, snapshotID)
 		}
-		err = insertSnapshotFileByPathIDNoReturning(ctx, tx, SnapshotFile{
+		row := snapshotFileDBRow{
 			SnapshotID:    snapshotID,
+			PathID:        pathID,
 			LogicalFileID: entry.logicalFileID,
 			Size:          sql.NullInt64{Int64: entry.totalSize, Valid: true},
 			Mode:          entry.mode,
 			MTime:         entry.mtime,
-		}, entry.normalizedPath, pathID)
+		}
+		err = insertSnapshotFileByPathIDNoReturning(ctx, tx, row, entry.normalizedPath)
 		if err != nil {
 			return err
 		}
