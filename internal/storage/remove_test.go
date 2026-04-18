@@ -10,21 +10,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/tests/testdb"
 	_ "github.com/mattn/go-sqlite3"
 )
-
-func insertRemoveTestSnapshotFileRef(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
-	t.Helper()
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
-		t.Fatalf("insert snapshot_path %q: %v", snapshotPath, err)
-	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`,
-		snapshotID, snapshotPath, logicalFileID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file snapshot_id=%q path=%q logical_file_id=%d: %v", snapshotID, snapshotPath, logicalFileID, err)
-	}
-}
 
 func TestRemoveFailsWhenLogicalFileNotFound(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
@@ -104,7 +92,7 @@ func TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
-	insertRemoveTestSnapshotFileRef(t, dbconn, "snap-keep-delete-safe", "docs/retained.txt", fileID)
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-keep-delete-safe", "docs/retained.txt", fileID)
 
 	_, err = RemoveFileWithDBResult(dbconn, fileID)
 	if err == nil {

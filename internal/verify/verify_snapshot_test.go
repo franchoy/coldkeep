@@ -8,6 +8,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/tests/testdb"
 )
 
 func insertSnapshotRowForVerify(t *testing.T, dbconn *sql.DB, snapshotID string) {
@@ -17,32 +18,15 @@ func insertSnapshotRowForVerify(t *testing.T, dbconn *sql.DB, snapshotID string)
 	}
 }
 
-func createSnapshotPathForVerify(t *testing.T, dbconn *sql.DB, snapshotPath string) int64 {
-	t.Helper()
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
-		t.Fatalf("insert snapshot_path row %q: %v", snapshotPath, err)
-	}
-	var pathID int64
-	if err := dbconn.QueryRow(`SELECT id FROM snapshot_path WHERE path = $1`, snapshotPath).Scan(&pathID); err != nil {
-		t.Fatalf("lookup snapshot_path id for %q: %v", snapshotPath, err)
-	}
-	return pathID
-}
-
 func insertSnapshotFileRefForVerify(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
 	t.Helper()
-	pathID := createSnapshotPathForVerify(t, dbconn, snapshotPath)
+	pathID := testdb.EnsureSnapshotPathID(t, dbconn, snapshotPath)
 	insertSnapshotFileRefByPathIDForVerify(t, dbconn, snapshotID, pathID, logicalFileID)
 }
 
 func insertSnapshotFileRefByPathIDForVerify(t *testing.T, dbconn *sql.DB, snapshotID string, pathID, logicalFileID int64) {
 	t.Helper()
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`,
-		snapshotID, pathID, logicalFileID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file row snapshot_id=%s path_id=%d logical_file_id=%d: %v", snapshotID, pathID, logicalFileID, err)
-	}
+	testdb.InsertSnapshotFileRefByPathID(t, dbconn, snapshotID, pathID, logicalFileID)
 }
 
 func TestVerifySystemStandardPassesWithConsistentSnapshotReachability(t *testing.T) {
@@ -80,8 +64,8 @@ func TestVerifySystemStandardAllowsUnusedSnapshotPathRows(t *testing.T) {
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-ok-unused-path-1")
-	createSnapshotPathForVerify(t, dbconn, "docs/snapshot-ok.txt")
-	createSnapshotPathForVerify(t, dbconn, "docs/unused-dictionary-entry.txt")
+	testdb.EnsureSnapshotPathID(t, dbconn, "docs/snapshot-ok.txt")
+	testdb.EnsureSnapshotPathID(t, dbconn, "docs/unused-dictionary-entry.txt")
 	insertSnapshotFileRefForVerify(t, dbconn, "snap-ok-unused-path-1", "docs/snapshot-ok.txt", logicalID)
 
 	if err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir()); err != nil {
@@ -149,7 +133,7 @@ func TestVerifySystemStandardDetectsDuplicateSnapshotPathPairs(t *testing.T) {
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-dup-path-1")
-	pathID := createSnapshotPathForVerify(t, dbconn, "docs/dup-path.txt")
+	pathID := testdb.EnsureSnapshotPathID(t, dbconn, "docs/dup-path.txt")
 	if _, err := dbconn.Exec(`DROP INDEX idx_snapshot_file_unique`); err != nil {
 		t.Fatalf("drop unique index to simulate corrupted duplicate pair state: %v", err)
 	}

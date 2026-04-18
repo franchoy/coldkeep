@@ -7,6 +7,7 @@ import (
 	"time"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/tests/testdb"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -41,19 +42,6 @@ func insertStatsLogicalFile(t *testing.T, dbconn *sql.DB, name string, totalSize
 	return id
 }
 
-func insertStatsSnapshotFileRef(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
-	t.Helper()
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
-		t.Fatalf("insert snapshot_path %q: %v", snapshotPath, err)
-	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`,
-		snapshotID, snapshotPath, logicalFileID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file snapshot_id=%q path=%q logical_file_id=%d: %v", snapshotID, snapshotPath, logicalFileID, err)
-	}
-}
-
 func TestRunStatsResultIncludesSnapshotRetentionVisibility(t *testing.T) {
 	dbconn := openStatsTestDB(t)
 	ctx := context.Background()
@@ -77,8 +65,8 @@ func TestRunStatsResultIncludesSnapshotRetentionVisibility(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
-	insertStatsSnapshotFileRef(t, dbconn, "snap-stats-retention", "snap/snapshot-only", snapshotOnlyID)
-	insertStatsSnapshotFileRef(t, dbconn, "snap-stats-retention", "snap/shared", sharedID)
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-stats-retention", "snap/snapshot-only", snapshotOnlyID)
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-stats-retention", "snap/shared", sharedID)
 
 	stats, err := runStatsResultWithDB(ctx, dbconn)
 	if err != nil {

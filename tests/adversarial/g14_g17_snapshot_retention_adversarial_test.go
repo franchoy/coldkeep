@@ -14,6 +14,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/tests/testdb"
 	testutils "github.com/franchoy/coldkeep/tests/utils"
 	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
@@ -141,20 +142,6 @@ func restoreByIDMustMatch(t *testing.T, repoRoot, binPath string, env map[string
 	}
 }
 
-func insertAdversarialSnapshotFileRef(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
-	t.Helper()
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
-		t.Fatalf("insert snapshot_path %q: %v", snapshotPath, err)
-	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id)
-		 VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`,
-		snapshotID, snapshotPath, logicalFileID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file snapshot_id=%q path=%q logical_file_id=%d: %v", snapshotID, snapshotPath, logicalFileID, err)
-	}
-}
-
 func TestAdversarialG14SnapshotRetainedGCGuardUnderChurn(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -241,7 +228,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	`); err != nil {
 		t.Fatalf("insert invalid lifecycle snapshot: %v", err)
 	}
-	insertAdversarialSnapshotFileRef(t, dbconn, "g15-invalid-lifecycle-snap", "docs/invalid-lifecycle.bin", invalidLifecycleID)
+	testdb.InsertSnapshotFileRef(t, dbconn, "g15-invalid-lifecycle-snap", "docs/invalid-lifecycle.bin", invalidLifecycleID)
 
 	// 2) Retained non-empty logical file with missing chunk graph.
 	var missingGraphID int64
@@ -257,7 +244,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	`); err != nil {
 		t.Fatalf("insert missing graph snapshot: %v", err)
 	}
-	insertAdversarialSnapshotFileRef(t, dbconn, "g15-missing-graph-snap", "docs/missing-graph.bin", missingGraphID)
+	testdb.InsertSnapshotFileRef(t, dbconn, "g15-missing-graph-snap", "docs/missing-graph.bin", missingGraphID)
 
 	// 3) Orphan snapshot reference (best-effort: requires elevated privilege).
 	orphanInjected := false
@@ -270,13 +257,11 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 		`); err != nil {
 			t.Fatalf("insert orphan snapshot row: %v", err)
 		}
-		if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/orphan.bin"); err != nil {
-			t.Fatalf("insert orphan snapshot_path row: %v", err)
-		}
+		pathID := testdb.EnsureSnapshotPathID(t, dbconn, "docs/orphan.bin")
 		if _, err := dbconn.Exec(`
 			INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id)
-			VALUES ('g15-orphan-snap', (SELECT id FROM snapshot_path WHERE path = 'docs/orphan.bin'), 999999999)
-		`); err != nil {
+			VALUES ('g15-orphan-snap', $1, 999999999)
+		`, pathID); err != nil {
 			t.Fatalf("insert orphan snapshot_file row with replication_role=replica: %v", err)
 		}
 		orphanInjected = true
