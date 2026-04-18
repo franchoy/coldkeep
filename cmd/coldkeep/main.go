@@ -57,6 +57,7 @@ var flagsWithValues = map[string]bool{
 	"offset":          true,
 	"name":            true,
 	"id":              true,
+	"from":            true,
 	"label":           true,
 	"since":           true,
 	"type":            true,

@@ -987,6 +987,230 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	}
 }
 
+func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate phase3 fixtures: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img input: %v", err)
+	}
+
+	docsPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "phase3-report.txt", 20*1024)
+	imgPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "img"), "phase3-logo.bin", 8*1024)
+	docsHash := testutils.SHA256File(t, docsPath)
+	imgHash := testutils.SHA256File(t, imgPath)
+
+	storeDocs := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", docsPath, "--output", "json"), "store")
+	storeDocsData := testutils.JSONMap(t, storeDocs, "data")
+	storedDocsPath, ok := storeDocsData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedDocsPath) == "" {
+		t.Fatalf("store docs JSON missing stored_path: payload=%v", storeDocs)
+	}
+
+	storeImg := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", imgPath, "--output", "json"), "store")
+	storeImgData := testutils.JSONMap(t, storeImg, "data")
+	storedImgPath, ok := storeImgData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedImgPath) == "" {
+		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
+	}
+
+	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+
+	// Baseline full snapshot without --from.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase3-baseline", "--output", "json"), "snapshot")
+
+	// Full parent and child with --from.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase3-parent-full", "--output", "json"), "snapshot")
+
+	childCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase3-child", "--from", "snap-phase3-parent-full", "--output", "json"), "snapshot")
+	childCreateData := testutils.JSONMap(t, childCreate, "data")
+	if got, _ := childCreateData["parent_id"].(string); got != "snap-phase3-parent-full" {
+		t.Fatalf("expected child create JSON to include parent_id=snap-phase3-parent-full, got=%q payload=%v", got, childCreate)
+	}
+
+	// Scope validation (Strategy B): child partial with --from is rejected.
+	childPartialFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedDocs, "--id", "snap-phase3-child-partial", "--from", "snap-phase3-parent-full", "--output", "json")
+	if childPartialFail.ExitCode == 0 {
+		t.Fatalf("expected filtered child with --from to fail\nstdout:\n%s\nstderr:\n%s", childPartialFail.Stdout, childPartialFail.Stderr)
+	}
+	if !strings.Contains(childPartialFail.Stdout+"\n"+childPartialFail.Stderr, "--from is currently supported only for full snapshots") {
+		t.Fatalf("expected explicit Strategy B child-partial error\nstdout:\n%s\nstderr:\n%s", childPartialFail.Stdout, childPartialFail.Stderr)
+	}
+
+	// Scope validation (Strategy B): parent partial with --from is rejected.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedDocs, "--id", "snap-phase3-parent-partial", "--output", "json"), "snapshot")
+
+	parentPartialFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase3-child-from-partial", "--from", "snap-phase3-parent-partial", "--output", "json")
+	if parentPartialFail.ExitCode == 0 {
+		t.Fatalf("expected full child with partial parent to fail\nstdout:\n%s\nstderr:\n%s", parentPartialFail.Stdout, parentPartialFail.Stderr)
+	}
+	if !strings.Contains(parentPartialFail.Stdout+"\n"+parentPartialFail.Stderr, "--from is currently supported only for full snapshots") {
+		t.Fatalf("expected explicit Strategy B parent-partial error\nstdout:\n%s\nstderr:\n%s", parentPartialFail.Stdout, parentPartialFail.Stderr)
+	}
+
+	// Missing parent and self-parent validation.
+	missingParentFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase3-missing-parent", "--from", "snap-phase3-nope", "--output", "json")
+	if missingParentFail.ExitCode == 0 {
+		t.Fatalf("expected missing parent create to fail\nstdout:\n%s\nstderr:\n%s", missingParentFail.Stdout, missingParentFail.Stderr)
+	}
+	missingErrPayload, ok := testutils.FindCLIErrorPayload(missingParentFail.Stdout + "\n" + missingParentFail.Stderr)
+	if !ok {
+		t.Fatalf("expected missing parent machine-readable error payload\nstdout:\n%s\nstderr:\n%s", missingParentFail.Stdout, missingParentFail.Stderr)
+	}
+	if got, _ := missingErrPayload["message"].(string); !strings.Contains(got, `parent snapshot "snap-phase3-nope" not found`) {
+		t.Fatalf("expected missing parent error message, got payload=%v", missingErrPayload)
+	}
+
+	selfParentFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase3-self", "--from", "snap-phase3-self", "--output", "json")
+	if selfParentFail.ExitCode == 0 {
+		t.Fatalf("expected self-parent create to fail\nstdout:\n%s\nstderr:\n%s", selfParentFail.Stdout, selfParentFail.Stderr)
+	}
+	selfErrPayload, ok := testutils.FindCLIErrorPayload(selfParentFail.Stdout + "\n" + selfParentFail.Stderr)
+	if !ok {
+		t.Fatalf("expected self-parent machine-readable error payload\nstdout:\n%s\nstderr:\n%s", selfParentFail.Stdout, selfParentFail.Stderr)
+	}
+	if got, _ := selfErrPayload["message"].(string); !strings.Contains(got, `parent snapshot "snap-phase3-self" cannot reference itself`) {
+		t.Fatalf("expected self-parent error message, got payload=%v", selfErrPayload)
+	}
+
+	// Semantics preservation: same state, with and without --from, should produce same file set.
+	showBaseline := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-phase3-baseline", "--limit", "20", "--output", "json"), "snapshot")
+	showChild := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-phase3-child", "--limit", "20", "--output", "json"), "snapshot")
+
+	showBaselineData := testutils.JSONMap(t, showBaseline, "data")
+	showChildData := testutils.JSONMap(t, showChild, "data")
+	baselineFiles, ok := showBaselineData["files"].([]any)
+	if !ok {
+		t.Fatalf("baseline show files missing: payload=%v", showBaseline)
+	}
+	childFiles, ok := showChildData["files"].([]any)
+	if !ok {
+		t.Fatalf("child show files missing: payload=%v", showChild)
+	}
+	if len(baselineFiles) != len(childFiles) {
+		t.Fatalf("expected identical snapshot file counts baseline=%d child=%d", len(baselineFiles), len(childFiles))
+	}
+	for i := range baselineFiles {
+		baseRow, ok := baselineFiles[i].(map[string]any)
+		if !ok {
+			t.Fatalf("baseline row %d is not object: %v", i, baselineFiles[i])
+		}
+		childRow, ok := childFiles[i].(map[string]any)
+		if !ok {
+			t.Fatalf("child row %d is not object: %v", i, childFiles[i])
+		}
+		if basePath, _ := baseRow["path"].(string); basePath != childRow["path"] {
+			t.Fatalf("path mismatch at index %d baseline=%v child=%v", i, baseRow["path"], childRow["path"])
+		}
+	}
+
+	// Child restore/verify/gc behavior remains normal.
+	restoreChildRoot := filepath.Join(tmp, "restore-phase3-child")
+	if err := os.MkdirAll(restoreChildRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore child root: %v", err)
+	}
+	restoreChild := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-phase3-child", "--mode", "prefix", "--destination", restoreChildRoot, "--output", "json"), "snapshot")
+	restoreChildData := testutils.JSONMap(t, restoreChild, "data")
+	if got := testutils.JSONInt64(t, restoreChildData, "restored_files"); got != 2 {
+		t.Fatalf("expected child restore to restore 2 files, got %d", got)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreChildRoot, filepath.FromSlash(trimmedDocs))); got != docsHash {
+		t.Fatalf("child restore docs hash mismatch: got=%s want=%s", got, docsHash)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreChildRoot, filepath.FromSlash(trimmedImg))); got != imgHash {
+		t.Fatalf("child restore img hash mismatch: got=%s want=%s", got, imgHash)
+	}
+
+	verifyPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+	if got, _ := verifyPayload["status"].(string); got != "ok" {
+		t.Fatalf("verify system should succeed for child lineage flow: payload=%v", verifyPayload)
+	}
+
+	gcPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+	if got, _ := gcPayload["status"].(string); got != "ok" {
+		t.Fatalf("gc --dry-run should succeed for child lineage flow: payload=%v", gcPayload)
+	}
+
+	// Parent deletion safety: child remains restorable and metadata remains valid.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-phase3-parent-full", "--force", "--output", "json"), "snapshot")
+
+	var childParent sql.NullString
+	if err := dbconn.QueryRow(`SELECT parent_id FROM snapshot WHERE id = $1`, "snap-phase3-child").Scan(&childParent); err != nil {
+		t.Fatalf("query child parent_id after deleting parent: %v", err)
+	}
+	if childParent.Valid {
+		t.Fatalf("expected child parent_id to be NULL after parent delete, got %+v", childParent)
+	}
+
+	restoreAfterDeleteRoot := filepath.Join(tmp, "restore-phase3-child-after-delete")
+	if err := os.MkdirAll(restoreAfterDeleteRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore child after delete root: %v", err)
+	}
+	restoreAfterDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-phase3-child", "--mode", "prefix", "--destination", restoreAfterDeleteRoot, "--output", "json"), "snapshot")
+	restoreAfterDeleteData := testutils.JSONMap(t, restoreAfterDelete, "data")
+	if got := testutils.JSONInt64(t, restoreAfterDeleteData, "restored_files"); got != 2 {
+		t.Fatalf("expected child restore after parent delete to restore 2 files, got %d", got)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreAfterDeleteRoot, filepath.FromSlash(trimmedDocs))); got != docsHash {
+		t.Fatalf("child restore-after-delete docs hash mismatch: got=%s want=%s", got, docsHash)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreAfterDeleteRoot, filepath.FromSlash(trimmedImg))); got != imgHash {
+		t.Fatalf("child restore-after-delete img hash mismatch: got=%s want=%s", got, imgHash)
+	}
+}
+
 // TestPhase7SnapshotRetentionLifecycleCLIIntegration validates the complete
 // Phase 7 retention lifecycle at CLI/system level:
 //

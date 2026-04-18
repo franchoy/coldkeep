@@ -1561,6 +1561,21 @@ func TestRunSnapshotCommandCreateRejectsEmptyFrom(t *testing.T) {
 	}
 }
 
+func TestParseCommandLineTreatsFromAsValueFlag(t *testing.T) {
+	parsed, err := parseCommandLine([]string{"snapshot", "create", "--id", "snap-child", "--from", "snap-parent"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	from, ok := parsed.lastFlagValue("from")
+	if !ok {
+		t.Fatalf("expected --from to be present in parsed flags: %+v", parsed.flags)
+	}
+	if from != "snap-parent" {
+		t.Fatalf("expected --from value snap-parent, got %q", from)
+	}
+}
+
 func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
