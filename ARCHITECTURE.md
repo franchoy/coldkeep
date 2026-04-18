@@ -16,17 +16,29 @@ The architecture composes:
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
 
-Correctness has three explicit layers:
+Correctness has four explicit layers:
 
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
 - v1.2 physical-graph coherence: audited physical roots, explicit repair, invariant taxonomy, batch maintenance semantics
+- v1.3 snapshot-based retention: immutable point-in-time captures, snapshot-protected GC, reachability audits
 
 ### Correctness Layers
 
 This diagram is a mental anchor for how guarantees compose across layers.
 
 ```text
++------------------------------------------------------------+
+| Snapshot-Based Retention (v1.3 - G14..G17)                |
+|------------------------------------------------------------|
+| Immutable point-in-time captures                           |
+| Snapshot-protected GC (union of current + retained roots)  |
+| Reachability integrity audits                              |
+| Stats retention visibility                                 |
++------------------------------------------------------------+
+    ^
+    | extends physical graph layer
+    |
 +------------------------------------------------------------+
 | Physical Graph Coherence (v1.2 - G10..G13)                |
 |------------------------------------------------------------|

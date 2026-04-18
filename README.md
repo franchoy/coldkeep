@@ -51,11 +51,12 @@ The goal is confidence and recoverability over maximum throughput.
 
 ## Status
 
-Coldkeep has three explicit correctness layers:
+Coldkeep has four explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
 - v1.2: physical-file graph coherence, explicit repair semantics, audited GC refusal, and invariant-aware batch maintenance reporting
+- v1.3: snapshot-based retention as a correctness layer (immutable point-in-time captures, snapshot-protected GC, reachability audits)
 
 Guarantees are enforced through automated validation and CI gates; see VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
 
@@ -86,8 +87,12 @@ Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 - G11: GC executes only on an audited coherent physical-root graph
 - G12: invariant failures expose stable machine-readable classification and operator guidance
 - G13: batch maintenance commands expose deterministic execution semantics and invariant-aware per-item reporting
+- G14: snapshot-retained content is GC-safe and protected by liveness union (current + snapshot roots)
+- G15: snapshot deletion only changes metadata and future GC eligibility (content preserved)
+- G16: stats expose snapshot-retention pressure to operators (retained-only-by-current, retained-only-by-snapshot, shared)
+- G17: verify and doctor audit persisted snapshot reachability integrity and report retention context
 
-Definitions and evidence mapping for G1-G13 are tracked in VALIDATION_MATRIX.md.
+Definitions and evidence mapping for G1-G17 are tracked in VALIDATION_MATRIX.md.
 
 Documentation is split into:
 

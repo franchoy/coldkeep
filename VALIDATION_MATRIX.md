@@ -1,28 +1,29 @@
 
-# v1.0 Validation Matrix
+# v1.x Validation Matrix
 
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).
 
 ## Guarantee ID Stability
 
-Guarantee IDs (G1–G8) are part of the public validation contract.
+Guarantee IDs (G1–G17+) are part of the public validation contract.
 
-- IDs are stable across v0.10 and v1.0
+- IDs are stable across v0.10, v1.0, v1.1, v1.2, and v1.3+
 - Guarantees may be reworded, but IDs must not change
-- New guarantees must use new IDs (G9, G10, ...)
+- New guarantees must use new IDs (G18, G19, ...)
 
-This prevents future “renumbering drift”.
+This prevents future "renumbering drift".
 
 All guarantees below are enforced through integration tests and verified under repeated GC / restart / restore cycles.
 
 This document originated from the v0.9/v0.10 trust-validation work and is now
 the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
-guarantees (G1-G8) plus post-v1.0 interface-correctness extensions (G9+).
+guarantees (G1-G8), v1.1 interface-correctness extensions (G9), v1.2 physical-file
+graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G14-G17).
 
 ## Scope
 
-- Target: single-node trust model for v1.0 core plus v1.1+ interface contracts
+- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+ interface contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 
@@ -39,11 +40,12 @@ guarantees (G1-G8) plus post-v1.0 interface-correctness extensions (G9+).
 | G7 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity, including authenticated AES-GCM decode failures on tampered ciphertext, tampered nonce metadata, wrong-key mismatch, and malformed key configuration (invalid length and invalid encoding) | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsAESGCMTamperedCiphertext`, `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`, `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`, `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`, `TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
 | G8 | Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload`, `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData` | covered |
 
-## Post-v1.0 Extension Guarantees (v1.1+)
+## Post-v1.0 Extension Guarantees (v1.1, v1.2, v1.3)
 
 These rows track guarantees added after the v1.0 baseline. They are intentionally
 separate from the frozen v1.0 core matrix (G1-G8).
-This extends the correctness model from storage invariants to interaction semantics.
+This extends the correctness model from storage invariants to interaction semantics,
+physical-file graph coherence, and snapshot-based retention.
 
 | ID | Guarantee | Primary verify evidence | Primary test evidence | Status |
 | --- | --- | --- | --- | --- |

@@ -12,9 +12,34 @@ v1.3 establishes snapshot-based retention as part of the correctness model.
 
 ------------------------------------------------------------------------
 
-## [Unreleased]
+## [1.3.0] - 2026-04-18
 
-v1.3 snapshot-layer release-candidate alignment.
+Snapshot-layer and retention contract establishment.
+
+v1.0 established storage correctness.
+v1.1 established interface correctness.
+v1.2 established physical-graph coherence.
+v1.3 establishes snapshot-based retention as a correctness layer: the system
+captures immutable point-in-time views, protects snapshot-retained content from
+GC deletion, and audits persisted snapshot reachability as part of standard
+verification and health reporting.
+
+### Added
+
+- **`snapshot` and `snapshot_file` tables** — new schema objects (schema version 7) for immutable point-in-time captures
+- **`snapshot create [--id ID] [--label LABEL] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes)
+- **`snapshot list [--type full|partial] [--limit N] [--since DATE]`** — list snapshots with filtering and ordering
+- **`snapshot show <snapshotID> [--limit N] [query filters…]`** — inspect snapshot contents with query support
+- **`snapshot stats [snapshotID]`** — report snapshot retention pressure and metadata
+- **`snapshot restore <snapshotID> [paths…] [--mode original|prefix|override] [--destination DIR]`** — restore full or partial from snapshot
+- **`snapshot diff <base-ID> <target-ID> [--filter added|removed|modified] [query filters…]`** — classify changes between snapshots
+- **`snapshot delete <snapshotID> --force`** — remove snapshot metadata only (logical content preserved)
+- **Snapshot query semantics** — unified SnapshotQuery across show/restore/diff with exact path, prefix, glob pattern, regex, size window, and modified-time window criteria (ANDed)
+- **Snapshot-aware retention model** — logical files are retained by union of current-state physical mappings and snapshot references; GC eligibility changes only after snapshot delete
+- **Stats retention visibility** — global and per-snapshot stats expose retained-only-by-current, retained-only-by-snapshot, shared-by-both, and total snapshot-retained metrics
+- **Verify snapshot reachability** — standard verify checks for orphan snapshot_file rows, invalid lifecycle states, and missing chunk graphs in snapshot-retained files
+- **Doctor snapshot-retention context** — text and JSON reports surface snapshot-retention integrity counters alongside physical mapping counters
+- **G14–G17 guarantees** — snapshot-retained GC safety, snapshot deletion metadata-only semantics, stats retention visibility, and verify/doctor snapshot reachability audits
 
 ### Scope alignment (v1.3)
 
