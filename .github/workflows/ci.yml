@@ -51,6 +51,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check smart quotes in Go files
+        run: bash scripts/check_smart_quotes.sh
+
       - name: Check shell script syntax
         run: bash -n scripts/*.sh
 

@@ -85,6 +85,8 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness\]' 'smoke job depends on quality and integration-correctness'
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke\]' 'required gate depends on all upstream jobs including long-run and adversarial'
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results'
+  require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step'
+  require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check shell script syntax' 'shell script syntax validation step'
   require_pattern "$WORKFLOW_FILE" 'name:\s*Lint shell scripts \(ShellCheck\)' 'shell script lint step (ShellCheck)'
   require_pattern "$WORKFLOW_FILE" 'uses:\s*ludeeus/action-shellcheck@2\.0\.0' 'ShellCheck action pinned version'
