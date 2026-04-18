@@ -1,5 +1,5 @@
 
-# v1.x Validation Matrix
+# v1.0 Validation Matrix
 
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).
@@ -40,7 +40,7 @@ graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G1
 | G7 | Deep corruption detection (payload/offset/tail) | Verify deep validates decoded payload hashes and container continuity, including authenticated AES-GCM decode failures on tampered ciphertext, tampered nonce metadata, wrong-key mismatch, and malformed key configuration (invalid length and invalid encoding) | `TestVerifySystemDeepDetectsChunkDataCorruption`, `TestVerifySystemDeepDetectsAESGCMTamperedCiphertext`, `TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering`, `TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch`, `TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration`, `TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration`, `TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock`, `TestVerifySystemDeepAggregatesChunkErrors` | covered |
 | G8 | Corrective health gate contract stability | Doctor phase model and JSON/exit-code contract tests | `TestDoctorCommand`, `TestDoctorJSONContractConsistency`, `TestDoctorJSONFailureShortPathSingleMachineReadablePayload`, `TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData` | covered |
 
-## Post-v1.0 Extension Guarantees (v1.1, v1.2, v1.3)
+## Post-v1.0 Extension Guarantees (v1.1+)
 
 These rows track guarantees added after the v1.0 baseline. They are intentionally
 separate from the frozen v1.0 core matrix (G1-G8).
