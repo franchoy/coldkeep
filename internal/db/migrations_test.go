@@ -703,6 +703,302 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	}
 }
 
+func TestPostgresV7SnapshotMigrationToV8WithoutDataLoss(t *testing.T) {
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
+	}
+
+	host := getenvOrDefault("DB_HOST", "127.0.0.1")
+	port := getenvOrDefault("DB_PORT", "5432")
+	user := getenvOrDefault("DB_USER", "coldkeep")
+	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
+	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
+	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
+
+	adminConnStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		host,
+		port,
+		user,
+		password,
+		maintenanceDB,
+		sslMode,
+	)
+	adminDB, err := sql.Open("postgres", adminConnStr)
+	if err != nil {
+		t.Fatalf("open postgres admin connection: %v", err)
+	}
+	defer func() { _ = adminDB.Close() }()
+
+	if err := adminDB.Ping(); err != nil {
+		t.Fatalf("ping postgres admin connection: %v", err)
+	}
+
+	testDBName := fmt.Sprintf("coldkeep_phase1_v7_to_v8_%d", time.Now().UnixNano())
+	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
+		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
+	}
+	defer func() {
+		_, _ = adminDB.Exec(`
+			SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, testDBName)
+		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
+	}()
+
+	testConnStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		host,
+		port,
+		user,
+		password,
+		testDBName,
+		sslMode,
+	)
+	dbconn, err := sql.Open("postgres", testConnStr)
+	if err != nil {
+		t.Fatalf("open postgres test database connection: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := dbconn.Ping(); err != nil {
+		t.Fatalf("ping postgres test database connection: %v", err)
+	}
+
+	legacyV7SQL := `
+		CREATE TABLE schema_version (
+			version INTEGER PRIMARY KEY
+		);
+		INSERT INTO schema_version(version) VALUES (7);
+
+		CREATE TABLE logical_file (
+			id BIGSERIAL PRIMARY KEY
+		);
+
+		CREATE TABLE snapshot (
+			id TEXT PRIMARY KEY,
+			created_at TIMESTAMPTZ NOT NULL,
+			type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
+			label TEXT
+		);
+
+		CREATE INDEX idx_snapshot_created_at ON snapshot(created_at);
+
+		CREATE TABLE snapshot_file (
+			id BIGSERIAL PRIMARY KEY,
+			snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
+			path TEXT NOT NULL CHECK (path <> ''),
+			logical_file_id BIGINT NOT NULL REFERENCES logical_file(id),
+			size BIGINT,
+			mode BIGINT,
+			mtime TIMESTAMPTZ
+		);
+
+		CREATE INDEX idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id);
+		CREATE INDEX idx_snapshot_file_path ON snapshot_file(path);
+		CREATE INDEX idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
+		CREATE UNIQUE INDEX idx_snapshot_file_unique ON snapshot_file(snapshot_id, path);
+	`
+	if _, err := dbconn.Exec(legacyV7SQL); err != nil {
+		t.Fatalf("create legacy postgres v7 snapshot schema: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO logical_file(id) VALUES (1), (2), (3)`); err != nil {
+		t.Fatalf("insert legacy logical_file rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label) VALUES ('snap-a', NOW(), 'full', 'A'), ('snap-b', NOW(), 'partial', 'B')`); err != nil {
+		t.Fatalf("insert legacy snapshot rows: %v", err)
+	}
+
+	type seedRow struct {
+		snapshotID string
+		path       string
+		logicalID  int
+		size       int
+	}
+	seedRows := []seedRow{
+		{snapshotID: "snap-a", path: "docs/a.txt", logicalID: 1, size: 11},
+		{snapshotID: "snap-a", path: "docs/b.txt", logicalID: 2, size: 22},
+		{snapshotID: "snap-b", path: "docs/a.txt", logicalID: 1, size: 11},
+		{snapshotID: "snap-b", path: "img/x.png", logicalID: 3, size: 33},
+	}
+	for i, row := range seedRows {
+		if _, err := dbconn.Exec(
+			`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime) VALUES ($1, $2, $3, $4, $5, NOW())`,
+			row.snapshotID,
+			row.path,
+			row.logicalID,
+			row.size,
+			int64(0644),
+		); err != nil {
+			t.Fatalf("insert legacy snapshot_file row %d: %v", i, err)
+		}
+	}
+
+	var preRowCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file`).Scan(&preRowCount); err != nil {
+		t.Fatalf("count pre-migration snapshot_file rows: %v", err)
+	}
+
+	var preDistinctPaths int
+	if err := dbconn.QueryRow(`SELECT COUNT(DISTINCT path) FROM snapshot_file`).Scan(&preDistinctPaths); err != nil {
+		t.Fatalf("count pre-migration distinct snapshot_file paths: %v", err)
+	}
+
+	schemaSQL, err := loadPostgresSchema()
+	if err != nil {
+		t.Fatalf("load postgres schema SQL: %v", err)
+	}
+	v8MigrationSQL, err := extractPostgresV8MigrationSQL(schemaSQL)
+	if err != nil {
+		t.Fatalf("extract postgres v8 migration SQL block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(v8MigrationSQL); err != nil {
+		t.Fatalf("apply postgres v8 migration block: %v", err)
+	}
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema_version after migration: %v", err)
+	}
+	if schemaVersion != 8 {
+		t.Fatalf("expected schema_version=8 after v8 migration block, got %d", schemaVersion)
+	}
+
+	var hasPathID bool
+	if err := dbconn.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'snapshot_file' AND column_name = 'path_id'
+		)
+	`).Scan(&hasPathID); err != nil {
+		t.Fatalf("check snapshot_file.path_id existence: %v", err)
+	}
+	if !hasPathID {
+		t.Fatal("expected snapshot_file.path_id after migration")
+	}
+
+	var hasLegacyPath bool
+	if err := dbconn.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'snapshot_file' AND column_name = 'path'
+		)
+	`).Scan(&hasLegacyPath); err != nil {
+		t.Fatalf("check legacy snapshot_file.path existence: %v", err)
+	}
+	if hasLegacyPath {
+		t.Fatal("did not expect legacy snapshot_file.path after migration")
+	}
+
+	var postRowCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file`).Scan(&postRowCount); err != nil {
+		t.Fatalf("count post-migration snapshot_file rows: %v", err)
+	}
+	if postRowCount != preRowCount {
+		t.Fatalf("snapshot_file row count changed after migration: pre=%d post=%d", preRowCount, postRowCount)
+	}
+
+	var postPathCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&postPathCount); err != nil {
+		t.Fatalf("count snapshot_path rows after migration: %v", err)
+	}
+	if postPathCount != preDistinctPaths {
+		t.Fatalf("snapshot_path normalization mismatch: preDistinct=%d snapshotPathRows=%d", preDistinctPaths, postPathCount)
+	}
+
+	for i, row := range seedRows {
+		var found int
+		if err := dbconn.QueryRow(
+			`SELECT COUNT(*)
+			 FROM snapshot_file sf
+			 JOIN snapshot_path sp ON sp.id = sf.path_id
+			 WHERE sf.snapshot_id = $1 AND sf.logical_file_id = $2 AND sf.size = $3 AND sp.path = $4`,
+			row.snapshotID,
+			row.logicalID,
+			row.size,
+			row.path,
+		).Scan(&found); err != nil {
+			t.Fatalf("verify migrated row %d: %v", i, err)
+		}
+		if found != 1 {
+			t.Fatalf("expected exactly one migrated row for seed row %d, got %d", i, found)
+		}
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-a', (SELECT path_id FROM snapshot_file WHERE snapshot_id = 'snap-a' LIMIT 1), 3)`,
+	); err == nil {
+		t.Fatal("expected unique violation on duplicate (snapshot_id, path_id)")
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-a', 999999, 1)`); err == nil {
+		t.Fatal("expected foreign key violation on unknown path_id")
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ('p-parent', NOW(), 'full', 'PP', NULL)`); err != nil {
+		t.Fatalf("insert parent snapshot with NULL parent_id: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ('p-child', NOW(), 'partial', 'PC', 'p-parent')`); err != nil {
+		t.Fatalf("insert child snapshot with parent_id: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = 'p-parent'`); err != nil {
+		t.Fatalf("delete parent snapshot: %v", err)
+	}
+
+	var childParentID sql.NullString
+	if err := dbconn.QueryRow(`SELECT parent_id FROM snapshot WHERE id = 'p-child'`).Scan(&childParentID); err != nil {
+		t.Fatalf("read child parent_id after deleting parent: %v", err)
+	}
+	if childParentID.Valid {
+		t.Fatalf("expected child parent_id to be NULL after parent delete, got %q", childParentID.String)
+	}
+
+	var hasOldPathIndex bool
+	if err := dbconn.QueryRow(`SELECT to_regclass('public.idx_snapshot_file_path') IS NOT NULL`).Scan(&hasOldPathIndex); err != nil {
+		t.Fatalf("check legacy path index presence: %v", err)
+	}
+	if hasOldPathIndex {
+		t.Fatal("did not expect legacy idx_snapshot_file_path after migration")
+	}
+
+	var hasPathIDIndex bool
+	if err := dbconn.QueryRow(`SELECT to_regclass('public.idx_snapshot_file_path_id') IS NOT NULL`).Scan(&hasPathIDIndex); err != nil {
+		t.Fatalf("check idx_snapshot_file_path_id presence: %v", err)
+	}
+	if !hasPathIDIndex {
+		t.Fatal("expected idx_snapshot_file_path_id after migration")
+	}
+
+	if _, err := dbconn.Exec(v8MigrationSQL); err != nil {
+		t.Fatalf("rerun postgres v8 migration block for idempotency: %v", err)
+	}
+
+	var postRerunRowCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file`).Scan(&postRerunRowCount); err != nil {
+		t.Fatalf("count snapshot_file rows after idempotent rerun: %v", err)
+	}
+	if postRerunRowCount != postRowCount {
+		t.Fatalf("snapshot_file row count changed after idempotent rerun: before=%d after=%d", postRowCount, postRerunRowCount)
+	}
+}
+
+func extractPostgresV8MigrationSQL(schemaSQL string) (string, error) {
+	start := strings.Index(schemaSQL, "-- Schema version 8:")
+	if start < 0 {
+		return "", fmt.Errorf("schema version 8 marker not found")
+	}
+	v8AndAfter := schemaSQL[start:]
+	end := strings.Index(v8AndAfter, "\nCOMMIT;")
+	if end < 0 {
+		return "", fmt.Errorf("schema version 8 block terminator not found")
+	}
+	return strings.TrimSpace(v8AndAfter[:end]), nil
+}
+
 func getenvOrDefault(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
