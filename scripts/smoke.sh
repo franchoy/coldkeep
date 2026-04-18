@@ -14,6 +14,7 @@ set -euo pipefail
 #   docker compose run --rm  -e COLDKEEP_SAMPLES_DIR=/samples -v ./samples:/samples --entrypoint bash coldkeep scripts/smoke.sh
 
 SMOKE_TEMP_STORAGE_DIR=""
+SNAP_RESTORE_PATTERN_DIR=""
 
 cleanup() {
   rm -rf ./_smoke_out
@@ -22,6 +23,9 @@ cleanup() {
   rm -rf ./_smoke_v13_snapshot_restore
   if [[ -n "$SMOKE_TEMP_STORAGE_DIR" ]]; then
     rm -rf "$SMOKE_TEMP_STORAGE_DIR"
+  fi
+  if [[ -n "$SNAP_RESTORE_PATTERN_DIR" ]]; then
+    rm -rf "$SNAP_RESTORE_PATTERN_DIR"
   fi
 }
 
@@ -839,7 +843,6 @@ echo "[smoke]   ok: snapshot show --pattern works"
 
 # Test 2: snapshot restore with --pattern
 SNAP_RESTORE_PATTERN_DIR=$(mktemp -d)
-trap 'rm -rf "$SNAP_RESTORE_PATTERN_DIR"' EXIT
 SNAP_RESTORE_PATTERN=$(coldkeep snapshot restore "$V13_SNAPSHOT_1" --pattern "*.txt" --mode prefix --destination "$SNAP_RESTORE_PATTERN_DIR" --output json)
 SNAP_RESTORE_PATTERN_PAYLOAD=$(echo "$SNAP_RESTORE_PATTERN" | grep -E '^\{.*\}$' | tail -n1)
 if ! echo "$SNAP_RESTORE_PATTERN_PAYLOAD" | jq -e '.status == "ok"' > /dev/null 2>&1; then
