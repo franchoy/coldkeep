@@ -19,7 +19,7 @@ type pathResolverDB interface {
 // snapshot_path.id, inserting the row if it does not yet exist.
 //
 // Callers are responsible for normalizing the path before calling this function.
-// An empty path is rejected because the schema enforces CHECK (path <> ”).
+// An empty path is rejected because the schema enforces a non-empty path check.
 func ResolveSnapshotPath(ctx context.Context, exec pathResolverDB, normalizedPath string) (int64, error) {
 	if normalizedPath == "" {
 		return 0, fmt.Errorf("resolve snapshot_path: path must not be empty")
