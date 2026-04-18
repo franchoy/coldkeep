@@ -2408,6 +2408,48 @@ func TestRenderSnapshotTreeLinesBreaksCyclesAndLogsWarning(t *testing.T) {
 	}
 }
 
+func TestRenderSnapshotTreeLinesLinearChain(t *testing.T) {
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+		{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+	})
+
+	if got := strings.Join(lines, "\n"); got != "day1\n└── day2\n    └── day3" {
+		t.Fatalf("expected linear chain day1 -> day2 -> day3, got: %q", got)
+	}
+}
+
+func TestRenderSnapshotTreeLinesBranching(t *testing.T) {
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "exp1", CreatedAt: time.Date(2026, 4, 10, 11, 30, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+		{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+	})
+
+	if got := strings.Join(lines, "\n"); got != "day1\n├── day2\n└── exp1" {
+		t.Fatalf("expected branching tree under day1, got: %q", got)
+	}
+}
+
+func TestRenderSnapshotTreeLinesDeterministicAcrossCalls(t *testing.T) {
+	items := []snapshot.Snapshot{
+		{ID: "child-b", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "child-a", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC), Type: "full"},
+	}
+
+	first := strings.Join(renderSnapshotTreeLines(items), "\n")
+	second := strings.Join(renderSnapshotTreeLines(items), "\n")
+	if first != second {
+		t.Fatalf("expected deterministic tree output across calls, first=%q second=%q", first, second)
+	}
+	if first != "day1\n\nroot\n├── child-a\n└── child-b" {
+		t.Fatalf("unexpected deterministic tree output, got: %q", first)
+	}
+}
+
 func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalGet := getSnapshotPhase
