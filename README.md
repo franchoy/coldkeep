@@ -153,6 +153,9 @@ docker compose run --rm \
 If you are preparing a PR, run the smoke gate (`scripts/smoke.sh`) with either
 workflow below. Both are valid and both are used by contributors.
 
+PR author tip: use the PR template at [`.github/pull_request_template.md`](.github/pull_request_template.md)
+to summarize invariants and lifecycle-semantics impact for reviewers.
+
 ### Approach A: Docker runner
 
 Use the `coldkeep` service container to run the smoke script.
@@ -459,6 +462,9 @@ For the full release criteria, use the v1.3 sections in `PRE_RELEASE_CHECKLIST.m
 - `D. Documentation / release checklist`
 - `15) Verify v1.3 snapshot / retention contract (manual gate)`
 - `16) Final global sign-off`
+
+When opening the release PR, use [`.github/pull_request_template.md`](.github/pull_request_template.md)
+to keep impact and validation context explicit.
 
 ### Post-v1.3 hardening backlog (non-blocking)
 

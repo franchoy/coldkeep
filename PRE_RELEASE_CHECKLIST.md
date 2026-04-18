@@ -388,6 +388,11 @@ README:
 - [ ] Diff filtering semantics are documented
 - [ ] Delete semantics are documented
 
+PR template / reviewer context:
+
+- [ ] `.github/pull_request_template.md` exists and matches current release impact language
+- [ ] Release PR uses the template and includes lifecycle-semantics impact note
+
 VALIDATION_MATRIX:
 
 - [ ] G14-G17 are listed and covered
@@ -506,3 +511,4 @@ Confirm:
 - [ ] v1.3 C. test surface checklist verified
 - [ ] v1.3 D. documentation/release checklist verified
 - [ ] v1.3 snapshot/retention manual gate verified
+- [ ] Release PR description follows `.github/pull_request_template.md`
