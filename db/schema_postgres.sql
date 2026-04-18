@@ -143,22 +143,22 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_container_updated_at
+CREATE OR REPLACE TRIGGER trg_container_updated_at
 BEFORE UPDATE ON container
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
-CREATE TRIGGER trg_chunk_updated_at
+CREATE OR REPLACE TRIGGER trg_chunk_updated_at
 BEFORE UPDATE ON chunk
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
-CREATE TRIGGER trg_logical_file_updated_at
+CREATE OR REPLACE TRIGGER trg_logical_file_updated_at
 BEFORE UPDATE ON logical_file
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
-CREATE TRIGGER trg_blocks_updated_at
+CREATE OR REPLACE TRIGGER trg_blocks_updated_at
 BEFORE UPDATE ON blocks
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();

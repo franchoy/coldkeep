@@ -728,6 +728,11 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 		t.Fatal("expected unique violation on duplicate (snapshot_id, path_id)")
 	}
 
+	// Remove snapshot_file rows belonging to snap-parent before deleting the snapshot;
+	// snapshot_file.snapshot_id has no ON DELETE CASCADE, so we clear them first.
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = 'snap-parent'`); err != nil {
+		t.Fatalf("delete snapshot_file rows for parent snapshot: %v", err)
+	}
 	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = 'snap-parent'`); err != nil {
 		t.Fatalf("delete parent snapshot: %v", err)
 	}
