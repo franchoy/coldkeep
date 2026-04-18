@@ -894,6 +894,49 @@ func TestCreateSnapshotStoresParentIDForFullSnapshotWithoutChangingSelectionBeha
 	}
 }
 
+func TestCreateSnapshotWithParentUsesCurrentStateNotParentContents(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-parent-state-docs", 17)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-state", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	// Change live state after parent creation: child must capture this new file too.
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-parent-state-img", 29)
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	parentID := "snap-parent-state"
+	if err := CreateSnapshot(ctx, db, "snap-child-state", "full", nil, &parentID, nil); err != nil {
+		t.Fatalf("CreateSnapshot child full with parent_id: %v", err)
+	}
+
+	parentFiles, err := ListSnapshotFiles(ctx, db, "snap-parent-state", 10, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles parent: %v", err)
+	}
+	if len(parentFiles) != 1 {
+		t.Fatalf("expected parent snapshot to remain at its original single file, got %d", len(parentFiles))
+	}
+	if parentFiles[0].Path != "docs/a.txt" {
+		t.Fatalf("expected parent snapshot path docs/a.txt, got %q", parentFiles[0].Path)
+	}
+
+	childFiles, err := ListSnapshotFiles(ctx, db, "snap-child-state", 10, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles child: %v", err)
+	}
+	if len(childFiles) != 2 {
+		t.Fatalf("expected child snapshot to reflect current state with 2 files, got %d", len(childFiles))
+	}
+	if childFiles[0].Path != "docs/a.txt" || childFiles[1].Path != "img/x.png" {
+		t.Fatalf("expected child snapshot paths docs/a.txt,img/x.png, got paths=%q,%q", childFiles[0].Path, childFiles[1].Path)
+	}
+}
+
 func TestCreateSnapshotRejectsParentLineageForChildPartialSnapshot(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
