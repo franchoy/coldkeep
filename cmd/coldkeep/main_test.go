@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -2054,8 +2055,130 @@ func TestRunSnapshotCommandListTreeFlagSwitchesTextOutputMode(t *testing.T) {
 	if !strings.Contains(treeOutput, "root") || !strings.Contains(treeOutput, "└── child") {
 		t.Fatalf("expected --tree output to include rendered tree, got:\n%s", treeOutput)
 	}
+	if strings.Contains(treeOutput, "Snapshots:") {
+		t.Fatalf("expected --tree output to contain tree only, got:\n%s", treeOutput)
+	}
 	if strings.Contains(treeOutput, "  root  full  2026-04-10T10:00:00Z") || strings.Contains(treeOutput, "  child  partial  2026-04-10T11:00:00Z") {
 		t.Fatalf("expected --tree output to omit flat list rows, got:\n%s", treeOutput)
+	}
+}
+
+func TestRunSnapshotCommandListTreeSingleSnapshot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"}}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.HasPrefix(output, "day1\n") {
+		t.Fatalf("expected single-snapshot tree output to start with day1, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeNoSnapshotsFound(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return nil, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.HasPrefix(output, "no snapshots found\n") {
+		t.Fatalf("expected no snapshots found message, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeSeparatesMultipleRoots(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "backup1", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "backup2", CreatedAt: time.Date(2026, 4, 10, 13, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "backup1", Valid: true}},
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "day1\n└── day2\n\nbackup1\n└── backup2\n") {
+		t.Fatalf("expected separate root trees, got:\n%s", output)
 	}
 }
 
@@ -2207,14 +2330,8 @@ func TestRunSnapshotCommandListTreeTreatsMissingParentAsRoot(t *testing.T) {
 		}
 	})
 
-	for _, want := range []string{
-		"day1",
-		"orphan",
-		"└── child",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("expected missing-parent root behavior to contain %q, got:\n%s", want, output)
-		}
+	if !strings.Contains(output, "day1\n\norphan\n└── child\n") {
+		t.Fatalf("expected missing parent to be treated as a separate root tree, got:\n%s", output)
 	}
 }
 
@@ -2264,6 +2381,30 @@ func TestRunSnapshotCommandListTreeSortsChildrenByCreatedAtAscending(t *testing.
 	}
 	if !(earlyIdx < middleIdx && middleIdx < lateIdx) {
 		t.Fatalf("expected child order early -> middle -> late, got:\n%s", output)
+	}
+}
+
+func TestRenderSnapshotTreeLinesBreaksCyclesAndLogsWarning(t *testing.T) {
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	var logBuffer bytes.Buffer
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day3", Valid: true}},
+		{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+	})
+
+	if strings.Join(lines, "\n") != "day2\n└── day3" {
+		t.Fatalf("expected cycle to be broken into a finite tree, got: %#v", lines)
+	}
+	if !strings.Contains(logBuffer.String(), "snapshot tree cycle detected") {
+		t.Fatalf("expected cycle warning log, got: %q", logBuffer.String())
 	}
 }
 

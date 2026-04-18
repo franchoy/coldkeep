@@ -2503,16 +2503,28 @@ func renderSnapshotTreeLines(items []snapshot.Snapshot) []string {
 
 		childItems := children[node.ID]
 		for idx, child := range childItems {
+			if _, seen := visited[child.ID]; seen {
+				log.Printf("WARNING: snapshot tree cycle detected; skipping edge parent=%s child=%s", node.ID, child.ID)
+				continue
+			}
 			walk(child, nextPrefix, idx == len(childItems)-1, true)
 		}
 	}
 
+	emitTopLevel := func(node snapshot.Snapshot) {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		walk(node, "", true, false)
+	}
+
 	for idx, root := range roots {
-		walk(root, "", idx == len(roots)-1, false)
+		_ = idx
+		emitTopLevel(root)
 	}
 	for _, item := range ordered {
 		if _, seen := visited[item.ID]; !seen {
-			walk(item, "", true, false)
+			emitTopLevel(item)
 		}
 	}
 	return lines
@@ -2623,10 +2635,9 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	if treeMode {
-		_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
 		lines := renderSnapshotTreeLines(items)
 		if len(lines) == 0 {
-			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
+			_, _ = fmt.Fprintln(os.Stdout, "no snapshots found")
 		} else {
 			for _, line := range lines {
 				_, _ = fmt.Fprintln(os.Stdout, line)
