@@ -161,6 +161,16 @@ type SnapshotQuery struct {
 	ModifiedBefore *time.Time
 }
 
+// SnapshotCreateOptions configures snapshot creation.
+// ParentID is metadata-only lineage and does not alter snapshot contents.
+type SnapshotCreateOptions struct {
+	ID       string
+	Type     string
+	Label    *string
+	ParentID *string
+	Paths    []string
+}
+
 // Match reports whether entry e satisfies all criteria in q.
 // A nil query always returns true.
 func (q *SnapshotQuery) Match(e SnapshotFileEntry) bool {
@@ -1088,21 +1098,20 @@ func RestoreSnapshot(
 	return result, nil
 }
 
-// CreateSnapshot creates an atomic point-in-time snapshot from current physical_file rows.
-// When paths is nil or empty, all physical_file rows are copied into the snapshot.
-// When paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
-//
-// parentID is optional and stored internally for future lineage tracking; pass nil for all
-// current callers. It is not yet surfaced to the CLI.
-func CreateSnapshot(
+// CreateSnapshotWithOptions creates an atomic point-in-time snapshot from current physical_file rows.
+// When opts.Paths is nil or empty, all physical_file rows are copied into the snapshot.
+// When opts.Paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
+func CreateSnapshotWithOptions(
 	ctx context.Context,
 	db *sql.DB,
-	snapshotID string,
-	snapshotType string,
-	label *string,
-	parentID *string,
-	paths []string,
+	opts SnapshotCreateOptions,
 ) error {
+	snapshotID := opts.ID
+	snapshotType := opts.Type
+	label := opts.Label
+	parentID := opts.ParentID
+	paths := opts.Paths
+
 	if db == nil {
 		return errors.New("snapshot db cannot be nil")
 	}
@@ -1305,4 +1314,23 @@ func CreateSnapshot(
 
 	log.Printf("snapshot: created id=%s type=%s files=%d", snapshotID, snapshotType, insertedCount)
 	return nil
+}
+
+// CreateSnapshot is a compatibility wrapper for callers that still use positional arguments.
+func CreateSnapshot(
+	ctx context.Context,
+	db *sql.DB,
+	snapshotID string,
+	snapshotType string,
+	label *string,
+	parentID *string,
+	paths []string,
+) error {
+	return CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{
+		ID:       snapshotID,
+		Type:     snapshotType,
+		Label:    label,
+		ParentID: parentID,
+		Paths:    paths,
+	})
 }

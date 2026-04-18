@@ -1400,13 +1400,13 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 		gotDBNonNil  bool
 		gotCtxNonNil bool
 	)
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, snapshotType string, label *string, parentID *string, paths []string) error {
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
 		called = true
-		gotID = snapshotID
-		gotType = snapshotType
-		gotLabel = label
-		gotParentID = parentID
-		gotPaths = append([]string(nil), paths...)
+		gotID = opts.ID
+		gotType = opts.Type
+		gotLabel = opts.Label
+		gotParentID = opts.ParentID
+		gotPaths = append([]string(nil), opts.Paths...)
 		gotDBNonNil = db != nil
 		gotCtxNonNil = ctx != nil
 		return nil
@@ -1483,9 +1483,9 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 
 	gotType := ""
 	gotPathCount := -1
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, snapshotType string, _ *string, _ *string, paths []string) error {
-		gotType = snapshotType
-		gotPathCount = len(paths)
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		gotType = opts.Type
+		gotPathCount = len(opts.Paths)
 		return nil
 	}
 
@@ -1523,8 +1523,8 @@ func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
 	}
 
 	var gotParentID *string
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, _ string, _ *string, parentID *string, _ []string) error {
-		gotParentID = parentID
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		gotParentID = opts.ParentID
 		return nil
 	}
 

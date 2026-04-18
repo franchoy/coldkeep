@@ -120,7 +120,7 @@ var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var runGCPhase = maintenance.RunGCWithContainersDirResult
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
-var createSnapshotPhase = snapshot.CreateSnapshot
+var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var listSnapshotsPhase = snapshot.ListSnapshots
 var getSnapshotPhase = snapshot.GetSnapshot
@@ -2942,7 +2942,13 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, parentIDPtr, paths); err != nil {
+	if err := createSnapshotPhase(ctx, sgctx.DB, snapshot.SnapshotCreateOptions{
+		ID:       snapshotID,
+		Type:     snapshotType,
+		Label:    labelPtr,
+		ParentID: parentIDPtr,
+		Paths:    paths,
+	}); err != nil {
 		return err
 	}
 
