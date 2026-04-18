@@ -43,6 +43,32 @@ func TestVerifySystemStandardPassesWithConsistentSnapshotReachability(t *testing
 	}
 }
 
+func TestVerifySystemStandardAllowsUnusedSnapshotPathRows(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"snapshot-ok-unused-path.txt", int64(0), strings.Repeat("u", 64), filestate.LogicalFileCompleted, int64(0),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	insertSnapshotRowForVerify(t, dbconn, "snap-ok-unused-path-1")
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1), ($2) ON CONFLICT(path) DO NOTHING`, "docs/snapshot-ok.txt", "docs/unused-dictionary-entry.txt"); err != nil {
+		t.Fatalf("insert snapshot_path rows: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-ok-unused-path-1", "docs/snapshot-ok.txt", logicalID); err != nil {
+		t.Fatalf("insert snapshot_file row: %v", err)
+	}
+
+	if err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir()); err != nil {
+		t.Fatalf("unused snapshot_path rows must not be treated as corruption: %v", err)
+	}
+}
+
 func TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -96,6 +122,41 @@ func TestVerifySystemStandardDetectsOrphanSnapshotPathReference(t *testing.T) {
 	}
 	if code, ok := invariants.Code(err); !ok || code != invariants.CodeSnapshotGraphOrphanLogicalRef {
 		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeSnapshotGraphOrphanLogicalRef, code, ok, err)
+	}
+}
+
+func TestVerifySystemStandardDetectsDuplicateSnapshotPathPairs(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"snapshot-dup-path.txt", int64(0), strings.Repeat("q", 64), filestate.LogicalFileCompleted, int64(0),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	insertSnapshotRowForVerify(t, dbconn, "snap-dup-path-1")
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/dup-path.txt"); err != nil {
+		t.Fatalf("insert snapshot_path row: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP INDEX idx_snapshot_file_unique`); err != nil {
+		t.Fatalf("drop unique index to simulate corrupted duplicate pair state: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-dup-path-1", "docs/dup-path.txt", logicalID); err != nil {
+			t.Fatalf("insert duplicate snapshot_file row %d: %v", i+1, err)
+		}
+	}
+
+	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "duplicate_snapshot_path_pairs=1") {
+		t.Fatalf("expected duplicate snapshot path pair verification error, got: %v", err)
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodeSnapshotGraphIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeSnapshotGraphIntegrity, code, ok, err)
 	}
 }
 
