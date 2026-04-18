@@ -69,6 +69,20 @@ func resetDB(t *testing.T, dbconn *sql.DB) {
 	}
 }
 
+func insertGCSnapshotFileRef(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
+		t.Fatalf("insert snapshot_path %q: %v", snapshotPath, err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id)
+		 VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`,
+		snapshotID, snapshotPath, logicalFileID,
+	); err != nil {
+		t.Fatalf("insert snapshot_file snapshot_id=%q path=%q logical_file_id=%d: %v", snapshotID, snapshotPath, logicalFileID, err)
+	}
+}
+
 func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	requireDB(t)
 
@@ -385,12 +399,7 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 	`); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(`
-		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id)
-		VALUES ('snap-gc-guard-1', '/snap/snap-retained.bin', $1)
-	`, logicalID); err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
+	insertGCSnapshotFileRef(t, dbconn, "snap-gc-guard-1", "/snap/snap-retained.bin", logicalID)
 
 	return containerID, filename
 }
@@ -581,12 +590,7 @@ func TestRunGCDryRunRetainsContainerWhenAnotherSnapshotStillReferences(t *testin
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-gc-guard-2', NOW(), 'full')`); err != nil {
 		t.Fatalf("insert second snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(`
-		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id)
-		VALUES ('snap-gc-guard-2', '/snap/also-retained.bin', $1)
-	`, logicalID); err != nil {
-		t.Fatalf("insert second snapshot_file row: %v", err)
-	}
+	insertGCSnapshotFileRef(t, dbconn, "snap-gc-guard-2", "/snap/also-retained.bin", logicalID)
 
 	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = 'snap-gc-guard-1'`); err != nil {
 		t.Fatalf("delete first snapshot_file rows: %v", err)

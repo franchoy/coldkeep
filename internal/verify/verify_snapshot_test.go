@@ -17,6 +17,34 @@ func insertSnapshotRowForVerify(t *testing.T, dbconn *sql.DB, snapshotID string)
 	}
 }
 
+func createSnapshotPathForVerify(t *testing.T, dbconn *sql.DB, snapshotPath string) int64 {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
+		t.Fatalf("insert snapshot_path row %q: %v", snapshotPath, err)
+	}
+	var pathID int64
+	if err := dbconn.QueryRow(`SELECT id FROM snapshot_path WHERE path = $1`, snapshotPath).Scan(&pathID); err != nil {
+		t.Fatalf("lookup snapshot_path id for %q: %v", snapshotPath, err)
+	}
+	return pathID
+}
+
+func insertSnapshotFileRefForVerify(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
+	t.Helper()
+	pathID := createSnapshotPathForVerify(t, dbconn, snapshotPath)
+	insertSnapshotFileRefByPathIDForVerify(t, dbconn, snapshotID, pathID, logicalFileID)
+}
+
+func insertSnapshotFileRefByPathIDForVerify(t *testing.T, dbconn *sql.DB, snapshotID string, pathID, logicalFileID int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`,
+		snapshotID, pathID, logicalFileID,
+	); err != nil {
+		t.Fatalf("insert snapshot_file row snapshot_id=%s path_id=%d logical_file_id=%d: %v", snapshotID, pathID, logicalFileID, err)
+	}
+}
+
 func TestVerifySystemStandardPassesWithConsistentSnapshotReachability(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -31,12 +59,7 @@ func TestVerifySystemStandardPassesWithConsistentSnapshotReachability(t *testing
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-ok-1")
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/snapshot-ok.txt"); err != nil {
-		t.Fatalf("insert snapshot_path row: %v", err)
-	}
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-ok-1", "docs/snapshot-ok.txt", logicalID); err != nil {
-		t.Fatalf("insert snapshot_file row: %v", err)
-	}
+	insertSnapshotFileRefForVerify(t, dbconn, "snap-ok-1", "docs/snapshot-ok.txt", logicalID)
 
 	if err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir()); err != nil {
 		t.Fatalf("verify standard should pass on consistent snapshot reachability graph: %v", err)
@@ -57,12 +80,9 @@ func TestVerifySystemStandardAllowsUnusedSnapshotPathRows(t *testing.T) {
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-ok-unused-path-1")
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1), ($2) ON CONFLICT(path) DO NOTHING`, "docs/snapshot-ok.txt", "docs/unused-dictionary-entry.txt"); err != nil {
-		t.Fatalf("insert snapshot_path rows: %v", err)
-	}
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-ok-unused-path-1", "docs/snapshot-ok.txt", logicalID); err != nil {
-		t.Fatalf("insert snapshot_file row: %v", err)
-	}
+	createSnapshotPathForVerify(t, dbconn, "docs/snapshot-ok.txt")
+	createSnapshotPathForVerify(t, dbconn, "docs/unused-dictionary-entry.txt")
+	insertSnapshotFileRefForVerify(t, dbconn, "snap-ok-unused-path-1", "docs/snapshot-ok.txt", logicalID)
 
 	if err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir()); err != nil {
 		t.Fatalf("unused snapshot_path rows must not be treated as corruption: %v", err)
@@ -76,12 +96,7 @@ func TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference(t *testing.T)
 	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable sqlite foreign_keys: %v", err)
 	}
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/missing.txt"); err != nil {
-		t.Fatalf("insert snapshot_path row: %v", err)
-	}
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-orphan-1", "docs/missing.txt", int64(9999)); err != nil {
-		t.Fatalf("insert orphan snapshot_file row: %v", err)
-	}
+	insertSnapshotFileRefForVerify(t, dbconn, "snap-orphan-1", "docs/missing.txt", int64(9999))
 
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "orphan_snapshot_logical_refs=1") {
@@ -109,12 +124,7 @@ func TestVerifySystemStandardDetectsOrphanSnapshotPathReference(t *testing.T) {
 	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable sqlite foreign_keys: %v", err)
 	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`,
-		"snap-path-orphan-1", int64(9999), logicalID,
-	); err != nil {
-		t.Fatalf("insert orphan snapshot path ref row: %v", err)
-	}
+	insertSnapshotFileRefByPathIDForVerify(t, dbconn, "snap-path-orphan-1", int64(9999), logicalID)
 
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "orphan_snapshot_path_refs=1") {
@@ -139,16 +149,12 @@ func TestVerifySystemStandardDetectsDuplicateSnapshotPathPairs(t *testing.T) {
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-dup-path-1")
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/dup-path.txt"); err != nil {
-		t.Fatalf("insert snapshot_path row: %v", err)
-	}
+	pathID := createSnapshotPathForVerify(t, dbconn, "docs/dup-path.txt")
 	if _, err := dbconn.Exec(`DROP INDEX idx_snapshot_file_unique`); err != nil {
 		t.Fatalf("drop unique index to simulate corrupted duplicate pair state: %v", err)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-dup-path-1", "docs/dup-path.txt", logicalID); err != nil {
-			t.Fatalf("insert duplicate snapshot_file row %d: %v", i+1, err)
-		}
+		insertSnapshotFileRefByPathIDForVerify(t, dbconn, "snap-dup-path-1", pathID, logicalID)
 	}
 
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
@@ -174,12 +180,7 @@ func TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState(t *testing.T) 
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-lifecycle-1")
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/snapshot-aborted.txt"); err != nil {
-		t.Fatalf("insert snapshot_path row: %v", err)
-	}
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-lifecycle-1", "docs/snapshot-aborted.txt", logicalID); err != nil {
-		t.Fatalf("insert snapshot_file row: %v", err)
-	}
+	insertSnapshotFileRefForVerify(t, dbconn, "snap-lifecycle-1", "docs/snapshot-aborted.txt", logicalID)
 
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "invalid_snapshot_lifecycle_states=1") {
@@ -204,12 +205,7 @@ func TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph(t *testing
 	}
 
 	insertSnapshotRowForVerify(t, dbconn, "snap-graph-1")
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/snapshot-missing-graph.txt"); err != nil {
-		t.Fatalf("insert snapshot_path row: %v", err)
-	}
-	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`, "snap-graph-1", "docs/snapshot-missing-graph.txt", logicalID); err != nil {
-		t.Fatalf("insert snapshot_file row: %v", err)
-	}
+	insertSnapshotFileRefForVerify(t, dbconn, "snap-graph-1", "docs/snapshot-missing-graph.txt", logicalID)
 
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "retained_missing_chunk_graph=1") {
