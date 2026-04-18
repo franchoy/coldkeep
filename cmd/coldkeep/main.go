@@ -2629,7 +2629,7 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
 		} else {
 			for _, line := range lines {
-				_, _ = fmt.Fprintf(os.Stdout, "  %s\n", line)
+				_, _ = fmt.Fprintln(os.Stdout, line)
 			}
 		}
 	} else {

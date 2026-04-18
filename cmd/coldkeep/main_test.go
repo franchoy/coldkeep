@@ -2034,11 +2034,11 @@ func TestRunSnapshotCommandListTreeTextRendersHierarchy(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"  day1",
-		"  ├── day2",
-		"  │   └── day3",
-		"  └── experiment1",
-		"      └── experiment2",
+		"day1",
+		"├── day2",
+		"│   └── day3",
+		"└── experiment1",
+		"    └── experiment2",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected tree output to contain %q, got:\n%s", want, output)
@@ -2143,9 +2143,9 @@ func TestRunSnapshotCommandListTreeTreatsMissingParentAsRoot(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"  day1",
-		"  orphan",
-		"  └── child",
+		"day1",
+		"orphan",
+		"└── child",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected missing-parent root behavior to contain %q, got:\n%s", want, output)
