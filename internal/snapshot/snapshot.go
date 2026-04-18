@@ -1152,7 +1152,7 @@ func CreateSnapshotWithOptions(
 			return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
 		}
 		if snapshotType != "full" {
-			return errors.New("parent lineage is only supported for full snapshots")
+			return errors.New("--from is currently supported only for full snapshots")
 		}
 
 		var parentType string
@@ -1164,7 +1164,7 @@ func CreateSnapshotWithOptions(
 			return fmt.Errorf("validate parent snapshot %q: %w", trimmedParentID, err)
 		}
 		if parentType != "full" {
-			return fmt.Errorf("parent snapshot %q must be full", trimmedParentID)
+			return fmt.Errorf("parent snapshot %q is partial; --from is currently supported only for full snapshots", trimmedParentID)
 		}
 
 		s.ParentID = sql.NullString{String: trimmedParentID, Valid: true}

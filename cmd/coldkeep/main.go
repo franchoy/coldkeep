@@ -2979,12 +2979,17 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		if labelPtr != nil {
 			data["label"] = *labelPtr
 		}
+		if parentIDPtr != nil {
+			data["parent_id"] = *parentIDPtr
+		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	if snapshotType == "full" {
+	if parentIDPtr != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot %q created from parent %q\n", snapshotID, *parentIDPtr)
+	} else if snapshotType == "full" {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s (all paths)\n", snapshotID, snapshotType)
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", snapshotID, snapshotType, len(paths))

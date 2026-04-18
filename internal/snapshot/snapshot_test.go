@@ -912,7 +912,7 @@ func TestCreateSnapshotRejectsParentLineageForChildPartialSnapshot(t *testing.T)
 	if err == nil {
 		t.Fatal("expected child partial lineage create to fail")
 	}
-	if !strings.Contains(err.Error(), "parent lineage is only supported for full snapshots") {
+	if !strings.Contains(err.Error(), "--from is currently supported only for full snapshots") {
 		t.Fatalf("expected child partial lineage restriction error, got: %v", err)
 	}
 
@@ -943,7 +943,7 @@ func TestCreateSnapshotRejectsParentLineageForParentPartialSnapshot(t *testing.T
 	if err == nil {
 		t.Fatal("expected parent partial lineage create to fail")
 	}
-	if !strings.Contains(err.Error(), `parent snapshot "snap-parent-partial" must be full`) {
+	if !strings.Contains(err.Error(), `parent snapshot "snap-parent-partial" is partial; --from is currently supported only for full snapshots`) {
 		t.Fatalf("expected parent partial lineage restriction error, got: %v", err)
 	}
 
@@ -1058,7 +1058,7 @@ func TestCreateSnapshotWithParentFailureLeavesNoChildRows(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected child snapshot create with parent to fail for unsupported partial lineage")
 	}
-	if !strings.Contains(err.Error(), "parent lineage is only supported for full snapshots") {
+	if !strings.Contains(err.Error(), "--from is currently supported only for full snapshots") {
 		t.Fatalf("expected full-only lineage error, got: %v", err)
 	}
 
