@@ -1151,14 +1151,20 @@ func CreateSnapshotWithOptions(
 		if trimmedParentID == snapshotID {
 			return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
 		}
+		if snapshotType != "full" {
+			return errors.New("parent lineage is only supported for full snapshots")
+		}
 
-		var parentExists int
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM snapshot WHERE id = $1`, trimmedParentID).Scan(&parentExists)
+		var parentType string
+		err := tx.QueryRowContext(ctx, `SELECT type FROM snapshot WHERE id = $1`, trimmedParentID).Scan(&parentType)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("parent snapshot %q not found", trimmedParentID)
 			}
 			return fmt.Errorf("validate parent snapshot %q: %w", trimmedParentID, err)
+		}
+		if parentType != "full" {
+			return fmt.Errorf("parent snapshot %q must be full", trimmedParentID)
 		}
 
 		s.ParentID = sql.NullString{String: trimmedParentID, Valid: true}

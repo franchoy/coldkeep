@@ -848,7 +848,7 @@ func TestCreateSnapshotReusesSnapshotPathRowsAcrossSnapshots(t *testing.T) {
 	}
 }
 
-func TestCreateSnapshotStoresParentIDWithoutChangingSelectionBehavior(t *testing.T) {
+func TestCreateSnapshotStoresParentIDForFullSnapshotWithoutChangingSelectionBehavior(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -862,8 +862,8 @@ func TestCreateSnapshotStoresParentIDWithoutChangingSelectionBehavior(t *testing
 	}
 
 	parentID := "snap-parent-inert"
-	if err := CreateSnapshot(ctx, db, "snap-child-inert", "partial", nil, &parentID, []string{"docs/"}); err != nil {
-		t.Fatalf("CreateSnapshot child partial with parent_id: %v", err)
+	if err := CreateSnapshot(ctx, db, "snap-child-inert", "full", nil, &parentID, nil); err != nil {
+		t.Fatalf("CreateSnapshot child full with parent_id: %v", err)
 	}
 
 	var storedParentID sql.NullString
@@ -886,11 +886,73 @@ func TestCreateSnapshotStoresParentIDWithoutChangingSelectionBehavior(t *testing
 	if err != nil {
 		t.Fatalf("ListSnapshotFiles child: %v", err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("expected partial snapshot to include exactly one docs path, got %d files", len(files))
+	if len(files) != 2 {
+		t.Fatalf("expected full snapshot to include both paths, got %d files", len(files))
 	}
-	if files[0].Path != "docs/a.txt" {
-		t.Fatalf("expected partial snapshot behavior to remain docs/a.txt, got %q", files[0].Path)
+	if files[0].Path != "docs/a.txt" || files[1].Path != "img/x.png" {
+		t.Fatalf("expected full snapshot behavior to remain docs/a.txt,img/x.png, got paths=%q,%q", files[0].Path, files[1].Path)
+	}
+}
+
+func TestCreateSnapshotRejectsParentLineageForChildPartialSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-scope-child-partial-docs", 17)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-scope-child-partial-img", 29)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-full", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	parentID := "snap-parent-full"
+	err := CreateSnapshot(ctx, db, "snap-child-partial", "partial", nil, &parentID, []string{"docs/"})
+	if err == nil {
+		t.Fatal("expected child partial lineage create to fail")
+	}
+	if !strings.Contains(err.Error(), "parent lineage is only supported for full snapshots") {
+		t.Fatalf("expected child partial lineage restriction error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-partial").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query child snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no child snapshot row for partial lineage rejection, got count=%d", snapshotCount)
+	}
+}
+
+func TestCreateSnapshotRejectsParentLineageForParentPartialSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-scope-parent-partial-docs", 17)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-scope-parent-partial-img", 29)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-partial", "partial", nil, nil, []string{"docs/"}); err != nil {
+		t.Fatalf("CreateSnapshot parent partial: %v", err)
+	}
+
+	parentID := "snap-parent-partial"
+	err := CreateSnapshot(ctx, db, "snap-child-full", "full", nil, &parentID, nil)
+	if err == nil {
+		t.Fatal("expected parent partial lineage create to fail")
+	}
+	if !strings.Contains(err.Error(), `parent snapshot "snap-parent-partial" must be full`) {
+		t.Fatalf("expected parent partial lineage restriction error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-full").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query child snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no child snapshot row for parent partial lineage rejection, got count=%d", snapshotCount)
 	}
 }
 
