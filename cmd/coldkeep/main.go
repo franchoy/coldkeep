@@ -2441,7 +2441,43 @@ func snapshotSummaryJSON(item snapshot.Snapshot) map[string]any {
 }
 
 func snapshotSortAscending(items []snapshot.Snapshot) []snapshot.Snapshot {
+	if len(items) < 2 {
+		return append([]snapshot.Snapshot(nil), items...)
+	}
+
+	isAscending := true
+	isDescending := true
+	for i := 1; i < len(items); i++ {
+		prev := items[i-1]
+		curr := items[i]
+
+		prevBeforeCurr := prev.CreatedAt.Before(curr.CreatedAt) || (prev.CreatedAt.Equal(curr.CreatedAt) && prev.ID < curr.ID)
+		currBeforePrev := curr.CreatedAt.Before(prev.CreatedAt) || (prev.CreatedAt.Equal(curr.CreatedAt) && curr.ID < prev.ID)
+
+		if !prevBeforeCurr {
+			isAscending = false
+		}
+		if !currBeforePrev {
+			isDescending = false
+		}
+		if !isAscending && !isDescending {
+			break
+		}
+	}
+
+	if isAscending {
+		return append([]snapshot.Snapshot(nil), items...)
+	}
+	if isDescending {
+		ordered := append([]snapshot.Snapshot(nil), items...)
+		for i, j := 0, len(ordered)-1; i < j; i, j = i+1, j-1 {
+			ordered[i], ordered[j] = ordered[j], ordered[i]
+		}
+		return ordered
+	}
+
 	ordered := append([]snapshot.Snapshot(nil), items...)
+	// Defensive fallback for unsorted/custom inputs; normal list flow should not hit this.
 	sort.Slice(ordered, func(i, j int) bool {
 		if ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
 			return ordered[i].ID < ordered[j].ID
