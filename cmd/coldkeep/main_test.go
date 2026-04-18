@@ -2335,6 +2335,108 @@ func TestRunSnapshotCommandListTreeTreatsMissingParentAsRoot(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandListTreeTreatsNullParentAsRoot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{}},
+			{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "day1\n\nday2\n└── day3\n") {
+		t.Fatalf("expected NULL parent to be treated as root, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeIsReadOnlyAndSnapshotOnly(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalCreate := createSnapshotPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+		listSnapshotFilesPhase = originalListFiles
+		createSnapshotPhase = originalCreate
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "child", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		}, nil
+	}
+
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		t.Fatal("listSnapshotFilesPhase should not be called by snapshot list --tree")
+		return nil, nil
+	}
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotCreateOptions) error {
+		t.Fatal("createSnapshotPhase should not be called by snapshot list --tree")
+		return nil
+	}
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase should not be called by snapshot list --tree")
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "root\n└── child\n") {
+		t.Fatalf("expected metadata-only tree output, got:\n%s", output)
+	}
+}
+
 func TestRunSnapshotCommandListTreeSortsChildrenByCreatedAtAscending(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalList := listSnapshotsPhase

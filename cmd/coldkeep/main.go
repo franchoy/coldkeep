@@ -2492,6 +2492,9 @@ func renderSnapshotTreeLines(items []snapshot.Snapshot) []string {
 		return nil
 	}
 
+	// Tree visualization is derived only from snapshot metadata (id, parent_id,
+	// created_at). Missing/NULL parent links are treated as roots so rendering
+	// stays resilient after parent deletion or lineage cleanup.
 	ordered := snapshotSortAscending(items)
 	byID := make(map[string]snapshot.Snapshot, len(ordered))
 	children := make(map[string][]snapshot.Snapshot)
