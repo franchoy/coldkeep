@@ -2250,6 +2250,82 @@ func TestGetSnapshotStatsLineageEdgeCaseCompletelyDifferentSnapshots(t *testing.
 	}
 }
 
+func TestGetSnapshotStatsCountsBrandNewPathAsNew(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalShared := insertLogicalFileWithSize(t, db, "hash-lineage-new-shared", 10)
+	logicalNew := insertLogicalFileWithSize(t, db, "hash-lineage-new-path", 11)
+
+	parent := Snapshot{ID: "snap-lineage-new-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalShared, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-new-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalShared, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "docs/new.txt", logicalNew, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 2 {
+		t.Fatalf("expected total files=2, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 1 {
+		t.Fatalf("expected reused=1, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 1 {
+		t.Fatalf("expected new=1 for brand-new child path, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 50.0 {
+		t.Fatalf("expected reuse ratio 50.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsIgnoresParentOnlyDeletedFiles(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalKeep := insertLogicalFileWithSize(t, db, "hash-lineage-del-keep", 10)
+	logicalDeleted := insertLogicalFileWithSize(t, db, "hash-lineage-del-parent-only", 11)
+
+	parent := Snapshot{ID: "snap-lineage-del-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/keep.txt", logicalKeep, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, parent.ID, "docs/deleted.txt", logicalDeleted, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-del-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/keep.txt", logicalKeep, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected child total files=1, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 1 {
+		t.Fatalf("expected reused=1, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 0 {
+		t.Fatalf("expected new=0 (parent-only deleted path must not be counted), got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 100.0 {
+		t.Fatalf("expected reuse ratio 100.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
 func TestGetSnapshotStatsSkipsLineageForPartialSnapshotParentMetadata(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
