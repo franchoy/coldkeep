@@ -2436,7 +2436,86 @@ func snapshotSummaryJSON(item snapshot.Snapshot) map[string]any {
 		"type":       item.Type,
 		"created_at": item.CreatedAt.UTC().Format(time.RFC3339),
 		"label":      snapshotLabelJSONValue(item.Label),
+		"parent_id":  snapshotLabelJSONValue(item.ParentID),
 	}
+}
+
+func snapshotSortAscending(items []snapshot.Snapshot) []snapshot.Snapshot {
+	ordered := append([]snapshot.Snapshot(nil), items...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+	})
+	return ordered
+}
+
+func renderSnapshotTreeLines(items []snapshot.Snapshot) []string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	ordered := snapshotSortAscending(items)
+	byID := make(map[string]snapshot.Snapshot, len(ordered))
+	children := make(map[string][]snapshot.Snapshot)
+	roots := make([]snapshot.Snapshot, 0)
+	for _, item := range ordered {
+		byID[item.ID] = item
+	}
+	for _, item := range ordered {
+		if item.ParentID.Valid {
+			if _, ok := byID[item.ParentID.String]; ok {
+				children[item.ParentID.String] = append(children[item.ParentID.String], item)
+				continue
+			}
+		}
+		roots = append(roots, item)
+	}
+
+	lines := make([]string, 0, len(ordered))
+	visited := make(map[string]struct{}, len(ordered))
+	var walk func(node snapshot.Snapshot, prefix string, isLast bool, hasParent bool)
+	walk = func(node snapshot.Snapshot, prefix string, isLast bool, hasParent bool) {
+		if _, seen := visited[node.ID]; seen {
+			return
+		}
+		visited[node.ID] = struct{}{}
+
+		linePrefix := prefix
+		if hasParent {
+			if isLast {
+				linePrefix += "└── "
+			} else {
+				linePrefix += "├── "
+			}
+		}
+		lines = append(lines, linePrefix+node.ID)
+
+		nextPrefix := prefix
+		if hasParent {
+			if isLast {
+				nextPrefix += "    "
+			} else {
+				nextPrefix += "│   "
+			}
+		}
+
+		childItems := children[node.ID]
+		for idx, child := range childItems {
+			walk(child, nextPrefix, idx == len(childItems)-1, true)
+		}
+	}
+
+	for idx, root := range roots {
+		walk(root, "", idx == len(roots)-1, false)
+	}
+	for _, item := range ordered {
+		if _, seen := visited[item.ID]; !seen {
+			walk(item, "", true, false)
+		}
+	}
+	return lines
 }
 
 func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
@@ -2456,15 +2535,16 @@ func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "tree", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return usageErrorf("Usage: coldkeep snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]")
 	}
 	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
 		return err
 	}
+	treeMode := parsed.hasFlag("tree")
 
 	filter := snapshot.SnapshotListFilter{}
 	if value, ok := parsed.lastFlagValue("type"); ok {
@@ -2522,31 +2602,48 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		for _, item := range items {
 			jsonItems = append(jsonItems, snapshotSummaryJSON(item))
 		}
+		data := map[string]any{
+			"action":      "list",
+			"count":       len(items),
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"snapshots":   jsonItems,
+		}
+		if treeMode {
+			data["tree_mode"] = true
+			data["tree_lines"] = renderSnapshotTreeLines(items)
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
-			"data": map[string]any{
-				"action":      "list",
-				"count":       len(items),
-				"duration_ms": time.Since(startedAt).Milliseconds(),
-				"snapshots":   jsonItems,
-			},
+			"data":    data,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
-	if len(items) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "  (none)")
-	} else {
-		for _, item := range items {
-			label := ""
-			if item.Label.Valid {
-				label = "  label=" + item.Label.String
+	if treeMode {
+		_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
+		lines := renderSnapshotTreeLines(items)
+		if len(lines) == 0 {
+			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
+		} else {
+			for _, line := range lines {
+				_, _ = fmt.Fprintf(os.Stdout, "  %s\n", line)
 			}
-			_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
+		}
+	} else {
+		_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
+		if len(items) == 0 {
+			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
+		} else {
+			for _, item := range items {
+				label := ""
+				if item.Label.Valid {
+					label = "  label=" + item.Label.String
+				}
+				_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
+			}
 		}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
@@ -3226,7 +3323,7 @@ func printHelp() {
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
 		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--from <snapshotID>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
 		{"  snapshot restore <snapshotID> [<path> ...] [--mode ...] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
-		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]", "List snapshots with optional filters"},
+		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]", "List snapshots with optional filters or as a lineage tree"},
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
@@ -3319,6 +3416,7 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot restore snap-123 docs/ --mode prefix --destination ./restored")
 	fmt.Println("  coldkeep snapshot restore snap-123 docs/a.txt --mode override --destination ./restored/a.txt")
 	fmt.Println("  coldkeep snapshot list --type full --limit 10")
+	fmt.Println("  coldkeep snapshot list --tree")
 	fmt.Println("  coldkeep snapshot show snap-123 --limit 50")
 	fmt.Println("  coldkeep snapshot stats")
 	fmt.Println("  coldkeep snapshot stats snap-123")
