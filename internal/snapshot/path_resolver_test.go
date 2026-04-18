@@ -69,6 +69,42 @@ func TestResolveSnapshotPathRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestLoadSnapshotPathByIDReturnsPath(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	id, err := ResolveSnapshotPath(ctx, db, "docs/readme.txt")
+	if err != nil {
+		t.Fatalf("resolve path: %v", err)
+	}
+
+	path, err := LoadSnapshotPathByID(ctx, db, id)
+	if err != nil {
+		t.Fatalf("load path by id: %v", err)
+	}
+	if path != "docs/readme.txt" {
+		t.Fatalf("unexpected path: got %q", path)
+	}
+}
+
+func TestLoadSnapshotPathByIDRejectsInvalidID(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	if _, err := LoadSnapshotPathByID(ctx, db, 0); err == nil {
+		t.Fatal("expected error for non-positive path id")
+	}
+}
+
+func TestLoadSnapshotPathByIDFailsWhenMissing(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	if _, err := LoadSnapshotPathByID(ctx, db, 9999); err == nil {
+		t.Fatal("expected error for missing path id")
+	}
+}
+
 func TestResolveSnapshotPathsReturnsMapForAllPaths(t *testing.T) {
 	db := openPathResolverDB(t)
 	ctx := context.Background()
@@ -201,5 +237,86 @@ func TestResolveSnapshotPathsAllDistinctIDs(t *testing.T) {
 			t.Errorf("id %d shared by %q and %q", id, prev, p)
 		}
 		unique[id] = p
+	}
+}
+
+func TestLoadSnapshotPathsByIDReturnsAllPaths(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	resolved, err := ResolveSnapshotPaths(ctx, db, []string{"a.txt", "b.txt", "c.txt"})
+	if err != nil {
+		t.Fatalf("resolve paths: %v", err)
+	}
+
+	ids := []int64{resolved["a.txt"], resolved["b.txt"], resolved["c.txt"]}
+	loaded, err := LoadSnapshotPathsByID(ctx, db, ids)
+	if err != nil {
+		t.Fatalf("load paths by id: %v", err)
+	}
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 loaded paths, got %d", len(loaded))
+	}
+	for wantPath, id := range resolved {
+		if got := loaded[id]; got != wantPath {
+			t.Fatalf("unexpected path for id %d: got %q want %q", id, got, wantPath)
+		}
+	}
+}
+
+func TestLoadSnapshotPathsByIDDeduplicatesInput(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	id, err := ResolveSnapshotPath(ctx, db, "dup/path.txt")
+	if err != nil {
+		t.Fatalf("resolve path: %v", err)
+	}
+
+	loaded, err := LoadSnapshotPathsByID(ctx, db, []int64{id, id, id})
+	if err != nil {
+		t.Fatalf("load duplicate ids: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 loaded path, got %d", len(loaded))
+	}
+	if loaded[id] != "dup/path.txt" {
+		t.Fatalf("unexpected loaded path: %q", loaded[id])
+	}
+}
+
+func TestLoadSnapshotPathsByIDRejectsInvalidID(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	if _, err := LoadSnapshotPathsByID(ctx, db, []int64{1, 0}); err == nil {
+		t.Fatal("expected error for non-positive path id in batch")
+	}
+}
+
+func TestLoadSnapshotPathsByIDFailsWhenMissing(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	id, err := ResolveSnapshotPath(ctx, db, "present.txt")
+	if err != nil {
+		t.Fatalf("resolve path: %v", err)
+	}
+
+	if _, err := LoadSnapshotPathsByID(ctx, db, []int64{id, 9999}); err == nil {
+		t.Fatal("expected error when any requested path id is missing")
+	}
+}
+
+func TestLoadSnapshotPathsByIDEmptyInputReturnsEmptyMap(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+
+	loaded, err := LoadSnapshotPathsByID(ctx, db, nil)
+	if err != nil {
+		t.Fatalf("nil input: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("expected empty result for nil input, got %v", loaded)
 	}
 }

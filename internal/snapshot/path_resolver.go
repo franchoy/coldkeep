@@ -48,6 +48,90 @@ func ResolveSnapshotPath(ctx context.Context, exec pathResolverDB, normalizedPat
 	return id, nil
 }
 
+// LoadSnapshotPathByID resolves a persisted snapshot_path.id back to its path string.
+//
+// This helper is intended for integrity/debugging flows or explicit hydration.
+// Normal snapshot reads should continue to prefer SQL joins on snapshot_path.
+func LoadSnapshotPathByID(ctx context.Context, exec pathResolverDB, pathID int64) (string, error) {
+	if pathID <= 0 {
+		return "", fmt.Errorf("load snapshot_path: path_id must be positive, got %d", pathID)
+	}
+
+	var path string
+	if err := exec.QueryRowContext(ctx,
+		`SELECT path FROM snapshot_path WHERE id = $1`,
+		pathID,
+	).Scan(&path); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("snapshot_path not found for path_id=%d", pathID)
+		}
+		return "", fmt.Errorf("load snapshot_path for path_id=%d: %w", pathID, err)
+	}
+
+	return path, nil
+}
+
+// LoadSnapshotPathsByID bulk-loads path strings for a set of snapshot_path IDs.
+// It returns a map[pathID]path and fails if any requested ID is missing.
+//
+// This helper is intended for integrity/debugging flows or explicit hydration.
+// Normal snapshot reads should continue to prefer SQL joins on snapshot_path.
+func LoadSnapshotPathsByID(ctx context.Context, exec pathResolverDB, pathIDs []int64) (map[int64]string, error) {
+	if len(pathIDs) == 0 {
+		return map[int64]string{}, nil
+	}
+
+	seen := make(map[int64]struct{}, len(pathIDs))
+	unique := make([]int64, 0, len(pathIDs))
+	for _, pathID := range pathIDs {
+		if pathID <= 0 {
+			return nil, fmt.Errorf("load snapshot_paths: path_id must be positive, got %d", pathID)
+		}
+		if _, ok := seen[pathID]; ok {
+			continue
+		}
+		seen[pathID] = struct{}{}
+		unique = append(unique, pathID)
+	}
+
+	placeholders := make([]string, len(unique))
+	args := make([]any, len(unique))
+	for i, pathID := range unique {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = pathID
+	}
+
+	rows, err := exec.QueryContext(ctx,
+		`SELECT id, path FROM snapshot_path WHERE id IN (`+strings.Join(placeholders, ", ")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("bulk load snapshot_path rows: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64]string, len(unique))
+	for rows.Next() {
+		var pathID int64
+		var path string
+		if err := rows.Scan(&pathID, &path); err != nil {
+			return nil, fmt.Errorf("scan snapshot_path rows: %w", err)
+		}
+		result[pathID] = path
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshot_path rows: %w", err)
+	}
+
+	for _, pathID := range unique {
+		if _, ok := result[pathID]; !ok {
+			return nil, fmt.Errorf("snapshot_path not found for path_id=%d", pathID)
+		}
+	}
+
+	return result, nil
+}
+
 // ResolveSnapshotPaths resolves a batch of already-normalized paths to their
 // snapshot_path.ids. It returns a map[path]id covering every input path.
 //
