@@ -2685,15 +2685,14 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 			"duration_ms":         time.Since(startedAt).Milliseconds(),
 		}
 		if stats.ParentSnapshotID.Valid {
-			data["parent_snapshot_id"] = stats.ParentSnapshotID.String
 			if stats.ReusedFileCount.Valid {
-				data["reused_file_count"] = stats.ReusedFileCount.Int64
+				data["reused"] = stats.ReusedFileCount.Int64
 			}
 			if stats.NewFileCount.Valid {
-				data["new_file_count"] = stats.NewFileCount.Int64
+				data["new"] = stats.NewFileCount.Int64
 			}
 			if stats.ReuseRatioPct.Valid {
-				data["reuse_ratio_pct"] = stats.ReuseRatioPct.Float64
+				data["reuse_ratio"] = stats.ReuseRatioPct.Float64
 			}
 		}
 

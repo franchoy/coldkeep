@@ -2389,17 +2389,66 @@ func TestRunSnapshotCommandStatsJSONIncludesLineageFieldsWhenParentExists(t *tes
 		t.Fatalf("parse snapshot stats JSON output: %v output=%q", err, output)
 	}
 	data := payload["data"].(map[string]any)
-	if got, _ := data["parent_snapshot_id"].(string); got != "snap-parent-json" {
-		t.Fatalf("expected parent_snapshot_id, got data=%v", data)
+	if got := int64(data["reused"].(float64)); got != 8 {
+		t.Fatalf("expected reused=8, got %d data=%v", got, data)
 	}
-	if got := int64(data["reused_file_count"].(float64)); got != 8 {
-		t.Fatalf("expected reused_file_count=8, got %d data=%v", got, data)
+	if got := int64(data["new"].(float64)); got != 2 {
+		t.Fatalf("expected new=2, got %d data=%v", got, data)
 	}
-	if got := int64(data["new_file_count"].(float64)); got != 2 {
-		t.Fatalf("expected new_file_count=2, got %d data=%v", got, data)
+	if got := data["reuse_ratio"].(float64); got != 80.0 {
+		t.Fatalf("expected reuse_ratio=80.0, got %v data=%v", got, data)
 	}
-	if got := data["reuse_ratio_pct"].(float64); got != 80.0 {
-		t.Fatalf("expected reuse_ratio_pct=80.0, got %v data=%v", got, data)
+	if _, exists := data["parent_snapshot_id"]; exists {
+		t.Fatalf("did not expect parent_snapshot_id field in stats output, got data=%v", data)
+	}
+}
+
+func TestRunSnapshotCommandStatsJSONOmitsLineageFieldsWhenNoParent(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 5, TotalSizeBytes: 1024}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-no-parent-json"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot stats JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if _, exists := data["reused"]; exists {
+		t.Fatalf("did not expect reused field without parent, got data=%v", data)
+	}
+	if _, exists := data["new"]; exists {
+		t.Fatalf("did not expect new field without parent, got data=%v", data)
+	}
+	if _, exists := data["reuse_ratio"]; exists {
+		t.Fatalf("did not expect reuse_ratio field without parent, got data=%v", data)
 	}
 }
 
