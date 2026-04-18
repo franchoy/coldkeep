@@ -605,9 +605,13 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 		// Analysis-only lineage breakdown (never used for correctness decisions):
 		// reused := count of child rows that match parent on (path_id, logical_file_id),
 		// total := child snapshot_file count, new := total - reused.
+		// Same path_id but different logical_file_id is treated as changed content,
+		// so it is NOT reused and is counted as new.
 		// This SQL strategy is intentionally simple and portable for PostgreSQL/SQLite.
 		// It relies on existing snapshot_file indexes around snapshot_id/path_id and
 		// avoids correctness coupling to lineage metadata.
+		// Non-goals for this phase: chunk-level comparison, size-based diff heuristics,
+		// or cross-snapshot optimization.
 		var reusedCount int64
 		if err := db.QueryRowContext(ctx, `
 			SELECT COUNT(*)
