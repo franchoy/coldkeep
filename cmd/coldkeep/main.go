@@ -2888,11 +2888,11 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "id", "label", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "id", "label", "from", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--from <snapshotID>] [--output <text|json>]")
 	}
 
 	paths := parsed.positionals[1:]
@@ -2920,6 +2920,15 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		labelPtr = &trimmed
 	}
 
+	var parentIDPtr *string
+	if fromID, hasFrom := parsed.lastFlagValue("from"); hasFrom {
+		trimmed := strings.TrimSpace(fromID)
+		if trimmed == "" {
+			return usageErrorf("--from cannot be empty")
+		}
+		parentIDPtr = &trimmed
+	}
+
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
@@ -2933,7 +2942,7 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, nil, paths); err != nil {
+	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, parentIDPtr, paths); err != nil {
 		return err
 	}
 
@@ -3127,7 +3136,7 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
-		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
+		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--from <snapshotID>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
 		{"  snapshot restore <snapshotID> [<path> ...] [--mode ...] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
 		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]", "List snapshots with optional filters"},
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
@@ -3149,6 +3158,7 @@ func printHelp() {
 	fmt.Println("      snapshot_id is the system identifier (set via --id on create)")
 	fmt.Println("      pass snapshot_id positionally to show/restore/stats/diff/delete")
 	fmt.Println("      --label is optional metadata only and is never used for targeting")
+	fmt.Println("      --from records lineage metadata only; it does not make a snapshot depend on its parent")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")
@@ -3216,6 +3226,7 @@ func printHelp() {
 	fmt.Println("  coldkeep verify file 12 --deep")
 	fmt.Println("  coldkeep snapshot create")
 	fmt.Println("  coldkeep snapshot create docs/ report.txt --label release-2026-04")
+	fmt.Println("  coldkeep snapshot create --id day2 --from day1")
 	fmt.Println("  coldkeep snapshot restore snap-123 --mode prefix --destination ./restored")
 	fmt.Println("  coldkeep snapshot restore snap-123 docs/ --mode prefix --destination ./restored")
 	fmt.Println("  coldkeep snapshot restore snap-123 docs/a.txt --mode override --destination ./restored/a.txt")

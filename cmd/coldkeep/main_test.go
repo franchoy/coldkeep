@@ -1443,7 +1443,7 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
 	}
 	if gotParentID != nil {
-		t.Fatalf("expected nil parentID for CLI create in phase 2, got=%v", gotParentID)
+		t.Fatalf("expected nil parentID when --from is not provided, got=%v", gotParentID)
 	}
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
@@ -1503,6 +1503,61 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 	}
 	if gotPathCount != 0 {
 		t.Fatalf("expected zero paths for full snapshot, got %d", gotPathCount)
+	}
+}
+
+func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotParentID *string
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, _ string, _ *string, parentID *string, _ []string) error {
+		gotParentID = parentID
+		return nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags: map[string][]string{
+			"id":   {"snap-child"},
+			"from": {"snap-parent"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand returned error: %v", err)
+	}
+
+	if gotParentID == nil || *gotParentID != "snap-parent" {
+		t.Fatalf("expected forwarded parentID snap-parent, got=%v", gotParentID)
+	}
+}
+
+func TestRunSnapshotCommandCreateRejectsEmptyFrom(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags: map[string][]string{
+			"from": {"   "},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--from cannot be empty") {
+		t.Fatalf("expected empty --from usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
