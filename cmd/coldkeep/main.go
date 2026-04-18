@@ -2781,11 +2781,11 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "filter", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+	if err := ensureAllowedFlags(parsed, "filter", "summary", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 3 {
-		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
 	}
 
 	baseID := strings.TrimSpace(parsed.positionals[1])
@@ -2798,6 +2798,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	filterType := ""
+	summaryMode := parsed.hasFlag("summary")
 	if value, ok := parsed.lastFlagValue("filter"); ok {
 		filterType = strings.ToLower(strings.TrimSpace(value))
 		switch filterType {
@@ -2847,31 +2848,49 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	if outputMode == outputModeJSON {
 		jsonEntries := make([]map[string]any, 0, len(entries))
-		for _, entry := range entries {
-			jsonEntries = append(jsonEntries, map[string]any{
-				"path":              entry.Path,
-				"type":              entry.Type,
-				"base_logical_id":   snapshotIntJSONValue(entry.BaseLogicalID),
-				"target_logical_id": snapshotIntJSONValue(entry.TargetLogicalID),
-			})
+		if !summaryMode {
+			for _, entry := range entries {
+				jsonEntries = append(jsonEntries, map[string]any{
+					"path":              entry.Path,
+					"type":              entry.Type,
+					"base_logical_id":   snapshotIntJSONValue(entry.BaseLogicalID),
+					"target_logical_id": snapshotIntJSONValue(entry.TargetLogicalID),
+				})
+			}
+		}
+
+		data := map[string]any{
+			"base":                   baseID,
+			"target":                 targetID,
+			"entry_count":            matchedEntryCount,
+			"matched_entry_count":    matchedEntryCount,
+			"total_diff_entry_count": totalEntryCount,
+			"summary":                summary,
+			"duration_ms":            time.Since(startedAt).Milliseconds(),
+		}
+		if summaryMode {
+			data["summary_mode"] = true
+		} else {
+			data["entries"] = jsonEntries
 		}
 
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot diff",
-			"data": map[string]any{
-				"base":                   baseID,
-				"target":                 targetID,
-				"entry_count":            matchedEntryCount,
-				"matched_entry_count":    matchedEntryCount,
-				"total_diff_entry_count": totalEntryCount,
-				"summary":                summary,
-				"entries":                jsonEntries,
-				"duration_ms":            time.Since(startedAt).Milliseconds(),
-			},
+			"data":    data,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if summaryMode {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
+		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
+		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
+		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
+		_, _ = fmt.Fprintf(os.Stdout, "\nDuration: %dms\n", time.Since(startedAt).Milliseconds())
+		_, _ = fmt.Fprintln(os.Stdout, "Hint: "+doctorOperationalHint)
 		return nil
 	}
 
@@ -3174,7 +3193,7 @@ func printHelp() {
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
-		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -3268,6 +3287,7 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot stats snap-123")
 	fmt.Println("  coldkeep snapshot delete snap-123 --force")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --summary")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --filter modified")
 	fmt.Println("  coldkeep snapshot show snap-123 --prefix docs/")
 	fmt.Println("  coldkeep snapshot show snap-123 --pattern \"*.txt\" --min-size 1024")

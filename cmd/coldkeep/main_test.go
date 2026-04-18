@@ -2891,6 +2891,116 @@ func TestRunSnapshotCommandDiffTextShowsMatchedAndTotalCounts(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandDiffSummaryTextShowsOnlySummary(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "day1", "day2"},
+			flags: map[string][]string{
+				"summary": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff summary returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Snapshot diff: day1 -> day2") {
+		t.Fatalf("expected summary header, got: %q", output)
+	}
+	if !strings.Contains(output, "Added:     1 files") || !strings.Contains(output, "Removed:   1 files") || !strings.Contains(output, "Modified:  1 files") {
+		t.Fatalf("expected summary counters, got: %q", output)
+	}
+	if strings.Contains(output, "+ docs/new.txt") || strings.Contains(output, "- docs/old.txt") || strings.Contains(output, "~ docs/config.yaml") {
+		t.Fatalf("did not expect detailed entries in summary mode, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryJSONOmitsEntries(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "day1", "day2"},
+			flags: map[string][]string{
+				"summary": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff summary returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot diff JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if summaryMode, ok := data["summary_mode"].(bool); !ok || !summaryMode {
+		t.Fatalf("expected summary_mode=true, got data=%v", data)
+	}
+	if _, exists := data["entries"]; exists {
+		t.Fatalf("did not expect entries in summary mode JSON, got data=%v", data)
+	}
+	summary := data["summary"].(map[string]any)
+	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 0 {
+		t.Fatalf("unexpected summary payload: %v", summary)
+	}
+}
+
 func TestRunSnapshotCommandDiffForwardsSnapshotQuery(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDiff := diffSnapshotsPhase
