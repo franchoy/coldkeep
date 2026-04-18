@@ -729,6 +729,12 @@ func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string)
 //
 // This function is portable across PostgreSQL and SQLite and is intended for
 // fast summary paths where full entry materialization is unnecessary.
+//
+// Performance contract (v1.x):
+//   - joins/filtering are anchored on snapshot_id/path_id and rely on existing
+//     snapshot_file indexes (including unique(snapshot_id, path_id))
+//   - expected cost is linear in snapshot cardinality for cold-storage workloads
+//   - do not introduce diff caching or precomputed delta state at this stage
 func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID string) (*SnapshotDiffSummary, error) {
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
