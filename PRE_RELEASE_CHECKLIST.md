@@ -163,7 +163,7 @@ docker compose run --rm coldkeep doctor
 
 Expected: no manual local state is required beyond documented setup, and basic commands succeed.
 
-## 10) Verify CLI contract stability
+## 9) Verify CLI contract stability
 
 Run core command paths in JSON mode and validate both success and failure envelopes.
 
@@ -181,7 +181,7 @@ Confirm:
 
 Expected: no drift in CLI JSON structure, error classification, or frozen exit-code mapping.
 
-## 11) Verify batch CLI contract stability (v1.1)
+## 10) Verify batch CLI contract stability (v1.1)
 
 These checks validate G9 (interface correctness guarantee).
 
@@ -216,7 +216,7 @@ Confirm:
 - Empty effective ID set returns `no valid file IDs after parsing input` with usage exit code `2`
 - Restore overwrite default is safe (requires `--overwrite` to replace files)
 
-## 12) Verify v1.2 physical-file contract (new in v1.2)
+## 11) Verify v1.2 physical-file contract (new in v1.2)
 
 These checks validate G10–G13 (physical graph audit, audited GC root, invariant taxonomy, batch maintenance semantics).
 
@@ -264,7 +264,7 @@ Confirm:
 - `repair ref-counts` unblocks subsequent GC and verify
 - Dry-run for `remove --stored-path` correctly returns usage exit code `2` (deferred per design)
 
-## Sign-off
+## 12) Sign-off
 
 - [ ] Quality parity checks passed
 - [ ] Full local CI matrix simulation passed (both codecs)
