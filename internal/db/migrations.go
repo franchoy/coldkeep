@@ -13,7 +13,13 @@ import (
 
 const requiredPostgresSchemaVersion = 8
 
-func sqliteTableHasColumn(dbconn *sql.DB, ctx context.Context, tableName, columnName string) (bool, error) {
+type sqliteContextExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func sqliteTableHasColumn(dbconn sqliteContextExecutor, ctx context.Context, tableName, columnName string) (bool, error) {
 	rows, err := dbconn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
 		return false, err
@@ -44,7 +50,7 @@ func sqliteTableHasColumn(dbconn *sql.DB, ctx context.Context, tableName, column
 	return false, nil
 }
 
-func sqliteTableSQL(dbconn *sql.DB, ctx context.Context, tableName string) (string, error) {
+func sqliteTableSQL(dbconn sqliteContextExecutor, ctx context.Context, tableName string) (string, error) {
 	var sqlText sql.NullString
 	err := dbconn.QueryRowContext(
 		ctx,
@@ -63,7 +69,7 @@ func sqliteTableSQL(dbconn *sql.DB, ctx context.Context, tableName string) (stri
 	return sqlText.String, nil
 }
 
-func sqliteSchemaTableExists(dbconn *sql.DB, ctx context.Context, tableName string) (bool, error) {
+func sqliteSchemaTableExists(dbconn sqliteContextExecutor, ctx context.Context, tableName string) (bool, error) {
 	var count int
 	err := dbconn.QueryRowContext(
 		ctx,
@@ -85,7 +91,7 @@ func sqlitePhysicalFileNeedsRebuild(tableSQL string) bool {
 		!strings.Contains(normalized, "check (path != '')")
 }
 
-func rebuildSQLitePhysicalFileTable(dbconn *sql.DB, ctx context.Context) error {
+func rebuildSQLitePhysicalFileTable(dbconn sqliteContextExecutor, ctx context.Context) error {
 	if _, err := dbconn.ExecContext(ctx, `
 		CREATE TABLE physical_file_v2 (
 			path TEXT PRIMARY KEY CHECK (path != ''),
@@ -124,7 +130,7 @@ func rebuildSQLitePhysicalFileTable(dbconn *sql.DB, ctx context.Context) error {
 	return nil
 }
 
-func runSQLitePhysicalFileMigration(dbconn *sql.DB, ctx context.Context) error {
+func runSQLitePhysicalFileMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
 	hasRefCount, err := sqliteTableHasColumn(dbconn, ctx, "logical_file", "ref_count")
 	if err != nil {
 		return fmt.Errorf("inspect logical_file.ref_count: %w", err)
@@ -204,7 +210,7 @@ func runSQLitePhysicalFileMigration(dbconn *sql.DB, ctx context.Context) error {
 	return nil
 }
 
-func runSQLiteSnapshotMigration(dbconn *sql.DB, ctx context.Context) error {
+func runSQLiteSnapshotMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
 	if _, err := dbconn.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS snapshot (
 			id TEXT PRIMARY KEY,
@@ -222,42 +228,12 @@ func runSQLiteSnapshotMigration(dbconn *sql.DB, ctx context.Context) error {
 		return fmt.Errorf("read snapshot schema: %w", err)
 	}
 	normalizedSnapshotSQL := strings.ToLower(snapshotSQL)
-	if normalizedSnapshotSQL != "" && (!strings.Contains(normalizedSnapshotSQL, "parent_id") || !strings.Contains(normalizedSnapshotSQL, "on delete set null")) {
-		if _, err := dbconn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
-			return fmt.Errorf("disable sqlite foreign keys for snapshot rebuild: %w", err)
+	if normalizedSnapshotSQL != "" && !strings.Contains(normalizedSnapshotSQL, "parent_id") {
+		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE snapshot ADD COLUMN parent_id TEXT REFERENCES snapshot(id) ON DELETE SET NULL`); err != nil {
+			return fmt.Errorf("add snapshot.parent_id: %w", err)
 		}
-
-		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE snapshot RENAME TO snapshot_v7`); err != nil {
-			return fmt.Errorf("rename snapshot to snapshot_v7: %w", err)
-		}
-
-		if _, err := dbconn.ExecContext(ctx, `
-			CREATE TABLE snapshot (
-				id TEXT PRIMARY KEY,
-				created_at TIMESTAMP NOT NULL,
-				type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
-				label TEXT,
-				parent_id TEXT REFERENCES snapshot(id) ON DELETE SET NULL
-			)
-		`); err != nil {
-			return fmt.Errorf("create rebuilt snapshot table: %w", err)
-		}
-
-		if _, err := dbconn.ExecContext(ctx, `
-			INSERT INTO snapshot (id, created_at, type, label, parent_id)
-			SELECT id, created_at, type, label, NULL
-			FROM snapshot_v7
-		`); err != nil {
-			return fmt.Errorf("copy snapshot rows into rebuilt table: %w", err)
-		}
-
-		if _, err := dbconn.ExecContext(ctx, `DROP TABLE snapshot_v7`); err != nil {
-			return fmt.Errorf("drop snapshot_v7: %w", err)
-		}
-
-		if _, err := dbconn.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
-			return fmt.Errorf("re-enable sqlite foreign keys after snapshot rebuild: %w", err)
-		}
+	} else if normalizedSnapshotSQL != "" && strings.Contains(normalizedSnapshotSQL, "parent_id") && !strings.Contains(normalizedSnapshotSQL, "on delete set null") {
+		return fmt.Errorf("snapshot.parent_id exists without ON DELETE SET NULL semantics")
 	}
 
 	if _, err := dbconn.ExecContext(ctx, `
@@ -529,12 +505,22 @@ func RunMigrations(dbconn *sql.DB) error {
 		_, _ = dbconn.ExecContext(ctx, `ROLLBACK`)
 	}
 
-	if err := runSQLitePhysicalFileMigration(dbconn, ctx); err != nil {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin sqlite migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := runSQLitePhysicalFileMigration(tx, ctx); err != nil {
 		return err
 	}
 
-	if err := runSQLiteSnapshotMigration(dbconn, ctx); err != nil {
+	if err := runSQLiteSnapshotMigration(tx, ctx); err != nil {
 		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sqlite migration transaction: %w", err)
 	}
 
 	return nil

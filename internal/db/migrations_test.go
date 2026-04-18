@@ -431,6 +431,60 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 		t.Fatalf("snapshot_path normalization mismatch: distinct_pre_paths=%d snapshot_path_rows=%d", preDistinctPaths, postPathCount)
 	}
 
+	var unresolvedPathRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sp.id IS NULL
+	`).Scan(&unresolvedPathRefs); err != nil {
+		t.Fatalf("count unresolved snapshot_file.path_id references: %v", err)
+	}
+	if unresolvedPathRefs != 0 {
+		t.Fatalf("expected all snapshot_file.path_id values to resolve, found %d unresolved", unresolvedPathRefs)
+	}
+
+	var unresolvedSnapshotRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN snapshot s ON s.id = sf.snapshot_id
+		WHERE s.id IS NULL
+	`).Scan(&unresolvedSnapshotRefs); err != nil {
+		t.Fatalf("count unresolved snapshot_file.snapshot_id references: %v", err)
+	}
+	if unresolvedSnapshotRefs != 0 {
+		t.Fatalf("expected all snapshot_file.snapshot_id values to resolve, found %d unresolved", unresolvedSnapshotRefs)
+	}
+
+	var unresolvedLogicalFileRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
+		WHERE lf.id IS NULL
+	`).Scan(&unresolvedLogicalFileRefs); err != nil {
+		t.Fatalf("count unresolved snapshot_file.logical_file_id references: %v", err)
+	}
+	if unresolvedLogicalFileRefs != 0 {
+		t.Fatalf("expected all snapshot_file.logical_file_id values to resolve, found %d unresolved", unresolvedLogicalFileRefs)
+	}
+
+	var duplicatePairs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT snapshot_id, path_id
+			FROM snapshot_file
+			GROUP BY snapshot_id, path_id
+			HAVING COUNT(*) > 1
+		)
+	`).Scan(&duplicatePairs); err != nil {
+		t.Fatalf("count duplicate (snapshot_id, path_id) pairs: %v", err)
+	}
+	if duplicatePairs != 0 {
+		t.Fatalf("expected no duplicate (snapshot_id, path_id) pairs, found %d", duplicatePairs)
+	}
+
 	for i, row := range seedRows {
 		var found int
 		if err := dbconn.QueryRow(
@@ -908,6 +962,60 @@ func TestPostgresV7SnapshotMigrationToV8WithoutDataLoss(t *testing.T) {
 	}
 	if postPathCount != preDistinctPaths {
 		t.Fatalf("snapshot_path normalization mismatch: preDistinct=%d snapshotPathRows=%d", preDistinctPaths, postPathCount)
+	}
+
+	var unresolvedPathRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sp.id IS NULL
+	`).Scan(&unresolvedPathRefs); err != nil {
+		t.Fatalf("count unresolved snapshot_file.path_id references: %v", err)
+	}
+	if unresolvedPathRefs != 0 {
+		t.Fatalf("expected all snapshot_file.path_id values to resolve, found %d unresolved", unresolvedPathRefs)
+	}
+
+	var unresolvedSnapshotRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN snapshot s ON s.id = sf.snapshot_id
+		WHERE s.id IS NULL
+	`).Scan(&unresolvedSnapshotRefs); err != nil {
+		t.Fatalf("count unresolved snapshot_file.snapshot_id references: %v", err)
+	}
+	if unresolvedSnapshotRefs != 0 {
+		t.Fatalf("expected all snapshot_file.snapshot_id values to resolve, found %d unresolved", unresolvedSnapshotRefs)
+	}
+
+	var unresolvedLogicalFileRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
+		WHERE lf.id IS NULL
+	`).Scan(&unresolvedLogicalFileRefs); err != nil {
+		t.Fatalf("count unresolved snapshot_file.logical_file_id references: %v", err)
+	}
+	if unresolvedLogicalFileRefs != 0 {
+		t.Fatalf("expected all snapshot_file.logical_file_id values to resolve, found %d unresolved", unresolvedLogicalFileRefs)
+	}
+
+	var duplicatePairs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT snapshot_id, path_id
+			FROM snapshot_file
+			GROUP BY snapshot_id, path_id
+			HAVING COUNT(*) > 1
+		) dup
+	`).Scan(&duplicatePairs); err != nil {
+		t.Fatalf("count duplicate (snapshot_id, path_id) pairs: %v", err)
+	}
+	if duplicatePairs != 0 {
+		t.Fatalf("expected no duplicate (snapshot_id, path_id) pairs, found %d", duplicatePairs)
 	}
 
 	for i, row := range seedRows {

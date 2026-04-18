@@ -250,34 +250,32 @@ WHERE NOT EXISTS (
 
 UPDATE schema_version SET version = 6 WHERE version < 6;
 
--- Schema version 7: snapshot tables.
+-- Schema version 8: snapshot lineage metadata and normalized snapshot paths.
 CREATE TABLE IF NOT EXISTS snapshot (
   id TEXT PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
-  label TEXT
+  label TEXT,
+  parent_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshot_created_at ON snapshot(created_at);
 
+CREATE TABLE IF NOT EXISTS snapshot_path (
+  id BIGSERIAL PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE CHECK (path <> '')
+);
+
 CREATE TABLE IF NOT EXISTS snapshot_file (
   id BIGSERIAL PRIMARY KEY,
   snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
-  path TEXT NOT NULL CHECK (path <> ''),
+  path_id BIGINT,
   logical_file_id BIGINT NOT NULL REFERENCES logical_file(id),
   size BIGINT,
   mode BIGINT,
   mtime TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id);
-CREATE INDEX IF NOT EXISTS idx_snapshot_file_path ON snapshot_file(path);
-CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path);
-
-UPDATE schema_version SET version = 7 WHERE version < 7;
-
--- Schema version 8: snapshot lineage metadata and normalized snapshot paths.
 ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id TEXT;
 
 DO $$
@@ -294,11 +292,6 @@ BEGIN
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_snapshot_parent_id ON snapshot(parent_id);
-
-CREATE TABLE IF NOT EXISTS snapshot_path (
-  id BIGSERIAL PRIMARY KEY,
-  path TEXT NOT NULL UNIQUE CHECK (path <> '')
-);
 
 DO $$
 BEGIN
@@ -351,6 +344,21 @@ BEGIN
     IF null_path_id_count > 0 THEN
       RAISE EXCEPTION 'snapshot_file.path_id backfill incomplete: % rows still NULL', null_path_id_count;
     END IF;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'snapshot_file' AND column_name = 'path_id'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS idx_snapshot_file_path_id ON snapshot_file(path_id);
+    CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id);
   END IF;
 END $$;
 
