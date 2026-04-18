@@ -848,6 +848,52 @@ func TestCreateSnapshotReusesSnapshotPathRowsAcrossSnapshots(t *testing.T) {
 	}
 }
 
+func TestCreateSnapshotStoresParentIDWithoutChangingSelectionBehavior(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-parent-inert-docs", 17)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-parent-inert-img", 29)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-inert", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	parentID := "snap-parent-inert"
+	if err := CreateSnapshot(ctx, db, "snap-child-inert", "partial", nil, &parentID, []string{"docs/"}); err != nil {
+		t.Fatalf("CreateSnapshot child partial with parent_id: %v", err)
+	}
+
+	var storedParentID sql.NullString
+	if err := db.QueryRow(`SELECT parent_id FROM snapshot WHERE id = ?`, "snap-child-inert").Scan(&storedParentID); err != nil {
+		t.Fatalf("query child snapshot parent_id: %v", err)
+	}
+	if !storedParentID.Valid || storedParentID.String != parentID {
+		t.Fatalf("expected stored parent_id=%q, got %+v", parentID, storedParentID)
+	}
+
+	gotChild, err := GetSnapshot(ctx, db, "snap-child-inert")
+	if err != nil {
+		t.Fatalf("GetSnapshot child: %v", err)
+	}
+	if !gotChild.ParentID.Valid || gotChild.ParentID.String != parentID {
+		t.Fatalf("expected model ParentID=%q, got %+v", parentID, gotChild.ParentID)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, "snap-child-inert", 10, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles child: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected partial snapshot to include exactly one docs path, got %d files", len(files))
+	}
+	if files[0].Path != "docs/a.txt" {
+		t.Fatalf("expected partial snapshot behavior to remain docs/a.txt, got %q", files[0].Path)
+	}
+}
+
 // ---- RestoreSnapshot helper tests ----
 
 func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {
