@@ -434,6 +434,15 @@ func loadPostgresAutoBootstrapEnabled() bool {
 	}
 }
 
+func isSQLiteSchemaApplyCompatibilityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, "no such column: parent_id") ||
+		strings.Contains(errText, "no such column: path_id")
+}
+
 func ensurePostgresVersion(dbconn *sql.DB, ctx context.Context) error {
 	var version int
 	err := dbconn.QueryRowContext(ctx, `SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&version)
@@ -514,7 +523,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("apply sqlite schema: %w", err)
+		if !isSQLiteSchemaApplyCompatibilityError(err) {
+			return fmt.Errorf("apply sqlite schema: %w", err)
+		}
+		_, _ = dbconn.ExecContext(ctx, `ROLLBACK`)
 	}
 
 	if err := runSQLitePhysicalFileMigration(dbconn, ctx); err != nil {
