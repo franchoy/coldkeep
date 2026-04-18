@@ -1994,6 +1994,71 @@ func TestRunSnapshotCommandListForwardsFilters(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandListTreeFlagSwitchesTextOutputMode(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "child", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "partial", ParentID: sql.NullString{String: "root", Valid: true}},
+		}, nil
+	}
+
+	flatOutput := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(flatOutput, "  root  full  2026-04-10T10:00:00Z") {
+		t.Fatalf("expected default list output to include flat root row, got:\n%s", flatOutput)
+	}
+	if !strings.Contains(flatOutput, "  child  partial  2026-04-10T11:00:00Z") {
+		t.Fatalf("expected default list output to include flat child row, got:\n%s", flatOutput)
+	}
+	if strings.Contains(flatOutput, "├──") || strings.Contains(flatOutput, "└──") {
+		t.Fatalf("expected default list output to remain flat, got:\n%s", flatOutput)
+	}
+
+	treeOutput := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(treeOutput, "root") || !strings.Contains(treeOutput, "└── child") {
+		t.Fatalf("expected --tree output to include rendered tree, got:\n%s", treeOutput)
+	}
+	if strings.Contains(treeOutput, "  root  full  2026-04-10T10:00:00Z") || strings.Contains(treeOutput, "  child  partial  2026-04-10T11:00:00Z") {
+		t.Fatalf("expected --tree output to omit flat list rows, got:\n%s", treeOutput)
+	}
+}
+
 func TestRunSnapshotCommandListTreeTextRendersHierarchy(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalList := listSnapshotsPhase
