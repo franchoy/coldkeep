@@ -2894,9 +2894,11 @@ func TestRunSnapshotCommandDiffTextShowsMatchedAndTotalCounts(t *testing.T) {
 func TestRunSnapshotCommandDiffSummaryTextShowsOnlySummary(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -2917,6 +2919,9 @@ func TestRunSnapshotCommandDiffSummaryTextShowsOnlySummary(t *testing.T) {
 				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
 			},
 		}, nil
+	}
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		return &snapshot.SnapshotDiffSummary{Added: 1, Removed: 1, Modified: 1}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -2946,9 +2951,11 @@ func TestRunSnapshotCommandDiffSummaryTextShowsOnlySummary(t *testing.T) {
 func TestRunSnapshotCommandDiffSummaryJSONOmitsEntries(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -2968,6 +2975,9 @@ func TestRunSnapshotCommandDiffSummaryJSONOmitsEntries(t *testing.T) {
 				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
 			},
 		}, nil
+	}
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		return &snapshot.SnapshotDiffSummary{Added: 1, Removed: 1, Modified: 0}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -2998,6 +3008,108 @@ func TestRunSnapshotCommandDiffSummaryJSONOmitsEntries(t *testing.T) {
 	summary := data["summary"].(map[string]any)
 	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 0 {
 		t.Fatalf("unexpected summary payload: %v", summary)
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryUsesSQLFastPathWithoutFilters(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledSummary := false
+	calledDetailed := false
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		calledSummary = true
+		return &snapshot.SnapshotDiffSummary{Added: 2, Removed: 1, Modified: 3}, nil
+	}
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, _, _ string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		calledDetailed = true
+		return &snapshot.SnapshotDiffResult{}, nil
+	}
+
+	if err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "base", "target"},
+		flags: map[string][]string{
+			"summary": {""},
+		},
+	}, outputModeText); err != nil {
+		t.Fatalf("runSnapshotCommand diff summary returned error: %v", err)
+	}
+
+	if !calledSummary {
+		t.Fatal("expected SQL summary fast path to be called")
+	}
+	if calledDetailed {
+		t.Fatal("did not expect detailed diff path to be called in unfiltered summary mode")
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryWithFilterUsesDetailedPath(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledSummary := false
+	calledDetailed := false
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		calledSummary = true
+		return &snapshot.SnapshotDiffSummary{}, nil
+	}
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		calledDetailed = true
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified},
+			},
+		}, nil
+	}
+
+	if err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "base", "target"},
+		flags: map[string][]string{
+			"summary": {""},
+			"filter":  {"modified"},
+		},
+	}, outputModeText); err != nil {
+		t.Fatalf("runSnapshotCommand diff summary/filter returned error: %v", err)
+	}
+
+	if calledSummary {
+		t.Fatal("did not expect SQL summary fast path when filter is present")
+	}
+	if !calledDetailed {
+		t.Fatal("expected detailed diff path when filter is present")
 	}
 }
 

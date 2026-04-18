@@ -2451,6 +2451,69 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsSummarySQLCountsAddedRemovedModified(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-a2", 10)
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-base-only", 11)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-target-only", 12)
+
+	base := Snapshot{ID: "snap-diffsql-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+
+	insertSnapshotFileRow(t, db, target.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/added.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL: %v", err)
+	}
+	if summary.Added != 1 || summary.Removed != 1 || summary.Modified != 1 {
+		t.Fatalf("unexpected SQL summary counts: %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLNoChanges(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-nochange-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-nochange-b", 11)
+
+	base := Snapshot{ID: "snap-diffsql-same-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-same-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL: %v", err)
+	}
+	if summary.Added != 0 || summary.Removed != 0 || summary.Modified != 0 {
+		t.Fatalf("expected no diff counts, got %+v", summary)
+	}
+}
+
 // ---- Phase 5 snapshot diff tests ----
 
 func TestDiffSnapshotsEmptyVsEmpty(t *testing.T) {

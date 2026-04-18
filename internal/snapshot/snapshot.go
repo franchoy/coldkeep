@@ -719,6 +719,77 @@ func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string)
 	return result, nil
 }
 
+// DiffSnapshotsSummarySQL computes added/removed/modified counts using SQL-only
+// path_id/logical_file_id comparisons.
+//
+// Classification rules:
+// - added:    exists in target, missing in base (by path_id)
+// - removed:  exists in base, missing in target (by path_id)
+// - modified: exists in both by path_id, logical_file_id differs
+//
+// This function is portable across PostgreSQL and SQLite and is intended for
+// fast summary paths where full entry materialization is unnecessary.
+func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID string) (*SnapshotDiffSummary, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	baseID = strings.TrimSpace(baseID)
+	targetID = strings.TrimSpace(targetID)
+	if baseID == "" {
+		return nil, errors.New("base snapshot id cannot be empty")
+	}
+	if targetID == "" {
+		return nil, errors.New("target snapshot id cannot be empty")
+	}
+
+	if _, err := GetSnapshot(ctx, db, baseID); err != nil {
+		return nil, err
+	}
+	if _, err := GetSnapshot(ctx, db, targetID); err != nil {
+		return nil, err
+	}
+
+	summary := &SnapshotDiffSummary{}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file b
+		LEFT JOIN snapshot_file a
+			ON a.snapshot_id = $1
+			AND a.path_id = b.path_id
+		WHERE b.snapshot_id = $2
+			AND a.path_id IS NULL
+	`, baseID, targetID).Scan(&summary.Added); err != nil {
+		return nil, fmt.Errorf("count added diff rows base=%s target=%s: %w", baseID, targetID, err)
+	}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file a
+		LEFT JOIN snapshot_file b
+			ON b.snapshot_id = $2
+			AND b.path_id = a.path_id
+		WHERE a.snapshot_id = $1
+			AND b.path_id IS NULL
+	`, baseID, targetID).Scan(&summary.Removed); err != nil {
+		return nil, fmt.Errorf("count removed diff rows base=%s target=%s: %w", baseID, targetID, err)
+	}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file a
+		JOIN snapshot_file b
+			ON a.path_id = b.path_id
+		WHERE a.snapshot_id = $1
+			AND b.snapshot_id = $2
+			AND a.logical_file_id != b.logical_file_id
+	`, baseID, targetID).Scan(&summary.Modified); err != nil {
+		return nil, fmt.Errorf("count modified diff rows base=%s target=%s: %w", baseID, targetID, err)
+	}
+
+	return summary, nil
+}
+
 // DiffSnapshots computes the diff between two snapshots identified by baseID and targetID.
 // An optional query filters the diff entries after classification (added/removed/modified).
 // The summary counts only the entries that pass the filter.

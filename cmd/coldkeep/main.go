@@ -129,6 +129,7 @@ var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = snapshot.GetSnapshotStats
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var diffSnapshotsPhase = snapshot.DiffSnapshots
+var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
 
 type cliError struct {
@@ -2821,6 +2822,43 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+
+	useSummaryFastPath := summaryMode && filterType == "" && query == nil
+	if useSummaryFastPath {
+		summary, err := diffSnapshotSummaryPhase(ctx, sgctx.DB, baseID, targetID)
+		if err != nil {
+			return err
+		}
+		totalEntryCount := int(summary.Added + summary.Removed + summary.Modified)
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "snapshot diff",
+				"data": map[string]any{
+					"base":                   baseID,
+					"target":                 targetID,
+					"entry_count":            totalEntryCount,
+					"matched_entry_count":    totalEntryCount,
+					"total_diff_entry_count": totalEntryCount,
+					"summary":                summary,
+					"summary_mode":           true,
+					"duration_ms":            time.Since(startedAt).Milliseconds(),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
+		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
+		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
+		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
+		_, _ = fmt.Fprintf(os.Stdout, "\nDuration: %dms\n", time.Since(startedAt).Milliseconds())
+		_, _ = fmt.Fprintln(os.Stdout, "Hint: "+doctorOperationalHint)
+		return nil
+	}
 
 	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
 	if err != nil {
