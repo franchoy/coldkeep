@@ -2676,17 +2676,31 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 	}
 
 	if outputMode == outputModeJSON {
+		data := map[string]any{
+			"action":              "stats",
+			"snapshot_id":         snapshotID,
+			"snapshot_count":      stats.SnapshotCount,
+			"snapshot_file_count": stats.SnapshotFileCount,
+			"total_size_bytes":    stats.TotalSizeBytes,
+			"duration_ms":         time.Since(startedAt).Milliseconds(),
+		}
+		if stats.ParentSnapshotID.Valid {
+			data["parent_snapshot_id"] = stats.ParentSnapshotID.String
+			if stats.ReusedFileCount.Valid {
+				data["reused_file_count"] = stats.ReusedFileCount.Int64
+			}
+			if stats.NewFileCount.Valid {
+				data["new_file_count"] = stats.NewFileCount.Int64
+			}
+			if stats.ReuseRatioPct.Valid {
+				data["reuse_ratio_pct"] = stats.ReuseRatioPct.Float64
+			}
+		}
+
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
-			"data": map[string]any{
-				"action":              "stats",
-				"snapshot_id":         snapshotID,
-				"snapshot_count":      stats.SnapshotCount,
-				"snapshot_file_count": stats.SnapshotFileCount,
-				"total_size_bytes":    stats.TotalSizeBytes,
-				"duration_ms":         time.Since(startedAt).Milliseconds(),
-			},
+			"data":    data,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -2699,6 +2713,13 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot: %s\n", snapshotID)
 		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", stats.SnapshotFileCount)
+		if stats.ParentSnapshotID.Valid {
+			_, _ = fmt.Fprintf(os.Stdout, "  Reused: %d\n", stats.ReusedFileCount.Int64)
+			_, _ = fmt.Fprintf(os.Stdout, "  New: %d\n", stats.NewFileCount.Int64)
+			_, _ = fmt.Fprintf(os.Stdout, "  Reuse ratio: %.1f%%\n", stats.ReuseRatioPct.Float64)
+		} else {
+			_, _ = fmt.Fprintln(os.Stdout, "  (Reused/New not available -- no parent snapshot)")
+		}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Total logical size: %d bytes\n", stats.TotalSizeBytes)
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())

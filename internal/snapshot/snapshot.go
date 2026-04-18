@@ -113,6 +113,10 @@ type SnapshotStats struct {
 	SnapshotFileCount int64
 	TotalSizeBytes    int64
 	SnapshotID        string
+	ParentSnapshotID  sql.NullString
+	ReusedFileCount   sql.NullInt64
+	NewFileCount      sql.NullInt64
+	ReuseRatioPct     sql.NullFloat64
 }
 
 type SnapshotDiffEntry struct {
@@ -564,13 +568,46 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 		return stats, nil
 	}
 
-	if _, err := GetSnapshot(ctx, db, stats.SnapshotID); err != nil {
+	snapshotRow, err := GetSnapshot(ctx, db, stats.SnapshotID)
+	if err != nil {
 		return nil, err
 	}
 	stats.SnapshotCount = 1
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(size), 0) FROM snapshot_file WHERE snapshot_id = $1`, stats.SnapshotID).Scan(&stats.SnapshotFileCount, &stats.TotalSizeBytes); err != nil {
 		return nil, fmt.Errorf("count snapshot files snapshot_id=%s: %w", stats.SnapshotID, err)
 	}
+
+	if snapshotRow.ParentID.Valid {
+		stats.ParentSnapshotID = snapshotRow.ParentID
+
+		var reusedCount int64
+		if err := db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM snapshot_file child
+			JOIN snapshot_file parent
+				ON parent.snapshot_id = $2
+				AND parent.path_id = child.path_id
+				AND parent.logical_file_id = child.logical_file_id
+			WHERE child.snapshot_id = $1
+		`, stats.SnapshotID, snapshotRow.ParentID.String).Scan(&reusedCount); err != nil {
+			return nil, fmt.Errorf("count reused snapshot files snapshot_id=%s parent_id=%s: %w", stats.SnapshotID, snapshotRow.ParentID.String, err)
+		}
+
+		newCount := stats.SnapshotFileCount - reusedCount
+		if newCount < 0 {
+			newCount = 0
+		}
+
+		reuseRatioPct := 0.0
+		if stats.SnapshotFileCount > 0 {
+			reuseRatioPct = float64(reusedCount) * 100.0 / float64(stats.SnapshotFileCount)
+		}
+
+		stats.ReusedFileCount = sql.NullInt64{Int64: reusedCount, Valid: true}
+		stats.NewFileCount = sql.NullInt64{Int64: newCount, Valid: true}
+		stats.ReuseRatioPct = sql.NullFloat64{Float64: reuseRatioPct, Valid: true}
+	}
+
 	return stats, nil
 }
 

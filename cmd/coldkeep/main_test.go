@@ -2255,6 +2255,154 @@ func TestRunSnapshotCommandStatsSupportsGlobalAndPerSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandStatsTextShowsLineageBreakdownWhenParentExists(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 100,
+			TotalSizeBytes:    2048,
+			ParentSnapshotID:  sql.NullString{String: "snap-parent", Valid: true},
+			ReusedFileCount:   sql.NullInt64{Int64: 99, Valid: true},
+			NewFileCount:      sql.NullInt64{Int64: 1, Valid: true},
+			ReuseRatioPct:     sql.NullFloat64{Float64: 99.0, Valid: true},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Reused: 99") {
+		t.Fatalf("expected reused count in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "New: 1") {
+		t.Fatalf("expected new count in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "Reuse ratio: 99.0%") {
+		t.Fatalf("expected reuse ratio in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsTextShowsNoParentFallback(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 4, TotalSizeBytes: 2048}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-root"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "(Reused/New not available -- no parent snapshot)") {
+		t.Fatalf("expected no-parent fallback line in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsJSONIncludesLineageFieldsWhenParentExists(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 10,
+			TotalSizeBytes:    512,
+			ParentSnapshotID:  sql.NullString{String: "snap-parent-json", Valid: true},
+			ReusedFileCount:   sql.NullInt64{Int64: 8, Valid: true},
+			NewFileCount:      sql.NullInt64{Int64: 2, Valid: true},
+			ReuseRatioPct:     sql.NullFloat64{Float64: 80.0, Valid: true},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child-json"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot stats JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["parent_snapshot_id"].(string); got != "snap-parent-json" {
+		t.Fatalf("expected parent_snapshot_id, got data=%v", data)
+	}
+	if got := int64(data["reused_file_count"].(float64)); got != 8 {
+		t.Fatalf("expected reused_file_count=8, got %d data=%v", got, data)
+	}
+	if got := int64(data["new_file_count"].(float64)); got != 2 {
+		t.Fatalf("expected new_file_count=2, got %d data=%v", got, data)
+	}
+	if got := data["reuse_ratio_pct"].(float64); got != 80.0 {
+		t.Fatalf("expected reuse_ratio_pct=80.0, got %v data=%v", got, data)
+	}
+}
+
 func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",

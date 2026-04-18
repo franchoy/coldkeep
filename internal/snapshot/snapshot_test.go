@@ -2016,6 +2016,55 @@ func TestGetSnapshotStatsGlobalAndPerSnapshot(t *testing.T) {
 	if perSnapshot.SnapshotCount != 1 || perSnapshot.SnapshotFileCount != 2 || perSnapshot.TotalSizeBytes != 2 {
 		t.Fatalf("unexpected per-snapshot stats: %+v", perSnapshot)
 	}
+	if perSnapshot.ParentSnapshotID.Valid || perSnapshot.ReusedFileCount.Valid || perSnapshot.NewFileCount.Valid || perSnapshot.ReuseRatioPct.Valid {
+		t.Fatalf("expected no lineage metrics when snapshot has no parent, got: %+v", perSnapshot)
+	}
+}
+
+func TestGetSnapshotStatsIncludesLineageReuseBreakdown(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocsV1 := insertLogicalFileWithSize(t, db, "hash-lineage-docs-v1", 10)
+	logicalDocsV2 := insertLogicalFileWithSize(t, db, "hash-lineage-docs-v2", 10)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-lineage-img", 11)
+
+	parent := Snapshot{ID: "snap-lineage-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalDocsV1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, parent.ID, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{
+		ID:        "snap-lineage-child",
+		CreatedAt: time.Now().UTC().Add(time.Second),
+		Type:      "full",
+		ParentID:  sql.NullString{String: parent.ID, Valid: true},
+	}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalDocsV2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+
+	if !stats.ParentSnapshotID.Valid || stats.ParentSnapshotID.String != parent.ID {
+		t.Fatalf("expected parent snapshot id %q, got %+v", parent.ID, stats.ParentSnapshotID)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 1 {
+		t.Fatalf("expected reused_file_count=1, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 1 {
+		t.Fatalf("expected new_file_count=1, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 50.0 {
+		t.Fatalf("expected reuse_ratio_pct=50.0, got %+v", stats.ReuseRatioPct)
+	}
 }
 
 func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
