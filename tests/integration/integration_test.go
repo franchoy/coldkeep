@@ -532,7 +532,12 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
 
 	var snap1DocsRows int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1 AND path = $2`, "snap-it-1", trimmedDocs).Scan(&snap1DocsRows); err != nil {
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = $1 AND sp.path = $2
+	`, "snap-it-1", trimmedDocs).Scan(&snap1DocsRows); err != nil {
 		t.Fatalf("query docs path in first snapshot: %v", err)
 	}
 	if snap1DocsRows != 1 {
@@ -622,7 +627,12 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	}
 
 	var snap2DocsRows int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1 AND path = $2`, "snap-it-2", trimmedDocs).Scan(&snap2DocsRows); err != nil {
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = $1 AND sp.path = $2
+	`, "snap-it-2", trimmedDocs).Scan(&snap2DocsRows); err != nil {
 		t.Fatalf("query docs path in second snapshot: %v", err)
 	}
 	if snap2DocsRows != 0 {
@@ -645,7 +655,12 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	}
 
 	var partialPath string
-	if err := dbconn.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-partial").Scan(&partialPath); err != nil {
+	if err := dbconn.QueryRow(`
+		SELECT sp.path
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = $1
+	`, "snap-it-partial").Scan(&partialPath); err != nil {
 		t.Fatalf("query partial snapshot path: %v", err)
 	}
 	if partialPath != trimmedImg {

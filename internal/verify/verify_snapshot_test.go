@@ -66,6 +66,39 @@ func TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference(t *testing.T)
 	}
 }
 
+func TestVerifySystemStandardDetectsOrphanSnapshotPathReference(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"snapshot-path-orphan.txt", int64(0), strings.Repeat("p", 64), filestate.LogicalFileCompleted, int64(0),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	insertSnapshotRowForVerify(t, dbconn, "snap-path-orphan-1")
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable sqlite foreign_keys: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, $2, $3)`,
+		"snap-path-orphan-1", int64(9999), logicalID,
+	); err != nil {
+		t.Fatalf("insert orphan snapshot path ref row: %v", err)
+	}
+
+	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "orphan_snapshot_path_refs=1") {
+		t.Fatalf("expected orphan snapshot path ref verification error, got: %v", err)
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodeSnapshotGraphOrphanLogicalRef {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeSnapshotGraphOrphanLogicalRef, code, ok, err)
+	}
+}
+
 func TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
