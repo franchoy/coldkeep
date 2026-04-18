@@ -199,12 +199,27 @@ func ResolveSnapshotPaths(ctx context.Context, exec pathResolverDB, paths []stri
 		}
 	}
 
-	for _, p := range missing {
-		if _, err := exec.ExecContext(ctx,
-			`INSERT INTO snapshot_path (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`,
-			p,
-		); err != nil {
-			return nil, fmt.Errorf("insert snapshot_path %q: %w", p, err)
+	const insertBatchSize = 200
+	for start := 0; start < len(missing); start += insertBatchSize {
+		end := start + insertBatchSize
+		if end > len(missing) {
+			end = len(missing)
+		}
+		batch := missing[start:end]
+
+		valuePlaceholders := make([]string, len(batch))
+		insertArgs := make([]any, len(batch))
+		for i, p := range batch {
+			valuePlaceholders[i] = fmt.Sprintf("($%d)", i+1)
+			insertArgs[i] = p
+		}
+
+		insertQuery := `INSERT INTO snapshot_path (path) VALUES ` +
+			strings.Join(valuePlaceholders, ", ") +
+			` ON CONFLICT (path) DO NOTHING`
+
+		if _, err := exec.ExecContext(ctx, insertQuery, insertArgs...); err != nil {
+			return nil, fmt.Errorf("bulk insert snapshot_path rows: %w", err)
 		}
 	}
 
