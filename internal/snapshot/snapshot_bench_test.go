@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"testing"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
@@ -108,10 +109,51 @@ func benchmarkCreateSnapshotFullNFiles(b *testing.B, fileCount int) {
 	}
 }
 
+func benchmarkCreateSnapshotPartialNFiles(b *testing.B, fileCount int, filters []string, nameSuffix string) {
+	dbconn := openBenchmarkDB(b)
+	seedBenchmarkPhysicalFiles(b, dbconn, fileCount)
+
+	// Keep benchmark output readable by suppressing per-row snapshot logs.
+	originalLogOutput := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() {
+		log.SetOutput(originalLogOutput)
+	})
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		snapshotID := fmt.Sprintf("bench-partial-%s-%d", nameSuffix, i)
+		if err := CreateSnapshot(ctx, dbconn, snapshotID, "partial", nil, nil, filters); err != nil {
+			b.Fatalf("CreateSnapshot partial iteration %d: %v", i, err)
+		}
+	}
+}
+
 func BenchmarkCreateSnapshotFull_1000Files(b *testing.B) {
 	benchmarkCreateSnapshotFullNFiles(b, 1000)
 }
 
 func BenchmarkCreateSnapshotFull_10000Files(b *testing.B) {
 	benchmarkCreateSnapshotFullNFiles(b, 10000)
+}
+
+func BenchmarkCreateSnapshotPartial_DirFilter_10000Files(b *testing.B) {
+	// Each bench directory shard holds 100 files from seedBenchmarkPhysicalFiles.
+	benchmarkCreateSnapshotPartialNFiles(b, 10000, []string{"bench/00042/"}, "dir")
+}
+
+func BenchmarkCreateSnapshotPartial_MixedFilters_10000Files(b *testing.B) {
+	// Mix exact and directory filters to exercise the normalized filter path.
+	filters := []string{
+		"bench/00042/",
+		"bench/00099/file-009999.bin",
+		"./bench//00001/",
+	}
+	for i := range filters {
+		filters[i] = strings.TrimSpace(filters[i])
+	}
+	benchmarkCreateSnapshotPartialNFiles(b, 10000, filters, "mixed")
 }
