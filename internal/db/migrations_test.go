@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -500,6 +502,213 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if postRerunRowCount != postRowCount {
 		t.Fatalf("snapshot_file rows changed after idempotent rerun: before=%d after=%d", postRowCount, postRerunRowCount)
 	}
+}
+
+func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
+	}
+
+	host := getenvOrDefault("DB_HOST", "127.0.0.1")
+	port := getenvOrDefault("DB_PORT", "5432")
+	user := getenvOrDefault("DB_USER", "coldkeep")
+	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
+	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
+	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
+
+	adminConnStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		host,
+		port,
+		user,
+		password,
+		maintenanceDB,
+		sslMode,
+	)
+	adminDB, err := sql.Open("postgres", adminConnStr)
+	if err != nil {
+		t.Fatalf("open postgres admin connection: %v", err)
+	}
+	defer func() { _ = adminDB.Close() }()
+
+	if err := adminDB.Ping(); err != nil {
+		t.Fatalf("ping postgres admin connection: %v", err)
+	}
+
+	testDBName := fmt.Sprintf("coldkeep_phase1_v8_%d", time.Now().UnixNano())
+	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
+		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
+	}
+	defer func() {
+		_, _ = adminDB.Exec(`
+			SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, testDBName)
+		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
+	}()
+
+	t.Setenv("DB_HOST", host)
+	t.Setenv("DB_PORT", port)
+	t.Setenv("DB_USER", user)
+	t.Setenv("DB_PASSWORD", password)
+	t.Setenv("DB_SSLMODE", sslMode)
+	t.Setenv("DB_NAME", testDBName)
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
+
+	dbconn, err := ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db with auto-bootstrap: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema_version after bootstrap: %v", err)
+	}
+	if schemaVersion != 8 {
+		t.Fatalf("expected schema_version=8 after fresh postgres bootstrap, got %d", schemaVersion)
+	}
+
+	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {
+		var exists bool
+		if err := dbconn.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`, tableName).Scan(&exists); err != nil {
+			t.Fatalf("check table existence %s: %v", tableName, err)
+		}
+		if !exists {
+			t.Fatalf("expected table %s to exist after bootstrap", tableName)
+		}
+	}
+
+	var hasParentID bool
+	if err := dbconn.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'snapshot' AND column_name = 'parent_id'
+		)
+	`).Scan(&hasParentID); err != nil {
+		t.Fatalf("check snapshot.parent_id column: %v", err)
+	}
+	if !hasParentID {
+		t.Fatal("expected snapshot.parent_id column")
+	}
+
+	var hasPathID bool
+	if err := dbconn.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'snapshot_file' AND column_name = 'path_id'
+		)
+	`).Scan(&hasPathID); err != nil {
+		t.Fatalf("check snapshot_file.path_id column: %v", err)
+	}
+	if !hasPathID {
+		t.Fatal("expected snapshot_file.path_id column")
+	}
+
+	var hasLegacyPath bool
+	if err := dbconn.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'snapshot_file' AND column_name = 'path'
+		)
+	`).Scan(&hasLegacyPath); err != nil {
+		t.Fatalf("check legacy snapshot_file.path column: %v", err)
+	}
+	if hasLegacyPath {
+		t.Fatal("did not expect legacy snapshot_file.path column in fresh v8 bootstrap")
+	}
+
+	var hasOldPathIndex bool
+	if err := dbconn.QueryRow(`SELECT to_regclass('public.idx_snapshot_file_path') IS NOT NULL`).Scan(&hasOldPathIndex); err != nil {
+		t.Fatalf("check old idx_snapshot_file_path: %v", err)
+	}
+	if hasOldPathIndex {
+		t.Fatal("did not expect legacy idx_snapshot_file_path index in fresh v8 bootstrap")
+	}
+
+	var hasPathIDIndex bool
+	if err := dbconn.QueryRow(`SELECT to_regclass('public.idx_snapshot_file_path_id') IS NOT NULL`).Scan(&hasPathIDIndex); err != nil {
+		t.Fatalf("check idx_snapshot_file_path_id: %v", err)
+	}
+	if !hasPathIDIndex {
+		t.Fatal("expected idx_snapshot_file_path_id index")
+	}
+
+	var hasUniqueIndex bool
+	if err := dbconn.QueryRow(`SELECT to_regclass('public.idx_snapshot_file_unique') IS NOT NULL`).Scan(&hasUniqueIndex); err != nil {
+		t.Fatalf("check idx_snapshot_file_unique: %v", err)
+	}
+	if !hasUniqueIndex {
+		t.Fatal("expected idx_snapshot_file_unique index")
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ('p1.txt', 10, 'phase1-hash-1', 'COMPLETED')`); err != nil {
+		t.Fatalf("insert logical_file row 1: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ('p2.txt', 20, 'phase1-hash-2', 'COMPLETED')`); err != nil {
+		t.Fatalf("insert logical_file row 2: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ('snap-parent', NOW(), 'full', 'parent', NULL)`); err != nil {
+		t.Fatalf("insert parent snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, created_at, type, label, parent_id) VALUES ('snap-child', NOW(), 'partial', 'child', 'snap-parent')`); err != nil {
+		t.Fatalf("insert child snapshot: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ('docs/a.txt')`); err != nil {
+		t.Fatalf("insert snapshot_path docs/a.txt: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ('snap-parent', (SELECT id FROM snapshot_path WHERE path = 'docs/a.txt'), 1, 10)`); err != nil {
+		t.Fatalf("insert snapshot_file parent row: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size) VALUES ('snap-child', (SELECT id FROM snapshot_path WHERE path = 'docs/a.txt'), 2, 20)`); err != nil {
+		t.Fatalf("insert snapshot_file child row with shared path_id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-parent', (SELECT id FROM snapshot_path WHERE path = 'docs/a.txt'), 2)`); err == nil {
+		t.Fatal("expected unique violation on duplicate (snapshot_id, path_id)")
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = 'snap-parent'`); err != nil {
+		t.Fatalf("delete parent snapshot: %v", err)
+	}
+
+	var childParentID sql.NullString
+	if err := dbconn.QueryRow(`SELECT parent_id FROM snapshot WHERE id = 'snap-child'`).Scan(&childParentID); err != nil {
+		t.Fatalf("read child parent_id after parent delete: %v", err)
+	}
+	if childParentID.Valid {
+		t.Fatalf("expected child parent_id NULL after deleting parent, got %q", childParentID.String)
+	}
+
+	schemaSQL, err := loadPostgresSchema()
+	if err != nil {
+		t.Fatalf("load postgres schema for idempotency rerun: %v", err)
+	}
+	if _, err := dbconn.Exec(schemaSQL); err != nil {
+		t.Fatalf("rerun postgres schema SQL for idempotency: %v", err)
+	}
+
+	var pathRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_path WHERE path = 'docs/a.txt'`).Scan(&pathRows); err != nil {
+		t.Fatalf("count normalized path rows after schema rerun: %v", err)
+	}
+	if pathRows != 1 {
+		t.Fatalf("expected exactly one normalized snapshot_path row after rerun, got %d", pathRows)
+	}
+}
+
+func getenvOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {
