@@ -839,7 +839,7 @@ echo "[smoke]   ok: snapshot show --pattern works"
 
 # Test 2: snapshot restore with --pattern
 SNAP_RESTORE_PATTERN_DIR=$(mktemp -d)
-trap "rm -rf '$SNAP_RESTORE_PATTERN_DIR'" EXIT
+trap 'rm -rf "$SNAP_RESTORE_PATTERN_DIR"' EXIT
 SNAP_RESTORE_PATTERN=$(coldkeep snapshot restore "$V13_SNAPSHOT_1" --pattern "*.txt" --mode prefix --destination "$SNAP_RESTORE_PATTERN_DIR" --output json)
 SNAP_RESTORE_PATTERN_PAYLOAD=$(echo "$SNAP_RESTORE_PATTERN" | grep -E '^\{.*\}$' | tail -n1)
 if ! echo "$SNAP_RESTORE_PATTERN_PAYLOAD" | jq -e '.status == "ok"' > /dev/null 2>&1; then
