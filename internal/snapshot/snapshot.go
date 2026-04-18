@@ -606,6 +606,8 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 		// reused := count of child rows that match parent on (path_id, logical_file_id),
 		// total := child snapshot_file count, new := total - reused.
 		// This SQL strategy is intentionally simple and portable for PostgreSQL/SQLite.
+		// It relies on existing snapshot_file indexes around snapshot_id/path_id and
+		// avoids correctness coupling to lineage metadata.
 		var reusedCount int64
 		if err := db.QueryRowContext(ctx, `
 			SELECT COUNT(*)
