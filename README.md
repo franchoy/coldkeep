@@ -318,12 +318,22 @@ coldkeep snapshots capture an immutable, point-in-time view of your stored files
 # Full snapshot (all physical_file entries)
 coldkeep snapshot create
 
+# Full snapshot with lineage metadata
+coldkeep snapshot create --id day2 --from day1
+
 # Partial snapshot (exact paths and/or directory prefixes)
 coldkeep snapshot create docs/ report.txt --label release-2026-04
 ```
 
 - `--id <snapshotID>`: snapshot_id system identifier. This is the command target for `show`, `restore`, `stats`, `diff`, and `delete`.
 - `--label <string>`: optional user-facing metadata only. It is not an identifier and is never used for command targeting.
+- `--from <snapshotID>`: optional parent snapshot lineage metadata on create. This is informational only and does not make child snapshots depend on parent snapshot content during create or restore.
+
+Current lineage scope policy:
+
+- `--from` is currently supported only for full snapshots.
+- Parent snapshot referenced by `--from` must also be full.
+- Filtered parent/child lineage for partial snapshots is intentionally rejected in this phase.
 
 Snapshot command targeting contract:
 

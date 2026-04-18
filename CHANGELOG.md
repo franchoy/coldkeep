@@ -27,7 +27,7 @@ verification and health reporting.
 ### Added
 
 - **`snapshot` and `snapshot_file` tables** — new schema objects (schema version 7) for immutable point-in-time captures
-- **`snapshot create [--id ID] [--label LABEL] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes)
+- **`snapshot create [--id ID] [--label LABEL] [--from PARENT_ID] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes); `--from` stores lineage metadata only and is currently full-to-full only
 - **`snapshot list [--type full|partial] [--limit N] [--since DATE]`** — list snapshots with filtering and ordering
 - **`snapshot show <snapshotID> [--limit N] [query filters…]`** — inspect snapshot contents with query support
 - **`snapshot stats [snapshotID]`** — report snapshot retention pressure and metadata
