@@ -52,6 +52,11 @@ v1.3 snapshot-layer release-candidate alignment.
   `snapshot restore`/`snapshot diff`/`snapshot delete`, and use
   `remove --stored-path` for current-state mapping removal.
 
+### Post-v1.3 hardening backlog (non-blocking)
+
+- Add fuzz coverage for snapshot query combinator cases (`regex` + `pattern` +
+  `prefix`) as a future hardening task.
+
 ------------------------------------------------------------------------
 
 ## [1.2.0] - 2026-04-11

@@ -400,6 +400,11 @@ For the full release criteria, use the v1.3 sections in `PRE_RELEASE_CHECKLIST.m
 - `15) Verify v1.3 snapshot / retention contract (manual gate)`
 - `16) Final global sign-off`
 
+### Post-v1.3 hardening backlog (non-blocking)
+
+- Add fuzz coverage for snapshot query combinations (`--regex`, `--pattern`, `--prefix`) to further harden parser+matcher edge cases.
+- This is a future hardening task and is not part of the v1.3 release gate.
+
 ## Doctor (recommended health gate)
 
 coldkeep doctor is the operator health gate:
