@@ -2545,6 +2545,82 @@ func TestDiffSnapshotsSummarySQLParentChildCountsRemainCorrect(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsSummarySQLMatchesDetailedSummary(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-match-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-match-a2", 10)
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-match-base-only", 11)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-match-target-only", 12)
+
+	base := Snapshot{ID: "snap-diffsql-match-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-match-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/added.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+
+	sqlSummary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL: %v", err)
+	}
+
+	detailed, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
+	if err != nil {
+		t.Fatalf("DiffSnapshots detailed: %v", err)
+	}
+
+	if sqlSummary.Added != detailed.Summary.Added || sqlSummary.Removed != detailed.Summary.Removed || sqlSummary.Modified != detailed.Summary.Modified {
+		t.Fatalf("summary mismatch sql=%+v detailed=%+v", sqlSummary, detailed.Summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLParentChildMatchesDetailedSummary(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-a2", 10)
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-base-only", 11)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-target-only", 12)
+
+	base := Snapshot{ID: "snap-diffsql-parent-match-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-diffsql-parent-match-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: base.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "docs/added.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+
+	sqlSummary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, child.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL parent-child: %v", err)
+	}
+
+	detailed, err := DiffSnapshots(ctx, db, base.ID, child.ID, nil)
+	if err != nil {
+		t.Fatalf("DiffSnapshots detailed parent-child: %v", err)
+	}
+
+	if sqlSummary.Added != detailed.Summary.Added || sqlSummary.Removed != detailed.Summary.Removed || sqlSummary.Modified != detailed.Summary.Modified {
+		t.Fatalf("parent-child summary mismatch sql=%+v detailed=%+v", sqlSummary, detailed.Summary)
+	}
+}
+
 func TestDiffSnapshotsSummarySQLMissingBaseReturnsNotFound(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
