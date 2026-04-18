@@ -791,6 +791,63 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 	}
 }
 
+func TestCreateSnapshotReusesSnapshotPathRowsAcrossSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-path-reuse-a", 31)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-path-reuse-b", 32)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-reuse-1", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot first full: %v", err)
+	}
+	if err := CreateSnapshot(ctx, db, "snap-reuse-2", "partial", nil, nil, []string{"docs/a.txt"}); err != nil {
+		t.Fatalf("CreateSnapshot second partial: %v", err)
+	}
+
+	var snapshotPathCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&snapshotPathCount); err != nil {
+		t.Fatalf("count snapshot_path rows: %v", err)
+	}
+	if snapshotPathCount != 2 {
+		t.Fatalf("expected exactly 2 normalized snapshot_path rows for two distinct paths, got %d", snapshotPathCount)
+	}
+
+	var docsAPathRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_path WHERE path = ?`, "docs/a.txt").Scan(&docsAPathRows); err != nil {
+		t.Fatalf("count docs/a.txt snapshot_path rows: %v", err)
+	}
+	if docsAPathRows != 1 {
+		t.Fatalf("expected docs/a.txt to exist once in snapshot_path, got %d rows", docsAPathRows)
+	}
+
+	var firstPathID int64
+	if err := db.QueryRow(`
+		SELECT sf.path_id
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ? AND sp.path = ?
+	`, "snap-reuse-1", "docs/a.txt").Scan(&firstPathID); err != nil {
+		t.Fatalf("query first snapshot path_id for docs/a.txt: %v", err)
+	}
+
+	var secondPathID int64
+	if err := db.QueryRow(`
+		SELECT sf.path_id
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ? AND sp.path = ?
+	`, "snap-reuse-2", "docs/a.txt").Scan(&secondPathID); err != nil {
+		t.Fatalf("query second snapshot path_id for docs/a.txt: %v", err)
+	}
+
+	if firstPathID != secondPathID {
+		t.Fatalf("expected snapshots to reuse the same path_id for docs/a.txt, got first=%d second=%d", firstPathID, secondPathID)
+	}
+}
+
 // ---- RestoreSnapshot helper tests ----
 
 func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {

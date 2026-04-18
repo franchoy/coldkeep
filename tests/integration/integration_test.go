@@ -702,6 +702,291 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 	}
 }
 
+func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate snapshot regression fixtures: %v", err)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img input: %v", err)
+	}
+
+	docsPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "report.txt", 24*1024)
+	imgPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "img"), "logo.bin", 12*1024)
+	docsHashV1 := testutils.SHA256File(t, docsPath)
+	imgHash := testutils.SHA256File(t, imgPath)
+
+	storeDocs := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", docsPath, "--output", "json"), "store")
+	storeDocsData := testutils.JSONMap(t, storeDocs, "data")
+	storedDocsPath, ok := storeDocsData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedDocsPath) == "" {
+		t.Fatalf("store docs JSON missing stored_path: payload=%v", storeDocs)
+	}
+
+	storeImg := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", imgPath, "--output", "json"), "store")
+	storeImgData := testutils.JSONMap(t, storeImg, "data")
+	storedImgPath, ok := storeImgData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedImgPath) == "" {
+		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
+	}
+
+	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase2-regression-v1", "--output", "json"), "snapshot")
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after first snapshot: %v", err)
+	}
+	defer dbconn.Close()
+
+	var snapshotPathCountV1 int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&snapshotPathCountV1); err != nil {
+		t.Fatalf("count snapshot_path rows after first snapshot: %v", err)
+	}
+	if snapshotPathCountV1 != 2 {
+		t.Fatalf("expected 2 normalized snapshot_path rows after first snapshot, got %d", snapshotPathCountV1)
+	}
+
+	showV1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-phase2-regression-v1", "--limit", "10", "--output", "json"), "snapshot")
+	showV1Data := testutils.JSONMap(t, showV1, "data")
+	showV1Files, ok := showV1Data["files"].([]any)
+	if !ok || len(showV1Files) != 2 {
+		t.Fatalf("snapshot show files mismatch for v1: payload=%v", showV1)
+	}
+	showV1Path0, ok := showV1Files[0].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot show first file is not an object: payload=%v", showV1Files[0])
+	}
+	showV1Path1, ok := showV1Files[1].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot show second file is not an object: payload=%v", showV1Files[1])
+	}
+	if got, _ := showV1Path0["path"].(string); got != trimmedDocs {
+		t.Fatalf("expected first show path to be %q, got %q", trimmedDocs, got)
+	}
+	if got, _ := showV1Path1["path"].(string); got != trimmedImg {
+		t.Fatalf("expected second show path to be %q, got %q", trimmedImg, got)
+	}
+
+	listV1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--type", "full", "--limit", "10", "--output", "json"), "snapshot")
+	listV1Data := testutils.JSONMap(t, listV1, "data")
+	listItems, ok := listV1Data["snapshots"].([]any)
+	if !ok || len(listItems) == 0 {
+		t.Fatalf("snapshot list missing snapshots array: payload=%v", listV1)
+	}
+	foundV1 := false
+	for _, raw := range listItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if got, _ := item["id"].(string); got == "snap-phase2-regression-v1" {
+			foundV1 = true
+			break
+		}
+	}
+	if !foundV1 {
+		t.Fatalf("snapshot list did not include snap-phase2-regression-v1: payload=%v", listV1)
+	}
+
+	restoreV1Root := filepath.Join(tmp, "restore-v1")
+	if err := os.MkdirAll(restoreV1Root, 0o755); err != nil {
+		t.Fatalf("mkdir restore-v1: %v", err)
+	}
+	restoreV1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-phase2-regression-v1", "--mode", "prefix", "--destination", restoreV1Root, "--output", "json"), "snapshot")
+	restoreV1Data := testutils.JSONMap(t, restoreV1, "data")
+	if got := testutils.JSONInt64(t, restoreV1Data, "restored_files"); got != 2 {
+		t.Fatalf("expected full restore to restore 2 files, got %d", got)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreV1Root, filepath.FromSlash(trimmedDocs))); got != docsHashV1 {
+		t.Fatalf("restored docs hash mismatch for v1: got=%s want=%s", got, docsHashV1)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreV1Root, filepath.FromSlash(trimmedImg))); got != imgHash {
+		t.Fatalf("restored img hash mismatch for v1: got=%s want=%s", got, imgHash)
+	}
+
+	verifyV1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+	if got, _ := verifyV1["status"].(string); got != "ok" {
+		t.Fatalf("verify system should succeed after normalized snapshot create: payload=%v", verifyV1)
+	}
+	doctorV1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+	doctorV1Data := testutils.JSONMap(t, doctorV1, "data")
+	if got, _ := doctorV1Data["verify_status"].(string); got == "" {
+		t.Fatalf("doctor payload missing verify_status: payload=%v", doctorV1)
+	}
+
+	notesPath := filepath.Join(inputDir, "docs", "notes.txt")
+	if err := os.WriteFile(notesPath, bytes.Repeat([]byte("phase2-regression-notes\n"), 512), 0o644); err != nil {
+		t.Fatalf("write notes input for v2: %v", err)
+	}
+	notesHash := testutils.SHA256File(t, notesPath)
+
+	storeNotes := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", notesPath, "--output", "json"), "store")
+	storeNotesData := testutils.JSONMap(t, storeNotes, "data")
+	storedNotesPath, ok := storeNotesData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedNotesPath) == "" {
+		t.Fatalf("store notes JSON missing stored_path: payload=%v", storeNotes)
+	}
+	trimmedNotes := strings.TrimLeft(filepath.ToSlash(storedNotesPath), "/")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase2-regression-v2", "--output", "json"), "snapshot")
+
+	var normalizedDocsRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_path WHERE path = $1`, trimmedDocs).Scan(&normalizedDocsRows); err != nil {
+		t.Fatalf("count normalized snapshot_path rows for docs path: %v", err)
+	}
+	if normalizedDocsRows != 1 {
+		t.Fatalf("expected exactly one snapshot_path row for repeated docs path, got %d", normalizedDocsRows)
+	}
+
+	var snapshotPathCountV2 int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&snapshotPathCountV2); err != nil {
+		t.Fatalf("count snapshot_path rows after second snapshot: %v", err)
+	}
+	if snapshotPathCountV2 != 3 {
+		t.Fatalf("expected 3 distinct snapshot_path rows after modified+added second snapshot, got %d", snapshotPathCountV2)
+	}
+
+	diffV1V2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "snap-phase2-regression-v1", "snap-phase2-regression-v2", "--output", "json"), "snapshot diff")
+	diffData := testutils.JSONMap(t, diffV1V2, "data")
+	summary, ok := diffData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot diff summary missing: payload=%v", diffV1V2)
+	}
+	if got, _ := summary["added"].(float64); int64(got) != 1 {
+		if got2, _ := summary["added_count"].(float64); int64(got2) != 1 {
+			t.Fatalf("expected one added diff entry, summary=%v", summary)
+		}
+	}
+	if got, _ := summary["modified"].(float64); int64(got) != 0 {
+		if got2, _ := summary["modified_count"].(float64); int64(got2) != 0 {
+			t.Fatalf("expected zero modified diff entries, summary=%v", summary)
+		}
+	}
+	diffEntries, ok := diffData["entries"].([]any)
+	if !ok || len(diffEntries) != 1 {
+		t.Fatalf("snapshot diff entries mismatch: payload=%v", diffV1V2)
+	}
+	firstDiff, ok := diffEntries[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first diff entry is not an object: payload=%v", diffEntries[0])
+	}
+	if got, _ := firstDiff["path"].(string); got != trimmedNotes {
+		t.Fatalf("expected diff path to be added notes path %q, got %q", trimmedNotes, got)
+	}
+	if got, _ := firstDiff["type"].(string); got != "added" {
+		t.Fatalf("expected diff type added, got %q", got)
+	}
+
+	docsDirPrefix := filepath.ToSlash(filepath.Dir(trimmedDocs)) + "/"
+	partialCreate := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedDocs, docsDirPrefix, "--id", "snap-phase2-regression-partial", "--output", "json"), "snapshot")
+	partialCreateData := testutils.JSONMap(t, partialCreate, "data")
+	if got, _ := partialCreateData["type"].(string); got != "partial" {
+		t.Fatalf("expected partial snapshot type, got %q payload=%v", got, partialCreate)
+	}
+
+	showPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-phase2-regression-partial", "--prefix", docsDirPrefix, "--output", "json"), "snapshot")
+	showPartialData := testutils.JSONMap(t, showPartial, "data")
+	if got := testutils.JSONInt64(t, showPartialData, "matched_file_count"); got != 2 {
+		t.Fatalf("expected partial snapshot prefix query to match 2 files, got %d", got)
+	}
+	partialFiles, ok := showPartialData["files"].([]any)
+	if !ok || len(partialFiles) != 2 {
+		t.Fatalf("partial snapshot files mismatch: payload=%v", showPartial)
+	}
+	partialFile0, ok := partialFiles[0].(map[string]any)
+	if !ok {
+		t.Fatalf("partial snapshot first file is not an object: payload=%v", partialFiles[0])
+	}
+	partialFile1, ok := partialFiles[1].(map[string]any)
+	if !ok {
+		t.Fatalf("partial snapshot second file is not an object: payload=%v", partialFiles[1])
+	}
+	if got, _ := partialFile0["path"].(string); got != trimmedNotes {
+		t.Fatalf("expected first partial snapshot path %q, got %q", trimmedNotes, got)
+	}
+	if got, _ := partialFile1["path"].(string); got != trimmedDocs {
+		t.Fatalf("expected second partial snapshot path %q, got %q", trimmedDocs, got)
+	}
+
+	restorePartialRoot := filepath.Join(tmp, "restore-partial")
+	if err := os.MkdirAll(restorePartialRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore-partial: %v", err)
+	}
+	restorePartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-phase2-regression-partial", docsDirPrefix, "--mode", "prefix", "--destination", restorePartialRoot, "--output", "json"), "snapshot")
+	restorePartialData := testutils.JSONMap(t, restorePartial, "data")
+	if got := testutils.JSONInt64(t, restorePartialData, "restored_files"); got != 2 {
+		t.Fatalf("expected partial restore to restore 2 files, got %d", got)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restorePartialRoot, filepath.FromSlash(trimmedDocs))); got != docsHashV1 {
+		t.Fatalf("partial restored docs hash mismatch: got=%s want=%s", got, docsHashV1)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restorePartialRoot, filepath.FromSlash(trimmedNotes))); got != notesHash {
+		t.Fatalf("partial restored notes hash mismatch: got=%s want=%s", got, notesHash)
+	}
+
+	verifyV2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+	if got, _ := verifyV2["status"].(string); got != "ok" {
+		t.Fatalf("verify system should remain green after second normalized snapshot flow: payload=%v", verifyV2)
+	}
+	doctorV2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+	doctorV2Data := testutils.JSONMap(t, doctorV2, "data")
+	if got, _ := doctorV2Data["schema_status"].(string); got == "" {
+		t.Fatalf("doctor payload missing schema_status after normalized snapshot flow: payload=%v", doctorV2)
+	}
+}
+
 // TestPhase7SnapshotRetentionLifecycleCLIIntegration validates the complete
 // Phase 7 retention lifecycle at CLI/system level:
 //
