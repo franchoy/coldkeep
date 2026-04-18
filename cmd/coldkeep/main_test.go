@@ -2943,6 +2943,9 @@ func TestRunSnapshotCommandDiffSummaryTextShowsOnlySummary(t *testing.T) {
 	if !strings.Contains(output, "Added:     1 files") || !strings.Contains(output, "Removed:   1 files") || !strings.Contains(output, "Modified:  1 files") {
 		t.Fatalf("expected summary counters, got: %q", output)
 	}
+	if !strings.Contains(output, "Total changes: 3") {
+		t.Fatalf("expected total changes line, got: %q", output)
+	}
 	if strings.Contains(output, "+ docs/new.txt") || strings.Contains(output, "- docs/old.txt") || strings.Contains(output, "~ docs/config.yaml") {
 		t.Fatalf("did not expect detailed entries in summary mode, got: %q", output)
 	}

@@ -2855,8 +2855,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
 		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
 		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
-		_, _ = fmt.Fprintf(os.Stdout, "\nDuration: %dms\n", time.Since(startedAt).Milliseconds())
-		_, _ = fmt.Fprintln(os.Stdout, "Hint: "+doctorOperationalHint)
+		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalEntryCount)
 		return nil
 	}
 
@@ -2923,12 +2922,12 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	if summaryMode {
+		totalChanges := summary.Added + summary.Removed + summary.Modified
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
 		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
 		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
 		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
-		_, _ = fmt.Fprintf(os.Stdout, "\nDuration: %dms\n", time.Since(startedAt).Milliseconds())
-		_, _ = fmt.Fprintln(os.Stdout, "Hint: "+doctorOperationalHint)
+		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalChanges)
 		return nil
 	}
 
