@@ -2067,6 +2067,76 @@ func TestGetSnapshotStatsIncludesLineageReuseBreakdown(t *testing.T) {
 	}
 }
 
+func TestGetSnapshotStatsSkipsLineageWhenParentDeleted(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalParent := insertLogicalFileWithSize(t, db, "hash-lineage-parent-deleted", 10)
+	logicalChild := insertLogicalFileWithSize(t, db, "hash-lineage-child-deleted", 11)
+
+	parent := Snapshot{ID: "snap-stats-parent-delete", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalParent, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-stats-child-delete", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalChild, sql.NullInt64{}, sql.NullTime{})
+
+	if err := DeleteSnapshot(ctx, db, parent.ID); err != nil {
+		t.Fatalf("DeleteSnapshot parent: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child after parent delete: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected child total file count=1, got %+v", stats)
+	}
+	if stats.ParentSnapshotID.Valid || stats.ReusedFileCount.Valid || stats.NewFileCount.Valid || stats.ReuseRatioPct.Valid {
+		t.Fatalf("expected lineage metrics to be skipped after parent deletion, got %+v", stats)
+	}
+}
+
+func TestGetSnapshotStatsSkipsLineageWhenParentMissingMetadataRemains(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-missing-parent", 12)
+
+	child := Snapshot{ID: "snap-stats-child-missing-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	// Simulate legacy/corrupt state where parent metadata points to a missing snapshot.
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, "snap-never-existed", child.ID); err != nil {
+		t.Fatalf("inject missing parent metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child with missing parent metadata: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected child total file count=1, got %+v", stats)
+	}
+	if stats.ParentSnapshotID.Valid || stats.ReusedFileCount.Valid || stats.NewFileCount.Valid || stats.ReuseRatioPct.Valid {
+		t.Fatalf("expected lineage metrics to be skipped when parent is missing, got %+v", stats)
+	}
+}
+
 func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()

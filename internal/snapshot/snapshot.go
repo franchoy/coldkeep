@@ -578,6 +578,16 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 	}
 
 	if snapshotRow.ParentID.Valid {
+		var parentExists int64
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot WHERE id = $1`, snapshotRow.ParentID.String).Scan(&parentExists); err != nil {
+			return nil, fmt.Errorf("check parent snapshot existence snapshot_id=%s parent_id=%s: %w", stats.SnapshotID, snapshotRow.ParentID.String, err)
+		}
+		if parentExists == 0 {
+			// Parent lineage metadata is optional and non-authoritative for stats.
+			// If parent no longer exists, skip lineage breakdown and return totals only.
+			return stats, nil
+		}
+
 		stats.ParentSnapshotID = snapshotRow.ParentID
 
 		// Analysis-only lineage breakdown (never used for correctness decisions):
