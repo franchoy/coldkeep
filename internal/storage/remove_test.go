@@ -91,8 +91,11 @@ func TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES ($1) ON CONFLICT(path) DO NOTHING`, "docs/retained.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
 	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES ($1, $2, $3)`,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ($1, (SELECT id FROM snapshot_path WHERE path = $2), $3)`,
 		"snap-keep-delete-safe",
 		"docs/retained.txt",
 		fileID,

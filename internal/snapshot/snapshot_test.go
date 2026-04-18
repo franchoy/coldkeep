@@ -278,7 +278,7 @@ func TestInsertSnapshotFileNormalizesPath(t *testing.T) {
 	}
 
 	var path string
-	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, s.ID).Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`, s.ID).Scan(&path); err != nil {
 		t.Fatalf("query path: %v", err)
 	}
 	if path != "docs/readme.txt" {
@@ -393,7 +393,7 @@ func TestCreateSnapshotFullCopiesAllPhysicalFiles(t *testing.T) {
 	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
 	label := "phase2-full"
-	if err := CreateSnapshot(ctx, db, "snap-full-phase2", "full", &label, nil); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-full-phase2", "full", &label, nil, nil); err != nil {
 		t.Fatalf("CreateSnapshot full: %v", err)
 	}
 
@@ -414,9 +414,10 @@ func TestCreateSnapshotFullCopiesAllPhysicalFiles(t *testing.T) {
 	}
 
 	rows, err := db.Query(`
-		SELECT path, logical_file_id, size, mode
-		FROM snapshot_file
-		WHERE snapshot_id = ?
+		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ?
 	`, "snap-full-phase2")
 	if err != nil {
 		t.Fatalf("query snapshot_file rows: %v", err)
@@ -477,7 +478,7 @@ func TestCreateSnapshotPartialFiltersExactAndDirectory(t *testing.T) {
 	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	if err := CreateSnapshot(ctx, db, "snap-partial-phase2", "partial", nil, []string{"img/x.png", "docs/"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-partial-phase2", "partial", nil, nil, []string{"img/x.png", "docs/"}); err != nil {
 		t.Fatalf("CreateSnapshot partial: %v", err)
 	}
 
@@ -497,7 +498,7 @@ func TestCreateSnapshotPartialAllowsEmptyDirectoryMatch(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-empty-a", 9)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	if err := CreateSnapshot(ctx, db, "snap-empty-dir", "partial", nil, []string{"empty/"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-empty-dir", "partial", nil, nil, []string{"empty/"}); err != nil {
 		t.Fatalf("CreateSnapshot empty-directory partial should succeed: %v", err)
 	}
 
@@ -525,7 +526,7 @@ func TestCreateSnapshotPartialMissingExactPathRollsBack(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-rollback-a", 17)
 	insertPhysicalFile(t, db, "a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-rollback-missing", "partial", nil, []string{"a.txt", "missing.txt"})
+	err := CreateSnapshot(ctx, db, "snap-rollback-missing", "partial", nil, nil, []string{"a.txt", "missing.txt"})
 	if err == nil {
 		t.Fatal("expected partial snapshot to fail when an exact path is missing")
 	}
@@ -557,7 +558,7 @@ func TestCreateSnapshotPartialDeduplicatesInputPaths(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-dedupe-a", 44)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-dedupe", "partial", nil, []string{"docs/a.txt", "docs/a.txt", "./docs//a.txt"})
+	err := CreateSnapshot(ctx, db, "snap-dedupe", "partial", nil, nil, []string{"docs/a.txt", "docs/a.txt", "./docs//a.txt"})
 	if err != nil {
 		t.Fatalf("CreateSnapshot partial with duplicate inputs: %v", err)
 	}
@@ -578,13 +579,13 @@ func TestCreateSnapshotPartialMatchesBackslashStoredExactPath(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-backslash-exact", 55)
 	insertPhysicalFile(t, db, "docs\\a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-backslash-exact", "partial", nil, []string{"docs/a.txt"})
+	err := CreateSnapshot(ctx, db, "snap-backslash-exact", "partial", nil, nil, []string{"docs/a.txt"})
 	if err != nil {
 		t.Fatalf("CreateSnapshot partial exact against backslash-stored path: %v", err)
 	}
 
 	var path string
-	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, "snap-backslash-exact").Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`, "snap-backslash-exact").Scan(&path); err != nil {
 		t.Fatalf("query snapshot_file path: %v", err)
 	}
 	if path != "docs/a.txt" {
@@ -604,7 +605,7 @@ func TestCreateSnapshotPartialMatchesBackslashStoredDirectory(t *testing.T) {
 	insertPhysicalFile(t, db, "docs\\nested\\b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertPhysicalFile(t, db, "img\\x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-backslash-dir", "partial", nil, []string{"docs/"})
+	err := CreateSnapshot(ctx, db, "snap-backslash-dir", "partial", nil, nil, []string{"docs/"})
 	if err != nil {
 		t.Fatalf("CreateSnapshot partial directory against backslash-stored paths: %v", err)
 	}
@@ -617,7 +618,7 @@ func TestCreateSnapshotPartialMatchesBackslashStoredDirectory(t *testing.T) {
 		t.Fatalf("expected 2 matched rows from backslash-stored docs directory, got %d", fileCount)
 	}
 
-	rows, err := db.Query(`SELECT path FROM snapshot_file WHERE snapshot_id = ? ORDER BY path`, "snap-backslash-dir")
+	rows, err := db.Query(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ? ORDER BY sp.path`, "snap-backslash-dir")
 	if err != nil {
 		t.Fatalf("query snapshot_file rows: %v", err)
 	}
@@ -653,13 +654,13 @@ func TestCreateSnapshotFullNormalizesAbsoluteStoredPaths(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-abs-a", 77)
 	insertPhysicalFile(t, db, "/tmp/input/docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-abs-full", "full", nil, nil)
+	err := CreateSnapshot(ctx, db, "snap-abs-full", "full", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateSnapshot full with absolute stored path: %v", err)
 	}
 
 	var path string
-	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, "snap-abs-full").Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`, "snap-abs-full").Scan(&path); err != nil {
 		t.Fatalf("query snapshot_file path: %v", err)
 	}
 	if path != "tmp/input/docs/a.txt" {
@@ -674,7 +675,7 @@ func TestCreateSnapshotPartialRejectsInvalidInputPathAndRollsBack(t *testing.T) 
 	logicalA := insertLogicalFileWithSize(t, db, "hash-invalid-input", 88)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-invalid-input", "partial", nil, []string{"/absolute/invalid"})
+	err := CreateSnapshot(ctx, db, "snap-invalid-input", "partial", nil, nil, []string{"/absolute/invalid"})
 	if err == nil {
 		t.Fatal("expected invalid-path error for partial snapshot input")
 	}
@@ -695,7 +696,7 @@ func TestCreateSnapshotPartialMixedValidInvalidPathRollsBack(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-mixed-invalid", 99)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-mixed-invalid", "partial", nil, []string{"docs/a.txt", "/bad"})
+	err := CreateSnapshot(ctx, db, "snap-mixed-invalid", "partial", nil, nil, []string{"docs/a.txt", "/bad"})
 	if err == nil {
 		t.Fatal("expected mixed valid/invalid paths to fail")
 	}
@@ -729,19 +730,20 @@ func TestCreateSnapshotPartialDeterministicAcrossInputOrder(t *testing.T) {
 	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	if err := CreateSnapshot(ctx, db, "snap-deterministic-1", "partial", nil, []string{"docs/", "img/x.png"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-deterministic-1", "partial", nil, nil, []string{"docs/", "img/x.png"}); err != nil {
 		t.Fatalf("CreateSnapshot first ordering: %v", err)
 	}
-	if err := CreateSnapshot(ctx, db, "snap-deterministic-2", "partial", nil, []string{"img/x.png", "docs/"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-deterministic-2", "partial", nil, nil, []string{"img/x.png", "docs/"}); err != nil {
 		t.Fatalf("CreateSnapshot second ordering: %v", err)
 	}
 
 	rows, err := db.Query(`
-		SELECT a.path, a.logical_file_id, a.size, a.mode, a.mtime
+		SELECT sp.path, a.logical_file_id, a.size, a.mode, a.mtime
 		FROM snapshot_file a
-		JOIN snapshot_file b ON b.path = a.path
+		JOIN snapshot_file b ON b.path_id = a.path_id
+		JOIN snapshot_path sp ON sp.id = a.path_id
 		WHERE a.snapshot_id = ? AND b.snapshot_id = ?
-		ORDER BY a.path
+		ORDER BY sp.path
 	`, "snap-deterministic-1", "snap-deterministic-2")
 	if err != nil {
 		t.Fatalf("query joined deterministic snapshot rows: %v", err)
@@ -767,7 +769,7 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 	logicalA := insertLogicalFileWithSize(t, db, "hash-exact-vs-dir-a", 31)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-exact-no-dir-expand", "partial", nil, []string{"docs"})
+	err := CreateSnapshot(ctx, db, "snap-exact-no-dir-expand", "partial", nil, nil, []string{"docs"})
 	if err == nil {
 		t.Fatal("expected exact path 'docs' to fail when only docs/* files exist")
 	}
@@ -775,7 +777,7 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 		t.Fatalf("expected path-not-found error for exact path docs, got: %v", err)
 	}
 
-	err = CreateSnapshot(ctx, db, "snap-dir-expand", "partial", nil, []string{"docs/"})
+	err = CreateSnapshot(ctx, db, "snap-dir-expand", "partial", nil, nil, []string{"docs/"})
 	if err != nil {
 		t.Fatalf("expected directory prefix docs/ to succeed, got: %v", err)
 	}
@@ -798,10 +800,15 @@ func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, lo
 
 func insertSnapshotFileRowWithSize(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, size sql.NullInt64, mode sql.NullInt64, mtime sql.NullTime) {
 	t.Helper()
-	_, err := db.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
+	ctx := context.Background()
+	pathID, err := ResolveSnapshotPath(ctx, db, path)
+	if err != nil {
+		t.Fatalf("resolve snapshot_path for insert snapshot_id=%s path=%s: %v", snapshotID, path, err)
+	}
+	_, err = db.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
 		snapshotID,
-		path,
+		pathID,
 		logicalFileID,
 		size,
 		mode,

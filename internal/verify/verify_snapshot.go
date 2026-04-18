@@ -74,8 +74,9 @@ func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityInt
 	}
 
 	orphanRows, err := dbconn.QueryContext(ctx, `
-		SELECT sf.id, sf.snapshot_id, sf.path, sf.logical_file_id
+		SELECT sf.id, sf.snapshot_id, sp.path, sf.logical_file_id
 		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
 		LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
 		WHERE lf.id IS NULL
 		ORDER BY sf.id ASC

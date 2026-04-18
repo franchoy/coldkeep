@@ -2933,7 +2933,7 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, paths); err != nil {
+	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, nil, paths); err != nil {
 		return err
 	}
 

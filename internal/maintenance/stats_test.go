@@ -64,8 +64,11 @@ func TestRunStatsResultIncludesSnapshotRetentionVisibility(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?), (?) ON CONFLICT(path) DO NOTHING`, "snap/snapshot-only", "snap/shared"); err != nil {
+		t.Fatalf("insert snapshot_path rows: %v", err)
+	}
 	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?), (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`,
 		"snap-stats-retention", "snap/snapshot-only", snapshotOnlyID,
 		"snap-stats-retention", "snap/shared", sharedID,
 	); err != nil {

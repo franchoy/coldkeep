@@ -1395,15 +1395,17 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 		gotID        string
 		gotType      string
 		gotLabel     *string
+		gotParentID  *string
 		gotPaths     []string
 		gotDBNonNil  bool
 		gotCtxNonNil bool
 	)
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, snapshotType string, label *string, paths []string) error {
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, snapshotType string, label *string, parentID *string, paths []string) error {
 		called = true
 		gotID = snapshotID
 		gotType = snapshotType
 		gotLabel = label
+		gotParentID = parentID
 		gotPaths = append([]string(nil), paths...)
 		gotDBNonNil = db != nil
 		gotCtxNonNil = ctx != nil
@@ -1439,6 +1441,9 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	}
 	if gotLabel == nil || *gotLabel != "release-candidate" {
 		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
+	}
+	if gotParentID != nil {
+		t.Fatalf("expected nil parentID for CLI create in phase 2, got=%v", gotParentID)
 	}
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
@@ -1478,7 +1483,7 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 
 	gotType := ""
 	gotPathCount := -1
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, snapshotType string, _ *string, paths []string) error {
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, snapshotType string, _ *string, _ *string, paths []string) error {
 		gotType = snapshotType
 		gotPathCount = len(paths)
 		return nil
