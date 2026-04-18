@@ -1995,6 +1995,23 @@ func TestRunSnapshotCommandListForwardsFilters(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandListRejectsUnsupportedFilterFlag(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"list"},
+		flags: map[string][]string{
+			"tree":   {""},
+			"filter": {"label:day"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for snapshot") || !strings.Contains(err.Error(), "filter") {
+		t.Fatalf("expected unsupported --filter usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunSnapshotCommandListTreeFlagSwitchesTextOutputMode(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalList := listSnapshotsPhase
@@ -2290,6 +2307,11 @@ func TestRunSnapshotCommandListTreeJSONIncludesParentMetadata(t *testing.T) {
 	treeLines := data["tree_lines"].([]any)
 	if len(treeLines) == 0 {
 		t.Fatalf("expected tree_lines in tree JSON output, got data=%v", data)
+	}
+	for _, forbidden := range []string{"graph", "nodes", "edges", "stats", "size"} {
+		if _, exists := data[forbidden]; exists {
+			t.Fatalf("expected no %q field in tree list JSON output, got data=%v", forbidden, data)
+		}
 	}
 }
 
