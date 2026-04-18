@@ -32,7 +32,8 @@ This diagram is a mental anchor for how guarantees compose across layers.
 | Snapshot-Based Retention (v1.3 - G14..G17)                |
 |------------------------------------------------------------|
 | Immutable point-in-time captures                           |
-| Snapshot-protected GC (union of current + retained roots)  |
+| Snapshot-protected GC: union of current-state              |
+|   (physical_file) and snapshot (snapshot_file) roots      |
 | Reachability integrity audits                              |
 | Stats retention visibility                                 |
 +------------------------------------------------------------+
