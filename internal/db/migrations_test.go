@@ -106,7 +106,7 @@ func sqliteIndexExists(t *testing.T, dbconn *sql.DB, indexName string) bool {
 	return count == 1
 }
 
-func TestRunMigrationsCreatesSnapshotSchemaVersionSeven(t *testing.T) {
+func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -121,8 +121,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionSeven(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 7 {
-		t.Fatalf("expected schema version 7 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 8 {
+		t.Fatalf("expected schema version 8 after first migration pass, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -131,11 +131,15 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionSeven(t *testing.T) {
 	if !sqliteTableExists(t, dbconn, "snapshot_file") {
 		t.Fatal("expected snapshot_file table to exist after migration")
 	}
+	if !sqliteTableExists(t, dbconn, "snapshot_path") {
+		t.Fatal("expected snapshot_path table to exist after migration")
+	}
 
 	for _, indexName := range []string{
 		"idx_snapshot_created_at",
+		"idx_snapshot_parent_id",
 		"idx_snapshot_file_snapshot_id",
-		"idx_snapshot_file_path",
+		"idx_snapshot_file_path_id",
 		"idx_snapshot_file_logical_file",
 		"idx_snapshot_file_unique",
 	} {
@@ -152,8 +156,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionSeven(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 7 {
-		t.Fatalf("expected schema version to stay 7 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 8 {
+		t.Fatalf("expected schema version to stay 8 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -162,11 +166,15 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionSeven(t *testing.T) {
 	if !sqliteTableExists(t, dbconn, "snapshot_file") {
 		t.Fatal("expected snapshot_file table to remain after idempotent rerun")
 	}
+	if !sqliteTableExists(t, dbconn, "snapshot_path") {
+		t.Fatal("expected snapshot_path table to remain after idempotent rerun")
+	}
 
 	for _, indexName := range []string{
 		"idx_snapshot_created_at",
+		"idx_snapshot_parent_id",
 		"idx_snapshot_file_snapshot_id",
-		"idx_snapshot_file_path",
+		"idx_snapshot_file_path_id",
 		"idx_snapshot_file_logical_file",
 		"idx_snapshot_file_unique",
 	} {

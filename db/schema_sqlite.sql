@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 7 WHERE version < 7;
-INSERT OR IGNORE INTO schema_version(version) VALUES (7);
+UPDATE schema_version SET version = 8 WHERE version < 8;
+INSERT OR IGNORE INTO schema_version(version) VALUES (8);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,15 +107,22 @@ CREATE TABLE IF NOT EXISTS snapshot (
   id TEXT PRIMARY KEY,
   created_at TIMESTAMP NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
-  label TEXT
+  label TEXT,
+  parent_id TEXT REFERENCES snapshot(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshot_created_at ON snapshot(created_at);
+CREATE INDEX IF NOT EXISTS idx_snapshot_parent_id ON snapshot(parent_id);
+
+CREATE TABLE IF NOT EXISTS snapshot_path (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  path TEXT NOT NULL UNIQUE CHECK (path != '')
+);
 
 CREATE TABLE IF NOT EXISTS snapshot_file (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
-  path TEXT NOT NULL CHECK (path != ''),
+  path_id INTEGER NOT NULL REFERENCES snapshot_path(id),
   logical_file_id INTEGER NOT NULL REFERENCES logical_file(id),
   size INTEGER,
   mode INTEGER,
@@ -123,8 +130,8 @@ CREATE TABLE IF NOT EXISTS snapshot_file (
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id);
-CREATE INDEX IF NOT EXISTS idx_snapshot_file_path ON snapshot_file(path);
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_path_id ON snapshot_file(path_id);
 CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id);
 
 COMMIT;
