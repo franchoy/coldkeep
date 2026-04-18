@@ -2153,6 +2153,55 @@ func TestRunSnapshotCommandListTreeTreatsMissingParentAsRoot(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandListTreeSortsChildrenByCreatedAtAscending(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "child-late", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+			{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "child-early", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+			{ID: "child-middle", CreatedAt: time.Date(2026, 4, 10, 11, 30, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	earlyIdx := strings.Index(output, "├── child-early")
+	middleIdx := strings.Index(output, "├── child-middle")
+	lateIdx := strings.Index(output, "└── child-late")
+	if earlyIdx == -1 || middleIdx == -1 || lateIdx == -1 {
+		t.Fatalf("expected ordered child entries in output, got:\n%s", output)
+	}
+	if !(earlyIdx < middleIdx && middleIdx < lateIdx) {
+		t.Fatalf("expected child order early -> middle -> late, got:\n%s", output)
+	}
+}
+
 func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalGet := getSnapshotPhase
