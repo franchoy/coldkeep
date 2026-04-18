@@ -2137,6 +2137,160 @@ func TestGetSnapshotStatsSkipsLineageWhenParentMissingMetadataRemains(t *testing
 	}
 }
 
+func TestGetSnapshotStatsLineageEdgeCaseEmptyChildSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-empty-parent", 10)
+
+	parent := Snapshot{ID: "snap-lineage-empty-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-empty-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 0 {
+		t.Fatalf("expected total files=0, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 0 {
+		t.Fatalf("expected reused=0, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 0 {
+		t.Fatalf("expected new=0, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 0.0 {
+		t.Fatalf("expected reuse ratio 0.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsLineageEdgeCaseIdenticalSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-identical-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-lineage-identical-b", 11)
+
+	parent := Snapshot{ID: "snap-lineage-identical-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, parent.ID, "img/x.png", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-identical-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "img/x.png", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 2 {
+		t.Fatalf("expected total files=2, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 2 {
+		t.Fatalf("expected reused=2, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 0 {
+		t.Fatalf("expected new=0, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 100.0 {
+		t.Fatalf("expected reuse ratio 100.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsLineageEdgeCaseCompletelyDifferentSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalParent := insertLogicalFileWithSize(t, db, "hash-lineage-diff-parent", 10)
+	logicalChildA := insertLogicalFileWithSize(t, db, "hash-lineage-diff-child-a", 11)
+	logicalChildB := insertLogicalFileWithSize(t, db, "hash-lineage-diff-child-b", 12)
+
+	parent := Snapshot{ID: "snap-lineage-diff-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalParent, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-diff-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "new/a.txt", logicalChildA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "new/b.txt", logicalChildB, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 2 {
+		t.Fatalf("expected total files=2, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 0 {
+		t.Fatalf("expected reused=0, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 2 {
+		t.Fatalf("expected new=2, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 0.0 {
+		t.Fatalf("expected reuse ratio 0.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsSkipsLineageForPartialSnapshotParentMetadata(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-partial-scope", 10)
+
+	parent := Snapshot{ID: "snap-lineage-partial-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+
+	child := Snapshot{ID: "snap-lineage-partial-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "partial"}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot partial child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	// Simulate legacy/corrupt partial lineage metadata and ensure stats does not
+	// attempt misleading cross-scope reused/new computation.
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, parent.ID, child.ID); err != nil {
+		t.Fatalf("inject partial lineage metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats partial child: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected partial child total files=1, got %+v", stats)
+	}
+	if stats.ParentSnapshotID.Valid || stats.ReusedFileCount.Valid || stats.NewFileCount.Valid || stats.ReuseRatioPct.Valid {
+		t.Fatalf("expected lineage metrics to be skipped for partial snapshot scope, got %+v", stats)
+	}
+}
+
 func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()

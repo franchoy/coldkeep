@@ -578,13 +578,25 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 	}
 
 	if snapshotRow.ParentID.Valid {
-		var parentExists int64
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot WHERE id = $1`, snapshotRow.ParentID.String).Scan(&parentExists); err != nil {
+		if snapshotRow.Type != "full" {
+			// Lineage reuse/new analysis is only meaningful for full-to-full comparisons.
+			return stats, nil
+		}
+
+		var parentType string
+		err := db.QueryRowContext(ctx, `SELECT type FROM snapshot WHERE id = $1`, snapshotRow.ParentID.String).Scan(&parentType)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// Parent lineage metadata is optional and non-authoritative for stats.
+				// If parent no longer exists, skip lineage breakdown and return totals only.
+				return stats, nil
+			}
 			return nil, fmt.Errorf("check parent snapshot existence snapshot_id=%s parent_id=%s: %w", stats.SnapshotID, snapshotRow.ParentID.String, err)
 		}
-		if parentExists == 0 {
+		if parentType != "full" {
+			// Guard against legacy/corrupt full->partial lineage metadata.
 			// Parent lineage metadata is optional and non-authoritative for stats.
-			// If parent no longer exists, skip lineage breakdown and return totals only.
+			// If parent is not full, skip lineage breakdown and return totals only.
 			return stats, nil
 		}
 
