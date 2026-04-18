@@ -779,12 +779,15 @@ func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID s
 
 	if err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
-		FROM snapshot_file a
+		FROM (
+			SELECT path_id
+			FROM snapshot_file
+			WHERE snapshot_id = $1
+		) a
 		LEFT JOIN snapshot_file b
-			ON b.snapshot_id = $2
-			AND b.path_id = a.path_id
-		WHERE a.snapshot_id = $1
-			AND b.path_id IS NULL
+			ON b.path_id = a.path_id
+			AND b.snapshot_id = $2
+		WHERE b.path_id IS NULL
 	`, baseID, targetID).Scan(&summary.Removed); err != nil {
 		return nil, fmt.Errorf("count removed diff rows base=%s target=%s: %w", baseID, targetID, err)
 	}
