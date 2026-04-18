@@ -2342,6 +2342,32 @@ func TestListSnapshotFilesWithPatternQuery(t *testing.T) {
 	}
 }
 
+func TestListSnapshotFilesNormalizesPathBeforeQueryMatch(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lsf-norm-a", 100)
+	s := Snapshot{ID: "snap-lsf-normalized-query", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, s); err != nil {
+		t.Fatalf("InsertSnapshot: %v", err)
+	}
+
+	// Insert a legacy/backslash row directly to verify list/query normalizes before matching.
+	insertSnapshotFileRow(t, db, s.ID, "docs\\a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	q := &SnapshotQuery{Pattern: "docs/*.txt"}
+	files, err := ListSnapshotFiles(ctx, db, s.ID, 0, q)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles with normalized matching: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 matched file, got %d", len(files))
+	}
+	if files[0].Path != "docs/a.txt" {
+		t.Fatalf("expected normalized output path docs/a.txt, got %q", files[0].Path)
+	}
+}
+
 func TestListSnapshotFilesQueryEmptyResult(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()

@@ -479,6 +479,13 @@ func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit
 		if err := rows.Scan(&item.Path, &item.LogicalFileID, &item.Size, &item.Mode, &item.MTime); err != nil {
 			return nil, fmt.Errorf("scan snapshot_file row: %w", err)
 		}
+
+		normalizedPath, err := NormalizeSnapshotPath(item.Path)
+		if err != nil {
+			return nil, fmt.Errorf("normalize snapshot_file path %q: %w", item.Path, err)
+		}
+		item.Path = normalizedPath
+
 		if !query.Match(item) {
 			continue
 		}
