@@ -727,6 +727,10 @@ func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string)
 // - removed:  exists in base, missing in target (by path_id)
 // - modified: exists in both by path_id, logical_file_id differs
 //
+// Correctness rule: diff identity is path identity + logical content identity.
+// Size and timestamp metadata are intentionally ignored for change classification;
+// logical_file_id is the content-addressed source of truth.
+//
 // This function is portable across PostgreSQL and SQLite and is intended for
 // fast summary paths where full entry materialization is unnecessary.
 //
@@ -816,6 +820,8 @@ func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID s
 // DiffSnapshots computes the diff between two snapshots identified by baseID and targetID.
 // An optional query filters the diff entries after classification (added/removed/modified).
 // The summary counts only the entries that pass the filter.
+// Change classification is based on normalized path identity plus logical_file_id,
+// not on size/mode/mtime metadata.
 //
 // Note: both snapshots are loaded fully into memory (O(N) memory, O(N log N) sort).
 // This is acceptable for typical workloads in v1.x. A future streaming diff implementation
