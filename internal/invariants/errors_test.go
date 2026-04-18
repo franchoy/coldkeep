@@ -37,6 +37,16 @@ func TestRecommendedActionForCode(t *testing.T) {
 		t.Fatal("expected non-empty recommended action")
 	}
 
+	snapshotAction := RecommendedActionForCode(CodeSnapshotRetainedDeleteBlocked)
+	if snapshotAction == "" {
+		t.Fatal("expected non-empty recommended action for snapshot retention blocker")
+	}
+
+	snapshotGraphAction := RecommendedActionForCode(CodeSnapshotGraphIntegrity)
+	if snapshotGraphAction == "" {
+		t.Fatal("expected non-empty recommended action for snapshot graph integrity")
+	}
+
 	if got := RecommendedActionForCode("UNKNOWN_CODE"); got != "" {
 		t.Fatalf("expected empty action for unknown code, got=%q", got)
 	}

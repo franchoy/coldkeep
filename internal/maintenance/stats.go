@@ -6,41 +6,56 @@ import (
 	"fmt"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/retention"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
+// SnapshotRetentionStats explains how retained logical content is distributed
+// across current-state references and snapshot history.
+type SnapshotRetentionStats struct {
+	CurrentOnlyLogicalFiles        int64 `json:"current_only_logical_files"`
+	CurrentOnlyBytes               int64 `json:"current_only_bytes"`
+	SnapshotReferencedLogicalFiles int64 `json:"snapshot_referenced_logical_files"`
+	SnapshotReferencedBytes        int64 `json:"snapshot_referenced_bytes"`
+	SnapshotOnlyLogicalFiles       int64 `json:"snapshot_only_logical_files"`
+	SnapshotOnlyBytes              int64 `json:"snapshot_only_bytes"`
+	SharedLogicalFiles             int64 `json:"shared_logical_files"`
+	SharedBytes                    int64 `json:"shared_bytes"`
+}
+
 // StatsResult holds the snapshot emitted by RunStatsResult.
 type StatsResult struct {
-	TotalFiles               int64                 `json:"total_files"`
-	TotalLogicalSizeBytes    int64                 `json:"total_logical_size_bytes"`
-	CompletedFiles           int64                 `json:"completed_files"`
-	CompletedSizeBytes       int64                 `json:"completed_size_bytes"`
-	ProcessingFiles          int64                 `json:"processing_files"`
-	ProcessingSizeBytes      int64                 `json:"processing_size_bytes"`
-	AbortedFiles             int64                 `json:"aborted_files"`
-	AbortedSizeBytes         int64                 `json:"aborted_size_bytes"`
-	HealthyContainers        int64                 `json:"healthy_containers"`
-	HealthyContainerBytes    int64                 `json:"healthy_container_bytes"`
-	QuarantineContainers     int64                 `json:"quarantine_containers"`
-	QuarantineContainerBytes int64                 `json:"quarantine_container_bytes"`
-	TotalContainers          int64                 `json:"total_containers"`
-	TotalContainerBytes      int64                 `json:"total_container_bytes"`
-	LiveBlockBytes           int64                 `json:"live_block_bytes"`
-	DeadBlockBytes           int64                 `json:"dead_block_bytes"`
-	GlobalDedupRatioPct      float64               `json:"global_dedup_ratio_pct"`
-	FragmentationRatioPct    float64               `json:"fragmentation_ratio_pct"`
-	TotalChunks              int64                 `json:"total_chunks"`
-	CompletedChunks          int64                 `json:"completed_chunks"`
-	CompletedChunkBytes      int64                 `json:"completed_chunk_bytes"`
-	ProcessingChunks         int64                 `json:"processing_chunks"`
-	AbortedChunks            int64                 `json:"aborted_chunks"`
-	TotalFileRetries         int64                 `json:"total_file_retries"`
-	AvgFileRetries           float64               `json:"avg_file_retries"`
-	MaxFileRetries           int64                 `json:"max_file_retries"`
-	TotalChunkRetries        int64                 `json:"total_chunk_retries"`
-	AvgChunkRetries          float64               `json:"avg_chunk_retries"`
-	MaxChunkRetries          int64                 `json:"max_chunk_retries"`
-	Containers               []ContainerStatRecord `json:"containers"`
+	TotalFiles               int64                  `json:"total_files"`
+	TotalLogicalSizeBytes    int64                  `json:"total_logical_size_bytes"`
+	CompletedFiles           int64                  `json:"completed_files"`
+	CompletedSizeBytes       int64                  `json:"completed_size_bytes"`
+	ProcessingFiles          int64                  `json:"processing_files"`
+	ProcessingSizeBytes      int64                  `json:"processing_size_bytes"`
+	AbortedFiles             int64                  `json:"aborted_files"`
+	AbortedSizeBytes         int64                  `json:"aborted_size_bytes"`
+	HealthyContainers        int64                  `json:"healthy_containers"`
+	HealthyContainerBytes    int64                  `json:"healthy_container_bytes"`
+	QuarantineContainers     int64                  `json:"quarantine_containers"`
+	QuarantineContainerBytes int64                  `json:"quarantine_container_bytes"`
+	TotalContainers          int64                  `json:"total_containers"`
+	TotalContainerBytes      int64                  `json:"total_container_bytes"`
+	LiveBlockBytes           int64                  `json:"live_block_bytes"`
+	DeadBlockBytes           int64                  `json:"dead_block_bytes"`
+	GlobalDedupRatioPct      float64                `json:"global_dedup_ratio_pct"`
+	FragmentationRatioPct    float64                `json:"fragmentation_ratio_pct"`
+	TotalChunks              int64                  `json:"total_chunks"`
+	CompletedChunks          int64                  `json:"completed_chunks"`
+	CompletedChunkBytes      int64                  `json:"completed_chunk_bytes"`
+	ProcessingChunks         int64                  `json:"processing_chunks"`
+	AbortedChunks            int64                  `json:"aborted_chunks"`
+	TotalFileRetries         int64                  `json:"total_file_retries"`
+	AvgFileRetries           float64                `json:"avg_file_retries"`
+	MaxFileRetries           int64                  `json:"max_file_retries"`
+	TotalChunkRetries        int64                  `json:"total_chunk_retries"`
+	AvgChunkRetries          float64                `json:"avg_chunk_retries"`
+	MaxChunkRetries          int64                  `json:"max_chunk_retries"`
+	SnapshotRetention        SnapshotRetentionStats `json:"snapshot_retention"`
+	Containers               []ContainerStatRecord  `json:"containers"`
 }
 
 // ContainerStatRecord holds per-container data.
@@ -63,6 +78,17 @@ func RunStatsResult() (*StatsResult, error) {
 	defer func() { _ = dbconn.Close() }()
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+
+	return runStatsResultWithDB(ctx, dbconn)
+}
+
+func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, error) {
+	if dbconn == nil {
+		return nil, fmt.Errorf("db connection is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	r := &StatsResult{}
 
@@ -150,6 +176,12 @@ func RunStatsResult() (*StatsResult, error) {
 	r.AvgChunkRetries = avgChunkRetries.Float64
 	r.MaxChunkRetries = maxChunkRetries.Int64
 
+	snapshotRetention, err := computeSnapshotRetentionStats(ctx, dbconn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute snapshot retention stats: %w", err)
+	}
+	r.SnapshotRetention = snapshotRetention
+
 	// Chunk status breakdown
 	chunkRows, err := dbconn.QueryContext(ctx, `SELECT status, COUNT(*), COALESCE(SUM(size),0) FROM chunk GROUP BY status`)
 	if err != nil {
@@ -213,4 +245,65 @@ func RunStatsResult() (*StatsResult, error) {
 	}
 
 	return r, nil
+}
+
+func computeSnapshotRetentionStats(ctx context.Context, dbconn *sql.DB) (SnapshotRetentionStats, error) {
+	summary, err := retention.ComputeReachabilitySummary(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	snapshotReferencedCount, err := retention.CountSnapshotReferencedLogicalFiles(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	snapshotOnlyCount, err := retention.CountSnapshotOnlyLogicalFiles(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	snapshotReferencedBytes, err := retention.SumSnapshotReferencedLogicalBytes(ctx, dbconn)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `SELECT id, total_size FROM logical_file`)
+	if err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	stats := SnapshotRetentionStats{
+		SnapshotReferencedLogicalFiles: snapshotReferencedCount,
+		SnapshotReferencedBytes:        snapshotReferencedBytes,
+		SnapshotOnlyLogicalFiles:       snapshotOnlyCount,
+		SharedLogicalFiles:             snapshotReferencedCount - snapshotOnlyCount,
+	}
+	for rows.Next() {
+		var logicalFileID int64
+		var totalSize int64
+		if err := rows.Scan(&logicalFileID, &totalSize); err != nil {
+			return SnapshotRetentionStats{}, err
+		}
+
+		_, currentReferenced := summary.CurrentLogicalIDs[logicalFileID]
+		_, snapshotReferenced := summary.SnapshotLogicalIDs[logicalFileID]
+
+		switch {
+		case currentReferenced && snapshotReferenced:
+			stats.SharedBytes += totalSize
+		case snapshotReferenced:
+			stats.SnapshotOnlyBytes += totalSize
+		case currentReferenced:
+			stats.CurrentOnlyLogicalFiles++
+			stats.CurrentOnlyBytes += totalSize
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return SnapshotRetentionStats{}, err
+	}
+
+	return stats, nil
 }

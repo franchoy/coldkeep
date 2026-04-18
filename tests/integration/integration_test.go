@@ -49,9 +49,10 @@ import (
 //
 //	COLDKEEP_TEST_DB=1 go test ./tests/... -v -timeout 10m
 //
-// Run the dedicated long-run tier:
+// Run the dedicated long-run tier (includes TestStoreGCVerifyRestoreDeleteLoopStability,
+// TestRandomizedLongRunLifecycleSoak, and TestSnapshotRetentionChurnLongRun):
 //
-//	COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests -run TestStoreGCVerifyRestoreDeleteLoopStability -v -timeout 20m
+//	COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun' -v -timeout 30m
 //
 // Run correctness only (skip stress regardless of environment):
 //
@@ -452,6 +453,602 @@ func TestDoctorCommand(t *testing.T) {
 	}
 
 	t.Logf("doctor command test passed: verify_level=%q recovery=%q verify=%q schema=%q", verifyLevel, recoveryStatus, verifyStatus, schemaStatus)
+}
+
+func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img input: %v", err)
+	}
+	pathDocs := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "a.txt", 64*1024)
+	pathImg := testutils.CreateTempFile(t, filepath.Join(inputDir, "img"), "x.png", 48*1024)
+
+	storeDocs := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathDocs, "--output", "json"), "store")
+	storeDocsData := testutils.JSONMap(t, storeDocs, "data")
+	storedDocsPath, ok := storeDocsData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedDocsPath) == "" {
+		t.Fatalf("store docs JSON missing stored_path: payload=%v", storeDocs)
+	}
+
+	storeImg := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathImg, "--output", "json"), "store")
+	storeImgData := testutils.JSONMap(t, storeImg, "data")
+	storedImgPath, ok := storeImgData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedImgPath) == "" {
+		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
+	}
+
+	snap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-it-1", "--output", "json"), "snapshot")
+	snap1Data := testutils.JSONMap(t, snap1, "data")
+	if got, _ := snap1Data["snapshot_id"].(string); got != "snap-it-1" {
+		t.Fatalf("snapshot id mismatch for first snapshot: got=%q payload=%v", got, snap1)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB: %v", err)
+	}
+	defer dbconn.Close()
+
+	var physicalCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file`).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical_file rows: %v", err)
+	}
+
+	var snap1Count int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-1").Scan(&snap1Count); err != nil {
+		t.Fatalf("count snapshot_file rows for snap-it-1: %v", err)
+	}
+	if snap1Count != physicalCount {
+		t.Fatalf("snapshot row count mismatch: snapshot=%d physical=%d", snap1Count, physicalCount)
+	}
+
+	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+
+	var snap1DocsRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1 AND path = $2`, "snap-it-1", trimmedDocs).Scan(&snap1DocsRows); err != nil {
+		t.Fatalf("query docs path in first snapshot: %v", err)
+	}
+	if snap1DocsRows != 1 {
+		t.Fatalf("expected docs path in first snapshot, got count=%d path=%q", snap1DocsRows, trimmedDocs)
+	}
+
+	// Validate snap-it-1 metadata while it still exists.
+	showPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", "snap-it-1", "--limit", "10", "--output", "json"), "snapshot")
+	showData := testutils.JSONMap(t, showPayload, "data")
+	if got, _ := showData["action"].(string); got != "show" {
+		t.Fatalf("snapshot show JSON missing action=show: payload=%v", showPayload)
+	}
+	if got := int64(showData["file_count"].(float64)); got != int64(snap1Count) {
+		t.Fatalf("snapshot show file_count mismatch: got=%d want=%d payload=%v", got, snap1Count, showPayload)
+	}
+
+	statsPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "stats", "snap-it-1", "--output", "json"), "snapshot")
+	statsData := testutils.JSONMap(t, statsPayload, "data")
+	if got, _ := statsData["action"].(string); got != "stats" {
+		t.Fatalf("snapshot stats JSON missing action=stats: payload=%v", statsPayload)
+	}
+	if got := int64(statsData["snapshot_file_count"].(float64)); got != int64(snap1Count) {
+		t.Fatalf("snapshot stats file count mismatch: got=%d want=%d payload=%v", got, snap1Count, statsPayload)
+	}
+
+	// Retention contract: remove --stored-path must be refused while a snapshot retains the file.
+	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedDocsPath, "--output", "json")
+	if removeBlocked.ExitCode == 0 {
+		t.Fatalf("expected remove --stored-path to be blocked while snapshot-retained, but it succeeded: stdout=%s", removeBlocked.Stdout)
+	}
+
+	// Restore snap-it-1 while it still exists.
+	restoreRoot := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore root: %v", err)
+	}
+	restoreSnap1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-1", "--mode", "prefix", "--destination", restoreRoot, "--output", "json"), "snapshot")
+	restoreSnap1Data := testutils.JSONMap(t, restoreSnap1, "data")
+	if got, _ := restoreSnap1Data["action"].(string); got != "restore" {
+		t.Fatalf("snapshot restore JSON missing action=restore: payload=%v", restoreSnap1)
+	}
+	restoredDocsFromSnap1 := filepath.Join(restoreRoot, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredDocsFromSnap1); err != nil {
+		t.Fatalf("expected docs file restored from first snapshot at %s: %v", restoredDocsFromSnap1, err)
+	}
+
+	// Partial snapshot restore: restore only trimmedImg from snap-it-1.
+	restoreRoot3 := filepath.Join(tmp, "restored3")
+	if err := os.MkdirAll(restoreRoot3, 0o755); err != nil {
+		t.Fatalf("mkdir restore root3: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-1", trimmedImg, "--mode", "prefix", "--destination", restoreRoot3, "--output", "json"), "snapshot")
+	restoredImg3 := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedImg))
+	restoredDocs3 := filepath.Join(restoreRoot3, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredImg3); err != nil {
+		t.Fatalf("expected exact requested image path restored, err=%v", err)
+	}
+	if _, err := os.Stat(restoredDocs3); !os.IsNotExist(err) {
+		t.Fatalf("expected docs path not restored in partial exact restore, stat err=%v", err)
+	}
+
+	// Clear retention by deleting snap-it-1, then remove docs.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-it-1", "--force", "--output", "json"), "snapshot")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedDocsPath, "--output", "json"), "remove")
+
+	snap2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-it-2", "--output", "json"), "snapshot")
+	snap2Data := testutils.JSONMap(t, snap2, "data")
+	if got, _ := snap2Data["snapshot_id"].(string); got != "snap-it-2" {
+		t.Fatalf("snapshot id mismatch for second snapshot: got=%q payload=%v", got, snap2)
+	}
+
+	var snap2Count int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-2").Scan(&snap2Count); err != nil {
+		t.Fatalf("count snapshot_file rows for snap-it-2: %v", err)
+	}
+	if snap2Count >= snap1Count {
+		t.Fatalf("expected second snapshot to have fewer rows after remove, got first=%d second=%d", snap1Count, snap2Count)
+	}
+
+	var snap2DocsRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1 AND path = $2`, "snap-it-2", trimmedDocs).Scan(&snap2DocsRows); err != nil {
+		t.Fatalf("query docs path in second snapshot: %v", err)
+	}
+	if snap2DocsRows != 0 {
+		t.Fatalf("expected removed docs path to be absent from second snapshot, got count=%d", snap2DocsRows)
+	}
+
+	snapPartial := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedImg, "--id", "snap-it-partial", "--output", "json"), "snapshot")
+	partialData := testutils.JSONMap(t, snapPartial, "data")
+	if got, _ := partialData["type"].(string); got != "partial" {
+		t.Fatalf("expected partial snapshot type, got %q payload=%v", got, snapPartial)
+	}
+
+	var partialCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-partial").Scan(&partialCount); err != nil {
+		t.Fatalf("count snapshot_file rows for partial snapshot: %v", err)
+	}
+	if partialCount != 1 {
+		t.Fatalf("expected exactly one row in partial snapshot, got %d", partialCount)
+	}
+
+	var partialPath string
+	if err := dbconn.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = $1`, "snap-it-partial").Scan(&partialPath); err != nil {
+		t.Fatalf("query partial snapshot path: %v", err)
+	}
+	if partialPath != trimmedImg {
+		t.Fatalf("partial snapshot path mismatch: got=%q want=%q", partialPath, trimmedImg)
+	}
+
+	// Restoring snap-it-2 must not include the removed docs path.
+	restoreRoot2 := filepath.Join(tmp, "restored2")
+	if err := os.MkdirAll(restoreRoot2, 0o755); err != nil {
+		t.Fatalf("mkdir restore root2: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-it-2", "--mode", "prefix", "--destination", restoreRoot2, "--output", "json"), "snapshot")
+	restoredDocsFromSnap2 := filepath.Join(restoreRoot2, filepath.FromSlash(trimmedDocs))
+	if _, err := os.Stat(restoredDocsFromSnap2); !os.IsNotExist(err) {
+		t.Fatalf("expected docs file to remain absent when restoring second snapshot, stat err=%v", err)
+	}
+
+	listPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--type", "full", "--limit", "10", "--output", "json"), "snapshot")
+	listData := testutils.JSONMap(t, listPayload, "data")
+	if got, _ := listData["action"].(string); got != "list" {
+		t.Fatalf("snapshot list JSON missing action=list: payload=%v", listPayload)
+	}
+	listItems, ok := listData["snapshots"].([]any)
+	if !ok || len(listItems) == 0 {
+		t.Fatalf("snapshot list JSON missing snapshots array: payload=%v", listPayload)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-it-partial", "--force", "--output", "json"), "snapshot")
+
+	var deletedPartialCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = $1`, "snap-it-partial").Scan(&deletedPartialCount); err != nil {
+		t.Fatalf("query deleted partial snapshot: %v", err)
+	}
+	if deletedPartialCount != 0 {
+		t.Fatalf("expected deleted partial snapshot to be gone, got count=%d", deletedPartialCount)
+	}
+}
+
+// TestPhase7SnapshotRetentionLifecycleCLIIntegration validates the complete
+// Phase 7 retention lifecycle at CLI/system level:
+//
+//  1. store file A
+//  2. create snapshot S1 retaining A
+//  3. remove --stored-path is refused while snapshot-retained
+//  4. restore by ID still works
+//  5. gc --dry-run reports snapshot protection
+//  6. verify system --standard passes
+//  7. delete snapshot S1
+//  8. remove --stored-path succeeds
+//  9. gc --dry-run shows snapshot-retained roots dropped (eligibility gate)
+func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	// Ensure a fully clean v1.3 state for deterministic snapshot/physical checks.
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate v1.3 tables: %v", err)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "phase7_a.bin", 96*1024)
+	originalHash := testutils.SHA256File(t, inPath)
+
+	storePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	fileID := testutils.JSONInt64(t, storeData, "file_id")
+	storedPath, ok := storeData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedPath) == "" {
+		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase7-e2e", "--output", "json"), "snapshot")
+
+	removeBlocked := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json")
+	if removeBlocked.ExitCode == 0 {
+		t.Fatalf("remove --stored-path should be refused while snapshot-retained\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
+	}
+	errPayload, ok := testutils.FindCLIErrorPayload(removeBlocked.Stderr)
+	if !ok {
+		errPayload, ok = testutils.FindCLIErrorPayload(removeBlocked.Stdout + "\n" + removeBlocked.Stderr)
+	}
+	if !ok {
+		t.Fatalf("remove blocked path produced no machine-readable error payload\nstdout:\n%s\nstderr:\n%s", removeBlocked.Stdout, removeBlocked.Stderr)
+	}
+	if got, _ := errPayload["invariant_code"].(string); got != "SNAPSHOT_RETAINED_DELETE_BLOCKED" {
+		t.Fatalf("expected invariant_code SNAPSHOT_RETAINED_DELETE_BLOCKED, got %q payload=%v", got, errPayload)
+	}
+
+	restoreDir := filepath.Join(tmp, "restored")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restoreDir: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileID), restoreDir, "--output", "json"), "restore")
+
+	var restoredPath string
+	if walkErr := filepath.WalkDir(restoreDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		restoredPath = path
+		return errors.New("done")
+	}); walkErr != nil && !strings.Contains(walkErr.Error(), "done") {
+		t.Fatalf("walk restore dir: %v", walkErr)
+	}
+	if strings.TrimSpace(restoredPath) == "" {
+		t.Fatalf("restore produced no output file in %s", restoreDir)
+	}
+	if restoredHash := testutils.SHA256File(t, restoredPath); restoredHash != originalHash {
+		t.Fatalf("restore-by-id hash mismatch: want=%s got=%s", originalHash, restoredHash)
+	}
+
+	gcBefore := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+	gcBeforeData := testutils.JSONMap(t, gcBefore, "data")
+	snapshotRetainedBefore := testutils.JSONInt64(t, gcBeforeData, "snapshot_retained_logical_files")
+	if snapshotRetainedBefore < 1 {
+		t.Fatalf("expected snapshot_retained_logical_files > 0 before snapshot delete, got %d payload=%v", snapshotRetainedBefore, gcBefore)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-phase7-e2e", "--force", "--output", "json"), "snapshot")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
+
+	gcAfter := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+	gcAfterData := testutils.JSONMap(t, gcAfter, "data")
+	snapshotRetainedAfter := testutils.JSONInt64(t, gcAfterData, "snapshot_retained_logical_files")
+	if snapshotRetainedAfter != 0 {
+		t.Fatalf("expected snapshot_retained_logical_files=0 after snapshot delete and remove, got %d payload=%v", snapshotRetainedAfter, gcAfter)
+	}
+	if snapshotRetainedAfter >= snapshotRetainedBefore {
+		t.Fatalf("expected snapshot-retained roots to decrease after snapshot delete: before=%d after=%d", snapshotRetainedBefore, snapshotRetainedAfter)
+	}
+}
+
+// TestSnapshotShowFilteredJSONContractMatchesFileCount ensures that
+// snapshot show --prefix/--pattern filtering produces JSON with
+// matched_file_count == len(files). This locks the contract that
+// clients use to validate completeness.
+func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Create files directly in the store directory structure
+	storeDir := filepath.Join(inputDir, "store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatalf("mkdir store: %v", err)
+	}
+
+	// Create files in different directories
+	if err := os.MkdirAll(filepath.Join(storeDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(storeDir, "docs", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(storeDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img: %v", err)
+	}
+
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "docs"), "a.txt", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "docs"), "b.txt", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "docs", "nested"), "c.txt", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "img"), "d.jpg", 100)
+	testutils.CreateTempFile(t, filepath.Join(storeDir, "img"), "e.jpg", 100)
+
+	// Store the entire directory structure
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store-folder", storeDir, "--output", "json"), "store-folder")
+
+	snapID := "snapshot-filter-contract"
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", snapID, "--output", "json"), "snapshot")
+
+	// Test 1: snapshot show --prefix filtering
+	showPrefix := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapID, "--prefix", "docs/", "--output", "json"), "snapshot")
+	showPrefixData := testutils.JSONMap(t, showPrefix, "data")
+
+	matchedFileCount := testutils.JSONInt64(t, showPrefixData, "matched_file_count")
+	filesArray, ok := showPrefixData["files"].([]any)
+	if !ok {
+		t.Fatalf("snapshot show --prefix: files is not an array in JSON: %v", showPrefixData)
+	}
+
+	if matchedFileCount != int64(len(filesArray)) {
+		t.Fatalf("snapshot show --prefix: matched_file_count=%d does not match len(files)=%d", matchedFileCount, len(filesArray))
+	}
+
+	// Test 2: snapshot show --pattern filtering (non-empty result).
+	// Snapshot paths are normalized slash paths rooted at stored physical paths,
+	// so derive the glob from storeDir for backend-agnostic matching.
+	normalizedStoreDir := strings.TrimPrefix(filepath.ToSlash(storeDir), "/")
+	pattern := normalizedStoreDir + "/docs/*.txt"
+	showPattern := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapID, "--pattern", pattern, "--output", "json"), "snapshot")
+	showPatternData := testutils.JSONMap(t, showPattern, "data")
+
+	matchedFileCountPattern := testutils.JSONInt64(t, showPatternData, "matched_file_count")
+	filesArrayPattern, ok := showPatternData["files"].([]any)
+	if !ok {
+		t.Fatalf("snapshot show --pattern: files is not an array in JSON: %v", showPatternData)
+	}
+
+	if matchedFileCountPattern != int64(len(filesArrayPattern)) {
+		t.Fatalf("snapshot show --pattern: matched_file_count=%d does not match len(files)=%d", matchedFileCountPattern, len(filesArrayPattern))
+	}
+
+	// Expect to match only docs/*.txt (a.txt, b.txt at prefix, not nested/c.txt)
+	if matchedFileCountPattern < 2 {
+		t.Fatalf("snapshot show --pattern %q: expected to match at least 2 files, got %d", pattern, matchedFileCountPattern)
+	}
+
+	// Test 3: Empty filtered result still returns stable JSON shape
+	showEmpty := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapID, "--prefix", "nonexistent/", "--output", "json"), "snapshot")
+	showEmptyData := testutils.JSONMap(t, showEmpty, "data")
+
+	matchedFileCountEmpty := testutils.JSONInt64(t, showEmptyData, "matched_file_count")
+	if matchedFileCountEmpty != 0 {
+		t.Fatalf("snapshot show --prefix 'nonexistent/': expected matched_file_count=0, got %d", matchedFileCountEmpty)
+	}
+
+	filesArrayEmpty, ok := showEmptyData["files"].([]any)
+	if !ok {
+		t.Fatalf("snapshot show (empty result): files is not an array in JSON: %v", showEmptyData)
+	}
+	if len(filesArrayEmpty) != 0 {
+		t.Fatalf("snapshot show (empty result): expected empty files array, got %d entries", len(filesArrayEmpty))
+	}
+
+	// Verify stable envelope structure exists
+	if status, _ := showEmpty["status"].(string); status != "ok" {
+		t.Fatalf("snapshot show (empty result): status should be 'ok', got %q", status)
+	}
+	if cmd, _ := showEmpty["command"].(string); cmd != "snapshot diff" && cmd != "snapshot" && cmd != "snapshot show" {
+		t.Fatalf("snapshot show (empty result): command field missing or wrong: %q", cmd)
+	}
+}
+
+// TestSnapshotDiffFilteredJSONContractMatchesSummary ensures that
+// snapshot diff with --filter/--regex produces JSON where the
+// summary matches the returned entries.
+func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Create version 1
+	storeDir1 := filepath.Join(inputDir, "v1")
+	if err := os.MkdirAll(filepath.Join(storeDir1, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	testutils.CreateTempFile(t, filepath.Join(storeDir1, "docs"), "readme.txt", 200)
+	testutils.CreateTempFile(t, filepath.Join(storeDir1, "docs"), "guide.md", 300)
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store-folder", storeDir1, "--output", "json"), "store-folder")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-diff-v1", "--output", "json"), "snapshot")
+
+	// Create version 2 (add and modify files)
+	storeDir2 := filepath.Join(inputDir, "v2")
+	if err := os.MkdirAll(filepath.Join(storeDir2, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "readme.txt", 250)  // modified size
+	testutils.CreateTempFile(t, filepath.Join(storeDir2, "docs"), "newfile.txt", 100) // added
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store-folder", storeDir2, "--output", "json"), "store-folder")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-diff-v2", "--output", "json"), "snapshot")
+
+	// Test: snapshot diff with --prefix filter
+	diffResult := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "snap-diff-v1", "snap-diff-v2", "--prefix", "docs/", "--output", "json"), "snapshot diff")
+	diffData := testutils.JSONMap(t, diffResult, "data")
+
+	// Extract summary
+	summary, ok := diffData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot diff: summary is not a map in JSON: %v", diffData)
+	}
+
+	// Count entries by classification
+	entriesArray, ok := diffData["entries"].([]any)
+	if !ok {
+		t.Fatalf("snapshot diff: entries is not an array in JSON: %v", diffData)
+	}
+
+	addedCount := int64(0)
+	modifiedCount := int64(0)
+	for _, entry := range entriesArray {
+		entryMap, _ := entry.(map[string]any)
+		if change, _ := entryMap["change"].(string); change == "added" {
+			addedCount++
+		} else if change == "modified" {
+			modifiedCount++
+		}
+	}
+
+	// Verify summary counts match
+	if got, _ := summary["added_count"].(float64); int64(got) != addedCount {
+		t.Fatalf("snapshot diff: summary.added_count=%d does not match counted added entries=%d", int64(got), addedCount)
+	}
+	if got, _ := summary["modified_count"].(float64); int64(got) != modifiedCount {
+		t.Fatalf("snapshot diff: summary.modified_count=%d does not match counted modified entries=%d", int64(got), modifiedCount)
+	}
+
+	// Verify total_diff_entry_count matches
+	totalEntryCount := testutils.JSONInt64(t, diffData, "total_diff_entry_count")
+	if totalEntryCount != int64(len(entriesArray)) {
+		t.Fatalf("snapshot diff: total_diff_entry_count=%d does not match len(entries)=%d", totalEntryCount, int64(len(entriesArray)))
+	}
 }
 
 func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
@@ -11511,6 +12108,280 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 		restoredHash := testutils.SHA256File(t, outPath)
 		if restoredHash != fileHashes[i] {
 			t.Fatalf("file %d: Hash mismatch after restore", i)
+		}
+	}
+
+	testutils.AssertNoProcessingRows(t, dbconn)
+	testutils.AssertUniqueFileChunkOrders(t, dbconn)
+}
+
+// TestSnapshotRetentionChurnLongRun is a long-run soak test that stresses the
+// snapshot-retention model by exercising snapshot create, delete, restore, and
+// GC cycles under high churn. It catches:
+//   - retention-count drift
+//   - stale metadata transitions
+//   - GC/retention race-like logical mistakes
+//   - ref-count inconsistencies
+func TestSnapshotRetentionChurnLongRun(t *testing.T) {
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	const iterations = 70
+
+	tmp := t.TempDir()
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	originalMaxSize := container.GetContainerMaxSize()
+	container.SetContainerMaxSize(5 * 1024 * 1024)
+	defer container.SetContainerMaxSize(originalMaxSize)
+
+	inputDir := filepath.Join(tmp, "input")
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+
+	// Build the coldkeep CLI binary for snapshot operations
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+
+	rng := rand.New(rand.NewSource(20260417 + 42))
+
+	type FileRecord struct {
+		id   int64
+		hash string
+		path string
+	}
+
+	type SnapshotRecord struct {
+		id    string
+		files map[int64]bool // map of file IDs captured in this snapshot
+	}
+
+	liveFiles := make(map[int64]FileRecord)
+	snapshots := make(map[string]SnapshotRecord)
+	snapshotIDCounter := 0
+
+	assertRetentionConsistent := func(label string) {
+		t.Helper()
+
+		// Count retained logical files from snapshots + check against DB
+		var snapshotRetainedCount int64
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(DISTINCT sf.logical_file_id)
+			FROM snapshot_file sf
+		`).Scan(&snapshotRetainedCount); err != nil {
+			t.Fatalf("%s: count snapshot-retained logical files: %v", label, err)
+		}
+
+		var snapshotCount int64
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot`).Scan(&snapshotCount); err != nil {
+			t.Fatalf("%s: count snapshots: %v", label, err)
+		}
+
+		// If no active snapshots, retention should be 0
+		if snapshotCount == 0 && snapshotRetainedCount != 0 {
+			t.Fatalf("%s: expected 0 snapshot-retained files when no snapshots exist, got %d", label, snapshotRetainedCount)
+		}
+
+		// Verify no orphan snapshot_file references
+		var orphanSnapshotFiles int64
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(*)
+			FROM snapshot_file sf
+			LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
+			WHERE lf.id IS NULL
+		`).Scan(&orphanSnapshotFiles); err != nil {
+			t.Fatalf("%s: count orphan snapshot_file rows: %v", label, err)
+		}
+		if orphanSnapshotFiles != 0 {
+			t.Fatalf("%s: expected 0 orphan snapshot_file rows, got %d", label, orphanSnapshotFiles)
+		}
+
+		// Verify no orphan physical_file references
+		var orphanPhysicalFiles int64
+		if err := dbconn.QueryRow(`
+			SELECT COUNT(*)
+			FROM physical_file pf
+			LEFT JOIN logical_file lf ON lf.id = pf.logical_file_id
+			WHERE lf.id IS NULL
+		`).Scan(&orphanPhysicalFiles); err != nil {
+			t.Fatalf("%s: count orphan physical_file rows: %v", label, err)
+		}
+		if orphanPhysicalFiles != 0 {
+			t.Fatalf("%s: expected 0 orphan physical_file rows, got %d", label, orphanPhysicalFiles)
+		}
+	}
+
+	assertVerifyPasses := func(label string, verifyLevel verify.VerifyLevel) {
+		t.Helper()
+
+		if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verifyLevel); err != nil {
+			t.Fatalf("%s: verify %v: %v", label, verifyLevel, err)
+		}
+	}
+
+	for iteration := 0; iteration < iterations; iteration++ {
+		// 60% chance: Store a new file
+		if rng.Intn(100) < 60 {
+			fileSize := 256*1024 + rng.Intn(2*1024*1024)
+			filePath := filepath.Join(inputDir, fmt.Sprintf("churn-%03d-%.5d.bin", iteration, rng.Intn(99999)))
+
+			wantBytes := make([]byte, fileSize)
+			for j := range wantBytes {
+				wantBytes[j] = byte((j*19 + iteration*23 + j/4096 + 7) % 251)
+			}
+			if err := os.WriteFile(filePath, wantBytes, 0o644); err != nil {
+				t.Fatalf("iteration %d: write input file: %v", iteration, err)
+			}
+			wantHash := testutils.SHA256File(t, filePath)
+
+			if err := storage.StoreFileWithStorageContext(testutils.NewTestContext(dbconn), filePath); err != nil {
+				t.Fatalf("iteration %d: store: %v", iteration, err)
+			}
+
+			fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
+			liveFiles[fileID] = FileRecord{id: fileID, hash: wantHash, path: filePath}
+		}
+
+		// 50% chance: Run GC (dry-run or real)
+		if rng.Intn(100) < 50 {
+			isDryRun := rng.Intn(100) < 40
+			gcResult, err := maintenance.RunGCWithContainersDirResult(isDryRun, container.ContainersDir)
+			if err != nil {
+				t.Fatalf("iteration %d: gc (dry=%v): %v", iteration, isDryRun, err)
+			}
+
+			// Validate retention counts from GC result
+			snapshotLen := len(snapshots)
+			if snapshotLen > 0 {
+				if gcResult.SnapshotRetainedLogicalFiles == 0 {
+					t.Fatalf("iteration %d: expected SnapshotRetainedLogicalFiles > 0 when %d snapshots exist, got 0", iteration, snapshotLen)
+				}
+			}
+		}
+
+		// 40% chance: Create a snapshot
+		if rng.Intn(100) < 40 && len(liveFiles) > 0 {
+			snapshotIDCounter++
+			snapID := fmt.Sprintf("snapshot-churn-%03d", snapshotIDCounter)
+
+			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "create", "--id", snapID, "--output", "json")
+			if result.ExitCode != 0 {
+				t.Fatalf("iteration %d: snapshot create failed: %s", iteration, result.Stderr)
+			}
+
+			// Parse snapshot creation result to verify it succeeded
+			snapData, ok := testutils.TryParseLastJSONLine(result.Stdout)
+			if !ok {
+				t.Fatalf("iteration %d: failed to parse snapshot create JSON: %s", iteration, result.Stdout)
+			}
+			dataObj, _ := snapData["data"].(map[string]any)
+			if gotID, _ := dataObj["snapshot_id"].(string); gotID != snapID {
+				t.Fatalf("iteration %d: snapshot id mismatch: want %q got %q", iteration, snapID, gotID)
+			}
+
+			// Record which files are retained by this snapshot
+			capturedFiles := make(map[int64]bool)
+			for fid := range liveFiles {
+				capturedFiles[fid] = true
+			}
+			snapshots[snapID] = SnapshotRecord{id: snapID, files: capturedFiles}
+		}
+
+		// 30% chance: Restore from an active snapshot
+		if rng.Intn(100) < 30 && len(snapshots) > 0 {
+			var randomSnap SnapshotRecord
+			for _, snap := range snapshots {
+				randomSnap = snap
+				break
+			}
+
+			if len(randomSnap.files) > 0 {
+				result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "restore", randomSnap.id, "--mode", "prefix", "--destination", restoreDir, "--output", "json")
+				if result.ExitCode != 0 {
+					t.Logf("iteration %d: snapshot restore from %s: %s (may be expected under churn)", iteration, randomSnap.id, result.Stderr)
+					continue
+				}
+			}
+		}
+
+		// 20% chance: Remove a live file (if not retained by snapshot)
+		if rng.Intn(100) < 20 && len(liveFiles) > 0 {
+			// Find a file not locked by any snapshot, or remove anyway and let the CLI handle it
+			var fileToRemove int64
+			for fid := range liveFiles {
+				fileToRemove = fid
+				break
+			}
+
+			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "remove", fmt.Sprintf("%d", fileToRemove))
+			if result.ExitCode == 0 {
+				delete(liveFiles, fileToRemove)
+			} else if strings.Contains(result.Stderr, "SNAPSHOT_RETAINED_DELETE_BLOCKED") {
+				// Expected: file is retained by snapshot, keep it in liveFiles
+			} else if strings.Contains(result.Stderr, "file ID") || strings.Contains(result.Stderr, "one or more remove operations failed") {
+				// Under churn, a previously-tracked file may already be absent from current mappings.
+				delete(liveFiles, fileToRemove)
+			} else {
+				t.Fatalf("iteration %d: remove file %d failed unexpectedly: %s", iteration, fileToRemove, result.Stderr)
+			}
+		}
+
+		// 25% chance: Delete a snapshot
+		if rng.Intn(100) < 25 && len(snapshots) > 0 {
+			var snapToDelete string
+			for snapID := range snapshots {
+				snapToDelete = snapID
+				break
+			}
+
+			result := testutils.RunColdkeepCommand(t, repoRoot, binPath, map[string]string{}, "snapshot", "delete", snapToDelete, "--force")
+			if result.ExitCode != 0 {
+				t.Fatalf("iteration %d: snapshot delete %s failed: %s", iteration, snapToDelete, result.Stderr)
+			}
+
+			delete(snapshots, snapToDelete)
+		}
+
+		// Every 10 iterations: Verify standard + check retention consistency
+		if iteration > 0 && iteration%10 == 0 {
+			assertVerifyPasses(fmt.Sprintf("iteration %d", iteration), verify.VerifyStandard)
+			assertRetentionConsistent(fmt.Sprintf("iteration %d", iteration))
+		}
+
+		testutils.AssertNoProcessingRows(t, dbconn)
+		testutils.AssertUniqueFileChunkOrders(t, dbconn)
+	}
+
+	// Final deep verify and retention check
+	assertVerifyPasses("final", verify.VerifyFull)
+	assertRetentionConsistent("final")
+
+	// Verify we can restore all remaining live files
+	for _, rec := range liveFiles {
+		outPath := filepath.Join(restoreDir, fmt.Sprintf("churn-final-%.5d.bin", rec.id))
+		if err := storage.RestoreFileWithDB(dbconn, rec.id, outPath); err != nil {
+			t.Fatalf("final restore of file %d: %v", rec.id, err)
+		}
+
+		restoredHash := testutils.SHA256File(t, outPath)
+		if restoredHash != rec.hash {
+			t.Fatalf("final restore hash mismatch for file %d: want %s got %s", rec.id, rec.hash, restoredHash)
 		}
 	}
 

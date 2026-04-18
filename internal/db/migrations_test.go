@@ -78,6 +78,104 @@ func TestRunMigrationsRejectsNonSQLiteBackend(t *testing.T) {
 	}
 }
 
+func sqliteTableExists(t *testing.T, dbconn *sql.DB, tableName string) bool {
+	t.Helper()
+
+	var count int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		tableName,
+	).Scan(&count); err != nil {
+		t.Fatalf("check table %s existence: %v", tableName, err)
+	}
+
+	return count == 1
+}
+
+func sqliteIndexExists(t *testing.T, dbconn *sql.DB, indexName string) bool {
+	t.Helper()
+
+	var count int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`,
+		indexName,
+	).Scan(&count); err != nil {
+		t.Fatalf("check index %s existence: %v", indexName, err)
+	}
+
+	return count == 1
+}
+
+func TestRunMigrationsCreatesSnapshotSchemaVersionSeven(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations first pass: %v", err)
+	}
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after first pass: %v", err)
+	}
+	if schemaVersion != 7 {
+		t.Fatalf("expected schema version 7 after first migration pass, got %d", schemaVersion)
+	}
+
+	if !sqliteTableExists(t, dbconn, "snapshot") {
+		t.Fatal("expected snapshot table to exist after migration")
+	}
+	if !sqliteTableExists(t, dbconn, "snapshot_file") {
+		t.Fatal("expected snapshot_file table to exist after migration")
+	}
+
+	for _, indexName := range []string{
+		"idx_snapshot_created_at",
+		"idx_snapshot_file_snapshot_id",
+		"idx_snapshot_file_path",
+		"idx_snapshot_file_logical_file",
+		"idx_snapshot_file_unique",
+	} {
+		if !sqliteIndexExists(t, dbconn, indexName) {
+			t.Fatalf("expected index %s to exist after migration", indexName)
+		}
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations second pass (idempotency): %v", err)
+	}
+
+	var schemaVersionAfterSecondRun int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
+		t.Fatalf("read schema version after second pass: %v", err)
+	}
+	if schemaVersionAfterSecondRun != 7 {
+		t.Fatalf("expected schema version to stay 7 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	}
+
+	if !sqliteTableExists(t, dbconn, "snapshot") {
+		t.Fatal("expected snapshot table to remain after idempotent rerun")
+	}
+	if !sqliteTableExists(t, dbconn, "snapshot_file") {
+		t.Fatal("expected snapshot_file table to remain after idempotent rerun")
+	}
+
+	for _, indexName := range []string{
+		"idx_snapshot_created_at",
+		"idx_snapshot_file_snapshot_id",
+		"idx_snapshot_file_path",
+		"idx_snapshot_file_logical_file",
+		"idx_snapshot_file_unique",
+	} {
+		if !sqliteIndexExists(t, dbconn, indexName) {
+			t.Fatalf("expected index %s to remain after idempotent rerun", indexName)
+		}
+	}
+}
+
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
 	if loadPostgresAutoBootstrapEnabled() {

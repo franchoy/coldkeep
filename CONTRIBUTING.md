@@ -294,6 +294,8 @@ for codec in plain aes-gcm; do
     COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
 
     # smoke
+    # New contributors: if smoke setup fails, see README "Smoke Validation (Two Approaches)"
+    # for both Docker-runner and host-runner workflows.
     COLDKEEP_SMOKE_RESET_DB=1 \
     COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql \
     COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/${codec}" \
@@ -304,6 +306,9 @@ done
 ```
 
 This is the closest local approximation of what must pass for `CI Required Gate`.
+
+If you prefer to run smoke outside this loop (or need troubleshooting), use the
+dual guidance in [`README.md`](README.md) under "Smoke Validation (Two Approaches)".
 
 5. Optional but recommended full sweep before pushing:
 

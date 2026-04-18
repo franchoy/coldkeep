@@ -10,6 +10,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
@@ -22,13 +23,22 @@ var gcPhysicalIntegrityCheck = func(dbconn *sql.DB) (verify.PhysicalFileIntegrit
 	return verify.CheckPhysicalFileGraphIntegrity(dbconn)
 }
 
+var gcComputeReachability = func(ctx context.Context, dbconn *sql.DB) (*retention.ReachabilitySummary, error) {
+	return retention.ComputeReachabilitySummary(ctx, dbconn)
+}
+
 // GCResult contains structured metadata about a GC run.
 // Non-dry-run GC is state-changing: it deletes unreferenced metadata rows and
 // container files. Dry-run is read-only and only reports what would be removed.
 type GCResult struct {
-	DryRun             bool     `json:"dry_run"`
-	AffectedContainers int      `json:"affected_containers"`
-	ContainerFilenames []string `json:"container_filenames"`
+	DryRun                       bool     `json:"dry_run"`
+	AffectedContainers           int      `json:"affected_containers"`
+	ContainerFilenames           []string `json:"container_filenames"`
+	SnapshotRetainedContainers   int      `json:"snapshot_retained_containers"`
+	SnapshotRetainedLogicalFiles int      `json:"snapshot_retained_logical_files"`
+	RetainedCurrentOnlyLogical   int      `json:"retained_current_only_logical_files"`
+	RetainedSnapshotOnlyLogical  int      `json:"retained_snapshot_only_logical_files"`
+	RetainedSharedLogical        int      `json:"retained_shared_logical_files"`
 }
 
 func RunGCWithContainersDir(dryRun bool, containersDir string) error {
@@ -121,9 +131,26 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		)
 	}
 
+	// Compute reachability summary once upfront. This is used as a safety net
+	// inside the container loop to ensure snapshot-retained chunks are never
+	// reclaimed, regardless of live_ref_count state.
+	reachability, err := gcComputeReachability(ctx, dbconn)
+	if err != nil {
+		return GCResult{}, fmt.Errorf("GC pre-flight: failed to compute reachability summary: %w", err)
+	}
+
+	// Snapshot-retained logical file count is a fixed property of the retained
+	// root set at the time GC runs. Populate it once, before the container loop.
+	result.SnapshotRetainedLogicalFiles = len(reachability.SnapshotLogicalIDs)
+	classification := retention.ClassifyRetention(reachability)
+	result.RetainedCurrentOnlyLogical = len(classification.CurrentOnly)
+	result.RetainedSnapshotOnlyLogical = len(classification.SnapshotOnly)
+	result.RetainedSharedLogical = len(classification.Shared)
+
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
+		ORDER BY id ASC
 	`)
 	if err != nil {
 		return GCResult{}, err
@@ -217,6 +244,19 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			continue
 		}
 
+		// Snapshot-retention safety net: even if live_ref_count == 0, skip any
+		// container whose chunks are still reachable from a retained logical file.
+		hasRetained, err := containerHasRetainedChunks(ctx, tx, containerID, reachability.RetainedLogicalIDs)
+		if err != nil {
+			_ = tx.Rollback()
+			return GCResult{}, fmt.Errorf("retention safety check for container %d: %w", containerID, err)
+		}
+		if hasRetained {
+			_ = tx.Rollback()
+			result.SnapshotRetainedContainers++
+			continue
+		}
+
 		// If dry-run, rollback transaction and skip file deletion
 		// dry-run is just simulation and count
 		if dryRun {
@@ -272,4 +312,41 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 
 	result.AffectedContainers = affectedContainers
 	return result, nil
+}
+
+// gcChunkQuerier is a minimal interface satisfied by *sql.Tx and *sql.DB,
+// allowing containerHasRetainedChunks to operate inside a transaction.
+type gcChunkQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// containerHasRetainedChunks reports whether any chunk in containerID is
+// associated (via file_chunk) with a logical file that appears in retainedIDs.
+// It is the snapshot-retention safety net: even when live_ref_count == 0, a
+// container must not be reclaimed if its chunks are logically reachable.
+func containerHasRetainedChunks(ctx context.Context, q gcChunkQuerier, containerID int64, retainedIDs map[int64]struct{}) (bool, error) {
+	if len(retainedIDs) == 0 {
+		return false, nil
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT DISTINCT fc.logical_file_id
+		FROM blocks b
+		JOIN file_chunk fc ON fc.chunk_id = b.chunk_id
+		WHERE b.container_id = $1
+	`, containerID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return false, err
+		}
+		if _, retained := retainedIDs[id]; retained {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }

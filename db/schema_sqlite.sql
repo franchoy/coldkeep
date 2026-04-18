@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 6 WHERE version < 6;
-INSERT OR IGNORE INTO schema_version(version) VALUES (6);
+UPDATE schema_version SET version = 7 WHERE version < 7;
+INSERT OR IGNORE INTO schema_version(version) VALUES (7);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,5 +102,29 @@ CREATE TABLE IF NOT EXISTS blocks (
 
 CREATE INDEX IF NOT EXISTS idx_blocks_container_id ON blocks(container_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_codec ON blocks(codec);
+
+CREATE TABLE IF NOT EXISTS snapshot (
+  id TEXT PRIMARY KEY,
+  created_at TIMESTAMP NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('full', 'partial')),
+  label TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_created_at ON snapshot(created_at);
+
+CREATE TABLE IF NOT EXISTS snapshot_file (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id TEXT NOT NULL REFERENCES snapshot(id),
+  path TEXT NOT NULL CHECK (path != ''),
+  logical_file_id INTEGER NOT NULL REFERENCES logical_file(id),
+  size INTEGER,
+  mode INTEGER,
+  mtime TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_snapshot_id ON snapshot_file(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_path ON snapshot_file(path);
+CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path);
 
 COMMIT;

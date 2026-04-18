@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -49,6 +51,79 @@ func TestRemoveFailsWhenFileIsProcessing(t *testing.T) {
 	err = RemoveFileWithDB(dbconn, fileID)
 	if err == nil || !strings.Contains(err.Error(), "is still PROCESSING and cannot be removed") {
 		t.Fatalf("expected PROCESSING error contract, got: %v", err)
+	}
+}
+
+func TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"snapshot-retained.bin", int64(8), strings.Repeat("s", 64), filestate.LogicalFileCompleted, int64(1),
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	storedPath := filepath.Join(t.TempDir(), "snapshot-retained.bin")
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES ($1, $2, 1)`,
+		storedPath,
+		fileID,
+	); err != nil {
+		t.Fatalf("insert physical_file row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot (id, created_at, type) VALUES ($1, $2, $3)`,
+		"snap-keep-delete-safe",
+		time.Now().UTC(),
+		"full",
+	); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES ($1, $2, $3)`,
+		"snap-keep-delete-safe",
+		"docs/retained.txt",
+		fileID,
+	); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	_, err = RemoveFileWithDBResult(dbconn, fileID)
+	if err == nil {
+		t.Fatal("expected remove to fail for snapshot-retained logical file")
+	}
+
+	code, ok := invariants.Code(err)
+	if !ok || code != invariants.CodeSnapshotRetainedDeleteBlocked {
+		t.Fatalf("expected invariant code %q, got code=%q ok=%v err=%v", invariants.CodeSnapshotRetainedDeleteBlocked, code, ok, err)
+	}
+
+	var logicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE id = $1`, fileID).Scan(&logicalCount); err != nil {
+		t.Fatalf("count logical_file rows: %v", err)
+	}
+	if logicalCount != 1 {
+		t.Fatalf("expected logical_file row to remain after blocked remove, got %d", logicalCount)
+	}
+
+	var physicalCount int64
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE logical_file_id = $1`, fileID).Scan(&physicalCount); err != nil {
+		t.Fatalf("count physical_file rows: %v", err)
+	}
+	if physicalCount != 1 {
+		t.Fatalf("expected physical_file mapping to remain after blocked remove, got %d", physicalCount)
 	}
 }
 

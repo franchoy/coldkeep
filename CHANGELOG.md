@@ -8,11 +8,79 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
+v1.3 establishes snapshot-based retention as part of the correctness model.
+
 ------------------------------------------------------------------------
 
-## [Unreleased]
+## [1.3.0] - 2026-04-18
 
-Nothing pending beyond v1.2.
+Snapshot-layer and retention contract establishment.
+
+v1.0 established storage correctness.
+v1.1 established interface correctness.
+v1.2 established physical-graph coherence.
+v1.3 establishes snapshot-based retention as a correctness layer: the system
+captures immutable point-in-time views, protects snapshot-retained content from
+GC deletion, and audits persisted snapshot reachability as part of standard
+verification and health reporting.
+
+### Added
+
+- **`snapshot` and `snapshot_file` tables** — new schema objects (schema version 7) for immutable point-in-time captures
+- **`snapshot create [--id ID] [--label LABEL] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes)
+- **`snapshot list [--type full|partial] [--limit N] [--since DATE]`** — list snapshots with filtering and ordering
+- **`snapshot show <snapshotID> [--limit N] [query filters…]`** — inspect snapshot contents with query support
+- **`snapshot stats [snapshotID]`** — report snapshot retention pressure and metadata
+- **`snapshot restore <snapshotID> [paths…] [--mode original|prefix|override] [--destination DIR]`** — restore full or partial from snapshot
+- **`snapshot diff <base-ID> <target-ID> [--filter added|removed|modified] [query filters…]`** — classify changes between snapshots
+- **`snapshot delete <snapshotID> --force`** — remove snapshot metadata only (logical content preserved)
+- **Snapshot query semantics** — unified SnapshotQuery across show/restore/diff with exact path, prefix, glob pattern, regex, size window, and modified-time window criteria (ANDed)
+- **Snapshot-aware retention model** — logical files are retained by union of current-state physical mappings and snapshot references; GC eligibility changes only after snapshot delete
+- **Stats retention visibility** — global and per-snapshot stats expose retained-only-by-current, retained-only-by-snapshot, shared-by-both, and total snapshot-retained metrics
+- **Verify snapshot reachability** — standard verify checks for orphan snapshot_file rows, invalid lifecycle states, and missing chunk graphs in snapshot-retained files
+- **Doctor snapshot-retention context** — text and JSON reports surface snapshot-retention integrity counters alongside physical mapping counters
+- **G14–G17 guarantees** — snapshot-retained GC safety, snapshot deletion metadata-only semantics, stats retention visibility, and verify/doctor snapshot reachability audits
+
+### Scope alignment (v1.3)
+
+- Snapshot command surface is in scope: `snapshot create`, `snapshot restore`,
+  `snapshot list`, `snapshot show`, `snapshot stats`, `snapshot diff`,
+  `snapshot delete --force`.
+- Snapshot query semantics are part of the contract surface across
+  `snapshot show`, `snapshot restore`, and `snapshot diff`:
+  exact path, prefix, glob pattern, regex, size window, and modified-time
+  window criteria with AND semantics.
+- `snapshot diff` filtering semantics are explicit and stable:
+  `--filter added|removed|modified` reduces returned entries and summary counts
+  to the selected classification.
+- Snapshot delete semantics are explicit and stable:
+  delete removes snapshot metadata (`snapshot` + `snapshot_file`) only;
+  underlying logical files/blocks are not directly removed by snapshot delete.
+
+### Snapshot-retention / GC contract alignment
+
+- Snapshot-retained content remains GC-ineligible until the retaining snapshot
+  is deleted.
+- Removing current-state mappings alone does not make snapshot-retained content
+  collectible.
+- GC eligibility transition is expected only after snapshot delete.
+
+### Validation and release-gate alignment
+
+- `VALIDATION_MATRIX.md` is expected to list and cover G14-G17 for v1.3.
+- v1.3 release gating explicitly includes:
+  - test surface coverage (package/integration/adversarial/smoke)
+  - documentation/release checklist consistency (README + validation matrix)
+  - manual snapshot/retention lifecycle gate in `PRE_RELEASE_CHECKLIST.md`
+- Manual snapshot lifecycle gate examples are aligned to CLI contracts:
+  use `snapshot create --id <snapshotID>`, use positional snapshot IDs for
+  `snapshot restore`/`snapshot diff`/`snapshot delete`, and use
+  `remove --stored-path` for current-state mapping removal.
+
+### Post-v1.3 hardening backlog (non-blocking)
+
+- Add fuzz coverage for snapshot query combinator cases (`regex` + `pattern` +
+  `prefix`) as a future hardening task.
 
 ------------------------------------------------------------------------
 

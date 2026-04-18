@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,12 +11,16 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func captureStderr(t *testing.T, fn func()) string {
@@ -974,6 +980,7 @@ func TestFormatDoctorTextReportGoldenHealthy(t *testing.T) {
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=0 aborted_chunks=0 quarantined_missing_containers=0 quarantined_corrupt_tail_containers=0 quarantined_orphan_containers=0\n" +
 		"  Physical mapping integrity: orphan_physical_file_rows=0 logical_ref_count_mismatches=0 negative_logical_ref_count_rows=0\n" +
+		"  Snapshot retention integrity: snapshot_file_rows=0 snapshot_referenced_logical_files=0 snapshot_only_logical_files=0 shared_logical_files=0 orphan_snapshot_logical_refs=0 invalid_snapshot_lifecycle_states=0 retained_missing_chunk_graph=0\n" +
 		"  Recommended next step: none\n"
 
 	if got != want {
@@ -1007,6 +1014,7 @@ func TestFormatDoctorTextReportGoldenDegraded(t *testing.T) {
 		"  Note: Recovery phase may have modified metadata\n" +
 		"  Recovery summary: aborted_logical_files=1 aborted_chunks=2 quarantined_missing_containers=3 quarantined_corrupt_tail_containers=4 quarantined_orphan_containers=5\n" +
 		"  Physical mapping integrity: orphan_physical_file_rows=0 logical_ref_count_mismatches=0 negative_logical_ref_count_rows=0\n" +
+		"  Snapshot retention integrity: snapshot_file_rows=0 snapshot_referenced_logical_files=0 snapshot_only_logical_files=0 shared_logical_files=0 orphan_snapshot_logical_refs=0 invalid_snapshot_lifecycle_states=0 retained_missing_chunk_graph=0\n" +
 		"  Recommended next step: inspect stderr / doctor output\n"
 
 	if got != want {
@@ -1263,7 +1271,7 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 }
 
 func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
-	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify"}
+	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot"}
 
 	for _, command := range commands {
 		if !shouldRunStartupRecovery(command) {
@@ -1291,6 +1299,18 @@ func TestInferOutputModeFromArgsSupportsDoctorJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"doctor", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected doctor --output=json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsSnapshotJSON(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"snapshot", "create", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected snapshot --output json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"snapshot", "create", "--output=json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected snapshot --output=json to infer json mode, got %q", mode)
 	}
 }
 
@@ -1323,7 +1343,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -1351,6 +1371,1308 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		if got, ok := payload["command"].(string); !ok || got != command {
 			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
 		}
+	}
+}
+
+func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var (
+		called       bool
+		gotID        string
+		gotType      string
+		gotLabel     *string
+		gotPaths     []string
+		gotDBNonNil  bool
+		gotCtxNonNil bool
+	)
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, snapshotType string, label *string, paths []string) error {
+		called = true
+		gotID = snapshotID
+		gotType = snapshotType
+		gotLabel = label
+		gotPaths = append([]string(nil), paths...)
+		gotDBNonNil = db != nil
+		gotCtxNonNil = ctx != nil
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"create", "docs/", "a.txt"},
+			flags: map[string][]string{
+				"id":     {"snap-phase2"},
+				"label":  {"release-candidate"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand returned error: %v", err)
+		}
+	})
+
+	if !called {
+		t.Fatal("expected createSnapshotPhase to be called")
+	}
+	if !gotCtxNonNil || !gotDBNonNil {
+		t.Fatalf("expected non-nil ctx and db, got ctx=%v db=%v", gotCtxNonNil, gotDBNonNil)
+	}
+	if gotID != "snap-phase2" {
+		t.Fatalf("snapshot ID mismatch: got=%q", gotID)
+	}
+	if gotType != "partial" {
+		t.Fatalf("snapshot type mismatch: got=%q", gotType)
+	}
+	if gotLabel == nil || *gotLabel != "release-candidate" {
+		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
+	}
+	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
+		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "snapshot" {
+		t.Fatalf("expected command snapshot in JSON payload, got=%v", payload["command"])
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in snapshot payload, got=%v", payload)
+	}
+	if _, ok := data["duration_ms"]; !ok {
+		t.Fatalf("expected duration_ms in snapshot payload data, got=%v", data)
+	}
+}
+
+func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	gotType := ""
+	gotPathCount := -1
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, snapshotType string, _ *string, paths []string) error {
+		gotType = snapshotType
+		gotPathCount = len(paths)
+		return nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand returned error: %v", err)
+	}
+
+	if gotType != "full" {
+		t.Fatalf("expected full snapshot type, got %q", gotType)
+	}
+	if gotPathCount != 0 {
+		t.Fatalf("expected zero paths for full snapshot, got %d", gotPathCount)
+	}
+}
+
+func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"wat"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown snapshot subcommand") {
+		t.Fatalf("expected unknown snapshot subcommand usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSnapshotCommandRestoreForwardsInputs(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalRestore := restoreSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		restoreSnapshotPhase = originalRestore
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var (
+		called        bool
+		gotSnapshotID string
+		gotPaths      []string
+		gotOpts       snapshot.RestoreSnapshotOptions
+	)
+	restoreSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, paths []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		called = true
+		_ = ctx
+		_ = db
+		gotSnapshotID = snapshotID
+		gotPaths = append([]string(nil), paths...)
+		gotOpts = opts
+		return &snapshot.RestoreSnapshotResult{SnapshotID: snapshotID, RestoredFiles: 2, RequestedPaths: int64(len(paths))}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-restore-1", "docs/", "a.txt"},
+			flags: map[string][]string{
+				"mode":        {"prefix"},
+				"destination": {"./restored"},
+				"overwrite":   {""},
+				"output":      {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand restore returned error: %v", err)
+		}
+	})
+
+	if !called {
+		t.Fatal("expected restoreSnapshotPhase to be called")
+	}
+	if gotSnapshotID != "snap-restore-1" {
+		t.Fatalf("snapshot ID mismatch: got=%q", gotSnapshotID)
+	}
+	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
+		t.Fatalf("snapshot restore paths mismatch: got=%v", gotPaths)
+	}
+	if gotOpts.DestinationMode != storage.RestoreDestinationPrefix {
+		t.Fatalf("destination mode mismatch: got=%q", gotOpts.DestinationMode)
+	}
+	if gotOpts.Destination != "./restored" {
+		t.Fatalf("destination mismatch: got=%q", gotOpts.Destination)
+	}
+	if !gotOpts.Overwrite {
+		t.Fatal("expected overwrite=true")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot restore JSON output: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in snapshot restore payload, got=%v", payload)
+	}
+	if got, _ := data["action"].(string); got != "restore" {
+		t.Fatalf("expected action=restore, got=%v", data)
+	}
+}
+
+func TestRunSnapshotCommandRestoreInfersFullWhenNoPaths(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalRestore := restoreSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		restoreSnapshotPhase = originalRestore
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	gotPathCount := -1
+	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, paths []string, _ snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		gotPathCount = len(paths)
+		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-full-restore", RestoredFiles: 0}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"restore", "snap-full-restore"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand restore full returned error: %v", err)
+	}
+
+	if gotPathCount != 0 {
+		t.Fatalf("expected zero restore paths for full snapshot restore, got %d", gotPathCount)
+	}
+}
+
+func TestRunSnapshotCommandRestoreForwardsSnapshotQuery(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalRestore := restoreSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		restoreSnapshotPhase = originalRestore
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotQuery *snapshot.SnapshotQuery
+	restoreSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, _ []string, opts snapshot.RestoreSnapshotOptions) (*snapshot.RestoreSnapshotResult, error) {
+		gotQuery = opts.Query
+		return &snapshot.RestoreSnapshotResult{SnapshotID: "snap-query", RestoredFiles: 1}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"restore", "snap-query"},
+		flags: map[string][]string{
+			"path":            {"./docs/a.txt", "docs/b.txt"},
+			"prefix":          {"./docs//", "images/"},
+			"pattern":         {"*.txt"},
+			"regex":           {"^docs/"},
+			"min-size":        {"10"},
+			"max-size":        {"20"},
+			"modified-after":  {"2026-01-01"},
+			"modified-before": {"2026-01-31"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand restore returned error: %v", err)
+	}
+	if gotQuery == nil {
+		t.Fatal("expected restore query to be forwarded")
+	}
+	if len(gotQuery.ExactPaths) != 2 {
+		t.Fatalf("expected 2 exact paths, got %#v", gotQuery.ExactPaths)
+	}
+	if _, ok := gotQuery.ExactPaths["docs/a.txt"]; !ok {
+		t.Fatalf("expected normalized path docs/a.txt, got %#v", gotQuery.ExactPaths)
+	}
+	if _, ok := gotQuery.ExactPaths["docs/b.txt"]; !ok {
+		t.Fatalf("expected exact path docs/b.txt, got %#v", gotQuery.ExactPaths)
+	}
+	if len(gotQuery.Prefixes) != 2 || gotQuery.Prefixes[0] != "docs/" || gotQuery.Prefixes[1] != "images/" {
+		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotQuery.Prefixes)
+	}
+	if gotQuery.Pattern != "*.txt" {
+		t.Fatalf("expected pattern '*.txt', got %q", gotQuery.Pattern)
+	}
+	if gotQuery.Regex == nil || gotQuery.Regex.String() != "^docs/" {
+		t.Fatalf("expected regex '^docs/', got %#v", gotQuery.Regex)
+	}
+	if gotQuery.MinSize == nil || *gotQuery.MinSize != 10 {
+		t.Fatalf("expected min size 10, got %#v", gotQuery.MinSize)
+	}
+	if gotQuery.MaxSize == nil || *gotQuery.MaxSize != 20 {
+		t.Fatalf("expected max size 20, got %#v", gotQuery.MaxSize)
+	}
+	if gotQuery.ModifiedAfter == nil || gotQuery.ModifiedAfter.UTC().Format("2006-01-02") != "2026-01-01" {
+		t.Fatalf("expected modified-after date, got %#v", gotQuery.ModifiedAfter)
+	}
+	if gotQuery.ModifiedBefore == nil || gotQuery.ModifiedBefore.UTC().Format("2006-01-02") != "2026-01-31" {
+		t.Fatalf("expected modified-before date, got %#v", gotQuery.ModifiedBefore)
+	}
+}
+
+func TestRunSnapshotCommandRestoreRejectsInvalidQueryRanges(t *testing.T) {
+	t.Run("size range", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"min-size": {"20"},
+				"max-size": {"10"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "--min-size must be <= --max-size") {
+			t.Fatalf("expected min/max validation error, got: %v", err)
+		}
+	})
+
+	t.Run("time range", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"modified-after":  {"2026-02-01"},
+				"modified-before": {"2026-01-01"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "--modified-after must be <= --modified-before") {
+			t.Fatalf("expected modified range validation error, got: %v", err)
+		}
+	})
+
+	t.Run("prefix format", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"prefix": {"docs"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "must end with '/'") {
+			t.Fatalf("expected prefix validation error, got: %v", err)
+		}
+	})
+
+	t.Run("invalid modified-after timestamp", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"modified-after": {"not-a-date"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --modified-after value") {
+			t.Fatalf("expected invalid-timestamp error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+
+	t.Run("invalid modified-before timestamp", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"modified-before": {"not-a-date"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --modified-before value") {
+			t.Fatalf("expected invalid-timestamp error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+}
+
+func TestRunSnapshotCommandRestoreRejectsInvalidQueryFlagValues(t *testing.T) {
+	t.Run("invalid regex", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"regex": {"[unclosed"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --regex value") {
+			t.Fatalf("expected invalid-regex error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+
+	t.Run("invalid pattern", func(t *testing.T) {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"restore", "snap-1"},
+			flags: map[string][]string{
+				"pattern": {"[unclosed"},
+			},
+		}, outputModeText)
+		if err == nil || !strings.Contains(err.Error(), "invalid --pattern value") {
+			t.Fatalf("expected invalid-pattern error, got: %v", err)
+		}
+		if got := classifyExitCode(err); got != exitUsage {
+			t.Fatalf("expected exitUsage=%d, got %d", exitUsage, got)
+		}
+	})
+}
+
+func TestRunSnapshotCommandShowRejectsInvalidQueryFlagValues(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"show", "snap-1"},
+		flags: map[string][]string{
+			"regex": {"[unclosed"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --regex value") {
+		t.Fatalf("expected invalid-regex error from show command, got: %v", err)
+	}
+}
+
+func TestRunSnapshotCommandDiffRejectsInvalidQueryFlagValues(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "snap-1", "snap-2"},
+		flags: map[string][]string{
+			"pattern": {"[unclosed"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --pattern value") {
+		t.Fatalf("expected invalid-pattern error from diff command, got: %v", err)
+	}
+}
+
+func TestRunSnapshotCommandRestoreRejectsInvalidModeCombination(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"restore", "snap-1"},
+		flags: map[string][]string{
+			"mode": {"override"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--destination is required") {
+		t.Fatalf("expected destination-required error for override restore mode, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSnapshotCommandListForwardsFilters(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotFilter snapshot.SnapshotListFilter
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, filter snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		gotFilter = filter
+		return []snapshot.Snapshot{{ID: "snap-list-1", Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"type":   {"full"},
+				"label":  {"backup"},
+				"since":  {"2026-01-01"},
+				"until":  {"2026-12-31"},
+				"limit":  {"10"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list returned error: %v", err)
+		}
+	})
+
+	if gotFilter.Type == nil || *gotFilter.Type != "full" {
+		t.Fatalf("expected type filter full, got %+v", gotFilter)
+	}
+	if gotFilter.Label == nil || *gotFilter.Label != "backup" {
+		t.Fatalf("expected label filter backup, got %+v", gotFilter)
+	}
+	if gotFilter.Limit != 10 || gotFilter.Since == nil || gotFilter.Until == nil {
+		t.Fatalf("expected limit and date filters to be parsed, got %+v", gotFilter)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot list JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "list" {
+		t.Fatalf("expected action=list, got %v", data)
+	}
+	if got := int(data["count"].(float64)); got != 1 {
+		t.Fatalf("expected count=1, got %d", got)
+	}
+}
+
+func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
+	}
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, snapshotID string, limit int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		if snapshotID != "snap-show-1" || limit != 50 {
+			t.Fatalf("unexpected show args snapshotID=%q limit=%d", snapshotID, limit)
+		}
+		return []snapshot.SnapshotFileEntry{{Path: "docs/a.txt"}, {Path: "img/x.png"}}, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 2, TotalSizeBytes: 123}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"show", "snap-show-1"},
+			flags: map[string][]string{
+				"limit":  {"50"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand show returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot show JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "show" {
+		t.Fatalf("expected action=show, got %v", data)
+	}
+	files := data["files"].([]any)
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(files))
+	}
+}
+
+func TestRunSnapshotCommandShowForwardsSnapshotQuery(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Now().UTC()}, nil
+	}
+
+	var gotQuery *snapshot.SnapshotQuery
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, query *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		gotQuery = query
+		return nil, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 0}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"show", "snap-show-query"},
+		flags: map[string][]string{
+			"path":   {"./docs/a.txt"},
+			"prefix": {"./docs//"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand show returned error: %v", err)
+	}
+	if gotQuery == nil {
+		t.Fatal("expected show query to be forwarded")
+	}
+	if _, ok := gotQuery.ExactPaths["docs/a.txt"]; !ok {
+		t.Fatalf("expected normalized path docs/a.txt, got %#v", gotQuery.ExactPaths)
+	}
+	if len(gotQuery.Prefixes) != 1 || gotQuery.Prefixes[0] != "docs/" {
+		t.Fatalf("expected normalized prefix docs/, got %#v", gotQuery.Prefixes)
+	}
+}
+
+func TestRunSnapshotCommandShowJSONUsesFilteredFileCount(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
+	}
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		return []snapshot.SnapshotFileEntry{{Path: "docs/a.txt"}}, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 3, TotalSizeBytes: 123}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"show", "snap-show-filtered-json"},
+			flags: map[string][]string{
+				"prefix": {"docs/"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand show returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot show JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got := int(data["file_count"].(float64)); got != 1 {
+		t.Fatalf("expected file_count=1 (filtered), got %d", got)
+	}
+	if got := int(data["matched_file_count"].(float64)); got != 1 {
+		t.Fatalf("expected matched_file_count=1, got %d", got)
+	}
+	if got := int(data["total_snapshot_file_count"].(float64)); got != 3 {
+		t.Fatalf("expected total_snapshot_file_count=3, got %d", got)
+	}
+}
+
+func TestRunSnapshotCommandShowTextDisplaysMatchedAndTotalCounts(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalGet := getSnapshotPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		getSnapshotPhase = originalGet
+		listSnapshotFilesPhase = originalListFiles
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	getSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.Snapshot, error) {
+		return &snapshot.Snapshot{ID: snapshotID, Type: "full", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)}, nil
+	}
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		return []snapshot.SnapshotFileEntry{{Path: "docs/a.txt"}}, nil
+	}
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 3, TotalSizeBytes: 123}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"show", "snap-show-filtered-text"},
+			flags: map[string][]string{
+				"prefix": {"docs/"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand show returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Files (matched): 1") {
+		t.Fatalf("expected text output to include matched file count, got: %q", output)
+	}
+	if !strings.Contains(output, "Files (total): 3") {
+		t.Fatalf("expected text output to include total file count, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsSupportsGlobalAndPerSnapshot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledWith := ""
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		calledWith = snapshotID
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 2, SnapshotFileCount: 4, TotalSizeBytes: 2048}, nil
+	}
+
+	if err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"stats", "snap-stats-1"},
+		flags:       map[string][]string{},
+	}, outputModeText); err != nil {
+		t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+	}
+	if calledWith != "snap-stats-1" {
+		t.Fatalf("expected per-snapshot stats call, got snapshotID=%q", calledWith)
+	}
+}
+
+func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "requires --force") {
+		t.Fatalf("expected --force requirement error, got: %v", err)
+	}
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledWith := ""
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		calledWith = snapshotID
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "snap-del-1"},
+			flags: map[string][]string{
+				"force":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete returned error: %v", err)
+		}
+	})
+	if calledWith != "snap-del-1" {
+		t.Fatalf("expected delete to be called with snap-del-1, got %q", calledWith)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "delete" {
+		t.Fatalf("expected action=delete, got %v", data)
+	}
+}
+
+func TestRunGCCommandJSONIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+		return maintenance.GCResult{
+			DryRun:                       false,
+			AffectedContainers:           2,
+			ContainerFilenames:           []string{"a.bin", "b.bin"},
+			SnapshotRetainedContainers:   1,
+			SnapshotRetainedLogicalFiles: 4,
+			RetainedCurrentOnlyLogical:   2,
+			RetainedSnapshotOnlyLogical:  1,
+			RetainedSharedLogical:        3,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object in payload: %v", payload)
+	}
+	assertJSONNumber(t, data, "snapshot_retained_logical_files", 4)
+	assertJSONNumber(t, data, "snapshot_retained_containers", 1)
+	assertJSONNumber(t, data, "retained_current_only_logical_files", 2)
+	assertJSONNumber(t, data, "retained_snapshot_only_logical_files", 1)
+	assertJSONNumber(t, data, "retained_shared_logical_files", 3)
+	assertJSONNumber(t, data, "affected_containers", 2)
+}
+
+func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	t.Run("appears in non-dry-run output when non-zero", func(t *testing.T) {
+		runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+			return maintenance.GCResult{
+				DryRun:                       false,
+				AffectedContainers:           1,
+				ContainerFilenames:           []string{"c.bin"},
+				SnapshotRetainedLogicalFiles: 3,
+				RetainedCurrentOnlyLogical:   4,
+				RetainedSnapshotOnlyLogical:  1,
+				RetainedSharedLogical:        2,
+			}, nil
+		}
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeText); err != nil {
+				t.Fatalf("runGCCommand text returned error: %v", err)
+			}
+		})
+		if !strings.Contains(output, "GC retained snapshot-protected logical files: 3") {
+			t.Fatalf("expected snapshot-retained logical files line in output:\n%s", output)
+		}
+		if !strings.Contains(output, "GC retention roots (logical files): current_only=4 snapshot_only=1 shared=2") {
+			t.Fatalf("expected retention roots line in output:\n%s", output)
+		}
+	})
+
+	t.Run("appears in dry-run output when non-zero", func(t *testing.T) {
+		runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+			return maintenance.GCResult{
+				DryRun:                       true,
+				AffectedContainers:           1,
+				ContainerFilenames:           []string{"d.bin"},
+				SnapshotRetainedLogicalFiles: 5,
+				RetainedCurrentOnlyLogical:   1,
+				RetainedSnapshotOnlyLogical:  5,
+				RetainedSharedLogical:        0,
+			}, nil
+		}
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{"dry-run": {"true"}}}, outputModeText); err != nil {
+				t.Fatalf("runGCCommand dry-run text returned error: %v", err)
+			}
+		})
+		if !strings.Contains(output, "GC retained snapshot-protected logical files: 5") {
+			t.Fatalf("expected snapshot-retained logical files line in dry-run output:\n%s", output)
+		}
+		if !strings.Contains(output, "GC retention roots (logical files): current_only=1 snapshot_only=5 shared=0") {
+			t.Fatalf("expected retention roots line in dry-run output:\n%s", output)
+		}
+	})
+
+	t.Run("absent when zero", func(t *testing.T) {
+		runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+			return maintenance.GCResult{
+				DryRun:                       false,
+				AffectedContainers:           1,
+				ContainerFilenames:           []string{"e.bin"},
+				SnapshotRetainedLogicalFiles: 0,
+				RetainedCurrentOnlyLogical:   0,
+				RetainedSnapshotOnlyLogical:  0,
+				RetainedSharedLogical:        0,
+			}, nil
+		}
+		output := captureStdout(t, func() {
+			if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeText); err != nil {
+				t.Fatalf("runGCCommand text returned error: %v", err)
+			}
+		})
+		if strings.Contains(output, "snapshot-protected") {
+			t.Fatalf("expected snapshot-retained line to be absent when zero, got output:\n%s", output)
+		}
+		if strings.Contains(output, "GC retention roots (logical files):") {
+			t.Fatalf("expected retention roots line to be absent when all buckets are zero, got output:\n%s", output)
+		}
+	})
+}
+
+func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
+	originalRunStats := runStatsPhase
+	t.Cleanup(func() {
+		runStatsPhase = originalRunStats
+	})
+
+	runStatsPhase = func() (*maintenance.StatsResult, error) {
+		return &maintenance.StatsResult{
+			TotalFiles: 7,
+			SnapshotRetention: maintenance.SnapshotRetentionStats{
+				CurrentOnlyLogicalFiles:        2,
+				CurrentOnlyBytes:               256,
+				SnapshotReferencedLogicalFiles: 3,
+				SnapshotReferencedBytes:        768,
+				SnapshotOnlyLogicalFiles:       1,
+				SnapshotOnlyBytes:              128,
+				SharedLogicalFiles:             2,
+				SharedBytes:                    640,
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object in payload: %v", payload)
+	}
+	retentionData, ok := data["snapshot_retention"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing snapshot_retention object in payload: %v", data)
+	}
+	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
+	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
+	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
+	assertJSONNumber(t, retentionData, "shared_logical_files", 2)
+	assertJSONNumber(t, retentionData, "snapshot_referenced_bytes", 768)
+	assertJSONNumber(t, retentionData, "snapshot_only_bytes", 128)
+	assertJSONNumber(t, retentionData, "shared_bytes", 640)
+	assertJSONNumber(t, retentionData, "current_only_bytes", 256)
+}
+
+func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
+	output := captureStdout(t, func() {
+		printStatsReport(&maintenance.StatsResult{
+			SnapshotRetention: maintenance.SnapshotRetentionStats{
+				CurrentOnlyLogicalFiles:        4,
+				CurrentOnlyBytes:               2 * 1024 * 1024,
+				SnapshotReferencedLogicalFiles: 3,
+				SnapshotReferencedBytes:        5 * 1024 * 1024,
+				SnapshotOnlyLogicalFiles:       1,
+				SnapshotOnlyBytes:              1 * 1024 * 1024,
+				SharedLogicalFiles:             2,
+				SharedBytes:                    4 * 1024 * 1024,
+			},
+		})
+	})
+
+	for _, want := range []string{
+		"Snapshot retention:",
+		"Current-only logical files:    4 (2.00 MB)",
+		"Snapshot-referenced files:     3 (5.00 MB)",
+		"Snapshot-only logical files:   1 (1.00 MB)",
+		"Shared logical files:          2 (4.00 MB)",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected stats report to contain %q, got output:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSnapshotCommandDiffForwardsAndFormatsJSON(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotBase, gotTarget string
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		gotBase = baseID
+		gotTarget = targetID
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: "added", TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: "removed", BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: "modified", BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+			Summary: snapshot.SnapshotDiffSummary{Added: 1, Removed: 1, Modified: 1},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "snap-1", "snap-2"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+		}
+	})
+
+	if gotBase != "snap-1" || gotTarget != "snap-2" {
+		t.Fatalf("expected diff args snap-1/snap-2, got %q/%q", gotBase, gotTarget)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot diff JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "snapshot diff" {
+		t.Fatalf("expected command=snapshot diff, got payload=%v", payload)
+	}
+	data := payload["data"].(map[string]any)
+	if got := int(data["entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected entry_count=3, got %d", got)
+	}
+	if got := int(data["matched_entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected matched_entry_count=3, got %d", got)
+	}
+	if got := int(data["total_diff_entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected total_diff_entry_count=3, got %d", got)
+	}
+	summary := data["summary"].(map[string]any)
+	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 1 {
+		t.Fatalf("unexpected diff summary payload: %v", data)
+	}
+}
+
+func TestRunSnapshotCommandDiffFilterJSONShowsMatchedAndTotalCounts(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "snap-1", "snap-2"},
+			flags: map[string][]string{
+				"filter": {"added"},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot diff JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got := int(data["entry_count"].(float64)); got != 1 {
+		t.Fatalf("expected filtered entry_count=1, got %d", got)
+	}
+	if got := int(data["matched_entry_count"].(float64)); got != 1 {
+		t.Fatalf("expected matched_entry_count=1, got %d", got)
+	}
+	if got := int(data["total_diff_entry_count"].(float64)); got != 3 {
+		t.Fatalf("expected total_diff_entry_count=3, got %d", got)
+	}
+	summary := data["summary"].(map[string]any)
+	if int(summary["added"].(float64)) != 1 || int(summary["removed"].(float64)) != 0 || int(summary["modified"].(float64)) != 0 {
+		t.Fatalf("unexpected filtered summary: %v", summary)
+	}
+}
+
+func TestRunSnapshotCommandDiffTextShowsMatchedAndTotalCounts(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "snap-1", "snap-2"},
+			flags: map[string][]string{
+				"filter": {"added"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "entries (matched): 1") {
+		t.Fatalf("expected text output to include matched entry count, got: %q", output)
+	}
+	if !strings.Contains(output, "entries (total): 3") {
+		t.Fatalf("expected text output to include total entry count, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandDiffForwardsSnapshotQuery(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotQuery *snapshot.SnapshotQuery
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, _, _ string, query *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		gotQuery = query
+		return &snapshot.SnapshotDiffResult{}, nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "snap-1", "snap-2"},
+		flags: map[string][]string{
+			"path":   {"./docs/a.txt", "docs/b.txt"},
+			"prefix": {"./docs//", "images/"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand diff returned error: %v", err)
+	}
+	if gotQuery == nil {
+		t.Fatal("expected diff query to be forwarded")
+	}
+	if len(gotQuery.ExactPaths) != 2 {
+		t.Fatalf("expected 2 exact paths, got %#v", gotQuery.ExactPaths)
+	}
+	if len(gotQuery.Prefixes) != 2 || gotQuery.Prefixes[0] != "docs/" || gotQuery.Prefixes[1] != "images/" {
+		t.Fatalf("expected normalized prefixes [docs/ images/], got %#v", gotQuery.Prefixes)
+	}
+}
+
+func TestRunSnapshotCommandDiffFilterValidation(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "snap-1", "snap-2"},
+		flags: map[string][]string{
+			"filter": {"invalid"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --filter value") {
+		t.Fatalf("expected invalid filter usage error, got: %v", err)
 	}
 }
 

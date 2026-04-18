@@ -3,19 +3,24 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -25,6 +30,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/snapshot"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -42,17 +48,29 @@ const (
 var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
-	"codec":       true,
-	"destination": true,
-	"input":       true,
-	"limit":       true,
-	"mode":        true,
-	"offset":      true,
-	"name":        true,
-	"min-size":    true,
-	"max-size":    true,
-	"output":      true,
-	"stored-path": true,
+	"codec":           true,
+	"destination":     true,
+	"filter":          true,
+	"input":           true,
+	"limit":           true,
+	"mode":            true,
+	"offset":          true,
+	"name":            true,
+	"id":              true,
+	"label":           true,
+	"since":           true,
+	"type":            true,
+	"until":           true,
+	"min-size":        true,
+	"max-size":        true,
+	"output":          true,
+	"stored-path":     true,
+	"path":            true,
+	"prefix":          true,
+	"pattern":         true,
+	"regex":           true,
+	"modified-after":  true,
+	"modified-before": true,
 }
 
 type cliOutputMode string
@@ -86,6 +104,7 @@ type doctorReport struct {
 	VerifyStatus   string          `json:"verify_status"`
 	SchemaStatus   string          `json:"schema_status"`
 	physicalAudit  verify.PhysicalFileIntegritySummary
+	snapshotAudit  verify.SnapshotReachabilityIntegritySummary
 }
 
 // Frozen v1.0 product contract: doctor is the fast corrective recovery + health gate.
@@ -97,7 +116,19 @@ const doctorOperationalHint = "After significant operations, run coldkeep doctor
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var doctorSchemaVersionPhase = querySchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
+var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
+var runGCPhase = maintenance.RunGCWithContainersDirResult
+var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
+var createSnapshotPhase = snapshot.CreateSnapshot
+var restoreSnapshotPhase = snapshot.RestoreSnapshot
+var listSnapshotsPhase = snapshot.ListSnapshots
+var getSnapshotPhase = snapshot.GetSnapshot
+var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
+var snapshotStatsPhase = snapshot.GetSnapshotStats
+var deleteSnapshotPhase = snapshot.DeleteSnapshot
+var diffSnapshotsPhase = snapshot.DiffSnapshots
+var runStatsPhase = maintenance.RunStatsResult
 
 type cliError struct {
 	code int
@@ -215,6 +246,8 @@ func runCLI(args []string) int {
 		err = runSearchCommand(parsed, outputMode)
 	case "verify":
 		err = runVerifyCommand(parsed, outputMode)
+	case "snapshot":
+		err = runSnapshotCommand(parsed, outputMode)
 	default:
 		err = usageErrorf("unknown command: %s", parsed.method)
 	}
@@ -377,7 +410,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version":
 		return
 	}
 
@@ -459,6 +492,7 @@ var outputSupportedCommands = map[string]bool{
 	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
+	"snapshot":     true,
 }
 
 func inferOutputModeFromArgs(args []string) cliOutputMode {
@@ -487,7 +521,7 @@ func shouldRunStartupRecovery(command string) bool {
 	switch command {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot":
 		return true
 	default:
 		return false
@@ -1407,7 +1441,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return usageErrorf("Usage: coldkeep gc [--dry-run]")
 	}
 
-	result, err := maintenance.RunGCWithContainersDirResult(dryRun, container.ContainersDir)
+	result, err := runGCPhase(dryRun, container.ContainersDir)
 	if err != nil {
 		return err
 	}
@@ -1425,6 +1459,15 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 	if result.AffectedContainers == 0 {
 		fmt.Println("GC completed. No containers eligible for deletion.")
+		if dryRun && result.SnapshotRetainedContainers > 0 {
+			fmt.Printf("GC skipped containers still retained by snapshots: %d\n", result.SnapshotRetainedContainers)
+		}
+		if result.SnapshotRetainedLogicalFiles > 0 {
+			fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+		}
+		if result.RetainedCurrentOnlyLogical > 0 || result.RetainedSnapshotOnlyLogical > 0 || result.RetainedSharedLogical > 0 {
+			fmt.Printf("GC retention roots (logical files): current_only=%d snapshot_only=%d shared=%d\n", result.RetainedCurrentOnlyLogical, result.RetainedSnapshotOnlyLogical, result.RetainedSharedLogical)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1434,6 +1477,15 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			fmt.Printf("[DRY-RUN] Would delete container: %s\n", filename)
 		}
 		fmt.Printf("GC dry-run completed. Containers eligible for deletion: %d\n", result.AffectedContainers)
+		if result.SnapshotRetainedContainers > 0 {
+			fmt.Printf("GC skipped containers still retained by snapshots: %d\n", result.SnapshotRetainedContainers)
+		}
+		if result.SnapshotRetainedLogicalFiles > 0 {
+			fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+		}
+		if result.RetainedCurrentOnlyLogical > 0 || result.RetainedSnapshotOnlyLogical > 0 || result.RetainedSharedLogical > 0 {
+			fmt.Printf("GC retention roots (logical files): current_only=%d snapshot_only=%d shared=%d\n", result.RetainedCurrentOnlyLogical, result.RetainedSnapshotOnlyLogical, result.RetainedSharedLogical)
+		}
 		fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		return nil
 	}
@@ -1442,6 +1494,12 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		fmt.Printf("Deleted container: %s\n", filename)
 	}
 	fmt.Printf("GC completed. Containers deleted: %d\n", result.AffectedContainers)
+	if result.SnapshotRetainedLogicalFiles > 0 {
+		fmt.Printf("GC retained snapshot-protected logical files: %d\n", result.SnapshotRetainedLogicalFiles)
+	}
+	if result.RetainedCurrentOnlyLogical > 0 || result.RetainedSnapshotOnlyLogical > 0 || result.RetainedSharedLogical > 0 {
+		fmt.Printf("GC retention roots (logical files): current_only=%d snapshot_only=%d shared=%d\n", result.RetainedCurrentOnlyLogical, result.RetainedSnapshotOnlyLogical, result.RetainedSharedLogical)
+	}
 	fmt.Printf("Hint: %s\n", doctorOperationalHint)
 	return nil
 }
@@ -1455,7 +1513,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 
 	if outputMode == outputModeJSON {
-		r, err := maintenance.RunStatsResult()
+		r, err := runStatsPhase()
 		if err != nil {
 			return err
 		}
@@ -1469,7 +1527,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return nil
 	}
 
-	r, err := maintenance.RunStatsResult()
+	r, err := runStatsPhase()
 	if err != nil {
 		return err
 	}
@@ -1766,6 +1824,11 @@ func printStatsReport(r *maintenance.StatsResult) {
 	if r.FragmentationRatioPct > 0 {
 		fmt.Printf("Fragmentation ratio:             %.2f%%\n", r.FragmentationRatioPct)
 	}
+	fmt.Println("Snapshot retention:")
+	fmt.Printf("  Current-only logical files:    %d (%.2f MB)\n", r.SnapshotRetention.CurrentOnlyLogicalFiles, bytesToMB(r.SnapshotRetention.CurrentOnlyBytes))
+	fmt.Printf("  Snapshot-referenced files:     %d (%.2f MB)\n", r.SnapshotRetention.SnapshotReferencedLogicalFiles, bytesToMB(r.SnapshotRetention.SnapshotReferencedBytes))
+	fmt.Printf("  Snapshot-only logical files:   %d (%.2f MB)\n", r.SnapshotRetention.SnapshotOnlyLogicalFiles, bytesToMB(r.SnapshotRetention.SnapshotOnlyBytes))
+	fmt.Printf("  Shared logical files:          %d (%.2f MB)\n", r.SnapshotRetention.SharedLogicalFiles, bytesToMB(r.SnapshotRetention.SharedBytes))
 	fmt.Printf("File retry stats:                total=%d, avg=%.2f, max=%d\n", r.TotalFileRetries, r.AvgFileRetries, r.MaxFileRetries)
 	fmt.Printf("Chunk retry stats:               total=%d, avg=%.2f, max=%d\n", r.TotalChunkRetries, r.AvgChunkRetries, r.MaxChunkRetries)
 	fmt.Println("============================")
@@ -1902,6 +1965,13 @@ func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	}
 	report.VerifyStatus = "ok"
 
+	auditSummary, auditErr := doctorSystemAuditPhase()
+	if auditErr != nil {
+		return verifyError(fmt.Errorf("doctor audit summary phase failed: %w", auditErr))
+	}
+	report.physicalAudit = auditSummary.Physical
+	report.snapshotAudit = auditSummary.Snapshot
+
 	// Intentional JSON contract (frozen v1.0):
 	// - Startup/preflight recovery diagnostics are emitted as stderr events
 	//   (`event=startup_recovery`) outside this doctor command payload.
@@ -1961,6 +2031,15 @@ func formatDoctorTextReport(report doctorReport) string {
 		report.physicalAudit.OrphanPhysicalFileRows,
 		report.physicalAudit.LogicalRefCountMismatches,
 		report.physicalAudit.NegativeLogicalRefCounts,
+	))
+	b.WriteString(fmt.Sprintf("  Snapshot retention integrity: snapshot_file_rows=%d snapshot_referenced_logical_files=%d snapshot_only_logical_files=%d shared_logical_files=%d orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d\n",
+		report.snapshotAudit.SnapshotFileRows,
+		report.snapshotAudit.SnapshotReferencedLogicalFiles,
+		report.snapshotAudit.SnapshotOnlyLogicalFiles,
+		report.snapshotAudit.SharedLogicalFiles,
+		report.snapshotAudit.OrphanSnapshotLogicalRefs,
+		report.snapshotAudit.InvalidSnapshotLifecycleStates,
+		report.snapshotAudit.RetainedMissingChunkGraph,
 	))
 	b.WriteString(fmt.Sprintf("  Recommended next step: %s\n", recommendedNextStep))
 
@@ -2140,6 +2219,883 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 	return nil
 }
 
+func generateSnapshotID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate snapshot id entropy: %w", err)
+	}
+	return "snap-" + hex.EncodeToString(b), nil
+}
+
+func runSnapshotCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep snapshot <create|restore|list|show|stats|delete|diff> ...")
+	}
+
+	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
+	switch subcommand {
+	case "create":
+		return runSnapshotCreateCommand(parsed, outputMode)
+	case "restore":
+		return runSnapshotRestoreCommand(parsed, outputMode)
+	case "list":
+		return runSnapshotListCommand(parsed, outputMode)
+	case "show":
+		return runSnapshotShowCommand(parsed, outputMode)
+	case "stats":
+		return runSnapshotStatsCommand(parsed, outputMode)
+	case "delete":
+		return runSnapshotDeleteCommand(parsed, outputMode)
+	case "diff":
+		return runSnapshotDiffCommand(parsed, outputMode)
+	default:
+		return usageErrorf("unknown snapshot subcommand: %s", parsed.positionals[0])
+	}
+}
+
+func parseSnapshotDateFlag(flagName, value string, endOfDay bool) (*time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, usageErrorf("--%s cannot be empty", flagName)
+	}
+
+	if parsed, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		utc := parsed.UTC()
+		return &utc, nil
+	}
+
+	parsedDate, err := time.Parse("2006-01-02", trimmed)
+	if err != nil {
+		return nil, usageErrorf("invalid --%s value %q: use RFC3339 or YYYY-MM-DD", flagName, value)
+	}
+	if endOfDay {
+		parsedDate = parsedDate.UTC().Add(24*time.Hour - time.Nanosecond)
+	} else {
+		parsedDate = parsedDate.UTC()
+	}
+	return &parsedDate, nil
+}
+
+func loadSnapshotDB() (storage.StorageContext, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return storage.StorageContext{}, fmt.Errorf("load storage context: %w", err)
+	}
+	if sgctx.DB == nil {
+		_ = sgctx.Close()
+		return storage.StorageContext{}, errors.New("storage context DB is nil")
+	}
+	return sgctx, nil
+}
+
+// parseSnapshotQuery builds a SnapshotQuery from the query-related flags in parsed.
+// Returns nil if no query flags are set. Recognized flags:
+// --path, --prefix, --pattern, --regex, --min-size, --max-size,
+// --modified-after, --modified-before.
+func parseSnapshotQuery(parsed parsedCommandLine) (*snapshot.SnapshotQuery, error) {
+	q := &snapshot.SnapshotQuery{}
+	hasAny := false
+
+	if values := parsed.flagValues("path"); len(values) > 0 {
+		q.ExactPaths = make(map[string]struct{}, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				return nil, usageErrorf("--path cannot be empty")
+			}
+			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+			if err != nil {
+				return nil, usageErrorf("invalid --path value %q: %v", trimmed, err)
+			}
+			q.ExactPaths[normalized] = struct{}{}
+		}
+		hasAny = true
+	}
+
+	if values := parsed.flagValues("prefix"); len(values) > 0 {
+		q.Prefixes = make([]string, 0, len(values))
+		for _, value := range values {
+			trimmed := strings.TrimSpace(value)
+			if trimmed == "" {
+				return nil, usageErrorf("--prefix cannot be empty")
+			}
+			normalized, err := snapshot.NormalizeSnapshotPath(trimmed)
+			if err != nil {
+				return nil, usageErrorf("invalid --prefix value %q: %v", trimmed, err)
+			}
+			if !strings.HasSuffix(normalized, "/") {
+				return nil, usageErrorf("invalid --prefix value %q: must end with '/'", trimmed)
+			}
+			q.Prefixes = append(q.Prefixes, normalized)
+		}
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("pattern"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, usageErrorf("--pattern cannot be empty")
+		}
+		// Validate the glob syntax early so users get a clear error rather than
+		// a silent empty-result caused by path.ErrBadPattern at match time.
+		if _, err := path.Match(trimmed, ""); err != nil {
+			return nil, usageErrorf("invalid --pattern value %q: %v", trimmed, err)
+		}
+		q.Pattern = trimmed
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("regex"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return nil, usageErrorf("--regex cannot be empty")
+		}
+		compiled, err := regexp.Compile(trimmed)
+		if err != nil {
+			return nil, usageErrorf("invalid --regex value %q: %v", trimmed, err)
+		}
+		q.Regex = compiled
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("min-size"); ok {
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || n < 0 {
+			return nil, usageErrorf("invalid --min-size value %q: must be a non-negative integer", value)
+		}
+		q.MinSize = &n
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("max-size"); ok {
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || n < 0 {
+			return nil, usageErrorf("invalid --max-size value %q: must be a non-negative integer", value)
+		}
+		q.MaxSize = &n
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("modified-after"); ok {
+		parsedTime, err := parseSnapshotDateFlag("modified-after", value, false)
+		if err != nil {
+			return nil, err
+		}
+		q.ModifiedAfter = parsedTime
+		hasAny = true
+	}
+
+	if value, ok := parsed.lastFlagValue("modified-before"); ok {
+		parsedTime, err := parseSnapshotDateFlag("modified-before", value, true)
+		if err != nil {
+			return nil, err
+		}
+		q.ModifiedBefore = parsedTime
+		hasAny = true
+	}
+
+	if q.MinSize != nil && q.MaxSize != nil && *q.MinSize > *q.MaxSize {
+		return nil, usageErrorf("--min-size must be <= --max-size")
+	}
+	if q.ModifiedAfter != nil && q.ModifiedBefore != nil && q.ModifiedAfter.After(*q.ModifiedBefore) {
+		return nil, usageErrorf("--modified-after must be <= --modified-before")
+	}
+
+	if !hasAny {
+		return nil, nil
+	}
+	return q, nil
+}
+
+func snapshotLabelJSONValue(label sql.NullString) any {
+	if !label.Valid {
+		return nil
+	}
+	return label.String
+}
+
+func snapshotTimeJSONValue(value sql.NullTime) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time.UTC().Format(time.RFC3339)
+}
+
+func snapshotIntJSONValue(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
+}
+
+func snapshotSummaryJSON(item snapshot.Snapshot) map[string]any {
+	return map[string]any{
+		"id":         item.ID,
+		"type":       item.Type,
+		"created_at": item.CreatedAt.UTC().Format(time.RFC3339),
+		"label":      snapshotLabelJSONValue(item.Label),
+	}
+}
+
+func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, map[string]any{
+			"path":            item.Path,
+			"logical_file_id": item.LogicalFileID,
+			"size":            snapshotIntJSONValue(item.Size),
+			"mode":            snapshotIntJSONValue(item.Mode),
+			"mtime":           snapshotTimeJSONValue(item.MTime),
+		})
+	}
+	return result
+}
+
+func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 1 {
+		return usageErrorf("Usage: coldkeep snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]")
+	}
+	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
+		return err
+	}
+
+	filter := snapshot.SnapshotListFilter{}
+	if value, ok := parsed.lastFlagValue("type"); ok {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed != "full" && trimmed != "partial" {
+			return usageErrorf("invalid --type value %q (allowed: full, partial)", value)
+		}
+		filter.Type = &trimmed
+	}
+	if value, ok := parsed.lastFlagValue("label"); ok {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return usageErrorf("--label cannot be empty")
+		}
+		filter.Label = &trimmed
+	}
+	if value, ok := parsed.lastFlagValue("since"); ok {
+		parsedTime, err := parseSnapshotDateFlag("since", value, false)
+		if err != nil {
+			return err
+		}
+		filter.Since = parsedTime
+	}
+	if value, ok := parsed.lastFlagValue("until"); ok {
+		parsedTime, err := parseSnapshotDateFlag("until", value, true)
+		if err != nil {
+			return err
+		}
+		filter.Until = parsedTime
+	}
+	if filter.Since != nil && filter.Until != nil && filter.Since.After(*filter.Until) {
+		return usageErrorf("--since must be <= --until")
+	}
+	if value, ok := parsed.lastFlagValue("limit"); ok {
+		parsedLimit, _ := strconv.Atoi(value)
+		filter.Limit = parsedLimit
+	}
+
+	sgctx, err := loadSnapshotDB()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	items, err := listSnapshotsPhase(ctx, sgctx.DB, filter)
+	if err != nil {
+		return err
+	}
+
+	if outputMode == outputModeJSON {
+		jsonItems := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			jsonItems = append(jsonItems, snapshotSummaryJSON(item))
+		}
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data": map[string]any{
+				"action":      "list",
+				"count":       len(items),
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"snapshots":   jsonItems,
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
+	if len(items) == 0 {
+		_, _ = fmt.Fprintln(os.Stdout, "  (none)")
+	} else {
+		for _, item := range items {
+			label := ""
+			if item.Label.Valid {
+				label = "  label=" + item.Label.String
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
+		}
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
+func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "limit", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 2 {
+		return usageErrorf("Usage: coldkeep snapshot show <snapshotID> [--limit <count>] [--path <path>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
+	}
+	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
+		return err
+	}
+
+	snapshotID := strings.TrimSpace(parsed.positionals[1])
+	if snapshotID == "" {
+		return usageErrorf("snapshotID cannot be empty")
+	}
+	limit := 0
+	if value, ok := parsed.lastFlagValue("limit"); ok {
+		limit, _ = strconv.Atoi(value)
+	}
+
+	query, err := parseSnapshotQuery(parsed)
+	if err != nil {
+		return err
+	}
+
+	sgctx, err := loadSnapshotDB()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	item, err := getSnapshotPhase(ctx, sgctx.DB, snapshotID)
+	if err != nil {
+		return err
+	}
+	files, err := listSnapshotFilesPhase(ctx, sgctx.DB, snapshotID, limit, query)
+	if err != nil {
+		return err
+	}
+	stats, err := snapshotStatsPhase(ctx, sgctx.DB, snapshotID)
+	if err != nil {
+		return err
+	}
+	matchedFileCount := len(files)
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data": map[string]any{
+				"action":                    "show",
+				"snapshot":                  snapshotSummaryJSON(*item),
+				"file_count":                matchedFileCount,
+				"matched_file_count":        matchedFileCount,
+				"total_snapshot_file_count": stats.SnapshotFileCount,
+				"files":                     snapshotFilesJSON(files),
+				"duration_ms":               time.Since(startedAt).Milliseconds(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Snapshot: %s\n", item.ID)
+	_, _ = fmt.Fprintf(os.Stdout, "  Type: %s\n", item.Type)
+	_, _ = fmt.Fprintf(os.Stdout, "  Created: %s\n", item.CreatedAt.UTC().Format(time.RFC3339))
+	if item.Label.Valid {
+		_, _ = fmt.Fprintf(os.Stdout, "  Label: %s\n", item.Label.String)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Files (matched): %d\n", matchedFileCount)
+	_, _ = fmt.Fprintf(os.Stdout, "  Files (total): %d\n", stats.SnapshotFileCount)
+	_, _ = fmt.Fprintln(os.Stdout)
+	if len(files) == 0 {
+		_, _ = fmt.Fprintln(os.Stdout, "  (no files)")
+	} else {
+		for _, file := range files {
+			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", file.Path)
+		}
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "\n  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
+func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) > 2 {
+		return usageErrorf("Usage: coldkeep snapshot stats [<snapshotID>] [--output <text|json>]")
+	}
+
+	snapshotID := ""
+	if len(parsed.positionals) == 2 {
+		snapshotID = strings.TrimSpace(parsed.positionals[1])
+		if snapshotID == "" {
+			return usageErrorf("snapshotID cannot be empty")
+		}
+	}
+
+	sgctx, err := loadSnapshotDB()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	stats, err := snapshotStatsPhase(ctx, sgctx.DB, snapshotID)
+	if err != nil {
+		return err
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data": map[string]any{
+				"action":              "stats",
+				"snapshot_id":         snapshotID,
+				"snapshot_count":      stats.SnapshotCount,
+				"snapshot_file_count": stats.SnapshotFileCount,
+				"total_size_bytes":    stats.TotalSizeBytes,
+				"duration_ms":         time.Since(startedAt).Milliseconds(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if snapshotID == "" {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshots: %d\n", stats.SnapshotCount)
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot files: %d\n", stats.SnapshotFileCount)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot: %s\n", snapshotID)
+		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", stats.SnapshotFileCount)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "Total logical size: %d bytes\n", stats.TotalSizeBytes)
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
+func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "force", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 2 {
+		return usageErrorf("Usage: coldkeep snapshot delete <snapshotID> --force [--output <text|json>]")
+	}
+	if !parsed.hasFlag("force") {
+		return usageErrorf("snapshot delete requires --force")
+	}
+
+	snapshotID := strings.TrimSpace(parsed.positionals[1])
+	if snapshotID == "" {
+		return usageErrorf("snapshotID cannot be empty")
+	}
+
+	sgctx, err := loadSnapshotDB()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
+		return err
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data": map[string]any{
+				"action":      "delete",
+				"snapshot_id": snapshotID,
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
+func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "filter", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) != 3 {
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
+	}
+
+	baseID := strings.TrimSpace(parsed.positionals[1])
+	targetID := strings.TrimSpace(parsed.positionals[2])
+	if baseID == "" {
+		return usageErrorf("baseSnapshotID cannot be empty")
+	}
+	if targetID == "" {
+		return usageErrorf("targetSnapshotID cannot be empty")
+	}
+
+	filterType := ""
+	if value, ok := parsed.lastFlagValue("filter"); ok {
+		filterType = strings.ToLower(strings.TrimSpace(value))
+		switch filterType {
+		case "added", "removed", "modified":
+		default:
+			return usageErrorf("invalid --filter value %q (allowed: added, removed, modified)", value)
+		}
+	}
+
+	query, err := parseSnapshotQuery(parsed)
+	if err != nil {
+		return err
+	}
+
+	sgctx, err := loadSnapshotDB()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
+	if err != nil {
+		return err
+	}
+
+	entries := make([]snapshot.SnapshotDiffEntry, 0, len(result.Entries))
+	summary := snapshot.SnapshotDiffSummary{}
+	for _, entry := range result.Entries {
+		if filterType != "" && entry.Type != snapshot.DiffType(filterType) {
+			continue
+		}
+		entries = append(entries, entry)
+		switch entry.Type {
+		case snapshot.DiffAdded:
+			summary.Added++
+		case snapshot.DiffRemoved:
+			summary.Removed++
+		case snapshot.DiffModified:
+			summary.Modified++
+		}
+	}
+	totalEntryCount := len(result.Entries)
+	matchedEntryCount := len(entries)
+
+	if outputMode == outputModeJSON {
+		jsonEntries := make([]map[string]any, 0, len(entries))
+		for _, entry := range entries {
+			jsonEntries = append(jsonEntries, map[string]any{
+				"path":              entry.Path,
+				"type":              entry.Type,
+				"base_logical_id":   snapshotIntJSONValue(entry.BaseLogicalID),
+				"target_logical_id": snapshotIntJSONValue(entry.TargetLogicalID),
+			})
+		}
+
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot diff",
+			"data": map[string]any{
+				"base":                   baseID,
+				"target":                 targetID,
+				"entry_count":            matchedEntryCount,
+				"matched_entry_count":    matchedEntryCount,
+				"total_diff_entry_count": totalEntryCount,
+				"summary":                summary,
+				"entries":                jsonEntries,
+				"duration_ms":            time.Since(startedAt).Milliseconds(),
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, "[SNAPSHOT DIFF]")
+	_, _ = fmt.Fprintf(os.Stdout, "\nBase:    %s\n", baseID)
+	_, _ = fmt.Fprintf(os.Stdout, "Target:  %s\n\n", targetID)
+	if len(entries) == 0 {
+		_, _ = fmt.Fprintln(os.Stdout, "(no changes)")
+	} else {
+		for _, entry := range entries {
+			prefix := "?"
+			switch entry.Type {
+			case snapshot.DiffAdded:
+				prefix = "+"
+			case snapshot.DiffRemoved:
+				prefix = "-"
+			case snapshot.DiffModified:
+				prefix = "~"
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "%s %s\n", prefix, entry.Path)
+		}
+	}
+
+	_, _ = fmt.Fprintln(os.Stdout, "\nSummary:")
+	_, _ = fmt.Fprintf(os.Stdout, "  entries (matched): %d\n", matchedEntryCount)
+	_, _ = fmt.Fprintf(os.Stdout, "  entries (total): %d\n", totalEntryCount)
+	_, _ = fmt.Fprintf(os.Stdout, "  added: %d\n", summary.Added)
+	_, _ = fmt.Fprintf(os.Stdout, "  removed: %d\n", summary.Removed)
+	_, _ = fmt.Fprintf(os.Stdout, "  modified: %d\n", summary.Modified)
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
+func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "id", "label", "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]")
+	}
+
+	paths := parsed.positionals[1:]
+	snapshotType := "full"
+	if len(paths) > 0 {
+		snapshotType = "partial"
+	}
+
+	snapshotID, hasSnapshotID := parsed.lastFlagValue("id")
+	snapshotID = strings.TrimSpace(snapshotID)
+	if !hasSnapshotID || snapshotID == "" {
+		generatedID, err := generateSnapshotID()
+		if err != nil {
+			return err
+		}
+		snapshotID = generatedID
+	}
+
+	var labelPtr *string
+	if label, hasLabel := parsed.lastFlagValue("label"); hasLabel {
+		trimmed := strings.TrimSpace(label)
+		if trimmed == "" {
+			return usageErrorf("--label cannot be empty")
+		}
+		labelPtr = &trimmed
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	if sgctx.DB == nil {
+		return errors.New("storage context DB is nil")
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, paths); err != nil {
+		return err
+	}
+
+	var (
+		filesInserted      int64
+		hasFilesInserted   bool
+		snapshotDurationMS = time.Since(startedAt).Milliseconds()
+	)
+	if err := sgctx.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&filesInserted); err == nil {
+		hasFilesInserted = true
+	}
+
+	if outputMode == outputModeJSON {
+		data := map[string]any{
+			"snapshot_id": snapshotID,
+			"type":        snapshotType,
+			"paths_count": len(paths),
+			"duration_ms": snapshotDurationMS,
+		}
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data":    data,
+		}
+		if hasFilesInserted {
+			data["files_inserted"] = filesInserted
+		}
+		if labelPtr != nil {
+			data["label"] = *labelPtr
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if snapshotType == "full" {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s (all paths)\n", snapshotID, snapshotType)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", snapshotID, snapshotType, len(paths))
+	}
+	if hasFilesInserted {
+		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", filesInserted)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", snapshotDurationMS)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
+func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	startedAt := time.Now()
+
+	if err := ensureAllowedFlags(parsed, "mode", "destination", "overwrite", "strict", "no-metadata", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 2 {
+		return usageErrorf("Usage: coldkeep snapshot restore <snapshotID> [<path> ...] [--mode <original|prefix|override>] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
+	}
+
+	snapshotID := strings.TrimSpace(parsed.positionals[1])
+	if snapshotID == "" {
+		return usageErrorf("snapshotID cannot be empty")
+	}
+	paths := parsed.positionals[2:]
+
+	strictMetadata := parsed.hasFlag("strict")
+	noMetadata := parsed.hasFlag("no-metadata")
+	if strictMetadata && noMetadata {
+		return usageErrorf("--strict and --no-metadata cannot be used together")
+	}
+
+	destinationMode, err := parseRestoreDestinationMode(parsed)
+	if err != nil {
+		return err
+	}
+	destination, _ := parsed.lastFlagValue("destination")
+	destination = strings.TrimSpace(destination)
+	if destinationMode == storage.RestoreDestinationOriginal && destination != "" {
+		return usageErrorf("--destination is only supported with --mode prefix or --mode override")
+	}
+	if (destinationMode == storage.RestoreDestinationPrefix || destinationMode == storage.RestoreDestinationOverride) && destination == "" {
+		return usageErrorf("--destination is required with --mode %s", destinationMode)
+	}
+
+	query, err := parseSnapshotQuery(parsed)
+	if err != nil {
+		return err
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	if sgctx.DB == nil {
+		return errors.New("storage context DB is nil")
+	}
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	result, err := restoreSnapshotPhase(
+		ctx,
+		sgctx.DB,
+		snapshotID,
+		paths,
+		snapshot.RestoreSnapshotOptions{
+			DestinationMode: destinationMode,
+			Destination:     destination,
+			Overwrite:       parsed.hasFlag("overwrite"),
+			StrictMetadata:  strictMetadata,
+			NoMetadata:      noMetadata,
+			StorageContext:  &sgctx,
+			Query:           query,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	durationMS := time.Since(startedAt).Milliseconds()
+	actionType := "full"
+	if len(paths) > 0 {
+		actionType = "partial_restore"
+	}
+
+	if outputMode == outputModeJSON {
+		data := map[string]any{
+			"action":                "restore",
+			"snapshot_id":           snapshotID,
+			"type":                  actionType,
+			"requested_paths_count": len(paths),
+			"restored_files":        result.RestoredFiles,
+			"duration_ms":           durationMS,
+		}
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "snapshot",
+			"data":    data,
+		}
+		if destination != "" {
+			data["output_root"] = destination
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	emptyNote := ""
+	if result.RestoredFiles == 0 {
+		emptyNote = " (empty snapshot selection)"
+	}
+	if len(paths) == 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s files=%d%s\n", snapshotID, result.RestoredFiles, emptyNote)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot restored: id=%s requested_paths=%d restored_files=%d%s\n", snapshotID, len(paths), result.RestoredFiles, emptyNote)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", durationMS)
+	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	return nil
+}
+
 func printHelp() {
 	fmt.Printf("coldkeep (v%s)\n", version.String())
 	fmt.Println()
@@ -2171,6 +3127,13 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
+		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
+		{"  snapshot restore <snapshotID> [<path> ...] [--mode ...] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
+		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]", "List snapshots with optional filters"},
+		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
+		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
+		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -2179,6 +3142,13 @@ func printHelp() {
 	fmt.Println("      --max-size <bytes>")
 	fmt.Println("      --limit <count>")
 	fmt.Println("      --offset <count>")
+	fmt.Println("    Snapshot path matching:")
+	fmt.Println("      exact path: snapshot create docs/file.txt")
+	fmt.Println("      directory prefix: snapshot create docs/")
+	fmt.Println("    Snapshot identity:")
+	fmt.Println("      snapshot_id is the system identifier (set via --id on create)")
+	fmt.Println("      pass snapshot_id positionally to show/restore/stats/diff/delete")
+	fmt.Println("      --label is optional metadata only and is never used for targeting")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")
@@ -2214,7 +3184,7 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
-	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify")
+	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify, snapshot")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
 	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
 	fmt.Println("  Batch JSON contract (restore/remove --output json): status=ok|partial_failure|error")
@@ -2244,6 +3214,24 @@ func printHelp() {
 	fmt.Println("  coldkeep repair ref-counts")
 	fmt.Println("  coldkeep verify system --full")
 	fmt.Println("  coldkeep verify file 12 --deep")
+	fmt.Println("  coldkeep snapshot create")
+	fmt.Println("  coldkeep snapshot create docs/ report.txt --label release-2026-04")
+	fmt.Println("  coldkeep snapshot restore snap-123 --mode prefix --destination ./restored")
+	fmt.Println("  coldkeep snapshot restore snap-123 docs/ --mode prefix --destination ./restored")
+	fmt.Println("  coldkeep snapshot restore snap-123 docs/a.txt --mode override --destination ./restored/a.txt")
+	fmt.Println("  coldkeep snapshot list --type full --limit 10")
+	fmt.Println("  coldkeep snapshot show snap-123 --limit 50")
+	fmt.Println("  coldkeep snapshot stats")
+	fmt.Println("  coldkeep snapshot stats snap-123")
+	fmt.Println("  coldkeep snapshot delete snap-123 --force")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --filter modified")
+	fmt.Println("  coldkeep snapshot show snap-123 --prefix docs/")
+	fmt.Println("  coldkeep snapshot show snap-123 --pattern \"*.txt\" --min-size 1024")
+	fmt.Println("  coldkeep snapshot restore snap-123 --prefix docs/ --mode prefix --destination ./restored")
+	fmt.Println("  coldkeep snapshot restore snap-123 --pattern \"*.txt\" --overwrite --mode original")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --prefix docs/ --filter added")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --regex \"\\.log$\"")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
 	fmt.Println("  coldkeep simulate store myfile.bin")
@@ -2314,6 +3302,15 @@ func (parsed parsedCommandLine) lastFlagValue(name string) (string, bool) {
 	}
 
 	return values[len(values)-1], true
+}
+
+func (parsed parsedCommandLine) flagValues(name string) []string {
+	values, ok := parsed.flags[name]
+	if !ok || len(values) == 0 {
+		return nil
+	}
+
+	return append([]string(nil), values...)
 }
 
 func (parsed parsedCommandLine) hasFlag(names ...string) bool {

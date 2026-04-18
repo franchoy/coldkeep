@@ -9,6 +9,38 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 )
 
+type SystemAuditSummary struct {
+	Physical verify.PhysicalFileIntegritySummary
+	Snapshot verify.SnapshotReachabilityIntegritySummary
+}
+
+func CollectSystemAuditSummary() (SystemAuditSummary, error) {
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return SystemAuditSummary{}, fmt.Errorf("failed to connect to database: %w", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	return collectSystemAuditSummaryWithDB(dbconn)
+}
+
+func collectSystemAuditSummaryWithDB(dbconn *sql.DB) (SystemAuditSummary, error) {
+	physical, err := verify.CheckPhysicalFileGraphIntegrity(dbconn)
+	if err != nil {
+		return SystemAuditSummary{}, err
+	}
+
+	snapshot, err := verify.CheckSnapshotReachabilityIntegrity(dbconn)
+	if err != nil {
+		return SystemAuditSummary{}, err
+	}
+
+	return SystemAuditSummary{
+		Physical: physical,
+		Snapshot: snapshot,
+	}, nil
+}
+
 func VerifyCommandWithContainersDir(containersDir string, target string, fileID int, verifyLevel verify.VerifyLevel) error {
 
 	dbconn, err := db.ConnectDB()

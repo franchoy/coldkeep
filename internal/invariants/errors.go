@@ -7,8 +7,12 @@ const (
 	CodePhysicalGraphOrphan           = "PHYSICAL_GRAPH_ORPHAN"
 	CodePhysicalGraphRefCountMismatch = "PHYSICAL_GRAPH_REFCOUNT_MISMATCH"
 	CodePhysicalGraphNegativeRefCount = "PHYSICAL_GRAPH_NEGATIVE_REFCOUNT"
+	CodeSnapshotGraphIntegrity        = "SNAPSHOT_GRAPH_INTEGRITY"
+	CodeSnapshotGraphOrphanLogicalRef = "SNAPSHOT_GRAPH_ORPHAN_LOGICAL_REF"
+	CodeSnapshotGraphInvalidLifecycle = "SNAPSHOT_GRAPH_INVALID_LIFECYCLE"
 	CodeGCRefusedIntegrity            = "GC_REFUSED_INTEGRITY"
 	CodeRepairRefusedOrphanRows       = "REPAIR_REFUSED_ORPHAN_ROWS"
+	CodeSnapshotRetainedDeleteBlocked = "SNAPSHOT_RETAINED_DELETE_BLOCKED"
 )
 
 // Error provides stable machine-readable classification for invariant failures
@@ -61,8 +65,14 @@ func RecommendedActionForCode(code string) string {
 		CodePhysicalGraphNegativeRefCount,
 		CodeGCRefusedIntegrity:
 		return "coldkeep repair ref-counts; then rerun coldkeep verify"
+	case CodeSnapshotGraphIntegrity,
+		CodeSnapshotGraphOrphanLogicalRef,
+		CodeSnapshotGraphInvalidLifecycle:
+		return "investigate snapshot metadata consistency; remove or recreate affected snapshots; then rerun coldkeep verify"
 	case CodeRepairRefusedOrphanRows:
 		return "investigate orphan physical_file rows; repair ref-counts is blocked until orphans are resolved"
+	case CodeSnapshotRetainedDeleteBlocked:
+		return "delete or prune snapshots that reference the logical file before removing it"
 	default:
 		return ""
 	}
