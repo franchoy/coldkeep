@@ -254,8 +254,13 @@ coldkeep snapshot create
 coldkeep snapshot create docs/ report.txt --label release-2026-04
 ```
 
-- `--id <snapshotID>`: snapshot system identifier used by snapshot subcommands (`show`, `restore`, `stats`, `diff`, `delete`).
-- `--label <string>`: optional user-facing metadata only (not an identifier and not required for command targeting).
+- `--id <snapshotID>`: snapshot_id system identifier. This is the command target for `show`, `restore`, `stats`, `diff`, and `delete`.
+- `--label <string>`: optional user-facing metadata only. It is not an identifier and is never used for command targeting.
+
+Snapshot command targeting contract:
+
+- There is no `--snapshot` selector flag for snapshot subcommands.
+- Pass snapshot_id positionally (for example: `coldkeep snapshot restore <snapshotID>`).
 
 ### Listing and inspecting
 

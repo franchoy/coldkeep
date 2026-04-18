@@ -481,7 +481,7 @@ Run this manual lifecycle gate after core CI/test gates pass.
 ./coldkeep gc --dry-run --output json
 ```
 
-Naming note: in this gate, `pre-gc-gate` is the snapshot identifier. It is created explicitly with `--id` and then passed positionally to `snapshot restore`, `snapshot diff`, and `snapshot delete`.
+Naming note: in this gate, `pre-gc-gate` is the `snapshot_id` system identifier. It is created explicitly with `--id` and then passed positionally to `snapshot restore`, `snapshot diff`, and `snapshot delete`. If you also set `--label`, treat it as metadata only (never as a command target).
 
 Confirm:
 
