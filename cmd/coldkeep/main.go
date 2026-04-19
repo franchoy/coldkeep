@@ -3191,7 +3191,8 @@ func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDelete
 		buf.WriteString("    - remove snapshot metadata\n")
 		buf.WriteString("    - NOT delete shared data\n")
 		if preview.UniqueFiles > 0 {
-			fmt.Fprintf(&buf, "    - potentially free %s file reference(s)\n", formatNumberWithCommas(preview.UniqueFiles))
+			fmt.Fprintf(&buf, "    - remove %s unique snapshot file reference(s) from metadata\n", formatNumberWithCommas(preview.UniqueFiles))
+			buf.WriteString("      (reference impact only; does not guarantee reclaimed disk space)\n")
 		}
 		buf.WriteString("\n")
 	}

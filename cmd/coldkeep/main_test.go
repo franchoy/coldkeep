@@ -3650,8 +3650,11 @@ func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
 	if !strings.Contains(output, "NOT delete shared data") {
 		t.Fatalf("expected 'NOT delete shared data' in output:\n%s", output)
 	}
-	if !strings.Contains(output, "potentially free 500 file reference") {
-		t.Fatalf("expected 'potentially free 500 file reference' in output:\n%s", output)
+	if !strings.Contains(output, "remove 500 unique snapshot file reference") {
+		t.Fatalf("expected 'remove 500 unique snapshot file reference' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "reference impact only; does not guarantee reclaimed disk space") {
+		t.Fatalf("expected explicit reference-impact note in output:\n%s", output)
 	}
 	if !strings.Contains(output, "Dry run: no changes applied.") {
 		t.Fatalf("expected 'Dry run: no changes applied.' in output:\n%s", output)
