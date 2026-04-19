@@ -356,9 +356,8 @@ BEGIN
     FROM information_schema.columns
     WHERE table_name = 'snapshot_file' AND column_name = 'path_id'
   ) THEN
-    CREATE INDEX IF NOT EXISTS idx_snapshot_file_path_id ON snapshot_file(path_id);
-    CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logical_file_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id);
+    -- Index/constraint finalization is performed in one canonical block below
+    -- after legacy index cleanup (idx_snapshot_file_path / legacy unique index).
   END IF;
 END $$;
 
