@@ -3093,6 +3093,23 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandDeleteRejectsDeleteUnusedFlag(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags: map[string][]string{
+			"dry-run":       {""},
+			"delete-unused": {""},
+		},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected error when using unsupported --delete-unused flag")
+	}
+	if !strings.Contains(err.Error(), "delete-unused") {
+		t.Fatalf("expected error mentioning delete-unused, got: %v", err)
+	}
+}
+
 func TestFormatNumberWithCommas(t *testing.T) {
 	tests := []struct {
 		input    int64
@@ -3356,6 +3373,13 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	warningObj := warnings[0].(map[string]any)
 	if warningType, _ := warningObj["type"].(string); warningType != "lineage_breakage" {
 		t.Fatalf("expected warning type='lineage_breakage', got %v", warningObj["type"])
+	}
+
+	// v1 non-goal lock: no GC simulation / disk impact metrics in snapshot delete dry-run.
+	for _, forbidden := range []string{"bytes_freed", "disk_space_freed", "chunks_affected", "containers_affected", "gc_plan", "gc_simulation"} {
+		if _, exists := data[forbidden]; exists {
+			t.Fatalf("did not expect GC simulation field %q in delete dry-run output: %v", forbidden, data)
+		}
 	}
 }
 
