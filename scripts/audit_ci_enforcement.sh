@@ -305,12 +305,14 @@ check_remote_policy() {
     if echo "$tags_required_checks" | grep -Fq "CI Required Gate"; then
       echo "[audit] ok: release tags ruleset requires 'CI Required Gate' status check"
     else
-      echo "[audit] WARN: release tags ruleset has required status checks but not 'CI Required Gate' (found: ${tags_required_checks})" >&2
+      echo "[audit] ERROR: release tags ruleset has required status checks but not 'CI Required Gate' (found: ${tags_required_checks})" >&2
+      return 1
     fi
   elif [[ "$tags_has_required_workflows" == "true" ]]; then
     echo "[audit] ok: release tags ruleset uses required workflow gates"
   else
-    echo "[audit] WARN: release tags ruleset does not expose status/workflow gate rules; CI enforcement for releases may rely on process or separate automation" >&2
+    echo "[audit] ERROR: release tags ruleset does not expose status/workflow gate rules" >&2
+    return 1
   fi
 
   # Verify tag deletion is blocked
