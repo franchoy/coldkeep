@@ -12,7 +12,7 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 # Detect common smart quote Unicode characters that often sneak in via editor autocorrect.
-pattern='[“”‘’]'
+pattern='[\x{201C}\x{201D}\x{2018}\x{2019}]'
 
 if matches=$(rg -n "$pattern" --glob '**/*.go' .); then
   :

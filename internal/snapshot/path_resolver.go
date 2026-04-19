@@ -108,19 +108,23 @@ func LoadSnapshotPathsByID(ctx context.Context, exec pathResolverDB, pathIDs []i
 	if err != nil {
 		return nil, fmt.Errorf("bulk load snapshot_path rows: %w", err)
 	}
-	defer rows.Close()
 
 	result := make(map[int64]string, len(unique))
 	for rows.Next() {
 		var pathID int64
 		var path string
 		if err := rows.Scan(&pathID, &path); err != nil {
+			_ = rows.Close()
 			return nil, fmt.Errorf("scan snapshot_path rows: %w", err)
 		}
 		result[pathID] = path
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return nil, fmt.Errorf("iterate snapshot_path rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close snapshot_path rows: %w", err)
 	}
 
 	for _, pathID := range unique {
@@ -177,18 +181,21 @@ func ResolveSnapshotPaths(ctx context.Context, exec pathResolverDB, paths []stri
 	if err != nil {
 		return nil, fmt.Errorf("bulk fetch snapshot_path ids: %w", err)
 	}
-	func() {
-		defer rows.Close()
-		for rows.Next() {
-			var p string
-			var id int64
-			if scanErr := rows.Scan(&p, &id); scanErr == nil {
-				result[p] = id
-			}
+	for rows.Next() {
+		var p string
+		var id int64
+		if err := rows.Scan(&p, &id); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan snapshot_path rows: %w", err)
 		}
-	}()
+		result[p] = id
+	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return nil, fmt.Errorf("scan snapshot_path rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close snapshot_path rows: %w", err)
 	}
 
 	// 3. Collect missing paths and insert them.
@@ -238,18 +245,21 @@ func ResolveSnapshotPaths(ctx context.Context, exec pathResolverDB, paths []stri
 		if err != nil {
 			return nil, fmt.Errorf("fetch newly inserted snapshot_path ids: %w", err)
 		}
-		func() {
-			defer rows2.Close()
-			for rows2.Next() {
-				var p string
-				var id int64
-				if scanErr := rows2.Scan(&p, &id); scanErr == nil {
-					result[p] = id
-				}
+		for rows2.Next() {
+			var p string
+			var id int64
+			if err := rows2.Scan(&p, &id); err != nil {
+				_ = rows2.Close()
+				return nil, fmt.Errorf("scan newly inserted snapshot_path rows: %w", err)
 			}
-		}()
+			result[p] = id
+		}
 		if err := rows2.Err(); err != nil {
+			_ = rows2.Close()
 			return nil, fmt.Errorf("scan newly inserted snapshot_path rows: %w", err)
+		}
+		if err := rows2.Close(); err != nil {
+			return nil, fmt.Errorf("close newly inserted snapshot_path rows: %w", err)
 		}
 	}
 

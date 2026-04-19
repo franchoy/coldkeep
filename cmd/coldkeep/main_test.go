@@ -2503,7 +2503,7 @@ func TestRunSnapshotCommandListTreeSortsChildrenByCreatedAtAscending(t *testing.
 	if earlyIdx == -1 || middleIdx == -1 || lateIdx == -1 {
 		t.Fatalf("expected ordered child entries in output, got:\n%s", output)
 	}
-	if !(earlyIdx < middleIdx && middleIdx < lateIdx) {
+	if earlyIdx >= middleIdx || middleIdx >= lateIdx {
 		t.Fatalf("expected child order early -> middle -> late, got:\n%s", output)
 	}
 }
