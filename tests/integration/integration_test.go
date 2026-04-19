@@ -1360,16 +1360,58 @@ func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
 	dryRunDay3 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "day3", "--dry-run", "--output", "json"), "snapshot")
 	dryRunDay3Data := testutils.JSONMap(t, dryRunDay3, "data")
-	if got := testutils.JSONInt64(t, dryRunDay3Data, "total_files"); got != 2 {
-		t.Fatalf("expected day3 dry-run total_files=2 after mixed-lineage delete, got %d payload=%v", got, dryRunDay3)
+	totalFilesDay3 := testutils.JSONInt64(t, dryRunDay3Data, "total_files")
+	uniqueFilesDay3 := testutils.JSONInt64(t, dryRunDay3Data, "unique_files")
+	sharedFilesDay3 := testutils.JSONInt64(t, dryRunDay3Data, "shared_files")
+	if totalFilesDay3 != 2 {
+		t.Fatalf("expected day3 dry-run total_files=2 after mixed-lineage delete, got %d payload=%v", totalFilesDay3, dryRunDay3)
+	}
+	if uniqueFilesDay3+sharedFilesDay3 != totalFilesDay3 {
+		t.Fatalf("expected unique+shared == total after delete (unique=%d shared=%d total=%d payload=%v)", uniqueFilesDay3, sharedFilesDay3, totalFilesDay3, dryRunDay3)
 	}
 
 	// Diff safety in mixed lineage: deleting middle parent must not break snapshot diff.
 	diffAfterMiddleDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "diff", "day1", "day3", "--output", "json"), "snapshot diff")
 	diffAfterMiddleDeleteData := testutils.JSONMap(t, diffAfterMiddleDelete, "data")
-	if _, ok := diffAfterMiddleDeleteData["summary"].(map[string]any); !ok {
+	summaryAfterMiddleDelete, ok := diffAfterMiddleDeleteData["summary"].(map[string]any)
+	if !ok {
 		t.Fatalf("expected snapshot diff summary after deleting middle lineage node, payload=%v", diffAfterMiddleDelete)
+	}
+	entriesAfterMiddleDelete, ok := diffAfterMiddleDeleteData["entries"].([]any)
+	if !ok {
+		t.Fatalf("expected snapshot diff entries array after deleting middle lineage node, payload=%v", diffAfterMiddleDelete)
+	}
+	totalEntryCountAfterMiddleDelete := testutils.JSONInt64(t, diffAfterMiddleDeleteData, "total_diff_entry_count")
+	if totalEntryCountAfterMiddleDelete != int64(len(entriesAfterMiddleDelete)) {
+		t.Fatalf("expected total_diff_entry_count=%d to match entries len=%d payload=%v", totalEntryCountAfterMiddleDelete, len(entriesAfterMiddleDelete), diffAfterMiddleDelete)
+	}
+	if _, ok := summaryAfterMiddleDelete["added_count"].(float64); !ok {
+		if _, ok2 := summaryAfterMiddleDelete["added"].(float64); !ok2 {
+			t.Fatalf("expected summary.added_count or summary.added in diff output after middle delete, summary=%v", summaryAfterMiddleDelete)
+		}
+	}
+
+	// No stale references after deleting middle node.
+	var staleParentRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot s
+		WHERE s.parent_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM snapshot p WHERE p.id = s.parent_id)
+	`).Scan(&staleParentRefs); err != nil {
+		t.Fatalf("count stale parent refs after deleting middle node: %v", err)
+	}
+	if staleParentRefs != 0 {
+		t.Fatalf("expected zero stale parent refs after deleting middle node, got %d", staleParentRefs)
+	}
+
+	var deletedDay2Rows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "day2").Scan(&deletedDay2Rows); err != nil {
+		t.Fatalf("count snapshot_file rows for deleted snapshot day2: %v", err)
+	}
+	if deletedDay2Rows != 0 {
+		t.Fatalf("expected snapshot_file rows for deleted day2 to be 0, got %d", deletedDay2Rows)
 	}
 }
 
@@ -1468,8 +1510,21 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	diffAfterDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "diff", "cross-s1", "cross-s3", "--output", "json"), "snapshot diff")
 	diffAfterDeleteData := testutils.JSONMap(t, diffAfterDelete, "data")
-	if _, ok := diffAfterDeleteData["summary"].(map[string]any); !ok {
+	summaryAfterDelete, ok := diffAfterDeleteData["summary"].(map[string]any)
+	if !ok {
 		t.Fatalf("snapshot diff summary missing after deleting parent snapshot: payload=%v", diffAfterDelete)
+	}
+	entriesAfterDelete, ok := diffAfterDeleteData["entries"].([]any)
+	if !ok {
+		t.Fatalf("snapshot diff entries missing after deleting parent snapshot: payload=%v", diffAfterDelete)
+	}
+	if totalAfterDelete := testutils.JSONInt64(t, diffAfterDeleteData, "total_diff_entry_count"); totalAfterDelete != int64(len(entriesAfterDelete)) {
+		t.Fatalf("snapshot diff total_diff_entry_count mismatch after deleting parent snapshot: total=%d entries=%d payload=%v", totalAfterDelete, len(entriesAfterDelete), diffAfterDelete)
+	}
+	if _, ok := summaryAfterDelete["modified_count"].(float64); !ok {
+		if _, ok2 := summaryAfterDelete["modified"].(float64); !ok2 {
+			t.Fatalf("snapshot diff summary.modified_count/modified missing after deleting parent snapshot: summary=%v", summaryAfterDelete)
+		}
 	}
 
 	// C) Partial snapshots + lineage policy (Strategy B currently disallows partial+--from)
@@ -1506,14 +1561,50 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 	dryRunStats := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"snapshot", "delete", "cross-s3", "--dry-run", "--output", "json"), "snapshot")
 	dryRunStatsData := testutils.JSONMap(t, dryRunStats, "data")
-	if got := testutils.JSONInt64(t, dryRunStatsData, "total_files"); got <= 0 {
-		t.Fatalf("expected total_files > 0 for cross-s3 dry-run stats, got %d payload=%v", got, dryRunStats)
+	totalFilesCross := testutils.JSONInt64(t, dryRunStatsData, "total_files")
+	uniqueFilesCross := testutils.JSONInt64(t, dryRunStatsData, "unique_files")
+	sharedFilesCross := testutils.JSONInt64(t, dryRunStatsData, "shared_files")
+	if totalFilesCross <= 0 {
+		t.Fatalf("expected total_files > 0 for cross-s3 dry-run stats, got %d payload=%v", totalFilesCross, dryRunStats)
 	}
-	if got := testutils.JSONInt64(t, dryRunStatsData, "unique_files"); got < 0 {
-		t.Fatalf("expected unique_files >= 0, got %d payload=%v", got, dryRunStats)
+	if uniqueFilesCross < 0 {
+		t.Fatalf("expected unique_files >= 0, got %d payload=%v", uniqueFilesCross, dryRunStats)
 	}
-	if got := testutils.JSONInt64(t, dryRunStatsData, "shared_files"); got < 0 {
-		t.Fatalf("expected shared_files >= 0, got %d payload=%v", got, dryRunStats)
+	if sharedFilesCross < 0 {
+		t.Fatalf("expected shared_files >= 0, got %d payload=%v", sharedFilesCross, dryRunStats)
+	}
+	if uniqueFilesCross+sharedFilesCross != totalFilesCross {
+		t.Fatalf("expected unique+shared == total after deletion path (unique=%d shared=%d total=%d payload=%v)", uniqueFilesCross, sharedFilesCross, totalFilesCross, dryRunStats)
+	}
+
+	// No stale references after delete interactions.
+	var staleParentRefsCross int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot s
+		WHERE s.parent_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM snapshot p WHERE p.id = s.parent_id)
+	`).Scan(&staleParentRefsCross); err != nil {
+		t.Fatalf("count stale parent refs in cross-feature flow: %v", err)
+	}
+	if staleParentRefsCross != 0 {
+		t.Fatalf("expected zero stale parent refs in cross-feature flow, got %d", staleParentRefsCross)
+	}
+
+	var deletedCrossS1Rows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "cross-s1").Scan(&deletedCrossS1Rows); err != nil {
+		t.Fatalf("count snapshot_file rows for deleted cross-s1: %v", err)
+	}
+	if deletedCrossS1Rows != 0 {
+		t.Fatalf("expected snapshot_file rows for deleted cross-s1 to be 0, got %d", deletedCrossS1Rows)
+	}
+
+	var deletedCrossS2Rows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, "cross-s2").Scan(&deletedCrossS2Rows); err != nil {
+		t.Fatalf("count snapshot_file rows for deleted cross-s2: %v", err)
+	}
+	if deletedCrossS2Rows != 0 {
+		t.Fatalf("expected snapshot_file rows for deleted cross-s2 to be 0, got %d", deletedCrossS2Rows)
 	}
 }
 
