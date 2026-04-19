@@ -3093,6 +3093,88 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}
 }
 
+func TestFormatNumberWithCommas(t *testing.T) {
+	tests := []struct {
+		input    int64
+		expected string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{10, "10"},
+		{100, "100"},
+		{1000, "1,000"},
+		{10000, "10,000"},
+		{100000, "100,000"},
+		{1000000, "1,000,000"},
+		{99500, "99,500"},
+		{500, "500"},
+		{-1000, "-1,000"},
+	}
+
+	for _, tt := range tests {
+		got := formatNumberWithCommas(tt.input)
+		if got != tt.expected {
+			t.Fatalf("formatNumberWithCommas(%d) = %q, expected %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutput(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "snapshot-123",
+		ParentID:         sql.NullString{String: "parent-snap", Valid: true},
+		ChildSnapshotIDs: []string{"child-1", "child-2"},
+		TotalFiles:       100000,
+		UniqueFiles:      500,
+		SharedFiles:      99500,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("snapshot-123", preview)
+
+	// Verify structure
+	if !strings.Contains(output, "Snapshot: snapshot-123") {
+		t.Fatalf("missing snapshot header in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Files:") {
+		t.Fatalf("missing Files section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "100,000") {
+		t.Fatalf("missing formatted total files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Lineage:") {
+		t.Fatalf("missing Lineage section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "parent-snap") {
+		t.Fatalf("missing parent in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Impact:") {
+		t.Fatalf("missing Impact section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "dry-run: no changes applied") {
+		t.Fatalf("missing dry-run notice in output:\n%s", output)
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutputWithNoParentNoChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "root-snap",
+		ParentID:         sql.NullString{Valid: false},
+		ChildSnapshotIDs: []string{},
+		TotalFiles:       50,
+		UniqueFiles:      50,
+		SharedFiles:      0,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("root-snap", preview)
+
+	if !strings.Contains(output, "Parent: none") {
+		t.Fatalf("expected 'Parent: none' for null parent, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Children: none") {
+		t.Fatalf("expected 'Children: none' for empty children, got:\n%s", output)
+	}
+}
+
 func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
@@ -3166,6 +3248,97 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	}
 	if sharedFiles, _ := data["shared_files"].(float64); sharedFiles != 7 {
 		t.Fatalf("expected shared_files=7, got %v", data["shared_files"])
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{String: "day1-parent", Valid: true},
+			ChildSnapshotIDs: []string{"day2", "exp1"},
+			TotalFiles:       100000,
+			UniqueFiles:      500,
+			SharedFiles:      99500,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "day1"},
+			flags: map[string][]string{
+				"dry-run": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	// Verify key output elements are present
+	if !strings.Contains(output, "Snapshot: day1") {
+		t.Fatalf("expected 'Snapshot: day1' header in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Files:") {
+		t.Fatalf("expected 'Files:' section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "100,000") {
+		t.Fatalf("expected '100,000' total files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "500") {
+		t.Fatalf("expected '500' unique files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "99,500") {
+		t.Fatalf("expected '99,500' shared files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Lineage:") {
+		t.Fatalf("expected 'Lineage:' section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "day1-parent") {
+		t.Fatalf("expected parent 'day1-parent' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "- day2") {
+		t.Fatalf("expected child '- day2' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "- exp1") {
+		t.Fatalf("expected child '- exp1' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Impact:") {
+		t.Fatalf("expected 'Impact:' section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "remove snapshot metadata") {
+		t.Fatalf("expected 'remove snapshot metadata' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "NOT delete shared data") {
+		t.Fatalf("expected 'NOT delete shared data' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "potentially free 500 file reference") {
+		t.Fatalf("expected 'potentially free 500 file reference' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "dry-run: no changes applied") {
+		t.Fatalf("expected 'dry-run: no changes applied' in output:\n%s", output)
 	}
 }
 

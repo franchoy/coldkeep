@@ -2944,18 +2944,13 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	}
 
 	if dryRun {
-		_, _ = fmt.Fprintf(os.Stdout, "Dry-run only: snapshot delete simulation for id=%s (no changes applied)\n", snapshotID)
-		if preview != nil && len(preview.ChildSnapshotIDs) > 0 {
-			_, _ = fmt.Fprintf(os.Stdout, "  Warning: This snapshot is parent of %d snapshot(s): %v\n", len(preview.ChildSnapshotIDs), preview.ChildSnapshotIDs)
-		}
-		if preview != nil {
-			_, _ = fmt.Fprintf(os.Stdout, "  Files: %d total, %d unique, %d shared\n", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
-		}
+		output := formatSnapshotDeleteDryRunOutput(snapshotID, preview)
+		_, _ = fmt.Fprint(os.Stdout, output)
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+		_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
 
@@ -3062,6 +3057,76 @@ func previewSharedFiles(preview *snapshotDeleteLineagePreview) int64 {
 		return 0
 	}
 	return preview.SharedFiles
+}
+
+// formatNumberWithCommas formats a number int64 with comma separators for readability
+func formatNumberWithCommas(n int64) string {
+	if n < 0 {
+		return "-" + formatNumberWithCommas(-n)
+	}
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+
+	var result strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result.WriteRune(',')
+		}
+		result.WriteRune(c)
+	}
+	return result.String()
+}
+
+// formatSnapshotDeleteDryRunOutput builds the formatted text output for dry-run delete
+func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDeleteLineagePreview) string {
+	var buf strings.Builder
+
+	// Header
+	fmt.Fprintf(&buf, "Snapshot: %s\n", snapshotID)
+	buf.WriteString("\n")
+
+	if preview != nil {
+		// Files section
+		buf.WriteString("Files:\n")
+		fmt.Fprintf(&buf, "  Total:        %s\n", formatNumberWithCommas(preview.TotalFiles))
+		fmt.Fprintf(&buf, "  Unique:       %s\n", formatNumberWithCommas(preview.UniqueFiles))
+		fmt.Fprintf(&buf, "  Shared:       %s\n", formatNumberWithCommas(preview.SharedFiles))
+		buf.WriteString("\n")
+
+		// Lineage section
+		buf.WriteString("Lineage:\n")
+		if preview.ParentID.Valid {
+			fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
+		} else {
+			buf.WriteString("  Parent: none\n")
+		}
+		if len(preview.ChildSnapshotIDs) > 0 {
+			buf.WriteString("  Children:\n")
+			for _, childID := range preview.ChildSnapshotIDs {
+				fmt.Fprintf(&buf, "    - %s\n", childID)
+			}
+		} else {
+			buf.WriteString("  Children: none\n")
+		}
+		buf.WriteString("\n")
+
+		// Impact section
+		buf.WriteString("Impact:\n")
+		buf.WriteString("  Deleting this snapshot will:\n")
+		buf.WriteString("    - remove snapshot metadata\n")
+		buf.WriteString("    - NOT delete shared data\n")
+		if preview.UniqueFiles > 0 {
+			fmt.Fprintf(&buf, "    - potentially free %s file reference(s)\n", formatNumberWithCommas(preview.UniqueFiles))
+		}
+		buf.WriteString("\n")
+	}
+
+	// Dry-run notice
+	buf.WriteString("(dry-run: no changes applied)\n")
+
+	return buf.String()
 }
 
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
