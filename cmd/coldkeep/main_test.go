@@ -3584,6 +3584,129 @@ func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) 
 	}
 }
 
+func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
+	// CRITICAL BEHAVIOR LOCK (v1 contract):
+	// --force must execute deletion immediately without confirmation or blocking.
+	// This test ensures Phase 7 dry-run feature doesn't change actual delete behavior.
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	// Track if delete was called and when
+	deleteCallOrder := []string{}
+	deleteCalled := false
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		deleteCallOrder = append(deleteCallOrder, "delete:"+snapshotID)
+		deleteCalled = true
+		return nil
+	}
+
+	// Execute delete with --force (no --dry-run)
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "parent-snap"},
+			flags: map[string][]string{
+				"force":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --force returned error: %v", err)
+		}
+	})
+
+	// VERIFY: Delete must be called immediately without any prompts or delays
+	if !deleteCalled {
+		t.Fatalf("expected deleteSnapshotPhase to be called with --force, but it wasn't")
+	}
+
+	// VERIFY: Delete must be the only operation
+	if len(deleteCallOrder) != 1 || deleteCallOrder[0] != "delete:parent-snap" {
+		t.Fatalf("expected single delete operation, got: %v", deleteCallOrder)
+	}
+
+	// VERIFY: Output must confirm deletion (not simulation/preview)
+	if strings.Contains(output, "dry-run") || strings.Contains(output, "simulation") {
+		t.Fatalf("--force output should not mention dry-run or simulation, got: %s", output)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete JSON output: %v", err)
+	}
+	data := payload["data"].(map[string]any)
+
+	// VERIFY: action must be "delete" not "delete_dry_run"
+	if action, _ := data["action"].(string); action != "delete" {
+		t.Fatalf("expected action=delete for --force, got %v", action)
+	}
+
+	// VERIFY: dry_run must be false
+	if dryRun, _ := data["dry_run"].(bool); dryRun {
+		t.Fatalf("expected dry_run=false for --force, got true")
+	}
+}
+
+func TestRunSnapshotCommandDeleteWithForceNoCascadeDelete(t *testing.T) {
+	// CRITICAL BEHAVIOR LOCK (v1 contract):
+	// Deleting a parent snapshot must NOT cascade-delete children.
+	// Children remain fully usable with null parent_id.
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	// Track what gets deleted
+	deletedSnapshots := []string{}
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		deletedSnapshots = append(deletedSnapshots, snapshotID)
+		return nil
+	}
+
+	// Execute delete of parent snapshot with --force
+	_ = captureStdout(t, func() {
+		_ = runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "parent-snap"},
+			flags: map[string][]string{
+				"force": {""},
+			},
+		}, outputModeText)
+	})
+
+	// CRITICAL: Only the specified snapshot should be deleted, NOT children
+	if len(deletedSnapshots) != 1 {
+		t.Fatalf("expected exactly 1 snapshot deleted (only parent), got %d: %v", len(deletedSnapshots), deletedSnapshots)
+	}
+	if deletedSnapshots[0] != "parent-snap" {
+		t.Fatalf("expected parent-snap deleted, got: %v", deletedSnapshots)
+	}
+}
+
 func TestRunGCCommandJSONIncludesSnapshotRetainedLogicalFiles(t *testing.T) {
 	originalRunGC := runGCPhase
 	t.Cleanup(func() { runGCPhase = originalRunGC })
