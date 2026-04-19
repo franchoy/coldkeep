@@ -1209,6 +1209,152 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	if got := testutils.SHA256File(t, filepath.Join(restoreAfterDeleteRoot, filepath.FromSlash(trimmedImg))); got != imgHash {
 		t.Fatalf("child restore-after-delete img hash mismatch: got=%s want=%s", got, imgHash)
 	}
+
+	// Broken-lineage safety (parent_id becomes NULL): tree rendering and delete dry-run stats stay functional.
+	treeAfterDelete := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--tree")
+	if treeAfterDelete.ExitCode != 0 {
+		t.Fatalf("snapshot list --tree should succeed after broken lineage\nstdout:\n%s\nstderr:\n%s", treeAfterDelete.Stdout, treeAfterDelete.Stderr)
+	}
+	if !strings.Contains(treeAfterDelete.Stdout, "snap-phase3-child") {
+		t.Fatalf("snapshot list --tree output should still include child snapshot, got:\n%s", treeAfterDelete.Stdout)
+	}
+
+	dryRunAfterDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "snap-phase3-child", "--dry-run", "--output", "json"), "snapshot")
+	dryRunAfterDeleteData := testutils.JSONMap(t, dryRunAfterDelete, "data")
+	if got := testutils.JSONInt64(t, dryRunAfterDeleteData, "total_files"); got <= 0 {
+		t.Fatalf("expected delete --dry-run to report total_files > 0 for child snapshot, got %d payload=%v", got, dryRunAfterDelete)
+	}
+	if got := testutils.JSONInt64(t, dryRunAfterDeleteData, "unique_files"); got < 0 {
+		t.Fatalf("expected unique_files >= 0, got %d payload=%v", got, dryRunAfterDelete)
+	}
+	if got := testutils.JSONInt64(t, dryRunAfterDeleteData, "shared_files"); got < 0 {
+		t.Fatalf("expected shared_files >= 0, got %d payload=%v", got, dryRunAfterDelete)
+	}
+}
+
+func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate mixed-lineage fixtures: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img input: %v", err)
+	}
+
+	docsPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "day-chain-docs.txt", 12*1024)
+	imgPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "img"), "day-chain-img.bin", 9*1024)
+	docsHash := testutils.SHA256File(t, docsPath)
+	imgHash := testutils.SHA256File(t, imgPath)
+
+	storeDocs := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", docsPath, "--output", "json"), "store")
+	storeDocsData := testutils.JSONMap(t, storeDocs, "data")
+	storedDocsPath, ok := storeDocsData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedDocsPath) == "" {
+		t.Fatalf("store docs JSON missing stored_path: payload=%v", storeDocs)
+	}
+
+	storeImg := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", imgPath, "--output", "json"), "store")
+	storeImgData := testutils.JSONMap(t, storeImg, "data")
+	storedImgPath, ok := storeImgData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedImgPath) == "" {
+		t.Fatalf("store img JSON missing stored_path: payload=%v", storeImg)
+	}
+
+	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+	trimmedImg := strings.TrimLeft(filepath.ToSlash(storedImgPath), "/")
+
+	// day1 -> day2 -> day3 lineage
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "day1", "--output", "json"), "snapshot")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "day2", "--from", "day1", "--output", "json"), "snapshot")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "day3", "--from", "day2", "--output", "json"), "snapshot")
+
+	// Delete the middle snapshot.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "day2", "--force", "--output", "json"), "snapshot")
+
+	// day3 must remain fully usable.
+	restoreRoot := filepath.Join(tmp, "restore-day3-after-day2-delete")
+	if err := os.MkdirAll(restoreRoot, 0o755); err != nil {
+		t.Fatalf("mkdir restore root: %v", err)
+	}
+	restoreDay3 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "day3", "--mode", "prefix", "--destination", restoreRoot, "--output", "json"), "snapshot")
+	restoreDay3Data := testutils.JSONMap(t, restoreDay3, "data")
+	if got := testutils.JSONInt64(t, restoreDay3Data, "restored_files"); got != 2 {
+		t.Fatalf("expected day3 restore to restore 2 files after deleting day2, got %d", got)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreRoot, filepath.FromSlash(trimmedDocs))); got != docsHash {
+		t.Fatalf("day3 restore docs hash mismatch: got=%s want=%s", got, docsHash)
+	}
+	if got := testutils.SHA256File(t, filepath.Join(restoreRoot, filepath.FromSlash(trimmedImg))); got != imgHash {
+		t.Fatalf("day3 restore img hash mismatch: got=%s want=%s", got, imgHash)
+	}
+
+	// Metadata should self-heal linkage: day3 parent_id becomes NULL after deleting day2.
+	var day3Parent sql.NullString
+	if err := dbconn.QueryRow(`SELECT parent_id FROM snapshot WHERE id = $1`, "day3").Scan(&day3Parent); err != nil {
+		t.Fatalf("query day3 parent_id after deleting day2: %v", err)
+	}
+	if day3Parent.Valid {
+		t.Fatalf("expected day3 parent_id to be NULL after deleting day2, got %+v", day3Parent)
+	}
+
+	// Tree rendering and dry-run stats should remain healthy in mixed lineage state.
+	tree := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--tree")
+	if tree.ExitCode != 0 {
+		t.Fatalf("snapshot list --tree failed after mixed-lineage delete\nstdout:\n%s\nstderr:\n%s", tree.Stdout, tree.Stderr)
+	}
+	if !strings.Contains(tree.Stdout, "day1") || !strings.Contains(tree.Stdout, "day3") {
+		t.Fatalf("expected tree output to include surviving snapshots day1/day3, got:\n%s", tree.Stdout)
+	}
+
+	dryRunDay3 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "day3", "--dry-run", "--output", "json"), "snapshot")
+	dryRunDay3Data := testutils.JSONMap(t, dryRunDay3, "data")
+	if got := testutils.JSONInt64(t, dryRunDay3Data, "total_files"); got != 2 {
+		t.Fatalf("expected day3 dry-run total_files=2 after mixed-lineage delete, got %d payload=%v", got, dryRunDay3)
+	}
 }
 
 // TestPhase7SnapshotRetentionLifecycleCLIIntegration validates the complete
