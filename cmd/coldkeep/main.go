@@ -2935,6 +2935,7 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 				"total_files":  previewTotalFiles(preview),
 				"unique_files": previewUniqueFiles(preview),
 				"shared_files": previewSharedFiles(preview),
+				"warnings":     previewWarnings(preview),
 				"duration_ms":  time.Since(startedAt).Milliseconds(),
 			},
 		}
@@ -3079,6 +3080,22 @@ func formatNumberWithCommas(n int64) string {
 	return result.String()
 }
 
+func previewWarnings(preview *snapshotDeleteLineagePreview) []map[string]any {
+	if preview == nil || len(preview.ChildSnapshotIDs) == 0 {
+		return nil
+	}
+	return []map[string]any{
+		{
+			"type":    "lineage_breakage",
+			"message": "Deleting this snapshot will break lineage visualization for its children.",
+			"details": map[string]any{
+				"affected_snapshots": preview.ChildSnapshotIDs,
+				"note":               "Affected snapshots remain fully usable; only lineage information is affected.",
+			},
+		},
+	}
+}
+
 // formatSnapshotDeleteDryRunOutput builds the formatted text output for dry-run delete
 func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDeleteLineagePreview) string {
 	var buf strings.Builder
@@ -3111,6 +3128,19 @@ func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDelete
 			buf.WriteString("  Children: none\n")
 		}
 		buf.WriteString("\n")
+
+		// Warning section (only if has children)
+		if len(preview.ChildSnapshotIDs) > 0 {
+			buf.WriteString("Warning:\n")
+			buf.WriteString("  This snapshot is parent of:\n")
+			for _, childID := range preview.ChildSnapshotIDs {
+				fmt.Fprintf(&buf, "    - %s\n", childID)
+			}
+			buf.WriteString("\n")
+			buf.WriteString("  Deleting it will break lineage visualization,\n")
+			buf.WriteString("  but snapshots remain fully usable.\n")
+			buf.WriteString("\n")
+		}
 
 		// Impact section
 		buf.WriteString("Impact:\n")

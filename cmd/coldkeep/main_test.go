@@ -3173,6 +3173,83 @@ func TestFormatSnapshotDeleteDryRunOutputWithNoParentNoChildren(t *testing.T) {
 	if !strings.Contains(output, "Children: none") {
 		t.Fatalf("expected 'Children: none' for empty children, got:\n%s", output)
 	}
+	if strings.Contains(output, "Warning:") {
+		t.Fatalf("expected no Warning section when there are no children, got:\n%s", output)
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutputIncludesWarningWhenHasChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "day1",
+		ParentID:         sql.NullString{Valid: false},
+		ChildSnapshotIDs: []string{"day2", "exp1"},
+		TotalFiles:       1000,
+		UniqueFiles:      100,
+		SharedFiles:      900,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("day1", preview)
+
+	if !strings.Contains(output, "Warning:") {
+		t.Fatalf("expected 'Warning:' section when there are children, got:\n%s", output)
+	}
+	if !strings.Contains(output, "This snapshot is parent of:") {
+		t.Fatalf("expected 'This snapshot is parent of:' in warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "- day2") || !strings.Contains(output, "- exp1") {
+		t.Fatalf("expected children listed in warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Deleting it will break lineage visualization") {
+		t.Fatalf("expected lineage warning text, got:\n%s", output)
+	}
+	if !strings.Contains(output, "snapshots remain fully usable") {
+		t.Fatalf("expected usability note, got:\n%s", output)
+	}
+}
+
+func TestPreviewWarningsIncludesLineageBreakageWhenHasChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "snap1",
+		ChildSnapshotIDs: []string{"child1", "child2"},
+	}
+
+	warnings := previewWarnings(preview)
+	if len(warnings) == 0 {
+		t.Fatalf("expected warnings when there are children, got none")
+	}
+
+	warning := warnings[0]
+	if warningType, ok := warning["type"].(string); !ok || warningType != "lineage_breakage" {
+		t.Fatalf("expected type='lineage_breakage', got %v", warning["type"])
+	}
+
+	if msg, ok := warning["message"].(string); !ok || !strings.Contains(msg, "break lineage visualization") {
+		t.Fatalf("expected lineage breakage message, got %v", warning["message"])
+	}
+
+	details := warning["details"].(map[string]any)
+	affected := details["affected_snapshots"].([]string)
+	if len(affected) != 2 || affected[0] != "child1" || affected[1] != "child2" {
+		t.Fatalf("expected affected_snapshots=['child1', 'child2'], got %v", affected)
+	}
+}
+
+func TestPreviewWarningsEmptyWhenNoChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "snap1",
+		ChildSnapshotIDs: []string{},
+	}
+
+	warnings := previewWarnings(preview)
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings when there are no children, got %d warnings", len(warnings))
+	}
+
+	// Also test with nil preview
+	warnings = previewWarnings(nil)
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings for nil preview, got %d warnings", len(warnings))
+	}
 }
 
 func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
@@ -3248,6 +3325,16 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	}
 	if sharedFiles, _ := data["shared_files"].(float64); sharedFiles != 7 {
 		t.Fatalf("expected shared_files=7, got %v", data["shared_files"])
+	}
+
+	// Check warnings field (should have lineage_breakage warning since has children)
+	warnings, ok := data["warnings"].([]any)
+	if !ok || len(warnings) != 1 {
+		t.Fatalf("expected one warning for snapshot with children, got %v", data["warnings"])
+	}
+	warningObj := warnings[0].(map[string]any)
+	if warningType, _ := warningObj["type"].(string); warningType != "lineage_breakage" {
+		t.Fatalf("expected warning type='lineage_breakage', got %v", warningObj["type"])
 	}
 }
 
@@ -3339,6 +3426,83 @@ func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
 	}
 	if !strings.Contains(output, "dry-run: no changes applied") {
 		t.Fatalf("expected 'dry-run: no changes applied' in output:\n%s", output)
+	}
+
+	// Most importantly, verify the warning section is present
+	if !strings.Contains(output, "Warning:") {
+		t.Fatalf("expected 'Warning:' section in text output when has children:\n%s", output)
+	}
+	if !strings.Contains(output, "This snapshot is parent of:") {
+		t.Fatalf("expected 'This snapshot is parent of:' in warning:\n%s", output)
+	}
+	if !strings.Contains(output, "Deleting it will break lineage visualization") {
+		t.Fatalf("expected lineage warning text:\n%s", output)
+	}
+	if !strings.Contains(output, "snapshots remain fully usable") {
+		t.Fatalf("expected usability note:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunTextOutputNoChildren(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{Valid: false},
+			ChildSnapshotIDs: []string{}, // No children
+			TotalFiles:       50,
+			UniqueFiles:      50,
+			SharedFiles:      0,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "root-snap"},
+			flags: map[string][]string{
+				"dry-run": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	// Verify warning section is NOT present when no children
+	if strings.Contains(output, "Warning:") {
+		t.Fatalf("expected NO 'Warning:' section when there are no children:\n%s", output)
+	}
+
+	// Verify other sections are still present
+	if !strings.Contains(output, "Snapshot: root-snap") {
+		t.Fatalf("expected snapshot header:\n%s", output)
+	}
+	if !strings.Contains(output, "Parent: none") {
+		t.Fatalf("expected 'Parent: none':\n%s", output)
+	}
+	if !strings.Contains(output, "Children: none") {
+		t.Fatalf("expected 'Children: none':\n%s", output)
 	}
 }
 
