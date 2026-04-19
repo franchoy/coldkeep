@@ -345,6 +345,7 @@ Snapshot command targeting contract:
 ```bash
 coldkeep snapshot list
 coldkeep snapshot list --type full --limit 10 --since 2026-01-01
+coldkeep snapshot list --tree
 coldkeep snapshot show snap-abc123
 coldkeep snapshot show snap-abc123 --limit 50
 coldkeep snapshot show snap-abc123 --prefix docs/
@@ -352,6 +353,9 @@ coldkeep snapshot show snap-abc123 --pattern "docs/*.txt" --min-size 1024
 coldkeep snapshot stats
 coldkeep snapshot stats snap-abc123
 ```
+
+`snapshot list --tree` renders a lineage view from snapshot metadata (`id`, `parent_id`, `created_at`).
+If a parent snapshot was deleted, affected snapshots are still shown as roots; snapshot usability is unchanged.
 
 Snapshot file queries are reusable across `snapshot show`, `snapshot restore`, and `snapshot diff`.
 
@@ -396,6 +400,9 @@ coldkeep snapshot diff snap-1 snap-2 --filter added
 
 # Restrict the diff view to a path subset
 coldkeep snapshot diff snap-1 snap-2 --prefix docs/
+
+# Return summary counts only (no per-entry list)
+coldkeep snapshot diff snap-1 snap-2 --summary
 
 # Combine diff classification with snapshot query filters
 coldkeep snapshot diff snap-1 snap-2 --filter modified --regex "\\.yaml$"
@@ -443,6 +450,7 @@ JSON output schema:
 ```
 
 `--filter` limits output to one change type (`added`, `removed`, or `modified`). Summary counts reflect the filtered set.
+`--summary` returns counts only and skips detailed `entries` output.
 
 The JSON contract for snapshot commands is unchanged. Query flags only reduce the returned `files` or `entries` collections and the derived counts; field names and envelope structure remain stable.
 
@@ -450,9 +458,12 @@ The JSON contract for snapshot commands is unchanged. Query flags only reduce th
 
 ```bash
 coldkeep snapshot delete snap-abc123 --force
+coldkeep snapshot delete snap-abc123 --dry-run
 ```
 
 Deletes only the snapshot row and its `snapshot_file` entries. The underlying logical files and blocks are not affected.
+
+`--dry-run` is read-only and reports impact details (lineage preview and file-count breakdown) without applying changes.
 
 ### v1.3 release gate (operator quick checklist)
 
