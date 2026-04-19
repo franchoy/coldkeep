@@ -1232,6 +1232,14 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	if got := testutils.JSONInt64(t, dryRunAfterDeleteData, "shared_files"); got < 0 {
 		t.Fatalf("expected shared_files >= 0, got %d payload=%v", got, dryRunAfterDelete)
 	}
+
+	// Diff safety after lineage break: diff should not depend on parent linkage.
+	diffAfterParentDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "snap-phase3-baseline", "snap-phase3-child", "--output", "json"), "snapshot diff")
+	diffAfterParentDeleteData := testutils.JSONMap(t, diffAfterParentDelete, "data")
+	if _, ok := diffAfterParentDeleteData["summary"].(map[string]any); !ok {
+		t.Fatalf("expected snapshot diff summary after lineage break, payload=%v", diffAfterParentDelete)
+	}
 }
 
 func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
@@ -1354,6 +1362,14 @@ func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
 	dryRunDay3Data := testutils.JSONMap(t, dryRunDay3, "data")
 	if got := testutils.JSONInt64(t, dryRunDay3Data, "total_files"); got != 2 {
 		t.Fatalf("expected day3 dry-run total_files=2 after mixed-lineage delete, got %d payload=%v", got, dryRunDay3)
+	}
+
+	// Diff safety in mixed lineage: deleting middle parent must not break snapshot diff.
+	diffAfterMiddleDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "day1", "day3", "--output", "json"), "snapshot diff")
+	diffAfterMiddleDeleteData := testutils.JSONMap(t, diffAfterMiddleDelete, "data")
+	if _, ok := diffAfterMiddleDeleteData["summary"].(map[string]any); !ok {
+		t.Fatalf("expected snapshot diff summary after deleting middle lineage node, payload=%v", diffAfterMiddleDelete)
 	}
 }
 
