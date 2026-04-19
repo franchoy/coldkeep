@@ -25,7 +25,7 @@ type Snapshot struct {
 	Type      string // "full" | "partial"
 	Label     sql.NullString
 	// ParentID optionally references a prior snapshot for lineage tracking.
-	// It is stored in the DB but not yet surfaced to the CLI.
+	// It is stored in the DB and surfaced by snapshot CLI lineage views.
 	ParentID sql.NullString
 }
 
