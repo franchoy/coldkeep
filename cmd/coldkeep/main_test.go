@@ -3038,8 +3038,8 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 		positionals: []string{"delete", "snap-del-1"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "requires --force") {
-		t.Fatalf("expected --force requirement error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
+		t.Fatalf("expected --force/--dry-run requirement error, got: %v", err)
 	}
 
 	originalLoad := loadDefaultStorageContextPhase
@@ -3087,6 +3087,57 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	data := payload["data"].(map[string]any)
 	if got, _ := data["action"].(string); got != "delete" {
 		t.Fatalf("expected action=delete, got %v", data)
+	}
+	if got, _ := data["dry_run"].(bool); got {
+		t.Fatalf("expected dry_run=false for normal delete, got %v", data)
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "snap-del-2"},
+			flags: map[string][]string{
+				"dry-run": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete dry-run JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "delete_dry_run" {
+		t.Fatalf("expected action=delete_dry_run, got %v", data)
+	}
+	if got, _ := data["dry_run"].(bool); !got {
+		t.Fatalf("expected dry_run=true for dry-run delete, got %v", data)
 	}
 }
 

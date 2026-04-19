@@ -2877,14 +2877,15 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "force", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "force", "dry-run", "dryRun", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep snapshot delete <snapshotID> --force [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]")
 	}
-	if !parsed.hasFlag("force") {
-		return usageErrorf("snapshot delete requires --force")
+	dryRun := parsed.hasFlag("dry-run", "dryRun")
+	if !dryRun && !parsed.hasFlag("force") {
+		return usageErrorf("snapshot delete requires --force or --dry-run")
 	}
 
 	snapshotID := strings.TrimSpace(parsed.positionals[1])
@@ -2901,17 +2902,24 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
-		return err
+	if !dryRun {
+		if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
+			return err
+		}
 	}
 
 	if outputMode == outputModeJSON {
+		action := "delete"
+		if dryRun {
+			action = "delete_dry_run"
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
 			"data": map[string]any{
-				"action":      "delete",
+				"action":      action,
 				"snapshot_id": snapshotID,
+				"dry_run":     dryRun,
 				"duration_ms": time.Since(startedAt).Milliseconds(),
 			},
 		}
@@ -2920,7 +2928,11 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		return nil
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+	if dryRun {
+		_, _ = fmt.Fprintf(os.Stdout, "Dry-run only: snapshot delete simulation for id=%s (no changes applied)\n", snapshotID)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+	}
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
@@ -3376,7 +3388,7 @@ func printHelp() {
 		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]", "List snapshots with optional filters or as a lineage tree"},
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
-		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
+		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete a snapshot row, or simulate deletion in read-only mode"},
 		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
@@ -3471,6 +3483,7 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot stats")
 	fmt.Println("  coldkeep snapshot stats snap-123")
 	fmt.Println("  coldkeep snapshot delete snap-123 --force")
+	fmt.Println("  coldkeep snapshot delete snap-123 --dry-run")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --summary")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --filter modified")
