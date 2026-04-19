@@ -7,7 +7,7 @@ Execution model (step-by-step):
 - Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.
 - Capture evidence as you go (command output snippets, failing/success states, and any remediation notes).
 - If a step fails, fix the issue and re-run that step before moving forward.
-- For v1.3 tags, treat sections 13-16 as required release gates after sections 1-12.
+- For releases that include snapshot/retention scope, treat sections 13-16 as required release gates after sections 1-12.
 
 ## Prerequisite: PostgreSQL assumptions and operator surface
 
@@ -104,7 +104,7 @@ done
 
 Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`) across both codecs.
 
-For the v1.4 snapshot contract gate, run the focused integration suite after the matrix loop:
+For the snapshot contract gate, run the focused integration suite after the matrix loop:
 
 ```bash
 scripts/run_snapshot_release_gate.sh --count 1
@@ -278,9 +278,9 @@ Confirm:
 - [ ] Integration suite passed
 - Note: Step 4 integration umbrella suite is optional (non-gating) and was triaged separately.
 
-## 13) v1.3 snapshot sign-off checklist (Phases 1-7)
+## 13) Snapshot sign-off checklist (Phases 1-7)
 
-Use this as the final release gate before tagging `v1.3.x`.
+Use this as the final snapshot gate before tagging a release.
 
 ### Phase 1 - schema / invariants
 
@@ -288,7 +288,7 @@ Use this as the final release gate before tagging `v1.3.x`.
 - [ ] Unique `(snapshot_id, path)` constraint exists
 - [ ] Migration version is correct and idempotent
 - [ ] Path normalization rules are centralized and tested
-- [ ] No regression to pre-v1.3 schema behavior
+- [ ] No regression to pre-snapshot schema behavior
 
 ### Phase 2 - snapshot creation
 
@@ -374,8 +374,8 @@ Adversarial tests:
 
 Smoke:
 
-- [ ] Smoke includes v1.3 snapshot lifecycle gate
-- [ ] Smoke resets v1.3 tables too
+- [ ] Smoke includes snapshot lifecycle gate
+- [ ] Smoke resets snapshot tables too
 - [ ] Smoke exercises:
 - [ ] `snapshot create`
 - [ ] `snapshot show`
@@ -388,7 +388,7 @@ Smoke:
 
 README:
 
-- [ ] v1.3 status line matches actual feature set
+- [ ] Snapshot status line matches actual feature set
 - [ ] Snapshot command examples are accurate
 - [ ] Query semantics are documented
 - [ ] Diff filtering semantics are documented
@@ -438,7 +438,7 @@ done
 echo "G14-G17 evidence names: OK"
 ```
 
-## 14) v1.3 snapshot CLI/contract checklist
+## 14) Snapshot CLI/contract checklist
 
 Commands in scope:
 
@@ -465,7 +465,7 @@ Additional CLI validation and policy checks:
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
 - [ ] `snapshot delete` requires `--force`
 
-## 15) Verify v1.3 snapshot / retention contract (manual gate)
+## 15) Verify snapshot / retention contract (manual gate)
 
 Run this manual lifecycle gate after core CI/test gates pass.
 
@@ -513,8 +513,8 @@ Confirm:
 - [ ] CLI contract stability verified
 - [ ] Batch CLI contract stability verified
 - [ ] v1.2 physical-file contract verified (G10–G13)
-- [ ] v1.3 snapshot phase checklist verified (Phases 1-7)
-- [ ] v1.3 C. test surface checklist verified
-- [ ] v1.3 D. documentation/release checklist verified
-- [ ] v1.3 snapshot/retention manual gate verified
+- [ ] Snapshot phase checklist verified (Phases 1-7)
+- [ ] Snapshot C. test surface checklist verified
+- [ ] Snapshot D. documentation/release checklist verified
+- [ ] Snapshot/retention manual gate verified
 - [ ] Release PR description follows `.github/pull_request_template.md`
