@@ -1373,6 +1373,150 @@ func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
 	}
 }
 
+func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate cross-feature fixtures: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs input: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputDir, "img"), 0o755); err != nil {
+		t.Fatalf("mkdir img input: %v", err)
+	}
+
+	docsPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "cross-docs.txt", 10*1024)
+	imgPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "img"), "cross-img.bin", 9*1024)
+
+	storeDocs := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", docsPath, "--output", "json"), "store")
+	storeDocsData := testutils.JSONMap(t, storeDocs, "data")
+	storedDocsPath, ok := storeDocsData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedDocsPath) == "" {
+		t.Fatalf("store docs JSON missing stored_path: payload=%v", storeDocs)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", imgPath, "--output", "json"), "store")
+
+	trimmedDocs := strings.TrimLeft(filepath.ToSlash(storedDocsPath), "/")
+
+	// A) Create -> stats -> diff
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "cross-s1", "--output", "json"), "snapshot")
+
+	statsS1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "stats", "cross-s1", "--output", "json"), "snapshot")
+	statsS1Data := testutils.JSONMap(t, statsS1, "data")
+	if got, _ := statsS1Data["action"].(string); got != "stats" {
+		t.Fatalf("snapshot stats JSON missing action=stats: payload=%v", statsS1)
+	}
+	if got := testutils.JSONInt64(t, statsS1Data, "snapshot_file_count"); got <= 0 {
+		t.Fatalf("expected snapshot_file_count > 0 for cross-s1, got %d payload=%v", got, statsS1)
+	}
+
+	addedPath := testutils.CreateTempFile(t, filepath.Join(inputDir, "docs"), "cross-added.txt", 6*1024)
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", addedPath, "--output", "json"), "store")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "cross-s2", "--output", "json"), "snapshot")
+
+	diffS1S2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "cross-s1", "cross-s2", "--output", "json"), "snapshot diff")
+	diffS1S2Data := testutils.JSONMap(t, diffS1S2, "data")
+	if _, ok := diffS1S2Data["summary"].(map[string]any); !ok {
+		t.Fatalf("snapshot diff summary missing for cross-s1->cross-s2: payload=%v", diffS1S2)
+	}
+
+	// B) Create with --from -> delete -> diff
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "cross-s3", "--from", "cross-s2", "--output", "json"), "snapshot")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "cross-s2", "--force", "--output", "json"), "snapshot")
+
+	diffAfterDelete := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "cross-s1", "cross-s3", "--output", "json"), "snapshot diff")
+	diffAfterDeleteData := testutils.JSONMap(t, diffAfterDelete, "data")
+	if _, ok := diffAfterDeleteData["summary"].(map[string]any); !ok {
+		t.Fatalf("snapshot diff summary missing after deleting parent snapshot: payload=%v", diffAfterDelete)
+	}
+
+	// C) Partial snapshots + lineage policy (Strategy B currently disallows partial+--from)
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedDocs, "--id", "cross-partial", "--output", "json"), "snapshot")
+
+	partialFromFail := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", trimmedDocs, "--id", "cross-partial-from", "--from", "cross-s1", "--output", "json")
+	if partialFromFail.ExitCode == 0 {
+		t.Fatalf("expected partial snapshot with --from to fail under current policy\nstdout:\n%s\nstderr:\n%s", partialFromFail.Stdout, partialFromFail.Stderr)
+	}
+	if !strings.Contains(partialFromFail.Stdout+"\n"+partialFromFail.Stderr, "--from is currently supported only for full snapshots") {
+		t.Fatalf("expected explicit partial+--from policy error\nstdout:\n%s\nstderr:\n%s", partialFromFail.Stdout, partialFromFail.Stderr)
+	}
+
+	// D) Tree + delete (delete node, tree still updates/renders)
+	treeBefore := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--tree")
+	if treeBefore.ExitCode != 0 {
+		t.Fatalf("snapshot list --tree failed before delete\nstdout:\n%s\nstderr:\n%s", treeBefore.Stdout, treeBefore.Stderr)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "cross-s1", "--force", "--output", "json"), "snapshot")
+	treeAfter := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--tree")
+	if treeAfter.ExitCode != 0 {
+		t.Fatalf("snapshot list --tree failed after delete\nstdout:\n%s\nstderr:\n%s", treeAfter.Stdout, treeAfter.Stderr)
+	}
+	if !strings.Contains(treeAfter.Stdout, "cross-s3") {
+		t.Fatalf("expected tree output after delete to include surviving snapshot cross-s3, got:\n%s", treeAfter.Stdout)
+	}
+
+	// E) Stats after parent deletion (via delete dry-run stats on child lineage node)
+	dryRunStats := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "cross-s3", "--dry-run", "--output", "json"), "snapshot")
+	dryRunStatsData := testutils.JSONMap(t, dryRunStats, "data")
+	if got := testutils.JSONInt64(t, dryRunStatsData, "total_files"); got <= 0 {
+		t.Fatalf("expected total_files > 0 for cross-s3 dry-run stats, got %d payload=%v", got, dryRunStats)
+	}
+	if got := testutils.JSONInt64(t, dryRunStatsData, "unique_files"); got < 0 {
+		t.Fatalf("expected unique_files >= 0, got %d payload=%v", got, dryRunStats)
+	}
+	if got := testutils.JSONInt64(t, dryRunStatsData, "shared_files"); got < 0 {
+		t.Fatalf("expected shared_files >= 0, got %d payload=%v", got, dryRunStats)
+	}
+}
+
 // TestPhase7SnapshotRetentionLifecycleCLIIntegration validates the complete
 // Phase 7 retention lifecycle at CLI/system level:
 //
