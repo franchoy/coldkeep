@@ -465,9 +465,15 @@ Deletes only the snapshot row and its `snapshot_file` entries. The underlying lo
 
 `--dry-run` is read-only and reports impact details (lineage preview and file-count breakdown) without applying changes.
 
-### v1.3 release gate (operator quick checklist)
+### Snapshot release gate (operator quick checklist)
 
-Before tagging a `v1.3.x` release, run the dedicated snapshot/retention contract gate in `PRE_RELEASE_CHECKLIST.md`.
+Before tagging a release, run the dedicated snapshot/retention contract gate in `PRE_RELEASE_CHECKLIST.md`.
+
+For the focused automated snapshot gate, run:
+
+```bash
+scripts/run_snapshot_release_gate.sh --count 1
+```
 
 Run the checklist step-by-step and in order. For the manual snapshot lifecycle gate, use a stable snapshot identifier (for example via `snapshot create --id pre-gc-gate`) and pass snapshot IDs positionally in `snapshot restore`, `snapshot diff`, and `snapshot delete`.
 
@@ -481,7 +487,7 @@ Manual lifecycle expected in the release gate:
 - delete snapshot
 - confirm GC eligibility changes only after delete
 
-For the full release criteria, use the v1.3 sections in `PRE_RELEASE_CHECKLIST.md`:
+For the full release criteria, use the snapshot sign-off sections in `PRE_RELEASE_CHECKLIST.md`:
 
 - `13) v1.3 snapshot sign-off checklist (Phases 1-7)`
 - `C. Test surface checklist`
@@ -492,10 +498,10 @@ For the full release criteria, use the v1.3 sections in `PRE_RELEASE_CHECKLIST.m
 When opening the release PR, use [`.github/pull_request_template.md`](.github/pull_request_template.md)
 to keep impact and validation context explicit.
 
-### Post-v1.3 hardening backlog (non-blocking)
+### Post-v1.4 hardening backlog (non-blocking)
 
 - Add fuzz coverage for snapshot query combinations (`--regex`, `--pattern`, `--prefix`) to further harden parser+matcher edge cases.
-- This is a future hardening task and is not part of the v1.3 release gate.
+- This is a future hardening task and is not part of the current release gate.
 
 ## Doctor (recommended health gate)
 
