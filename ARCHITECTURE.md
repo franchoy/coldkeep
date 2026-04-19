@@ -16,12 +16,13 @@ The architecture composes:
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
 
-Correctness has four explicit layers:
+Correctness has five explicit layers:
 
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
 - v1.2 physical-graph coherence: audited physical roots, explicit repair, invariant taxonomy, batch maintenance semantics
 - v1.3 snapshot-based retention: immutable point-in-time captures, snapshot-protected GC, reachability audits
+- v1.4 snapshot clarity hardening: lineage metadata is explicit and non-dependency by contract
 
 ### Correctness Layers
 
@@ -29,9 +30,10 @@ This diagram is a mental anchor for how guarantees compose across layers.
 
 ```text
 +------------------------------------------------------------+
-| Snapshot-Based Retention (v1.3 - G14..G17)                |
+| Snapshot-Based Retention (v1.3 introduced, v1.4 clarified)|
 |------------------------------------------------------------|
 | Immutable point-in-time captures                           |
+| Snapshots are self-contained (no parent content dependency)|
 | Snapshot-protected GC: union of current-state              |
 |   (physical_file) and snapshot (snapshot_file) roots      |
 | Reachability integrity audits                              |
@@ -142,7 +144,31 @@ These invariants should hold across store, restore, GC, recovery, and verificati
 - committed metadata implies referenced bytes are already durable on disk
 - G14 snapshot-retained content is GC-safe: any logical file reachable from either current state (`physical_file`) or retained snapshot history (`snapshot_file`) must be treated as live and must not be reclaimed; GC computes a `ReachabilitySummary` before the container sweep and applies it as an additional safety net (`containerHasRetainedChunks`) independent of `live_ref_count`
 - G15 snapshot deletion is metadata-only: deleting a snapshot removes only `snapshot` and `snapshot_file` rows; it may reduce logical reachability and make content eligible for a future GC pass, but it must not directly delete logical content
+- Snapshot lineage (`snapshot.parent_id`) is informational metadata only: parent/child links support analysis and visualization, but restore reads only the selected snapshot and never requires parent snapshot content.
 - G17 verify/doctor snapshot awareness: system verify audits persisted snapshot reachability integrity (`snapshot_file` -> `logical_file` existence, logical lifecycle validity, retained non-empty files with missing chunk graph), and doctor reporting surfaces snapshot-retention audit counters so snapshot-driven integrity/GC blockers are explicit to operators
+
+## Snapshot Lineage (v1.4)
+
+Snapshots may reference a parent snapshot via `parent_id`.
+
+This relationship is:
+
+- informational only
+- not used for reconstruction
+- not required for restore
+- safe to break (deleting a parent does not affect child snapshot usability)
+
+This design preserves:
+
+- snapshot independence
+- simple garbage collection behavior
+- deterministic restore
+
+Metadata growth note:
+
+- each snapshot stores a full metadata view of captured files
+- metadata size grows over time as snapshots accumulate
+- this tradeoff is intentional to keep restore behavior simple, self-contained, and safety-first
 
 ## Validity and Restorability Model
 

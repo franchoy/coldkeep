@@ -27,13 +27,15 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.3%20snapshot%20layer-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.4%20snapshot%20clarity%20%26%20hardening-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.3 adds the snapshot layer (immutable point-in-time captures, full/partial create, restore, list/show/stats, delete, and `snapshot diff` for change classification) on top of the v1.2 physical-file and operator semantics core.
+> Status: v1.4 hardens snapshot operator clarity and release-readiness on top of the v1.3 snapshot layer. Snapshots remain self-contained immutable captures; lineage (`--from`) is metadata for analysis only.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
+
+Now with snapshot lineage, diff summaries, and safe deletion insights.
 
 ## Why coldkeep?
 
@@ -49,14 +51,24 @@ Unlike traditional backup tools, it emphasizes:
 
 The goal is confidence and recoverability over maximum throughput.
 
+## Features
+
+- Snapshot lineage (`--from`)
+- Snapshot diff summaries
+- Snapshot tree visualization
+- Safe deletion preview (`--dry-run`)
+- Built-in deduplication
+- Deterministic restore
+
 ## Status
 
-Coldkeep has four explicit correctness layers:
+Coldkeep has five explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
 - v1.2: physical-file graph coherence, explicit repair semantics, audited GC refusal, and invariant-aware batch maintenance reporting
 - v1.3: snapshot-based retention as a correctness layer (immutable point-in-time captures, snapshot-protected GC, reachability audits)
+- v1.4: snapshot clarity and lifecycle hardening (explicit lineage semantics, safer dry-run wording, stricter pre-release verification guidance)
 
 Guarantees are enforced through automated validation and CI gates; see VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
 
@@ -308,11 +320,45 @@ Example JSON payload:
 
 For full batch contract details and examples, see ARCHITECTURE.md and PRE_RELEASE_CHECKLIST.md.
 
-## Snapshot Layer (v1.3)
+## Snapshot Layer (v1.4)
 
 coldkeep snapshots capture an immutable, point-in-time view of your stored files.
 
+Snapshots capture a complete, immutable view of the current system state.
+Even when using `--from`, snapshots are always fully self-contained and do not depend on their parent.
+
+Critical clarity:
+
+- Snapshots are always self-contained.
+- `--from` records lineage metadata for analysis only.
+- `--from` does not create dependencies.
+- A child snapshot restore never requires reading parent snapshot content.
+
 ### Creating snapshots
+
+v1.4 flow example:
+
+```bash
+# Create initial snapshot
+coldkeep snapshot create --id day1
+
+# Modify files...
+
+# Create snapshot with lineage
+coldkeep snapshot create --id day2 --from day1
+
+# Understand changes
+coldkeep snapshot diff day1 day2 --summary
+
+# Inspect snapshot reuse
+coldkeep snapshot stats day2
+
+# Visualize history
+coldkeep snapshot list --tree
+
+# Preview deletion
+coldkeep snapshot delete day1 --dry-run
+```
 
 ```bash
 # Full snapshot (all physical_file entries)
@@ -327,7 +373,14 @@ coldkeep snapshot create docs/ report.txt --label release-2026-04
 
 - `--id <snapshotID>`: snapshot_id system identifier. This is the command target for `show`, `restore`, `stats`, `diff`, and `delete`.
 - `--label <string>`: optional user-facing metadata only. It is not an identifier and is never used for command targeting.
-- `--from <snapshotID>`: optional parent snapshot lineage metadata on create. This is informational only and does not make child snapshots depend on parent snapshot content during create or restore.
+- `--from <snapshotID>`: optional parent snapshot lineage metadata on create. This is informational only and does not create any parent-content dependency during create or restore.
+
+`--from <snapshotID>` behavior:
+
+- snapshot recorded as derived from parent
+- does not create a dependency
+- snapshot content is still built from current system state
+- parent relationship is used for comparison and visualization only
 
 Current lineage scope policy:
 
@@ -356,6 +409,28 @@ coldkeep snapshot stats snap-abc123
 
 `snapshot list --tree` renders a lineage view from snapshot metadata (`id`, `parent_id`, `created_at`).
 If a parent snapshot was deleted, affected snapshots are still shown as roots; snapshot usability is unchanged.
+Lineage visualization is not a dependency graph for restore execution.
+The snapshot tree represents lineage metadata, not dependency.
+
+Conceptual lineage example:
+
+```text
+day1
+ └── day2
+  └── day3
+```
+
+Each snapshot is independent despite this structure.
+
+`snapshot list --tree`:
+
+- displays snapshots as a lineage tree based on parent relationships
+- reflects metadata lineage only (not restore dependency)
+
+`snapshot stats` lineage context:
+
+- when a parent snapshot is available, stats include reused files, new files, and reuse ratio
+- if the parent snapshot is missing, stats fall back gracefully with explanatory output
 
 Snapshot file queries are reusable across `snapshot show`, `snapshot restore`, and `snapshot diff`.
 
@@ -390,6 +465,7 @@ coldkeep snapshot restore snap-abc123 --prefix docs/ --pattern "docs/*.txt" --mo
 
 `snapshot diff` compares two snapshots by path and logical file identity, classifying each change as `added`, `removed`, or `modified`.
 When query filters include size or mtime constraints, diff evaluates `added` and `modified` entries against target-snapshot metadata, and `removed` entries against base-snapshot metadata.
+A file is considered modified if its content changes, even when the path stays the same.
 
 ```bash
 # Show all changes between two snapshots
@@ -452,6 +528,11 @@ JSON output schema:
 `--filter` limits output to one change type (`added`, `removed`, or `modified`). Summary counts reflect the filtered set.
 `--summary` returns counts only and skips detailed `entries` output.
 
+`snapshot diff --summary`:
+
+- displays a summary of changes
+- includes added, removed, and modified counts
+
 The JSON contract for snapshot commands is unchanged. Query flags only reduce the returned `files` or `entries` collections and the derived counts; field names and envelope structure remain stable.
 
 ### Deleting a snapshot
@@ -462,8 +543,45 @@ coldkeep snapshot delete snap-abc123 --dry-run
 ```
 
 Deletes only the snapshot row and its `snapshot_file` entries. The underlying logical files and blocks are not affected.
+Deleting a snapshot removes metadata only. Data remains retained when still referenced by other snapshots or current state.
 
 `--dry-run` is read-only and reports impact details (lineage preview and file-count breakdown) without applying changes.
+Dry-run impact describes metadata/reference effects and does not guarantee disk-space reclamation.
+
+`snapshot delete --dry-run` preview includes:
+
+- number of files referenced by the snapshot
+- files unique to this snapshot
+- files shared with other snapshots
+- lineage impact
+
+No data is modified in dry-run mode.
+
+### Safe lineage workflow (v1.4)
+
+Use this sequence when operating on parent/child snapshots:
+
+```bash
+# 1) Create baseline and child lineage metadata
+coldkeep snapshot create --id day1
+coldkeep snapshot create --id day2 --from day1
+
+# 2) Review lineage and impact before delete
+coldkeep snapshot list --tree
+coldkeep snapshot delete day1 --dry-run
+
+# 3) If approved, delete parent metadata
+coldkeep snapshot delete day1 --force
+
+# 4) Verify child remains independently restorable
+coldkeep snapshot restore day2
+```
+
+Expected behavior:
+
+- Deleting `day1` changes lineage metadata and future GC eligibility only.
+- `day2` remains restorable because snapshots are self-contained.
+- `snapshot list --tree` may re-root children after parent delete; restore behavior is unchanged.
 
 ### Snapshot release gate (operator quick checklist)
 
@@ -489,10 +607,10 @@ Manual lifecycle expected in the release gate:
 
 For the full release criteria, use the snapshot sign-off sections in `PRE_RELEASE_CHECKLIST.md`:
 
-- `13) v1.3 snapshot sign-off checklist (Phases 1-7)`
+- `13) Snapshot sign-off checklist (Phases 1-7)`
 - `C. Test surface checklist`
 - `D. Documentation / release checklist`
-- `15) Verify v1.3 snapshot / retention contract (manual gate)`
+- `15) Verify snapshot / retention contract (manual gate)`
 - `16) Final global sign-off`
 
 When opening the release PR, use [`.github/pull_request_template.md`](.github/pull_request_template.md)
@@ -543,7 +661,7 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Release readiness flow: PRE_RELEASE_CHECKLIST.md
 - Security reporting and threat guidance: SECURITY.md
 
-## Roadmap note (v1.3 and beyond)
+## Roadmap note (v1.4 and beyond)
 
 v1.2 now includes the `physical_file` to `logical_file` mapping layer, explicit `repair ref-counts`, audited GC refusal on drifted roots, and deterministic batch maintenance semantics. Future work is expected to focus on performance, broader repair scopes, and higher-level orchestration rather than changing the core correctness model.
 

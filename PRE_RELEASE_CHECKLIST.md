@@ -285,7 +285,7 @@ Use this as the final snapshot gate before tagging a release.
 ### Phase 1 - schema / invariants
 
 - [ ] `snapshot` and `snapshot_file` tables exist in both SQLite and PostgreSQL paths
-- [ ] Unique `(snapshot_id, path)` constraint exists
+- [ ] Unique `(snapshot_id, path_id)` constraint exists (`snapshot_path.path` remains globally unique)
 - [ ] Migration version is correct and idempotent
 - [ ] Path normalization rules are centralized and tested
 - [ ] No regression to pre-snapshot schema behavior
@@ -314,6 +314,7 @@ Use this as the final snapshot gate before tagging a release.
 - [ ] Snapshot list works with filtering and ordering
 - [ ] Snapshot show returns metadata plus file list
 - [ ] Snapshot stats works globally and per snapshot
+- [ ] Snapshot lineage is documented and tested as metadata-only (not restore dependency)
 - [ ] `snapshot delete --force` only removes snapshot metadata
 - [ ] Delete does not directly delete retained content
 
@@ -341,6 +342,7 @@ Use this as the final snapshot gate before tagging a release.
 - [ ] Retained logical roots are computed from `physical_file` union `snapshot_file`
 - [ ] Snapshot-only retained content is GC-safe
 - [ ] Deleting a snapshot changes only future GC eligibility
+- [ ] Child snapshot remains restorable after deleting its lineage parent
 - [ ] Stats expose snapshot retention pressure
 - [ ] Verify audits persisted snapshot reachability anomalies
 - [ ] Doctor/reporting surfaces snapshot-retention integrity context
