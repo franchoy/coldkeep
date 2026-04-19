@@ -370,4 +370,54 @@ func TestAdversarialG7DeepVerifyFailsWhenMultipleChunksAreCorrupted(t *testing.T
 	}
 }
 
+func TestAdversarialG7DeepVerifyDetectsContainerHeaderCorruption(t *testing.T) {
+	testgate.RequireDB(t)
+
+	for _, codec := range adversarialG7Codecs() {
+		t.Run(codec, func(t *testing.T) {
+			configureAdversarialG7Codec(t, codec)
+
+			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG7Env(t)
+			defer dbconn.Close()
+			_ = env
+			_ = repoRoot
+			_ = binPath
+
+			inputDir := filepath.Join(tmp, "input")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+
+			inPath := testutils.CreateTempFile(t, inputDir, "g7-header-corrupt.bin", 512*1024)
+			fileID := storeFileWithCodecCLIG7(t, repoRoot, binPath, env, codec, inPath)
+
+			record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
+			containerPath := testutils.ContainerPathForRecord(record)
+
+			// flip the first byte of the magic field so header validation rejects it
+			f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatalf("open container for header corruption: %v", err)
+			}
+			orig := make([]byte, 1)
+			if _, err := f.ReadAt(orig, 0); err != nil {
+				_ = f.Close()
+				t.Fatalf("read magic byte: %v", err)
+			}
+			if _, err := f.WriteAt([]byte{orig[0] ^ 0xFF}, 0); err != nil {
+				_ = f.Close()
+				t.Fatalf("corrupt magic byte: %v", err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatalf("close container after header corruption: %v", err)
+			}
+
+			err = maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
+			deepVerifyMustFailG7(t, err, "container header corruption")
+
+			restoreMustFailG7(t, dbconn, fileID, filepath.Join(tmp, "restore", "g7-header-corrupt.restored.bin"))
+		})
+	}
+}
+
 var _ = dbschema.PostgresSchema

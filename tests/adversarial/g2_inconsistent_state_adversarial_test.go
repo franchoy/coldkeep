@@ -355,4 +355,87 @@ func TestAdversarialG2VerifyRejectsCompletedChunkMissingBlockRow(t *testing.T) {
 	}
 }
 
+func TestAdversarialG2GhostByteSealingContainerQuarantinedAndHealthyRestorePreserved(t *testing.T) {
+	testgate.RequireDB(t)
+
+	for _, codec := range adversarialG2Codecs() {
+		t.Run(codec, func(t *testing.T) {
+			configureAdversarialG2Codec(t, codec)
+
+			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG2Env(t)
+			defer dbconn.Close()
+
+			inputDir := filepath.Join(tmp, "input")
+			restoreDir := filepath.Join(tmp, "restore")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+			if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+				t.Fatalf("mkdir restore: %v", err)
+			}
+
+			anchorPath := testutils.CreateTempFile(t, inputDir, "g2-ghost-anchor.bin", 512*1024)
+			anchorHash := testutils.SHA256File(t, anchorPath)
+			anchorID := storeFileWithCodecCLIG2(t, repoRoot, binPath, env, codec, anchorPath)
+
+			if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+				t.Fatalf("mkdir containers dir: %v", err)
+			}
+
+			const ghostFilename = "g2-ghost-sealing.bin"
+			ghostContainerPath := filepath.Join(container.ContainersDir, ghostFilename)
+			dbCurrentSize := int64(container.ContainerHdrLen + 128)
+			ghostBytes := []byte("g2-adversarial-ghost-bytes")
+			physicalSize := dbCurrentSize + int64(len(ghostBytes))
+
+			if err := os.WriteFile(ghostContainerPath, make([]byte, physicalSize), 0o644); err != nil {
+				t.Fatalf("write ghost-byte container file: %v", err)
+			}
+
+			var ghostContainerID int64
+			if err := dbconn.QueryRow(`
+				INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+				VALUES ($1, $2, $3, FALSE, TRUE, FALSE)
+				RETURNING id
+			`, ghostFilename, dbCurrentSize, container.GetContainerMaxSize()).Scan(&ghostContainerID); err != nil {
+				t.Fatalf("insert ghost-byte sealing container: %v", err)
+			}
+
+			if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+				t.Fatalf("system recovery: %v", err)
+			}
+
+			var sealed, sealing, quarantine bool
+			if err := dbconn.QueryRow(`SELECT sealed, sealing, quarantine FROM container WHERE id = $1`, ghostContainerID).Scan(&sealed, &sealing, &quarantine); err != nil {
+				t.Fatalf("query ghost container state after recovery: %v", err)
+			}
+			if sealed {
+				t.Fatalf("expected ghost-byte sealing container to remain unsealed after recovery")
+			}
+			if sealing {
+				t.Fatalf("expected recovery to clear sealing marker on quarantined ghost-byte container")
+			}
+			if !quarantine {
+				t.Fatalf("expected ghost-byte sealing container to be quarantined after recovery")
+			}
+
+			testutils.AssertNoProcessingRows(t, dbconn)
+
+			anchorOut := filepath.Join(restoreDir, "g2-ghost-anchor.restored.bin")
+			restoreMustMatchHashG2(t, dbconn, anchorID, anchorOut, anchorHash)
+
+			// doctor CLI should remain healthy after quarantine
+			doctorPayload := testutils.AssertCLIJSONOK(
+				t,
+				testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "doctor", "--output", "json"),
+				"doctor",
+			)
+			doctorData := testutils.JSONMap(t, doctorPayload, "data")
+			if verifyStatus, _ := doctorData["verify_status"].(string); verifyStatus != "ok" {
+				t.Fatalf("expected verify_status=ok after ghost-byte recovery, got %q", verifyStatus)
+			}
+		})
+	}
+}
+
 var _ = dbschema.PostgresSchema

@@ -169,6 +169,24 @@ func verifyInvariantConvergenceG8(t *testing.T, dbconn *sql.DB, repoRoot, binPat
 	`); got != 0 {
 		t.Fatalf("expected no logical_file.ref_count drift vs physical_file rows, got %d", got)
 	}
+
+	// Snapshot integrity invariants: no snapshot_file pointing at missing or aborted logical_file
+	if got := countInt64QueryG8(t, dbconn, `
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
+		WHERE lf.id IS NULL
+	`); got != 0 {
+		t.Fatalf("expected no orphan snapshot_file referencing non-existent logical_file, got %d", got)
+	}
+	if got := countInt64QueryG8(t, dbconn, `
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		JOIN logical_file lf ON lf.id = sf.logical_file_id
+		WHERE lf.status = 'ABORTED'
+	`); got != 0 {
+		t.Fatalf("expected no snapshot_file referencing ABORTED logical_file, got %d", got)
+	}
 }
 
 func restartAndRecoverG8(t *testing.T, dbconn *sql.DB) *sql.DB {
