@@ -3142,6 +3142,7 @@ func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDelete
 		if preview.ParentID.Valid {
 			if preview.ParentMissing {
 				buf.WriteString("  Parent: (missing)\n")
+				buf.WriteString("  Parent note: parent snapshot metadata is missing; this snapshot remains usable\n")
 			} else {
 				fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
 			}
@@ -3183,7 +3184,7 @@ func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDelete
 	}
 
 	// Dry-run notice
-	buf.WriteString("(dry-run: no changes applied)\n")
+	buf.WriteString("Dry run: no changes applied.\n")
 
 	return buf.String()
 }
@@ -3635,11 +3636,11 @@ func printHelp() {
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
 		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--from <snapshotID>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
 		{"  snapshot restore <snapshotID> [<path> ...] [--mode ...] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
-		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]", "List snapshots with optional filters or as a lineage tree"},
+		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]", "List snapshots with optional filters; use --tree for lineage view"},
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
-		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete a snapshot row, or simulate deletion in read-only mode"},
-		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
+		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -3656,6 +3657,10 @@ func printHelp() {
 	fmt.Println("      pass snapshot_id positionally to show/restore/stats/diff/delete")
 	fmt.Println("      --label is optional metadata only and is never used for targeting")
 	fmt.Println("      --from records lineage metadata only; it does not make a snapshot depend on its parent")
+	fmt.Println("      --tree renders metadata lineage only")
+	fmt.Println("      --summary returns count-only diff output (no entry list)")
+	fmt.Println("      --dry-run performs a read-only preview and never writes data")
+	fmt.Println("      missing lineage parent metadata is shown as Parent: (missing); snapshot data remains usable")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")

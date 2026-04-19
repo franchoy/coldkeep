@@ -484,18 +484,19 @@ func GetSnapshot(ctx context.Context, db *sql.DB, snapshotID string) (*Snapshot,
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
 	}
-	if strings.TrimSpace(snapshotID) == "" {
+	trimmedID := strings.TrimSpace(snapshotID)
+	if trimmedID == "" {
 		return nil, errors.New("snapshot id cannot be empty")
 	}
 
 	var item Snapshot
-	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label, parent_id FROM snapshot WHERE id = $1`, strings.TrimSpace(snapshotID)).
+	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label, parent_id FROM snapshot WHERE id = $1`, trimmedID).
 		Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label, &item.ParentID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("snapshot not found: %s", snapshotID)
+			return nil, fmt.Errorf("snapshot %q not found", trimmedID)
 		}
-		return nil, fmt.Errorf("get snapshot id=%s: %w", snapshotID, err)
+		return nil, fmt.Errorf("get snapshot id=%s: %w", trimmedID, err)
 	}
 	return &item, nil
 }
@@ -757,7 +758,7 @@ func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID s
 	var targetParentID sql.NullString
 	if err := db.QueryRowContext(ctx, `SELECT parent_id FROM snapshot WHERE id = $1`, targetID).Scan(&targetParentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("snapshot not found: %s", targetID)
+			return nil, fmt.Errorf("snapshot %q not found", targetID)
 		}
 		return nil, fmt.Errorf("query target snapshot id=%s: %w", targetID, err)
 	}
@@ -767,7 +768,7 @@ func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID s
 		return nil, fmt.Errorf("check base snapshot id=%s: %w", baseID, err)
 	}
 	if baseExists == 0 {
-		return nil, fmt.Errorf("snapshot not found: %s", baseID)
+		return nil, fmt.Errorf("snapshot %q not found", baseID)
 	}
 
 	// Common case optimization marker: direct parent-child diff.
@@ -980,7 +981,7 @@ func resolveSnapshotRestoreSelection(
 	var snapshotExists int
 	if err := db.QueryRowContext(ctx, `SELECT 1 FROM snapshot WHERE id = $1`, snapshotID).Scan(&snapshotExists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("snapshot not found: %s", snapshotID)
+			return nil, nil, fmt.Errorf("snapshot %q not found", snapshotID)
 		}
 		return nil, nil, fmt.Errorf("check snapshot existence id=%s: %w", snapshotID, err)
 	}

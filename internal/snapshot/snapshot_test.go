@@ -1155,7 +1155,7 @@ func TestResolveSnapshotRestoreSelectionMissingSnapshotFails(t *testing.T) {
 	ctx := context.Background()
 
 	_, _, err := resolveSnapshotRestoreSelection(ctx, db, "snap-missing", nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "snap-missing" not found`) {
 		t.Fatalf("expected missing snapshot error, got: %v", err)
 	}
 }
@@ -1588,7 +1588,7 @@ func TestRestoreSnapshotInvalidSnapshotID(t *testing.T) {
 
 	// Test: Request non-existent snapshot
 	_, err := RestoreSnapshot(ctx, db, "nonexistent-snap", []string{}, opts)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "nonexistent-snap" not found`) {
 		t.Fatalf("expected snapshot not found error, got: %v", err)
 	}
 }
@@ -1979,7 +1979,7 @@ func TestListSnapshotFilesMissingSnapshotFails(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := ListSnapshotFiles(ctx, db, "snap-missing-show", 10, nil)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "snap-missing-show" not found`) {
 		t.Fatalf("expected missing snapshot error, got: %v", err)
 	}
 }
@@ -2641,7 +2641,7 @@ func TestDiffSnapshotsSummarySQLMissingBaseReturnsNotFound(t *testing.T) {
 	}
 
 	_, err := DiffSnapshotsSummarySQL(ctx, db, "snap-diffsql-missing-base", target.ID)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found: snap-diffsql-missing-base") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "snap-diffsql-missing-base" not found`) {
 		t.Fatalf("expected missing base error, got: %v", err)
 	}
 }
@@ -2914,7 +2914,7 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	if _, err := DiffSnapshots(ctx, db, "snap-base", "", nil); err == nil || !strings.Contains(err.Error(), "target snapshot id cannot be empty") {
 		t.Fatalf("expected target empty id error, got: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target", nil); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target", nil); err == nil || !strings.Contains(err.Error(), `snapshot "missing-base" not found`) {
 		t.Fatalf("expected missing base snapshot error, got: %v", err)
 	}
 
@@ -2922,7 +2922,7 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	if err := InsertSnapshot(ctx, db, base); err != nil {
 		t.Fatalf("InsertSnapshot base: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target", nil); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target", nil); err == nil || !strings.Contains(err.Error(), `snapshot "missing-target" not found`) {
 		t.Fatalf("expected missing target snapshot error, got: %v", err)
 	}
 }

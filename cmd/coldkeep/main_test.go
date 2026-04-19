@@ -3167,7 +3167,7 @@ func TestFormatSnapshotDeleteDryRunOutput(t *testing.T) {
 	if !strings.Contains(output, "Impact:") {
 		t.Fatalf("missing Impact section in output:\n%s", output)
 	}
-	if !strings.Contains(output, "dry-run: no changes applied") {
+	if !strings.Contains(output, "Dry run: no changes applied.") {
 		t.Fatalf("missing dry-run notice in output:\n%s", output)
 	}
 }
@@ -3569,8 +3569,8 @@ func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
 	if !strings.Contains(output, "potentially free 500 file reference") {
 		t.Fatalf("expected 'potentially free 500 file reference' in output:\n%s", output)
 	}
-	if !strings.Contains(output, "dry-run: no changes applied") {
-		t.Fatalf("expected 'dry-run: no changes applied' in output:\n%s", output)
+	if !strings.Contains(output, "Dry run: no changes applied.") {
+		t.Fatalf("expected 'Dry run: no changes applied.' in output:\n%s", output)
 	}
 
 	// Most importantly, verify the warning section is present
@@ -3891,6 +3891,27 @@ func TestLoadSnapshotDeleteLineagePreviewDetectsMissingParent(t *testing.T) {
 	output := formatSnapshotDeleteDryRunOutput("child", preview)
 	if !strings.Contains(output, "Parent: (missing)") {
 		t.Fatalf("expected formatted output to show Parent: (missing), got:\n%s", output)
+	}
+	if !strings.Contains(output, "Parent note: parent snapshot metadata is missing") {
+		t.Fatalf("expected formatted output to include missing-parent note, got:\n%s", output)
+	}
+}
+
+func TestPrintHelpSnapshotFlagDocs(t *testing.T) {
+	output := captureStdout(t, func() {
+		printHelp()
+	})
+
+	for _, expected := range []string{
+		"--from records lineage metadata only",
+		"--tree renders metadata lineage only",
+		"--summary returns count-only diff output",
+		"--dry-run performs a read-only preview and never writes data",
+		"missing lineage parent metadata is shown as Parent: (missing)",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected help output to include %q, got:\n%s", expected, output)
+		}
 	}
 }
 
