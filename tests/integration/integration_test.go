@@ -113,7 +113,20 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 		t.Fatalf("connectDB: %v", err)
 	}
 	testutils.ApplySchema(t, dbconn)
-	testutils.ResetDB(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
 	_ = dbconn.Close()
 
 	repoRoot := testutils.FindRepoRoot(t)
@@ -223,7 +236,20 @@ func TestDoctorCommand(t *testing.T) {
 		t.Fatalf("connectDB: %v", err)
 	}
 	testutils.ApplySchema(t, dbconn)
-	testutils.ResetDB(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
 	_ = dbconn.Close()
 
 	repoRoot := testutils.FindRepoRoot(t)
@@ -469,7 +495,20 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 		t.Fatalf("connectDB: %v", err)
 	}
 	testutils.ApplySchema(t, dbconn)
-	testutils.ResetDB(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
 	_ = dbconn.Close()
 
 	repoRoot := testutils.FindRepoRoot(t)
@@ -1969,6 +2008,275 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 	totalEntryCount := testutils.JSONInt64(t, diffData, "total_diff_entry_count")
 	if totalEntryCount != int64(len(entriesArray)) {
 		t.Fatalf("snapshot diff: total_diff_entry_count=%d does not match len(entries)=%d", totalEntryCount, int64(len(entriesArray)))
+	}
+}
+
+func TestSnapshotDiffSummaryJSONContractMatchesDetailedSummary(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+
+	aPath := filepath.Join(inputDir, "docs", "a.txt")
+	bPath := filepath.Join(inputDir, "docs", "b.txt")
+	if err := os.WriteFile(aPath, bytes.Repeat([]byte("a-v1\n"), 200), 0o644); err != nil {
+		t.Fatalf("write a v1: %v", err)
+	}
+	if err := os.WriteFile(bPath, bytes.Repeat([]byte("b-v1\n"), 150), 0o644); err != nil {
+		t.Fatalf("write b v1: %v", err)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", aPath, "--output", "json"), "store")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", bPath, "--output", "json"), "store")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "sum-v1", "--output", "json"), "snapshot")
+
+	cPath := filepath.Join(inputDir, "docs", "c.txt")
+	if err := os.WriteFile(cPath, bytes.Repeat([]byte("c-added\n"), 120), 0o644); err != nil {
+		t.Fatalf("write c v2: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", cPath, "--output", "json"), "store")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "sum-v2", "--output", "json"), "snapshot")
+
+	summaryOnly := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "sum-v1", "sum-v2", "--summary", "--output", "json"), "snapshot diff")
+	summaryOnlyData := testutils.JSONMap(t, summaryOnly, "data")
+	if mode, _ := summaryOnlyData["summary_mode"].(bool); !mode {
+		t.Fatalf("expected summary_mode=true in summary output, payload=%v", summaryOnly)
+	}
+	if _, hasEntries := summaryOnlyData["entries"]; hasEntries {
+		t.Fatalf("did not expect entries array in summary mode payload=%v", summaryOnly)
+	}
+
+	detailed := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "diff", "sum-v1", "sum-v2", "--output", "json"), "snapshot diff")
+	detailedData := testutils.JSONMap(t, detailed, "data")
+
+	readSummaryCount := func(summary map[string]any, key string) int64 {
+		if v, ok := summary[key].(float64); ok {
+			return int64(v)
+		}
+		if v, ok := summary[key+"_count"].(float64); ok {
+			return int64(v)
+		}
+		return -1
+	}
+
+	summaryA, ok := summaryOnlyData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary output missing summary object: %v", summaryOnly)
+	}
+	summaryB, ok := detailedData["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("detailed output missing summary object: %v", detailed)
+	}
+
+	for _, key := range []string{"added", "removed", "modified"} {
+		a := readSummaryCount(summaryA, key)
+		b := readSummaryCount(summaryB, key)
+		if a < 0 || b < 0 {
+			t.Fatalf("missing %s count in summaries summary=%v detailed=%v", key, summaryA, summaryB)
+		}
+		if a != b {
+			t.Fatalf("summary mismatch for %s: summary=%d detailed=%d", key, a, b)
+		}
+	}
+}
+
+func TestSnapshotListTreeJSONContract(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	f1 := testutils.CreateTempFile(t, inputDir, "tree-a.txt", 512)
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", f1, "--output", "json"), "store")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "tree-day1", "--output", "json"), "snapshot")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "tree-day2", "--from", "tree-day1", "--output", "json"), "snapshot")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "tree-day3", "--from", "tree-day2", "--output", "json"), "snapshot")
+
+	treeJSON := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--tree", "--output", "json"), "snapshot")
+	treeData := testutils.JSONMap(t, treeJSON, "data")
+	if mode, _ := treeData["tree_mode"].(bool); !mode {
+		t.Fatalf("expected tree_mode=true, payload=%v", treeJSON)
+	}
+	lines, ok := treeData["tree_lines"].([]any)
+	if !ok {
+		t.Fatalf("expected tree_lines array, payload=%v", treeJSON)
+	}
+	if len(lines) == 0 {
+		t.Fatalf("expected non-empty tree_lines, payload=%v", treeJSON)
+	}
+
+	containsID := func(id string) bool {
+		for _, line := range lines {
+			s, _ := line.(string)
+			if strings.Contains(s, id) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, id := range []string{"tree-day1", "tree-day2", "tree-day3"} {
+		if !containsID(id) {
+			t.Fatalf("expected tree_lines to include %s, lines=%v", id, lines)
+		}
+	}
+
+	// Broken lineage still produces valid tree JSON output.
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "tree-day2", "--force", "--output", "json"), "snapshot")
+	treeJSONAfter := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "list", "--tree", "--output", "json"), "snapshot")
+	treeDataAfter := testutils.JSONMap(t, treeJSONAfter, "data")
+	linesAfter, ok := treeDataAfter["tree_lines"].([]any)
+	if !ok {
+		t.Fatalf("expected tree_lines array after delete, payload=%v", treeJSONAfter)
+	}
+	foundDay3 := false
+	for _, line := range linesAfter {
+		s, _ := line.(string)
+		if strings.Contains(s, "tree-day3") {
+			foundDay3 = true
+			break
+		}
+	}
+	if !foundDay3 {
+		t.Fatalf("expected tree-day3 after deleting parent snapshot, lines=%v", linesAfter)
+	}
+}
+
+func TestSnapshotStatsLineageEnhancedFieldsJSONContract(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(filepath.Join(inputDir, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+
+	aPath := filepath.Join(inputDir, "docs", "stats-a.txt")
+	bPath := filepath.Join(inputDir, "docs", "stats-b.txt")
+	if err := os.WriteFile(aPath, bytes.Repeat([]byte("stats-a-v1\n"), 200), 0o644); err != nil {
+		t.Fatalf("write a v1: %v", err)
+	}
+	if err := os.WriteFile(bPath, bytes.Repeat([]byte("stats-b-v1\n"), 180), 0o644); err != nil {
+		t.Fatalf("write b v1: %v", err)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", aPath, "--output", "json"), "store")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", bPath, "--output", "json"), "store")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "stats-v1", "--output", "json"), "snapshot")
+
+	// Keep a and b reused, add c as new.
+	cPath := filepath.Join(inputDir, "docs", "stats-c.txt")
+	if err := os.WriteFile(cPath, bytes.Repeat([]byte("stats-c-new\n"), 150), 0o644); err != nil {
+		t.Fatalf("write c v2: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", cPath, "--output", "json"), "store")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "stats-v2", "--from", "stats-v1", "--output", "json"), "snapshot")
+
+	statsV2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "stats", "stats-v2", "--output", "json"), "snapshot")
+	statsData := testutils.JSONMap(t, statsV2, "data")
+
+	total := testutils.JSONInt64(t, statsData, "snapshot_file_count")
+	reused := testutils.JSONInt64(t, statsData, "reused")
+	newFiles := testutils.JSONInt64(t, statsData, "new")
+	reuseRatio, ok := statsData["reuse_ratio"].(float64)
+	if !ok {
+		t.Fatalf("expected reuse_ratio float in stats payload=%v", statsV2)
+	}
+
+	if total <= 0 {
+		t.Fatalf("expected total snapshot_file_count > 0, got %d", total)
+	}
+	if reused < 0 || newFiles < 0 {
+		t.Fatalf("expected non-negative reused/new counts, reused=%d new=%d payload=%v", reused, newFiles, statsV2)
+	}
+	if reused+newFiles != total {
+		t.Fatalf("expected reused+new == total (reused=%d new=%d total=%d payload=%v)", reused, newFiles, total, statsV2)
+	}
+	if newFiles == 0 {
+		t.Fatalf("expected new files > 0 for added-file v2 snapshot, payload=%v", statsV2)
+	}
+	if reused == 0 {
+		t.Fatalf("expected reused files > 0 (stats-a/stats-b reused), payload=%v", statsV2)
+	}
+	if reuseRatio < 0 || reuseRatio > 100 {
+		t.Fatalf("expected reuse_ratio in [0,100], got %.2f payload=%v", reuseRatio, statsV2)
 	}
 }
 
