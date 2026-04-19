@@ -2866,13 +2866,26 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 			_, _ = fmt.Fprintf(os.Stdout, "  New: %d\n", stats.NewFileCount.Int64)
 			_, _ = fmt.Fprintf(os.Stdout, "  Reuse ratio: %.1f%%\n", stats.ReuseRatioPct.Float64)
 		} else {
-			_, _ = fmt.Fprintln(os.Stdout, "  (Reused/New not available -- no parent snapshot)")
+			_, _ = fmt.Fprintf(os.Stdout, "  (%s)\n", snapshotLineageUnavailableMessage(stats.LineageStatus))
 		}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Total logical size: %d bytes\n", stats.TotalSizeBytes)
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
+}
+
+func snapshotLineageUnavailableMessage(status snapshot.SnapshotLineageStatus) string {
+	switch status {
+	case snapshot.SnapshotLineageStatusNoParent, "":
+		return "Reused/New not available -- no parent snapshot metadata"
+	case snapshot.SnapshotLineageStatusParentMissing:
+		return "Reused/New not available -- parent snapshot metadata exists but parent snapshot is missing"
+	case snapshot.SnapshotLineageStatusSkipped:
+		return "Reused/New not available -- lineage analysis was intentionally skipped for this snapshot scope"
+	default:
+		return "Reused/New not available"
+	}
 }
 
 func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {

@@ -114,10 +114,22 @@ type SnapshotStats struct {
 	TotalSizeBytes    int64
 	SnapshotID        string
 	ParentSnapshotID  sql.NullString
-	ReusedFileCount   sql.NullInt64
-	NewFileCount      sql.NullInt64
-	ReuseRatioPct     sql.NullFloat64
+	// LineageStatus describes why per-snapshot reuse/new metrics are present or absent.
+	// Empty means not applicable (for global stats calls with no snapshot_id).
+	LineageStatus   SnapshotLineageStatus
+	ReusedFileCount sql.NullInt64
+	NewFileCount    sql.NullInt64
+	ReuseRatioPct   sql.NullFloat64
 }
+
+type SnapshotLineageStatus string
+
+const (
+	SnapshotLineageStatusNoParent      SnapshotLineageStatus = "no_parent"
+	SnapshotLineageStatusParentMissing SnapshotLineageStatus = "parent_missing"
+	SnapshotLineageStatusSkipped       SnapshotLineageStatus = "lineage_skipped"
+	SnapshotLineageStatusComputed      SnapshotLineageStatus = "lineage_computed"
+)
 
 type SnapshotDiffEntry struct {
 	Path            string        `json:"path"`
@@ -581,6 +593,7 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 	if snapshotRow.ParentID.Valid {
 		if snapshotRow.Type != "full" {
 			// Lineage reuse/new analysis is only meaningful for full-to-full comparisons.
+			stats.LineageStatus = SnapshotLineageStatusSkipped
 			return stats, nil
 		}
 
@@ -590,6 +603,7 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 			if errors.Is(err, sql.ErrNoRows) {
 				// Parent lineage metadata is optional and non-authoritative for stats.
 				// If parent no longer exists, skip lineage breakdown and return totals only.
+				stats.LineageStatus = SnapshotLineageStatusParentMissing
 				return stats, nil
 			}
 			return nil, fmt.Errorf("check parent snapshot existence snapshot_id=%s parent_id=%s: %w", stats.SnapshotID, snapshotRow.ParentID.String, err)
@@ -598,6 +612,7 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 			// Guard against legacy/corrupt full->partial lineage metadata.
 			// Parent lineage metadata is optional and non-authoritative for stats.
 			// If parent is not full, skip lineage breakdown and return totals only.
+			stats.LineageStatus = SnapshotLineageStatusSkipped
 			return stats, nil
 		}
 
@@ -639,6 +654,9 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 		stats.ReusedFileCount = sql.NullInt64{Int64: reusedCount, Valid: true}
 		stats.NewFileCount = sql.NullInt64{Int64: newCount, Valid: true}
 		stats.ReuseRatioPct = sql.NullFloat64{Float64: reuseRatioPct, Valid: true}
+		stats.LineageStatus = SnapshotLineageStatusComputed
+	} else {
+		stats.LineageStatus = SnapshotLineageStatusNoParent
 	}
 
 	return stats, nil

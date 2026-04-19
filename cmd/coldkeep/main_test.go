@@ -2917,8 +2917,92 @@ func TestRunSnapshotCommandStatsTextShowsNoParentFallback(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "(Reused/New not available -- no parent snapshot)") {
+	if !strings.Contains(output, "(Reused/New not available -- no parent snapshot metadata)") {
 		t.Fatalf("expected no-parent fallback line in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsTextShowsMissingParentFallback(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 4,
+			TotalSizeBytes:    2048,
+			LineageStatus:     snapshot.SnapshotLineageStatusParentMissing,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child-missing-parent"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "(Reused/New not available -- parent snapshot metadata exists but parent snapshot is missing)") {
+		t.Fatalf("expected missing-parent fallback line in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsTextShowsSkippedLineageFallback(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 4,
+			TotalSizeBytes:    2048,
+			LineageStatus:     snapshot.SnapshotLineageStatusSkipped,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child-skipped-lineage"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "(Reused/New not available -- lineage analysis was intentionally skipped for this snapshot scope)") {
+		t.Fatalf("expected skipped-lineage fallback line in text output, got: %q", output)
 	}
 }
 
