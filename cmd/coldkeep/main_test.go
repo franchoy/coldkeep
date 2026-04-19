@@ -3359,6 +3359,106 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandDeleteDryRunJSONNoChildrenHasNoWarnings(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{Valid: false},
+			ChildSnapshotIDs: []string{},
+			TotalFiles:       0,
+			UniqueFiles:      0,
+			SharedFiles:      0,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "root-snap"},
+			flags: map[string][]string{
+				"dry-run": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete dry-run JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if warnings, exists := data["warnings"]; exists && warnings != nil {
+		if arr, ok := warnings.([]any); ok && len(arr) > 0 {
+			t.Fatalf("expected no warnings for snapshot without children, got %v", warnings)
+		}
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunSnapshotNotFound(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called when preview fails")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return nil, fmt.Errorf("snapshot %q not found", snapshotID)
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "missing-snap"},
+		flags: map[string][]string{
+			"dry-run": {""},
+		},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected not found error, got nil")
+	}
+	if got := err.Error(); got != `snapshot "missing-snap" not found` {
+		t.Fatalf("expected exact not-found error, got %q", got)
+	}
+}
+
 func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
