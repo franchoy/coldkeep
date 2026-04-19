@@ -104,6 +104,12 @@ done
 
 Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`) across both codecs.
 
+For the v1.4 snapshot contract gate, run the focused integration suite after the matrix loop:
+
+```bash
+scripts/run_snapshot_release_gate.sh --count 1
+```
+
 ## 4) Run integration umbrella suite (optional extra confidence, not a release gate)
 
 This step is intentionally non-blocking for release sign-off.
