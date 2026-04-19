@@ -3120,6 +3120,9 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 			SnapshotID:       snapshotID,
 			ParentID:         sql.NullString{String: "snap-parent", Valid: true},
 			ChildSnapshotIDs: []string{"snap-child-1", "snap-child-2"},
+			TotalFiles:       10,
+			UniqueFiles:      3,
+			SharedFiles:      7,
 		}, nil
 	}
 
@@ -3155,6 +3158,15 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	if !ok || len(children) != 2 {
 		t.Fatalf("expected two child snapshots in preview, got %v", data)
 	}
+	if totalFiles, _ := data["total_files"].(float64); totalFiles != 10 {
+		t.Fatalf("expected total_files=10, got %v", data["total_files"])
+	}
+	if uniqueFiles, _ := data["unique_files"].(float64); uniqueFiles != 3 {
+		t.Fatalf("expected unique_files=3, got %v", data["unique_files"])
+	}
+	if sharedFiles, _ := data["shared_files"].(float64); sharedFiles != 7 {
+		t.Fatalf("expected shared_files=7, got %v", data["shared_files"])
+	}
 }
 
 func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) {
@@ -3170,11 +3182,38 @@ func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) 
 	)`); err != nil {
 		t.Fatalf("create snapshot table: %v", err)
 	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
 	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
 		('day1', NULL),
 		('day2', 'day1'),
+		('day3', 'day2'),
 		('experiment1', 'day1')`); err != nil {
 		t.Fatalf("seed snapshots: %v", err)
+	}
+
+	// day1: 4 files (3 unique to day1, 1 shared with day2)
+	// day2: 3 files (1 shared with day1, 1 shared with day3, 1 unique to day2)
+	// day3: 2 files (1 shared with day2, 1 unique to day3)
+	// experiment1: 2 files (1 shared with day1, 1 unique to experiment1)
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file(snapshot_id, path_id, logical_file_id) VALUES
+		('day1', 1, 'file1'),
+		('day1', 2, 'file2'),
+		('day1', 3, 'file3'),
+		('day1', 4, 'file4'),
+		('day2', 4, 'file4'),
+		('day2', 5, 'file5'),
+		('day2', 6, 'file6'),
+		('day3', 6, 'file6'),
+		('day3', 7, 'file7'),
+		('experiment1', 1, 'file1'),
+		('experiment1', 8, 'file8')`); err != nil {
+		t.Fatalf("seed snapshot_file: %v", err)
 	}
 
 	preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "day1")
@@ -3189,6 +3228,22 @@ func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) 
 	}
 	if len(preview.ChildSnapshotIDs) != 2 || preview.ChildSnapshotIDs[0] != "day2" || preview.ChildSnapshotIDs[1] != "experiment1" {
 		t.Fatalf("expected ordered child IDs [day2 experiment1], got %#v", preview.ChildSnapshotIDs)
+	}
+
+	// day1 has 4 total files:
+	// file1 (path_id=1): shared with experiment1 (shared)
+	// file2 (path_id=2): unique to day1
+	// file3 (path_id=3): unique to day1
+	// file4 (path_id=4): shared with day2 (shared)
+	// Expected: 4 total, 2 unique, 2 shared
+	if preview.TotalFiles != 4 {
+		t.Fatalf("expected 4 total files, got %d", preview.TotalFiles)
+	}
+	if preview.UniqueFiles != 2 {
+		t.Fatalf("expected 2 unique files, got %d", preview.UniqueFiles)
+	}
+	if preview.SharedFiles != 2 {
+		t.Fatalf("expected 2 shared files, got %d", preview.SharedFiles)
 	}
 }
 

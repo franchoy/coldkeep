@@ -2927,12 +2927,15 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 			"status":  "ok",
 			"command": "snapshot",
 			"data": map[string]any{
-				"action":      action,
-				"snapshot_id": snapshotID,
-				"dry_run":     dryRun,
-				"parent_id":   snapshotLabelJSONValue(previewParentID(preview)),
-				"children":    previewChildren(preview),
-				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"action":       action,
+				"snapshot_id":  snapshotID,
+				"dry_run":      dryRun,
+				"parent_id":    snapshotLabelJSONValue(previewParentID(preview)),
+				"children":     previewChildren(preview),
+				"total_files":  previewTotalFiles(preview),
+				"unique_files": previewUniqueFiles(preview),
+				"shared_files": previewSharedFiles(preview),
+				"duration_ms":  time.Since(startedAt).Milliseconds(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -2942,6 +2945,12 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 
 	if dryRun {
 		_, _ = fmt.Fprintf(os.Stdout, "Dry-run only: snapshot delete simulation for id=%s (no changes applied)\n", snapshotID)
+		if preview != nil && len(preview.ChildSnapshotIDs) > 0 {
+			_, _ = fmt.Fprintf(os.Stdout, "  Warning: This snapshot is parent of %d snapshot(s): %v\n", len(preview.ChildSnapshotIDs), preview.ChildSnapshotIDs)
+		}
+		if preview != nil {
+			_, _ = fmt.Fprintf(os.Stdout, "  Files: %d total, %d unique, %d shared\n", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
 	}
@@ -2954,6 +2963,9 @@ type snapshotDeleteLineagePreview struct {
 	SnapshotID       string
 	ParentID         sql.NullString
 	ChildSnapshotIDs []string
+	TotalFiles       int64
+	UniqueFiles      int64
+	SharedFiles      int64
 }
 
 func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
@@ -2990,6 +3002,30 @@ func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snaps
 		return nil, fmt.Errorf("iterate snapshot delete preview child rows snapshot_id=%s: %w", trimmedID, err)
 	}
 
+	// Query total files referenced by this snapshot
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, trimmedID).Scan(&preview.TotalFiles); err != nil {
+		return nil, fmt.Errorf("load snapshot delete preview count total files snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	// Query unique files (only referenced by this snapshot)
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		WHERE sf.snapshot_id = $1
+		AND NOT EXISTS (
+			SELECT 1
+			FROM snapshot_file sf2
+			WHERE sf2.path_id = sf.path_id
+			  AND sf2.logical_file_id = sf.logical_file_id
+			  AND sf2.snapshot_id != sf.snapshot_id
+		)
+	`, trimmedID).Scan(&preview.UniqueFiles); err != nil {
+		return nil, fmt.Errorf("load snapshot delete preview count unique files snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	// Calculate shared files
+	preview.SharedFiles = preview.TotalFiles - preview.UniqueFiles
+
 	return preview, nil
 }
 
@@ -3005,6 +3041,27 @@ func previewChildren(preview *snapshotDeleteLineagePreview) []string {
 		return nil
 	}
 	return append([]string(nil), preview.ChildSnapshotIDs...)
+}
+
+func previewTotalFiles(preview *snapshotDeleteLineagePreview) int64 {
+	if preview == nil {
+		return 0
+	}
+	return preview.TotalFiles
+}
+
+func previewUniqueFiles(preview *snapshotDeleteLineagePreview) int64 {
+	if preview == nil {
+		return 0
+	}
+	return preview.UniqueFiles
+}
+
+func previewSharedFiles(preview *snapshotDeleteLineagePreview) int64 {
+	if preview == nil {
+		return 0
+	}
+	return preview.SharedFiles
 }
 
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
