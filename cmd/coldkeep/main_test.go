@@ -3096,9 +3096,11 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
 	t.Cleanup(func() {
 		loadDefaultStorageContextPhase = originalLoad
 		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
 	})
 
 	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
@@ -3112,6 +3114,13 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
 		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
 		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{String: "snap-parent", Valid: true},
+			ChildSnapshotIDs: []string{"snap-child-1", "snap-child-2"},
+		}, nil
 	}
 
 	output := captureStdout(t, func() {
@@ -3138,6 +3147,48 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	}
 	if got, _ := data["dry_run"].(bool); !got {
 		t.Fatalf("expected dry_run=true for dry-run delete, got %v", data)
+	}
+	if got, _ := data["parent_id"].(string); got != "snap-parent" {
+		t.Fatalf("expected parent_id=snap-parent, got %v", data)
+	}
+	children, ok := data["children"].([]any)
+	if !ok || len(children) != 2 {
+		t.Fatalf("expected two child snapshots in preview, got %v", data)
+	}
+}
+
+func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
+		('day1', NULL),
+		('day2', 'day1'),
+		('experiment1', 'day1')`); err != nil {
+		t.Fatalf("seed snapshots: %v", err)
+	}
+
+	preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "day1")
+	if err != nil {
+		t.Fatalf("loadSnapshotDeleteLineagePreview returned error: %v", err)
+	}
+	if preview.SnapshotID != "day1" {
+		t.Fatalf("expected snapshot id day1, got %q", preview.SnapshotID)
+	}
+	if preview.ParentID.Valid {
+		t.Fatalf("expected parent_id NULL for root snapshot, got %+v", preview.ParentID)
+	}
+	if len(preview.ChildSnapshotIDs) != 2 || preview.ChildSnapshotIDs[0] != "day2" || preview.ChildSnapshotIDs[1] != "experiment1" {
+		t.Fatalf("expected ordered child IDs [day2 experiment1], got %#v", preview.ChildSnapshotIDs)
 	}
 }
 

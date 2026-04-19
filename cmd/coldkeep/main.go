@@ -128,6 +128,7 @@ var getSnapshotPhase = snapshot.GetSnapshot
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = snapshot.GetSnapshotStats
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
+var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
@@ -2902,6 +2903,15 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
+	var preview *snapshotDeleteLineagePreview
+	if dryRun {
+		loadedPreview, err := snapshotDeleteLineagePreviewPhase(ctx, sgctx.DB, snapshotID)
+		if err != nil {
+			return err
+		}
+		preview = loadedPreview
+	}
+
 	if !dryRun {
 		if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
 			return err
@@ -2920,6 +2930,8 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 				"action":      action,
 				"snapshot_id": snapshotID,
 				"dry_run":     dryRun,
+				"parent_id":   snapshotLabelJSONValue(previewParentID(preview)),
+				"children":    previewChildren(preview),
 				"duration_ms": time.Since(startedAt).Milliseconds(),
 			},
 		}
@@ -2936,6 +2948,63 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
+}
+
+type snapshotDeleteLineagePreview struct {
+	SnapshotID       string
+	ParentID         sql.NullString
+	ChildSnapshotIDs []string
+}
+
+func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+	if dbconn == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	trimmedID := strings.TrimSpace(snapshotID)
+	if trimmedID == "" {
+		return nil, errors.New("snapshot id cannot be empty")
+	}
+
+	preview := &snapshotDeleteLineagePreview{}
+	if err := dbconn.QueryRowContext(ctx, `SELECT id, parent_id FROM snapshot WHERE id = $1`, trimmedID).Scan(&preview.SnapshotID, &preview.ParentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("snapshot not found: %s", trimmedID)
+		}
+		return nil, fmt.Errorf("load snapshot delete preview snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `SELECT id FROM snapshot WHERE parent_id = $1 ORDER BY id`, trimmedID)
+	if err != nil {
+		return nil, fmt.Errorf("load snapshot delete preview children snapshot_id=%s: %w", trimmedID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var childID string
+		if err := rows.Scan(&childID); err != nil {
+			return nil, fmt.Errorf("scan snapshot delete preview child row snapshot_id=%s: %w", trimmedID, err)
+		}
+		preview.ChildSnapshotIDs = append(preview.ChildSnapshotIDs, childID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshot delete preview child rows snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	return preview, nil
+}
+
+func previewParentID(preview *snapshotDeleteLineagePreview) sql.NullString {
+	if preview == nil {
+		return sql.NullString{}
+	}
+	return preview.ParentID
+}
+
+func previewChildren(preview *snapshotDeleteLineagePreview) []string {
+	if preview == nil {
+		return nil
+	}
+	return append([]string(nil), preview.ChildSnapshotIDs...)
 }
 
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
