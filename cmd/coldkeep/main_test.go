@@ -3178,6 +3178,24 @@ func TestFormatSnapshotDeleteDryRunOutputWithNoParentNoChildren(t *testing.T) {
 	}
 }
 
+func TestFormatSnapshotDeleteDryRunOutputWithMissingParent(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "child-snap",
+		ParentID:         sql.NullString{String: "missing-parent", Valid: true},
+		ParentMissing:    true,
+		ChildSnapshotIDs: []string{},
+		TotalFiles:       0,
+		UniqueFiles:      0,
+		SharedFiles:      0,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("child-snap", preview)
+
+	if !strings.Contains(output, "Parent: (missing)") {
+		t.Fatalf("expected missing-parent marker in output, got:\n%s", output)
+	}
+}
+
 func TestFormatSnapshotDeleteDryRunOutputIncludesWarningWhenHasChildren(t *testing.T) {
 	preview := &snapshotDeleteLineagePreview{
 		SnapshotID:       "day1",
@@ -3325,6 +3343,9 @@ func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
 	}
 	if sharedFiles, _ := data["shared_files"].(float64); sharedFiles != 7 {
 		t.Fatalf("expected shared_files=7, got %v", data["shared_files"])
+	}
+	if parentMissing, _ := data["parent_missing"].(bool); parentMissing {
+		t.Fatalf("expected parent_missing=false, got true")
 	}
 
 	// Check warnings field (should have lineage_breakage warning since has children)
@@ -3581,6 +3602,148 @@ func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) 
 	}
 	if preview.SharedFiles != 2 {
 		t.Fatalf("expected 2 shared files, got %d", preview.SharedFiles)
+	}
+}
+
+func TestLoadSnapshotDeleteLineagePreviewNotFound(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+
+	_, err = loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "X")
+	if err == nil {
+		t.Fatal("expected not found error, got nil")
+	}
+	if got := err.Error(); got != `snapshot "X" not found` {
+		t.Fatalf("expected exact error %q, got %q", `snapshot "X" not found`, got)
+	}
+}
+
+func TestLoadSnapshotDeleteLineagePreviewEdgeCaseStats(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
+		('empty', NULL),
+		('shared-a', NULL),
+		('shared-b', NULL),
+		('unique-a', NULL)`); err != nil {
+		t.Fatalf("seed snapshots: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file(snapshot_id, path_id, logical_file_id) VALUES
+		('shared-a', 10, 'f10'),
+		('shared-a', 11, 'f11'),
+		('shared-b', 10, 'f10'),
+		('shared-b', 11, 'f11'),
+		('unique-a', 20, 'f20'),
+		('unique-a', 21, 'f21')`); err != nil {
+		t.Fatalf("seed snapshot_file: %v", err)
+	}
+
+	t.Run("empty snapshot totals are zero", func(t *testing.T) {
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "empty")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 0 || preview.UniqueFiles != 0 || preview.SharedFiles != 0 {
+			t.Fatalf("expected empty stats 0/0/0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+
+	t.Run("all files shared means unique is zero", func(t *testing.T) {
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "shared-a")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 2 || preview.UniqueFiles != 0 || preview.SharedFiles != 2 {
+			t.Fatalf("expected shared stats total=2 unique=0 shared=2, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+
+	t.Run("all files unique means shared is zero", func(t *testing.T) {
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "unique-a")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 2 || preview.UniqueFiles != 2 || preview.SharedFiles != 0 {
+			t.Fatalf("expected unique stats total=2 unique=2 shared=0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+}
+
+func TestLoadSnapshotDeleteLineagePreviewDetectsMissingParent(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES ('child', 'ghost-parent')`); err != nil {
+		t.Fatalf("seed snapshot with missing parent: %v", err)
+	}
+
+	preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "child")
+	if err != nil {
+		t.Fatalf("loadSnapshotDeleteLineagePreview returned error: %v", err)
+	}
+	if !preview.ParentID.Valid || preview.ParentID.String != "ghost-parent" {
+		t.Fatalf("expected parent_id ghost-parent, got %+v", preview.ParentID)
+	}
+	if !preview.ParentMissing {
+		t.Fatal("expected ParentMissing=true when parent row does not exist")
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("child", preview)
+	if !strings.Contains(output, "Parent: (missing)") {
+		t.Fatalf("expected formatted output to show Parent: (missing), got:\n%s", output)
 	}
 }
 

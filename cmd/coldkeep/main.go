@@ -2927,16 +2927,17 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 			"status":  "ok",
 			"command": "snapshot",
 			"data": map[string]any{
-				"action":       action,
-				"snapshot_id":  snapshotID,
-				"dry_run":      dryRun,
-				"parent_id":    snapshotLabelJSONValue(previewParentID(preview)),
-				"children":     previewChildren(preview),
-				"total_files":  previewTotalFiles(preview),
-				"unique_files": previewUniqueFiles(preview),
-				"shared_files": previewSharedFiles(preview),
-				"warnings":     previewWarnings(preview),
-				"duration_ms":  time.Since(startedAt).Milliseconds(),
+				"action":         action,
+				"snapshot_id":    snapshotID,
+				"dry_run":        dryRun,
+				"parent_id":      snapshotLabelJSONValue(previewParentID(preview)),
+				"parent_missing": previewParentMissing(preview),
+				"children":       previewChildren(preview),
+				"total_files":    previewTotalFiles(preview),
+				"unique_files":   previewUniqueFiles(preview),
+				"shared_files":   previewSharedFiles(preview),
+				"warnings":       previewWarnings(preview),
+				"duration_ms":    time.Since(startedAt).Milliseconds(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -2958,6 +2959,7 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 type snapshotDeleteLineagePreview struct {
 	SnapshotID       string
 	ParentID         sql.NullString
+	ParentMissing    bool
 	ChildSnapshotIDs []string
 	TotalFiles       int64
 	UniqueFiles      int64
@@ -2976,9 +2978,16 @@ func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snaps
 	preview := &snapshotDeleteLineagePreview{}
 	if err := dbconn.QueryRowContext(ctx, `SELECT id, parent_id FROM snapshot WHERE id = $1`, trimmedID).Scan(&preview.SnapshotID, &preview.ParentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("snapshot not found: %s", trimmedID)
+			return nil, fmt.Errorf("snapshot %q not found", trimmedID)
 		}
 		return nil, fmt.Errorf("load snapshot delete preview snapshot_id=%s: %w", trimmedID, err)
+	}
+	if preview.ParentID.Valid {
+		var parentExists bool
+		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = $1)`, preview.ParentID.String).Scan(&parentExists); err != nil {
+			return nil, fmt.Errorf("load snapshot delete preview parent existence snapshot_id=%s parent_id=%s: %w", trimmedID, preview.ParentID.String, err)
+		}
+		preview.ParentMissing = !parentExists
 	}
 
 	rows, err := dbconn.QueryContext(ctx, `SELECT id FROM snapshot WHERE parent_id = $1 ORDER BY id`, trimmedID)
@@ -3030,6 +3039,13 @@ func previewParentID(preview *snapshotDeleteLineagePreview) sql.NullString {
 		return sql.NullString{}
 	}
 	return preview.ParentID
+}
+
+func previewParentMissing(preview *snapshotDeleteLineagePreview) bool {
+	if preview == nil {
+		return false
+	}
+	return preview.ParentMissing
 }
 
 func previewChildren(preview *snapshotDeleteLineagePreview) []string {
@@ -3115,7 +3131,11 @@ func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDelete
 		// Lineage section
 		buf.WriteString("Lineage:\n")
 		if preview.ParentID.Valid {
-			fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
+			if preview.ParentMissing {
+				buf.WriteString("  Parent: (missing)\n")
+			} else {
+				fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
+			}
 		} else {
 			buf.WriteString("  Parent: none\n")
 		}
