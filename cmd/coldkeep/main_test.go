@@ -3803,6 +3803,29 @@ func TestLoadSnapshotDeleteLineagePreviewEdgeCaseStats(t *testing.T) {
 			t.Fatalf("expected unique stats total=2 unique=2 shared=0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
 		}
 	})
+
+	t.Run("same path but different logical_file_id is NOT shared", func(t *testing.T) {
+		if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
+			('same-path-a', NULL),
+			('same-path-b', NULL)`); err != nil {
+			t.Fatalf("seed same-path snapshots: %v", err)
+		}
+
+		// Same path_id (30), different logical_file_id values. These must NOT be treated as shared.
+		if _, err := dbconn.Exec(`INSERT INTO snapshot_file(snapshot_id, path_id, logical_file_id) VALUES
+			('same-path-a', 30, 'L1'),
+			('same-path-b', 30, 'L2')`); err != nil {
+			t.Fatalf("seed same-path different-logical rows: %v", err)
+		}
+
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "same-path-a")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 1 || preview.UniqueFiles != 1 || preview.SharedFiles != 0 {
+			t.Fatalf("expected same-path/different-logical to be unique: total=1 unique=1 shared=0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
 }
 
 func TestLoadSnapshotDeleteLineagePreviewDetectsMissingParent(t *testing.T) {

@@ -3013,6 +3013,8 @@ func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snaps
 	}
 
 	// Query unique files (only referenced by this snapshot).
+	// A file is shared only when BOTH path_id and logical_file_id match another snapshot row.
+	// Same path_id with different logical_file_id is intentionally treated as unique.
 	//
 	// Performance note:
 	// - This NOT EXISTS anti-join relies on snapshot_file indexes for acceptable latency:
