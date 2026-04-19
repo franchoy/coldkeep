@@ -3012,7 +3012,14 @@ func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snaps
 		return nil, fmt.Errorf("load snapshot delete preview count total files snapshot_id=%s: %w", trimmedID, err)
 	}
 
-	// Query unique files (only referenced by this snapshot)
+	// Query unique files (only referenced by this snapshot).
+	//
+	// Performance note:
+	// - This NOT EXISTS anti-join relies on snapshot_file indexes for acceptable latency:
+	//   idx_snapshot_file_unique (snapshot_id, path_id), idx_snapshot_file_path_id (path_id),
+	//   and idx_snapshot_file_logical_file (logical_file_id).
+	// - This runs in a dry-run operator path for cold-storage workflows where snapshot counts are
+	//   expected to remain much smaller than file counts, so current cost is acceptable.
 	if err := dbconn.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM snapshot_file sf
