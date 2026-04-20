@@ -24,6 +24,9 @@ type Snapshot struct {
 	CreatedAt time.Time
 	Type      string // "full" | "partial"
 	Label     sql.NullString
+	// ParentID optionally references a prior snapshot for lineage tracking.
+	// It is stored in the DB and surfaced by snapshot CLI lineage views.
+	ParentID sql.NullString
 }
 
 // DiffType represents the kind of change in a snapshot diff entry.
@@ -45,6 +48,28 @@ type SnapshotFile struct {
 	Size          sql.NullInt64
 	Mode          sql.NullInt64
 	MTime         sql.NullTime
+}
+
+// snapshotFileDBRow models the persisted snapshot_file shape.
+// This stays internal so higher layers can continue working with path strings.
+type snapshotFileDBRow struct {
+	SnapshotID    string
+	PathID        int64
+	LogicalFileID int64
+	Size          sql.NullInt64
+	Mode          sql.NullInt64
+	MTime         sql.NullTime
+}
+
+func newSnapshotFileDBRow(sf SnapshotFile, pathID int64) snapshotFileDBRow {
+	return snapshotFileDBRow{
+		SnapshotID:    sf.SnapshotID,
+		PathID:        pathID,
+		LogicalFileID: sf.LogicalFileID,
+		Size:          sf.Size,
+		Mode:          sf.Mode,
+		MTime:         sf.MTime,
+	}
 }
 
 type RestoreSnapshotOptions struct {
@@ -88,7 +113,23 @@ type SnapshotStats struct {
 	SnapshotFileCount int64
 	TotalSizeBytes    int64
 	SnapshotID        string
+	ParentSnapshotID  sql.NullString
+	// LineageStatus describes why per-snapshot reuse/new metrics are present or absent.
+	// Empty means not applicable (for global stats calls with no snapshot_id).
+	LineageStatus   SnapshotLineageStatus
+	ReusedFileCount sql.NullInt64
+	NewFileCount    sql.NullInt64
+	ReuseRatioPct   sql.NullFloat64
 }
+
+type SnapshotLineageStatus string
+
+const (
+	SnapshotLineageStatusNoParent      SnapshotLineageStatus = "no_parent"
+	SnapshotLineageStatusParentMissing SnapshotLineageStatus = "parent_missing"
+	SnapshotLineageStatusSkipped       SnapshotLineageStatus = "lineage_skipped"
+	SnapshotLineageStatusComputed      SnapshotLineageStatus = "lineage_computed"
+)
 
 type SnapshotDiffEntry struct {
 	Path            string        `json:"path"`
@@ -134,6 +175,16 @@ type SnapshotQuery struct {
 	// ModifiedBefore filters out entries whose mtime is after this instant.
 	// Entries with no recorded mtime pass this check.
 	ModifiedBefore *time.Time
+}
+
+// SnapshotCreateOptions configures snapshot creation.
+// ParentID is metadata-only lineage and does not alter snapshot contents.
+type SnapshotCreateOptions struct {
+	ID       string
+	Type     string
+	Label    *string
+	ParentID *string
+	Paths    []string
 }
 
 // Match reports whether entry e satisfies all criteria in q.
@@ -280,11 +331,12 @@ func insertSnapshot(ctx context.Context, exec sqlExecutor, s Snapshot) error {
 
 	_, err := exec.ExecContext(
 		ctx,
-		`INSERT INTO snapshot (id, created_at, type, label) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO snapshot (id, created_at, type, label, parent_id) VALUES ($1, $2, $3, $4, $5)`,
 		s.ID,
 		s.CreatedAt.UTC(),
 		s.Type,
 		s.Label,
+		s.ParentID,
 	)
 	if err != nil {
 		return fmt.Errorf("insert snapshot id=%s: %w", s.ID, err)
@@ -295,12 +347,13 @@ func insertSnapshot(ctx context.Context, exec sqlExecutor, s Snapshot) error {
 }
 
 // InsertSnapshotFile inserts a snapshot_file row. The path is normalized before
-// insert. The logical_file referenced by logicalFileID must exist.
+// insert. snapshot_path is upserted automatically. The logical_file referenced
+// by logicalFileID must exist.
 func InsertSnapshotFile(ctx context.Context, db *sql.DB, sf SnapshotFile) (int64, error) {
 	return insertSnapshotFile(ctx, db, sf)
 }
 
-func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) (int64, error) {
+func insertSnapshotFile(ctx context.Context, exec pathResolverDB, sf SnapshotFile) (int64, error) {
 	if sf.SnapshotID == "" {
 		return 0, errors.New("snapshot_file snapshot_id cannot be empty")
 	}
@@ -324,48 +377,57 @@ func insertSnapshotFile(ctx context.Context, exec sqlExecutor, sf SnapshotFile) 
 		return 0, fmt.Errorf("check logical_file existence id=%d: %w", sf.LogicalFileID, err)
 	}
 
-	return insertSnapshotFileDirect(ctx, exec, sf, normalizedPath)
+	pathID, err := ResolveSnapshotPath(ctx, exec, normalizedPath)
+	if err != nil {
+		return 0, fmt.Errorf("resolve snapshot_path for %q: %w", normalizedPath, err)
+	}
+
+	return insertSnapshotFileByPathID(ctx, exec, newSnapshotFileDBRow(sf, pathID), normalizedPath)
 }
 
-func insertSnapshotFileDirect(ctx context.Context, exec sqlExecutor, sf SnapshotFile, normalizedPath string) (int64, error) {
+// insertSnapshotFileByPathID inserts a snapshot_file row using an already-resolved
+// path_id. normalizedPath is used only for log/error messages.
+func insertSnapshotFileByPathID(ctx context.Context, exec sqlExecutor, row snapshotFileDBRow, normalizedPath string) (int64, error) {
 	var id int64
 	err := exec.QueryRowContext(
 		ctx,
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime)
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id`,
-		sf.SnapshotID,
-		normalizedPath,
-		sf.LogicalFileID,
-		sf.Size,
-		sf.Mode,
-		sf.MTime,
+		row.SnapshotID,
+		row.PathID,
+		row.LogicalFileID,
+		row.Size,
+		row.Mode,
+		row.MTime,
 	).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", sf.SnapshotID, normalizedPath, err)
+		return 0, fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
 	}
 
-	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, sf.SnapshotID, normalizedPath)
+	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, row.SnapshotID, normalizedPath)
 	return id, nil
 }
 
-func insertSnapshotFileDirectNoReturning(ctx context.Context, exec sqlExecutor, sf SnapshotFile, normalizedPath string) error {
+// insertSnapshotFileByPathIDNoReturning inserts a snapshot_file row using an
+// already-resolved path_id without needing RETURNING support (SQLite-compatible).
+func insertSnapshotFileByPathIDNoReturning(ctx context.Context, exec sqlExecutor, row snapshotFileDBRow, normalizedPath string) error {
 	_, err := exec.ExecContext(
 		ctx,
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime)
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		sf.SnapshotID,
-		normalizedPath,
-		sf.LogicalFileID,
-		sf.Size,
-		sf.Mode,
-		sf.MTime,
+		row.SnapshotID,
+		row.PathID,
+		row.LogicalFileID,
+		row.Size,
+		row.Mode,
+		row.MTime,
 	)
 	if err != nil {
-		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", sf.SnapshotID, normalizedPath, err)
+		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
 	}
 
-	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", sf.SnapshotID, normalizedPath)
+	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", row.SnapshotID, normalizedPath)
 	return nil
 }
 
@@ -376,7 +438,7 @@ func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) (
 
 	query := strings.Builder{}
 	query.WriteString(`
-		SELECT id, created_at, type, label
+		SELECT id, created_at, type, label, parent_id
 		FROM snapshot
 		WHERE 1 = 1`)
 
@@ -418,7 +480,7 @@ func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) (
 	result := make([]Snapshot, 0)
 	for rows.Next() {
 		var item Snapshot
-		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label); err != nil {
+		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label, &item.ParentID); err != nil {
 			return nil, fmt.Errorf("scan snapshot list row: %w", err)
 		}
 		result = append(result, item)
@@ -434,18 +496,19 @@ func GetSnapshot(ctx context.Context, db *sql.DB, snapshotID string) (*Snapshot,
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
 	}
-	if strings.TrimSpace(snapshotID) == "" {
+	trimmedID := strings.TrimSpace(snapshotID)
+	if trimmedID == "" {
 		return nil, errors.New("snapshot id cannot be empty")
 	}
 
 	var item Snapshot
-	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label FROM snapshot WHERE id = $1`, strings.TrimSpace(snapshotID)).
-		Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label)
+	err := db.QueryRowContext(ctx, `SELECT id, created_at, type, label, parent_id FROM snapshot WHERE id = $1`, trimmedID).
+		Scan(&item.ID, &item.CreatedAt, &item.Type, &item.Label, &item.ParentID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("snapshot not found: %s", snapshotID)
+			return nil, fmt.Errorf("snapshot %q not found", trimmedID)
 		}
-		return nil, fmt.Errorf("get snapshot id=%s: %w", snapshotID, err)
+		return nil, fmt.Errorf("get snapshot id=%s: %w", trimmedID, err)
 	}
 	return &item, nil
 }
@@ -462,10 +525,11 @@ func ListSnapshotFiles(ctx context.Context, db *sql.DB, snapshotID string, limit
 	}
 
 	sqlQuery := `
-		SELECT path, logical_file_id, size, mode, mtime
-		FROM snapshot_file
-		WHERE snapshot_id = $1
-		ORDER BY path, logical_file_id`
+		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode, sf.mtime
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = $1
+		ORDER BY sp.path, sf.logical_file_id`
 
 	rows, err := db.QueryContext(ctx, sqlQuery, strings.TrimSpace(snapshotID))
 	if err != nil {
@@ -517,13 +581,84 @@ func GetSnapshotStats(ctx context.Context, db *sql.DB, snapshotID string) (*Snap
 		return stats, nil
 	}
 
-	if _, err := GetSnapshot(ctx, db, stats.SnapshotID); err != nil {
+	snapshotRow, err := GetSnapshot(ctx, db, stats.SnapshotID)
+	if err != nil {
 		return nil, err
 	}
 	stats.SnapshotCount = 1
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(size), 0) FROM snapshot_file WHERE snapshot_id = $1`, stats.SnapshotID).Scan(&stats.SnapshotFileCount, &stats.TotalSizeBytes); err != nil {
 		return nil, fmt.Errorf("count snapshot files snapshot_id=%s: %w", stats.SnapshotID, err)
 	}
+
+	if snapshotRow.ParentID.Valid {
+		if snapshotRow.Type != "full" {
+			// Lineage reuse/new analysis is only meaningful for full-to-full comparisons.
+			stats.LineageStatus = SnapshotLineageStatusSkipped
+			return stats, nil
+		}
+
+		var parentType string
+		err := db.QueryRowContext(ctx, `SELECT type FROM snapshot WHERE id = $1`, snapshotRow.ParentID.String).Scan(&parentType)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// Parent lineage metadata is optional and non-authoritative for stats.
+				// If parent no longer exists, skip lineage breakdown and return totals only.
+				stats.LineageStatus = SnapshotLineageStatusParentMissing
+				return stats, nil
+			}
+			return nil, fmt.Errorf("check parent snapshot existence snapshot_id=%s parent_id=%s: %w", stats.SnapshotID, snapshotRow.ParentID.String, err)
+		}
+		if parentType != "full" {
+			// Guard against legacy/corrupt full->partial lineage metadata.
+			// Parent lineage metadata is optional and non-authoritative for stats.
+			// If parent is not full, skip lineage breakdown and return totals only.
+			stats.LineageStatus = SnapshotLineageStatusSkipped
+			return stats, nil
+		}
+
+		stats.ParentSnapshotID = snapshotRow.ParentID
+
+		// Analysis-only lineage breakdown (never used for correctness decisions):
+		// reused := count of child rows that match parent on (path_id, logical_file_id),
+		// total := child snapshot_file count, new := total - reused.
+		// Same path_id but different logical_file_id is treated as changed content,
+		// so it is NOT reused and is counted as new.
+		// This SQL strategy is intentionally simple and portable for PostgreSQL/SQLite.
+		// It relies on existing snapshot_file indexes around snapshot_id/path_id and
+		// avoids correctness coupling to lineage metadata.
+		// Non-goals for this phase: chunk-level comparison, size-based diff heuristics,
+		// or cross-snapshot optimization.
+		var reusedCount int64
+		if err := db.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM snapshot_file child
+			JOIN snapshot_file parent
+				ON parent.snapshot_id = $2
+				AND parent.path_id = child.path_id
+				AND parent.logical_file_id = child.logical_file_id
+			WHERE child.snapshot_id = $1
+		`, stats.SnapshotID, snapshotRow.ParentID.String).Scan(&reusedCount); err != nil {
+			return nil, fmt.Errorf("count reused snapshot files snapshot_id=%s parent_id=%s: %w", stats.SnapshotID, snapshotRow.ParentID.String, err)
+		}
+
+		newCount := stats.SnapshotFileCount - reusedCount
+		if newCount < 0 {
+			newCount = 0
+		}
+
+		reuseRatioPct := 0.0
+		if stats.SnapshotFileCount > 0 {
+			reuseRatioPct = float64(reusedCount) * 100.0 / float64(stats.SnapshotFileCount)
+		}
+
+		stats.ReusedFileCount = sql.NullInt64{Int64: reusedCount, Valid: true}
+		stats.NewFileCount = sql.NullInt64{Int64: newCount, Valid: true}
+		stats.ReuseRatioPct = sql.NullFloat64{Float64: reuseRatioPct, Valid: true}
+		stats.LineageStatus = SnapshotLineageStatusComputed
+	} else {
+		stats.LineageStatus = SnapshotLineageStatusNoParent
+	}
+
 	return stats, nil
 }
 
@@ -568,9 +703,10 @@ func DeleteSnapshot(ctx context.Context, db *sql.DB, snapshotID string) error {
 
 func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string) (map[string]SnapshotFileEntry, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT path, logical_file_id, size, mode, mtime
-		FROM snapshot_file
-		WHERE snapshot_id = $1
+		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode, sf.mtime
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = $1
 	`, snapshotID)
 	if err != nil {
 		return nil, fmt.Errorf("query snapshot_file rows snapshot_id=%s: %w", snapshotID, err)
@@ -602,9 +738,113 @@ func loadSnapshotFilesByPath(ctx context.Context, db *sql.DB, snapshotID string)
 	return result, nil
 }
 
+// DiffSnapshotsSummarySQL computes added/removed/modified counts using SQL-only
+// path_id/logical_file_id comparisons.
+//
+// Classification rules:
+// - added:    exists in target, missing in base (by path_id)
+// - removed:  exists in base, missing in target (by path_id)
+// - modified: exists in both by path_id, logical_file_id differs
+//
+// Correctness rule: diff identity is path identity + logical content identity.
+// Size and timestamp metadata are intentionally ignored for change classification;
+// logical_file_id is the content-addressed source of truth.
+// Non-goals for v1.x diff classification: rename detection, move detection,
+// and chunk-level diffing.
+//
+// This function is portable across PostgreSQL and SQLite and is intended for
+// fast summary paths where full entry materialization is unnecessary.
+//
+// Performance contract (v1.x):
+//   - joins/filtering are anchored on snapshot_id/path_id and rely on existing
+//     snapshot_file indexes (including unique(snapshot_id, path_id))
+//   - expected cost is linear in snapshot cardinality for cold-storage workloads
+//   - do not introduce diff caching or precomputed delta state at this stage
+func DiffSnapshotsSummarySQL(ctx context.Context, db *sql.DB, baseID, targetID string) (*SnapshotDiffSummary, error) {
+	if db == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	baseID = strings.TrimSpace(baseID)
+	targetID = strings.TrimSpace(targetID)
+	if baseID == "" {
+		return nil, errors.New("base snapshot id cannot be empty")
+	}
+	if targetID == "" {
+		return nil, errors.New("target snapshot id cannot be empty")
+	}
+
+	var targetParentID sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT parent_id FROM snapshot WHERE id = $1`, targetID).Scan(&targetParentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("snapshot %q not found", targetID)
+		}
+		return nil, fmt.Errorf("query target snapshot id=%s: %w", targetID, err)
+	}
+
+	var baseExists int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot WHERE id = $1`, baseID).Scan(&baseExists); err != nil {
+		return nil, fmt.Errorf("check base snapshot id=%s: %w", baseID, err)
+	}
+	if baseExists == 0 {
+		return nil, fmt.Errorf("snapshot %q not found", baseID)
+	}
+
+	// Common case optimization marker: direct parent-child diff.
+	// We intentionally keep identical SQL summary semantics regardless of this
+	// relationship and avoid introducing special delta logic in v1.x.
+	_ = targetParentID.Valid && targetParentID.String == baseID
+
+	summary := &SnapshotDiffSummary{}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file b
+		LEFT JOIN snapshot_file a
+			ON a.snapshot_id = $1
+			AND a.path_id = b.path_id
+		WHERE b.snapshot_id = $2
+			AND a.path_id IS NULL
+	`, baseID, targetID).Scan(&summary.Added); err != nil {
+		return nil, fmt.Errorf("count added diff rows base=%s target=%s: %w", baseID, targetID, err)
+	}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT path_id
+			FROM snapshot_file
+			WHERE snapshot_id = $1
+		) a
+		LEFT JOIN snapshot_file b
+			ON b.path_id = a.path_id
+			AND b.snapshot_id = $2
+		WHERE b.path_id IS NULL
+	`, baseID, targetID).Scan(&summary.Removed); err != nil {
+		return nil, fmt.Errorf("count removed diff rows base=%s target=%s: %w", baseID, targetID, err)
+	}
+
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file a
+		JOIN snapshot_file b
+			ON a.path_id = b.path_id
+		WHERE a.snapshot_id = $1
+			AND b.snapshot_id = $2
+			AND a.logical_file_id != b.logical_file_id
+	`, baseID, targetID).Scan(&summary.Modified); err != nil {
+		return nil, fmt.Errorf("count modified diff rows base=%s target=%s: %w", baseID, targetID, err)
+	}
+
+	return summary, nil
+}
+
 // DiffSnapshots computes the diff between two snapshots identified by baseID and targetID.
 // An optional query filters the diff entries after classification (added/removed/modified).
 // The summary counts only the entries that pass the filter.
+// Change classification is based on normalized path identity plus logical_file_id,
+// not on size/mode/mtime metadata.
+// It intentionally does not attempt rename detection, move detection, or
+// chunk-level diff analysis.
 //
 // Note: both snapshots are loaded fully into memory (O(N) memory, O(N log N) sort).
 // This is acceptable for typical workloads in v1.x. A future streaming diff implementation
@@ -759,7 +999,7 @@ func resolveSnapshotRestoreSelection(
 	var snapshotExists int
 	if err := db.QueryRowContext(ctx, `SELECT 1 FROM snapshot WHERE id = $1`, snapshotID).Scan(&snapshotExists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("snapshot not found: %s", snapshotID)
+			return nil, nil, fmt.Errorf("snapshot %q not found", snapshotID)
 		}
 		return nil, nil, fmt.Errorf("check snapshot existence id=%s: %w", snapshotID, err)
 	}
@@ -770,10 +1010,11 @@ func resolveSnapshotRestoreSelection(
 	}
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT sf.path, sf.logical_file_id, sf.size, sf.mode, sf.mtime
+		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode, sf.mtime
 		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
 		WHERE sf.snapshot_id = $1
-		ORDER BY sf.path, sf.logical_file_id
+		ORDER BY sp.path, sf.logical_file_id
 	`, snapshotID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query snapshot rows for restore snapshot_id=%s: %w", snapshotID, err)
@@ -1049,17 +1290,20 @@ func RestoreSnapshot(
 	return result, nil
 }
 
-// CreateSnapshot creates an atomic point-in-time snapshot from current physical_file rows.
-// When paths is nil or empty, all physical_file rows are copied into the snapshot.
-// When paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
-func CreateSnapshot(
+// CreateSnapshotWithOptions creates an atomic point-in-time snapshot from current physical_file rows.
+// When opts.Paths is nil or empty, all physical_file rows are copied into the snapshot.
+// When opts.Paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
+func CreateSnapshotWithOptions(
 	ctx context.Context,
 	db *sql.DB,
-	snapshotID string,
-	snapshotType string,
-	label *string,
-	paths []string,
+	opts SnapshotCreateOptions,
 ) error {
+	snapshotID := opts.ID
+	snapshotType := opts.Type
+	label := opts.Label
+	parentID := opts.ParentID
+	paths := opts.Paths
+
 	if db == nil {
 		return errors.New("snapshot db cannot be nil")
 	}
@@ -1093,6 +1337,29 @@ func CreateSnapshot(
 	}
 	if label != nil {
 		s.Label = sql.NullString{String: *label, Valid: true}
+	}
+	if parentID != nil && strings.TrimSpace(*parentID) != "" {
+		trimmedParentID := strings.TrimSpace(*parentID)
+		if trimmedParentID == snapshotID {
+			return fmt.Errorf("parent snapshot %q cannot reference itself", trimmedParentID)
+		}
+		if snapshotType != "full" {
+			return errors.New("--from is currently supported only for full snapshots")
+		}
+
+		var parentType string
+		err := tx.QueryRowContext(ctx, `SELECT type FROM snapshot WHERE id = $1`, trimmedParentID).Scan(&parentType)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("parent snapshot %q not found", trimmedParentID)
+			}
+			return fmt.Errorf("validate parent snapshot %q: %w", trimmedParentID, err)
+		}
+		if parentType != "full" {
+			return fmt.Errorf("parent snapshot %q is partial; --from is currently supported only for full snapshots", trimmedParentID)
+		}
+
+		s.ParentID = sql.NullString{String: trimmedParentID, Valid: true}
 	}
 
 	if err := insertSnapshot(ctx, tx, s); err != nil {
@@ -1217,16 +1484,31 @@ func CreateSnapshot(
 		}
 	}
 
+	// Batch-resolve all unique snapshot paths to their snapshot_path IDs.
+	allPaths := make([]string, 0, len(pending))
+	for _, entry := range pending {
+		allPaths = append(allPaths, entry.normalizedPath)
+	}
+	pathIDs, err := ResolveSnapshotPaths(ctx, tx, allPaths)
+	if err != nil {
+		return fmt.Errorf("resolve snapshot_path ids for snapshot %s: %w", snapshotID, err)
+	}
+
 	insertedCount := 0
 	for _, entry := range pending {
-		err = insertSnapshotFileDirectNoReturning(ctx, tx, SnapshotFile{
+		pathID, ok := pathIDs[entry.normalizedPath]
+		if !ok {
+			return fmt.Errorf("no path_id resolved for %q in snapshot %s", entry.normalizedPath, snapshotID)
+		}
+		row := snapshotFileDBRow{
 			SnapshotID:    snapshotID,
-			Path:          entry.normalizedPath,
+			PathID:        pathID,
 			LogicalFileID: entry.logicalFileID,
 			Size:          sql.NullInt64{Int64: entry.totalSize, Valid: true},
 			Mode:          entry.mode,
 			MTime:         entry.mtime,
-		}, entry.normalizedPath)
+		}
+		err = insertSnapshotFileByPathIDNoReturning(ctx, tx, row, entry.normalizedPath)
 		if err != nil {
 			return err
 		}
@@ -1244,4 +1526,23 @@ func CreateSnapshot(
 
 	log.Printf("snapshot: created id=%s type=%s files=%d", snapshotID, snapshotType, insertedCount)
 	return nil
+}
+
+// CreateSnapshot is a compatibility wrapper for callers that still use positional arguments.
+func CreateSnapshot(
+	ctx context.Context,
+	db *sql.DB,
+	snapshotID string,
+	snapshotType string,
+	label *string,
+	parentID *string,
+	paths []string,
+) error {
+	return CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{
+		ID:       snapshotID,
+		Type:     snapshotType,
+		Label:    label,
+		ParentID: parentID,
+		Paths:    paths,
+	})
 }

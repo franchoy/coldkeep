@@ -406,4 +406,74 @@ func TestAdversarialG6ConcurrentRemoveAndGCPreserveOtherLiveFiles(t *testing.T) 
 	}
 }
 
+func TestAdversarialG6ConcurrentSnapshotCreateAndGCPreserveRetainedData(t *testing.T) {
+	testgate.RequireDB(t)
+
+	for _, codec := range adversarialG6Codecs() {
+		t.Run(codec, func(t *testing.T) {
+			configureAdversarialG6Codec(t, codec)
+
+			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG6Env(t)
+			defer dbconn.Close()
+
+			inputDir := filepath.Join(tmp, "input")
+			restoreDir := filepath.Join(tmp, "restore")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+			if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+				t.Fatalf("mkdir restore: %v", err)
+			}
+
+			retainedPath := testutils.CreateTempFile(t, inputDir, "g6-snap-retained.bin", 512*1024)
+			retainedHash := testutils.SHA256File(t, retainedPath)
+			retainedID := storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, retainedPath)
+			snapshotID := fmt.Sprintf("g6-concurrent-snap-%s", codec)
+
+			var snapErr, gcErr error
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						snapErr = fmt.Errorf("panic: %v", r)
+					}
+				}()
+				args := []string{"snapshot", "create", "--id", snapshotID, "--output", "json"}
+				res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, args...)
+				if res.ExitCode != 0 {
+					snapErr = fmt.Errorf("snapshot create exited %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				gcErr = maintenance.RunGCWithContainersDir(false, container.ContainersDir)
+			}()
+			wg.Wait()
+
+			if snapErr != nil {
+				t.Fatalf("concurrent snapshot create failed: %v", snapErr)
+			}
+			if gcErr != nil {
+				t.Fatalf("concurrent gc failed: %v", gcErr)
+			}
+
+			verifyConcurrentInvariantsG6(t, dbconn)
+
+			// snapshot must still exist in the DB
+			var snapCount int64
+			if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = $1`, snapshotID).Scan(&snapCount); err != nil {
+				t.Fatalf("query snapshot after concurrent ops: %v", err)
+			}
+			if snapCount == 0 {
+				t.Fatalf("expected snapshot %q to exist after concurrent GC, not found", snapshotID)
+			}
+
+			// retained file must still restore correctly
+			restoreMustMatchHashG6(t, dbconn, retainedID, filepath.Join(restoreDir, "retained.restored.bin"), retainedHash)
+		})
+	}
+}
+
 var _ = dbschema.PostgresSchema

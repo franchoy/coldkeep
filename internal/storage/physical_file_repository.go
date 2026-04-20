@@ -277,9 +277,8 @@ func replacePhysicalFileLogicalTargetTx(ctx context.Context, dbconn *sql.DB, tx 
 		return nil
 	}
 
-	// TODO(v1.2+): Prefer an in-place UPDATE logical_file_id once we fully
-	// understand and resolve SQLite behavior observed in tests where UPDATE did
-	// not persist the logical target reliably in this replace path.
+	// Keep the delete+insert replacement strategy here because historical SQLite
+	// behavior in this path showed unreliable persistence for in-place logical target updates.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM physical_file WHERE path = $1`, path); err != nil {
 		return fmt.Errorf("delete physical_file row for replace path %q: %w", path, err)
 	}

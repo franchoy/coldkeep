@@ -307,6 +307,12 @@ done
 
 This is the closest local approximation of what must pass for `CI Required Gate`.
 
+For the v1.4 snapshot contract gate, run the focused integration suite after the matrix loop:
+
+``` bash
+scripts/run_snapshot_release_gate.sh --count 1
+```
+
 If you prefer to run smoke outside this loop (or need troubleshooting), use the
 dual guidance in [`README.md`](README.md) under "Smoke Validation (Two Approaches)".
 

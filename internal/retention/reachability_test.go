@@ -68,6 +68,19 @@ func insertSnapshot(t *testing.T, dbconn *sql.DB, id string) {
 	}
 }
 
+func insertSnapshotFileRef(t *testing.T, dbconn *sql.DB, snapshotID, snapshotPath string, logicalFileID int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?) ON CONFLICT(path) DO NOTHING`, snapshotPath); err != nil {
+		t.Fatalf("insert snapshot_path %q: %v", snapshotPath, err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`,
+		snapshotID, snapshotPath, logicalFileID,
+	); err != nil {
+		t.Fatalf("insert snapshot_file snapshot_id=%q path=%q logical_file_id=%d: %v", snapshotID, snapshotPath, logicalFileID, err)
+	}
+}
+
 func TestListRetainedLogicalFileIDs(t *testing.T) {
 	dbconn := openTestDB(t)
 	ctx := context.Background()
@@ -85,13 +98,8 @@ func TestListRetainedLogicalFileIDs(t *testing.T) {
 	}
 
 	insertSnapshot(t, dbconn, "snap-r1")
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
-		"snap-r1", "snap/snapshot-only", logicalSnapshotOnly,
-		"snap-r1", "snap/shared", logicalShared,
-	); err != nil {
-		t.Fatalf("insert snapshot_file rows: %v", err)
-	}
+	insertSnapshotFileRef(t, dbconn, "snap-r1", "snap/snapshot-only", logicalSnapshotOnly)
+	insertSnapshotFileRef(t, dbconn, "snap-r1", "snap/shared", logicalShared)
 
 	currentIDs, err := ListCurrentReferencedLogicalFileIDs(ctx, dbconn)
 	if err != nil {
@@ -136,12 +144,7 @@ func TestIsLogicalFileReferencedBySnapshot(t *testing.T) {
 	logicalUnretained := insertLogical(t, dbconn, "unretained")
 
 	insertSnapshot(t, dbconn, "snap-retain")
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?)`,
-		"snap-retain", "retained/path", logicalRetained,
-	); err != nil {
-		t.Fatalf("insert snapshot_file row: %v", err)
-	}
+	insertSnapshotFileRef(t, dbconn, "snap-retain", "retained/path", logicalRetained)
 
 	retained, err := IsLogicalFileReferencedBySnapshot(ctx, dbconn, logicalRetained)
 	if err != nil {
@@ -194,13 +197,8 @@ func TestComputeReachabilitySummary(t *testing.T) {
 	}
 
 	insertSnapshot(t, dbconn, "rsum-snap-1")
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
-		"rsum-snap-1", "/snap/rsum-snapshot-only", logicalSnapshotOnly,
-		"rsum-snap-1", "/snap/rsum-shared", logicalShared,
-	); err != nil {
-		t.Fatalf("insert snapshot_file rows: %v", err)
-	}
+	insertSnapshotFileRef(t, dbconn, "rsum-snap-1", "/snap/rsum-snapshot-only", logicalSnapshotOnly)
+	insertSnapshotFileRef(t, dbconn, "rsum-snap-1", "/snap/rsum-shared", logicalShared)
 
 	summary, err := ComputeReachabilitySummary(ctx, dbconn)
 	if err != nil {
@@ -266,13 +264,8 @@ func TestSnapshotReferenceCountAndByteHelpers(t *testing.T) {
 	}
 
 	insertSnapshot(t, dbconn, "helper-snap-1")
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
-		"helper-snap-1", "/snap/helper-snapshot-only", logicalSnapshotOnly,
-		"helper-snap-1", "/snap/helper-shared", logicalShared,
-	); err != nil {
-		t.Fatalf("insert snapshot_file rows: %v", err)
-	}
+	insertSnapshotFileRef(t, dbconn, "helper-snap-1", "/snap/helper-snapshot-only", logicalSnapshotOnly)
+	insertSnapshotFileRef(t, dbconn, "helper-snap-1", "/snap/helper-shared", logicalShared)
 
 	snapshotReferencedCount, err := CountSnapshotReferencedLogicalFiles(ctx, dbconn)
 	if err != nil {
@@ -459,13 +452,8 @@ func TestRetentionByLogicalIDNotPath(t *testing.T) {
 	insertSnapshot(t, dbconn, "snap-path-b")
 
 	// Same logical file retained under different paths across two snapshots.
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
-		"snap-path-a", "docs/version1.txt", logicalID,
-		"snap-path-b", "archive/version2.txt", logicalID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file rows: %v", err)
-	}
+	insertSnapshotFileRef(t, dbconn, "snap-path-a", "docs/version1.txt", logicalID)
+	insertSnapshotFileRef(t, dbconn, "snap-path-b", "archive/version2.txt", logicalID)
 
 	snapshotIDs, err := ListSnapshotReferencedLogicalFileIDs(ctx, dbconn)
 	if err != nil {
@@ -514,15 +502,19 @@ func TestDanglingSnapshotRefIsConservativelyRetained(t *testing.T) {
 
 	if _, err := dbconn.Exec(`
 CREATE TABLE IF NOT EXISTS snapshot (id TEXT PRIMARY KEY, created_at TIMESTAMP, type TEXT);
-CREATE TABLE IF NOT EXISTS snapshot_file (id INTEGER PRIMARY KEY AUTOINCREMENT, snapshot_id TEXT, path TEXT, logical_file_id INTEGER);
+CREATE TABLE IF NOT EXISTS snapshot_path (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE CHECK (path != ''));
+CREATE TABLE IF NOT EXISTS snapshot_file (id INTEGER PRIMARY KEY AUTOINCREMENT, snapshot_id TEXT, path_id INTEGER NOT NULL, logical_file_id INTEGER);
 `); err != nil {
 		t.Fatalf("create minimal tables: %v", err)
 	}
 
 	// Insert a snapshot_file row pointing to a nonexistent logical_file_id.
 	phantomLogicalID := int64(9999)
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path(path) VALUES (?) ON CONFLICT(path) DO NOTHING`, "docs/ghost.txt"); err != nil {
+		t.Fatalf("insert snapshot_path row: %v", err)
+	}
 	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?)`,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`,
 		"snap-dangling", "docs/ghost.txt", phantomLogicalID,
 	); err != nil {
 		t.Fatalf("insert dangling snapshot_file row: %v", err)
@@ -563,13 +555,8 @@ func TestRetainedUnionIsInsertionOrderIndependent(t *testing.T) {
 
 		insertSnapshotAndFiles := func() {
 			insertSnapshot(t, dbconn, "snap-order-1")
-			if _, err := dbconn.Exec(
-				`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
-				"snap-order-1", "/snap/b", idB,
-				"snap-order-1", "/snap/c", idC,
-			); err != nil {
-				t.Fatalf("insert snapshot_file rows: %v", err)
-			}
+			insertSnapshotFileRef(t, dbconn, "snap-order-1", "/snap/b", idB)
+			insertSnapshotFileRef(t, dbconn, "snap-order-1", "/snap/c", idC)
 		}
 		insertCurrentFiles := func() {
 			if _, err := dbconn.Exec(
@@ -634,12 +621,7 @@ func TestSharedRetentionSurvivesSnapshotDeleteWhenCurrentExists(t *testing.T) {
 
 	// Snapshot reference to the same logical file.
 	insertSnapshot(t, dbconn, "snap-shared-survive")
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?)`,
-		"snap-shared-survive", "/snap/shared-survive.txt", logicalID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file row: %v", err)
-	}
+	insertSnapshotFileRef(t, dbconn, "snap-shared-survive", "/snap/shared-survive.txt", logicalID)
 
 	// Before delete: shared.
 	before, err := ComputeReachabilitySummary(ctx, dbconn)

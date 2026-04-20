@@ -10,6 +10,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/tests/testdb"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -91,14 +92,7 @@ func TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES ($1, $2, $3)`,
-		"snap-keep-delete-safe",
-		"docs/retained.txt",
-		fileID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-keep-delete-safe", "docs/retained.txt", fileID)
 
 	_, err = RemoveFileWithDBResult(dbconn, fileID)
 	if err == nil {

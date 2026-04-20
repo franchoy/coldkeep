@@ -8,7 +8,36 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
-v1.3 establishes snapshot-based retention as part of the correctness model.
+v1.4 clarifies snapshot lineage semantics and release-gate guidance.
+
+------------------------------------------------------------------------
+
+## [1.4.0] - 2026-04-19
+
+Snapshot clarity and release hardening milestone.
+
+v1.4 keeps the v1.3 retention model and makes the operator contract explicit:
+snapshots are always self-contained; lineage metadata never creates restore
+dependencies.
+
+### Clarified
+
+- **Self-contained snapshot contract** — snapshot content is independent of
+  parent snapshot content at restore time.
+- **`--from` lineage semantics** — `--from` records metadata for lineage
+  analysis only; it does not create dependency chains.
+- **Lineage tree interpretation** — `snapshot list --tree` is a metadata view,
+  not an execution dependency graph.
+- **Delete dry-run impact wording** — delete preview explicitly describes
+  metadata/reference impact rather than guaranteed disk-space reclamation.
+- **Release-gate guidance** — pre-release docs emphasize parent-delete +
+  child-restore checks to validate lineage independence.
+
+### Scope alignment (v1.4)
+
+- No behavioral regression against the v1.3 snapshot retention safety model.
+- Lineage remains informational only by design.
+- Snapshot delete remains metadata-only.
 
 ------------------------------------------------------------------------
 
@@ -27,7 +56,7 @@ verification and health reporting.
 ### Added
 
 - **`snapshot` and `snapshot_file` tables** — new schema objects (schema version 7) for immutable point-in-time captures
-- **`snapshot create [--id ID] [--label LABEL] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes)
+- **`snapshot create [--id ID] [--label LABEL] [--from PARENT_ID] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes); `--from` stores lineage metadata only and is currently full-to-full only
 - **`snapshot list [--type full|partial] [--limit N] [--since DATE]`** — list snapshots with filtering and ordering
 - **`snapshot show <snapshotID> [--limit N] [query filters…]`** — inspect snapshot contents with query support
 - **`snapshot stats [snapshotID]`** — report snapshot retention pressure and metadata

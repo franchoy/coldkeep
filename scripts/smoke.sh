@@ -908,6 +908,119 @@ echo "[smoke]   ok: snapshot-retained count decreased only after deleting all re
 echo "[smoke] v1.3 snapshot lifecycle gate PASSED"
 
 echo ""
+echo "[smoke] === V1.4 SNAPSHOT FEATURE GATE ==="
+
+V14_PARENT="smoke-v14-parent"
+V14_CHILD="smoke-v14-child"
+
+SNAP_V14_PARENT=$(coldkeep snapshot create --id "$V14_PARENT" --output json)
+SNAP_V14_PARENT_PAYLOAD=$(echo "$SNAP_V14_PARENT" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_V14_PARENT_PAYLOAD" | jq -e --arg id "$V14_PARENT" '.status == "ok" and .command == "snapshot" and .data.snapshot_id == $id' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 parent snapshot create failed"
+  echo "$SNAP_V14_PARENT"
+  exit 1
+fi
+
+SNAP_V14_CHILD=$(coldkeep snapshot create --id "$V14_CHILD" --from "$V14_PARENT" --output json)
+SNAP_V14_CHILD_PAYLOAD=$(echo "$SNAP_V14_CHILD" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_V14_CHILD_PAYLOAD" | jq -e --arg id "$V14_CHILD" '.status == "ok" and .command == "snapshot" and .data.snapshot_id == $id' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 child snapshot create with --from failed"
+  echo "$SNAP_V14_CHILD"
+  exit 1
+fi
+echo "[smoke]   ok: --from lineage snapshot creation works"
+
+STATS_V14_CHILD=$(coldkeep snapshot stats "$V14_CHILD" --output json)
+STATS_V14_CHILD_PAYLOAD=$(echo "$STATS_V14_CHILD" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$STATS_V14_CHILD_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "snapshot"
+  and .data.action == "stats"
+  and (.data.snapshot_file_count != null)
+  and (.data.reused != null)
+  and (.data.new != null)
+  and (.data.reuse_ratio != null)
+  and ((.data.reused + .data.new) == .data.snapshot_file_count)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 snapshot stats enhanced fields contract failed"
+  echo "$STATS_V14_CHILD"
+  exit 1
+fi
+echo "[smoke]   ok: stats enhanced fields (reused/new/reuse_ratio) are consistent"
+
+DIFF_V14_SUMMARY=$(coldkeep snapshot diff "$V14_PARENT" "$V14_CHILD" --summary --output json)
+DIFF_V14_SUMMARY_PAYLOAD=$(echo "$DIFF_V14_SUMMARY" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$DIFF_V14_SUMMARY_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "snapshot diff"
+  and (.data.summary_mode == true)
+  and (.data.summary != null)
+  and (.data.entries == null)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 snapshot diff --summary contract failed"
+  echo "$DIFF_V14_SUMMARY"
+  exit 1
+fi
+echo "[smoke]   ok: diff --summary contract works"
+
+TREE_V14_JSON=$(coldkeep snapshot list --tree --output json)
+TREE_V14_JSON_PAYLOAD=$(echo "$TREE_V14_JSON" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$TREE_V14_JSON_PAYLOAD" | jq -e --arg p "$V14_PARENT" --arg c "$V14_CHILD" '
+  .status == "ok"
+  and .command == "snapshot"
+  and (.data.tree_mode == true)
+  and (.data.tree_lines | type == "array")
+  and ((.data.tree_lines | map(tostring) | join("\n")) | contains($p))
+  and ((.data.tree_lines | map(tostring) | join("\n")) | contains($c))
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 snapshot tree JSON contract failed"
+  echo "$TREE_V14_JSON"
+  exit 1
+fi
+echo "[smoke]   ok: tree JSON contract works"
+
+SNAP_DELETE_V14_PARENT=$(coldkeep snapshot delete "$V14_PARENT" --force --output json)
+SNAP_DELETE_V14_PARENT_PAYLOAD=$(echo "$SNAP_DELETE_V14_PARENT" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$SNAP_DELETE_V14_PARENT_PAYLOAD" | jq -e '.status == "ok" and .command == "snapshot" and .data.action == "delete"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 parent deletion failed"
+  echo "$SNAP_DELETE_V14_PARENT"
+  exit 1
+fi
+
+TREE_V14_AFTER_JSON=$(coldkeep snapshot list --tree --output json)
+TREE_V14_AFTER_JSON_PAYLOAD=$(echo "$TREE_V14_AFTER_JSON" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$TREE_V14_AFTER_JSON_PAYLOAD" | jq -e --arg c "$V14_CHILD" '
+  .status == "ok"
+  and .command == "snapshot"
+  and (.data.tree_mode == true)
+  and ((.data.tree_lines | map(tostring) | join("\n")) | contains($c))
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 broken-lineage tree handling failed"
+  echo "$TREE_V14_AFTER_JSON"
+  exit 1
+fi
+echo "[smoke]   ok: broken lineage remains renderable in tree view"
+
+DELETE_V14_DRY_RUN=$(coldkeep snapshot delete "$V14_CHILD" --dry-run --output json)
+DELETE_V14_DRY_RUN_PAYLOAD=$(echo "$DELETE_V14_DRY_RUN" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$DELETE_V14_DRY_RUN_PAYLOAD" | jq -e '
+  .status == "ok"
+  and .command == "snapshot"
+  and .data.action == "delete_dry_run"
+  and (.data.total_files != null)
+  and (.data.unique_files != null)
+  and (.data.shared_files != null)
+  and ((.data.unique_files + .data.shared_files) == .data.total_files)
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.4 delete --dry-run JSON contract failed"
+  echo "$DELETE_V14_DRY_RUN"
+  exit 1
+fi
+echo "[smoke]   ok: delete --dry-run JSON contract works"
+
+echo "[smoke] v1.4 snapshot feature gate PASSED"
+
+echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="
 
 # Test GC dry-run prediction vs actual container deletion count.

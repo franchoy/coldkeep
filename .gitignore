@@ -81,3 +81,4 @@ temp/
 # smoke scripts output
 # =========================
 _smoke_*/
+.pre_release_smoke/

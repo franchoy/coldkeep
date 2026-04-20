@@ -14,6 +14,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/tests/testdb"
 	testutils "github.com/franchoy/coldkeep/tests/utils"
 	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
@@ -227,11 +228,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	`); err != nil {
 		t.Fatalf("insert invalid lifecycle snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(`
-		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES ('g15-invalid-lifecycle-snap', 'docs/invalid-lifecycle.bin', $1)
-	`, invalidLifecycleID); err != nil {
-		t.Fatalf("insert invalid lifecycle snapshot_file: %v", err)
-	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "g15-invalid-lifecycle-snap", "docs/invalid-lifecycle.bin", invalidLifecycleID)
 
 	// 2) Retained non-empty logical file with missing chunk graph.
 	var missingGraphID int64
@@ -247,11 +244,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	`); err != nil {
 		t.Fatalf("insert missing graph snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(`
-		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES ('g15-missing-graph-snap', 'docs/missing-graph.bin', $1)
-	`, missingGraphID); err != nil {
-		t.Fatalf("insert missing graph snapshot_file: %v", err)
-	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "g15-missing-graph-snap", "docs/missing-graph.bin", missingGraphID)
 
 	// 3) Orphan snapshot reference (best-effort: requires elevated privilege).
 	orphanInjected := false
@@ -264,9 +257,11 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 		`); err != nil {
 			t.Fatalf("insert orphan snapshot row: %v", err)
 		}
+		pathID := testdb.EnsureSnapshotPathID(t, dbconn, "docs/orphan.bin")
 		if _, err := dbconn.Exec(`
-			INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES ('g15-orphan-snap', 'docs/orphan.bin', 999999999)
-		`); err != nil {
+			INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id)
+			VALUES ('g15-orphan-snap', $1, 999999999)
+		`, pathID); err != nil {
 			t.Fatalf("insert orphan snapshot_file row with replication_role=replica: %v", err)
 		}
 		orphanInjected = true
@@ -502,5 +497,131 @@ func TestAdversarialG17RetentionRootTransitionChurn(t *testing.T) {
 		"remove", "--stored-path", storedPath, "--output", "json"), "remove")
 	if got := testutils.JSONInt64(t, gcDryRunData(t, repoRoot, binPath, env), "snapshot_retained_logical_files"); got != 0 {
 		t.Fatalf("expected snapshot_retained_logical_files=0 after deleting last retaining root, got %d", got)
+	}
+}
+
+func TestAdversarialG14SnapshotSurvivesCrashAndRecovery(t *testing.T) {
+	testgate.RequireDB(t)
+
+	dbconn, env, repoRoot, binPath, tmp := setupAdversarialG14Env(t)
+	defer dbconn.Close()
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	fileID, _, wantHash := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g14-crash-survive.txt", 220*1024)
+	snapshotID := "g14-crash-recovery-snap"
+	snapshotCreateWithID(t, repoRoot, binPath, env, snapshotID)
+
+	// Simulate a crash residue by injecting PROCESSING state before doctor recovery.
+	if _, err := dbconn.Exec(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		VALUES ($1, $2, $3, 'PROCESSING', 0)
+	`, "g14-crash-processing.bin", int64(4096), fmt.Sprintf("%064x", 4142)); err != nil {
+		t.Fatalf("inject crash-like PROCESSING row: %v", err)
+	}
+
+	doctor := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"doctor", "--output", "json"), "doctor")
+	doctorData := testutils.JSONMap(t, doctor, "data")
+	if verifyStatus, _ := doctorData["verify_status"].(string); verifyStatus != "ok" {
+		t.Fatalf("expected doctor verify_status=ok after crash recovery, got %q payload=%v", verifyStatus, doctor)
+	}
+
+	show := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "show", snapshotID, "--output", "json"), "snapshot")
+	showData := testutils.JSONMap(t, show, "data")
+	if got := testutils.JSONInt64(t, showData, "matched_file_count"); got < 1 {
+		t.Fatalf("expected snapshot show to remain queryable with at least one file, got %d payload=%v", got, show)
+	}
+
+	restoreDir := filepath.Join(tmp, "snapshot-recovery-restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+	restorePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", snapshotID, "--mode", "prefix", "--destination", restoreDir, "--output", "json"), "snapshot")
+	restoreData := testutils.JSONMap(t, restorePayload, "data")
+	if got := testutils.JSONInt64(t, restoreData, "restored_files"); got != 1 {
+		t.Fatalf("expected restored_files=1 from snapshot restore, got %d payload=%v", got, restorePayload)
+	}
+
+	var restoredPath string
+	if walkErr := filepath.WalkDir(restoreDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.TrimSpace(restoredPath) == "" {
+			restoredPath = path
+		}
+		return nil
+	}); walkErr != nil {
+		t.Fatalf("walk restored snapshot output: %v", walkErr)
+	}
+	if strings.TrimSpace(restoredPath) == "" {
+		t.Fatalf("snapshot restore reported success but produced no files in %s", restoreDir)
+	}
+	if gotHash := testutils.SHA256File(t, restoredPath); gotHash != wantHash {
+		t.Fatalf("snapshot restored hash mismatch: want=%s got=%s", wantHash, gotHash)
+	}
+
+	// Original file must remain restorable as well.
+	restoreByIDMustMatch(t, repoRoot, binPath, env, fileID, filepath.Join(tmp, "id-restore"), wantHash)
+}
+
+func TestAdversarialG14SnapshotRestoreFailsClearlyWhenContainerCorrupted(t *testing.T) {
+	testgate.RequireDB(t)
+
+	dbconn, env, repoRoot, binPath, tmp := setupAdversarialG14Env(t)
+	defer dbconn.Close()
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	fileID, _, _ := storeAdversarialSnapshotFile(t, repoRoot, binPath, env, inputDir, "g14-corrupt-restore.txt", 256*1024)
+	const snapshotID = "g14-corrupt-container-snap"
+	snapshotCreateWithID(t, repoRoot, binPath, env, snapshotID)
+
+	record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
+	containerPath := testutils.ContainerPathForRecord(record)
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container for corruption: %v", err)
+	}
+	corruptOffset := record.BlockOffset
+	if record.StoredSize > 16 {
+		corruptOffset += 16
+	}
+	if _, err := f.WriteAt([]byte{0xA6, 0xB7, 0xC8, 0xD9}, corruptOffset); err != nil {
+		_ = f.Close()
+		t.Fatalf("write corruption bytes into container: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close container after corruption: %v", err)
+	}
+
+	restoreDir := filepath.Join(tmp, "corrupt-snapshot-restore")
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", snapshotID, "--destination", restoreDir, "--output", "json")
+	if res.ExitCode == 0 {
+		t.Fatalf("expected snapshot restore failure on corrupted container\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+	}
+
+	errPayload, ok := testutils.FindCLIErrorPayload(res.Stderr)
+	if !ok {
+		errPayload, ok = testutils.FindCLIErrorPayload(res.Stdout + "\n" + res.Stderr)
+	}
+	if !ok {
+		t.Fatalf("snapshot restore failure should include machine-readable error payload\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+	}
+	if msg, _ := errPayload["message"].(string); strings.TrimSpace(msg) == "" {
+		t.Fatalf("snapshot restore error payload should include a non-empty message: %v", errPayload)
 	}
 }

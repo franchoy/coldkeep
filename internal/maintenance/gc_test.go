@@ -15,6 +15,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/verify"
+	"github.com/franchoy/coldkeep/tests/testdb"
 )
 
 func requireDB(t *testing.T) {
@@ -385,12 +386,7 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 	`); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(`
-		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id)
-		VALUES ('snap-gc-guard-1', '/snap/snap-retained.bin', $1)
-	`, logicalID); err != nil {
-		t.Fatalf("insert snapshot_file: %v", err)
-	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-gc-guard-1", "/snap/snap-retained.bin", logicalID)
 
 	return containerID, filename
 }
@@ -581,12 +577,7 @@ func TestRunGCDryRunRetainsContainerWhenAnotherSnapshotStillReferences(t *testin
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-gc-guard-2', NOW(), 'full')`); err != nil {
 		t.Fatalf("insert second snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(`
-		INSERT INTO snapshot_file (snapshot_id, path, logical_file_id)
-		VALUES ('snap-gc-guard-2', '/snap/also-retained.bin', $1)
-	`, logicalID); err != nil {
-		t.Fatalf("insert second snapshot_file row: %v", err)
-	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-gc-guard-2", "/snap/also-retained.bin", logicalID)
 
 	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = 'snap-gc-guard-1'`); err != nil {
 		t.Fatalf("delete first snapshot_file rows: %v", err)

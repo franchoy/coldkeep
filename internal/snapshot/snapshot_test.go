@@ -278,7 +278,7 @@ func TestInsertSnapshotFileNormalizesPath(t *testing.T) {
 	}
 
 	var path string
-	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, s.ID).Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`, s.ID).Scan(&path); err != nil {
 		t.Fatalf("query path: %v", err)
 	}
 	if path != "docs/readme.txt" {
@@ -393,7 +393,7 @@ func TestCreateSnapshotFullCopiesAllPhysicalFiles(t *testing.T) {
 	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
 	label := "phase2-full"
-	if err := CreateSnapshot(ctx, db, "snap-full-phase2", "full", &label, nil); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-full-phase2", "full", &label, nil, nil); err != nil {
 		t.Fatalf("CreateSnapshot full: %v", err)
 	}
 
@@ -414,9 +414,10 @@ func TestCreateSnapshotFullCopiesAllPhysicalFiles(t *testing.T) {
 	}
 
 	rows, err := db.Query(`
-		SELECT path, logical_file_id, size, mode
-		FROM snapshot_file
-		WHERE snapshot_id = ?
+		SELECT sp.path, sf.logical_file_id, sf.size, sf.mode
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ?
 	`, "snap-full-phase2")
 	if err != nil {
 		t.Fatalf("query snapshot_file rows: %v", err)
@@ -477,7 +478,7 @@ func TestCreateSnapshotPartialFiltersExactAndDirectory(t *testing.T) {
 	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	if err := CreateSnapshot(ctx, db, "snap-partial-phase2", "partial", nil, []string{"img/x.png", "docs/"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-partial-phase2", "partial", nil, nil, []string{"img/x.png", "docs/"}); err != nil {
 		t.Fatalf("CreateSnapshot partial: %v", err)
 	}
 
@@ -497,7 +498,7 @@ func TestCreateSnapshotPartialAllowsEmptyDirectoryMatch(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-empty-a", 9)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	if err := CreateSnapshot(ctx, db, "snap-empty-dir", "partial", nil, []string{"empty/"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-empty-dir", "partial", nil, nil, []string{"empty/"}); err != nil {
 		t.Fatalf("CreateSnapshot empty-directory partial should succeed: %v", err)
 	}
 
@@ -525,7 +526,7 @@ func TestCreateSnapshotPartialMissingExactPathRollsBack(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-rollback-a", 17)
 	insertPhysicalFile(t, db, "a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-rollback-missing", "partial", nil, []string{"a.txt", "missing.txt"})
+	err := CreateSnapshot(ctx, db, "snap-rollback-missing", "partial", nil, nil, []string{"a.txt", "missing.txt"})
 	if err == nil {
 		t.Fatal("expected partial snapshot to fail when an exact path is missing")
 	}
@@ -557,7 +558,7 @@ func TestCreateSnapshotPartialDeduplicatesInputPaths(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-dedupe-a", 44)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-dedupe", "partial", nil, []string{"docs/a.txt", "docs/a.txt", "./docs//a.txt"})
+	err := CreateSnapshot(ctx, db, "snap-dedupe", "partial", nil, nil, []string{"docs/a.txt", "docs/a.txt", "./docs//a.txt"})
 	if err != nil {
 		t.Fatalf("CreateSnapshot partial with duplicate inputs: %v", err)
 	}
@@ -578,13 +579,13 @@ func TestCreateSnapshotPartialMatchesBackslashStoredExactPath(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-backslash-exact", 55)
 	insertPhysicalFile(t, db, "docs\\a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-backslash-exact", "partial", nil, []string{"docs/a.txt"})
+	err := CreateSnapshot(ctx, db, "snap-backslash-exact", "partial", nil, nil, []string{"docs/a.txt"})
 	if err != nil {
 		t.Fatalf("CreateSnapshot partial exact against backslash-stored path: %v", err)
 	}
 
 	var path string
-	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, "snap-backslash-exact").Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`, "snap-backslash-exact").Scan(&path); err != nil {
 		t.Fatalf("query snapshot_file path: %v", err)
 	}
 	if path != "docs/a.txt" {
@@ -604,7 +605,7 @@ func TestCreateSnapshotPartialMatchesBackslashStoredDirectory(t *testing.T) {
 	insertPhysicalFile(t, db, "docs\\nested\\b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertPhysicalFile(t, db, "img\\x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-backslash-dir", "partial", nil, []string{"docs/"})
+	err := CreateSnapshot(ctx, db, "snap-backslash-dir", "partial", nil, nil, []string{"docs/"})
 	if err != nil {
 		t.Fatalf("CreateSnapshot partial directory against backslash-stored paths: %v", err)
 	}
@@ -617,7 +618,7 @@ func TestCreateSnapshotPartialMatchesBackslashStoredDirectory(t *testing.T) {
 		t.Fatalf("expected 2 matched rows from backslash-stored docs directory, got %d", fileCount)
 	}
 
-	rows, err := db.Query(`SELECT path FROM snapshot_file WHERE snapshot_id = ? ORDER BY path`, "snap-backslash-dir")
+	rows, err := db.Query(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ? ORDER BY sp.path`, "snap-backslash-dir")
 	if err != nil {
 		t.Fatalf("query snapshot_file rows: %v", err)
 	}
@@ -653,13 +654,13 @@ func TestCreateSnapshotFullNormalizesAbsoluteStoredPaths(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-abs-a", 77)
 	insertPhysicalFile(t, db, "/tmp/input/docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-abs-full", "full", nil, nil)
+	err := CreateSnapshot(ctx, db, "snap-abs-full", "full", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateSnapshot full with absolute stored path: %v", err)
 	}
 
 	var path string
-	if err := db.QueryRow(`SELECT path FROM snapshot_file WHERE snapshot_id = ?`, "snap-abs-full").Scan(&path); err != nil {
+	if err := db.QueryRow(`SELECT sp.path FROM snapshot_file sf JOIN snapshot_path sp ON sp.id = sf.path_id WHERE sf.snapshot_id = ?`, "snap-abs-full").Scan(&path); err != nil {
 		t.Fatalf("query snapshot_file path: %v", err)
 	}
 	if path != "tmp/input/docs/a.txt" {
@@ -674,7 +675,7 @@ func TestCreateSnapshotPartialRejectsInvalidInputPathAndRollsBack(t *testing.T) 
 	logicalA := insertLogicalFileWithSize(t, db, "hash-invalid-input", 88)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-invalid-input", "partial", nil, []string{"/absolute/invalid"})
+	err := CreateSnapshot(ctx, db, "snap-invalid-input", "partial", nil, nil, []string{"/absolute/invalid"})
 	if err == nil {
 		t.Fatal("expected invalid-path error for partial snapshot input")
 	}
@@ -695,7 +696,7 @@ func TestCreateSnapshotPartialMixedValidInvalidPathRollsBack(t *testing.T) {
 	logicalA := insertLogicalFileWithSize(t, db, "hash-mixed-invalid", 99)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-mixed-invalid", "partial", nil, []string{"docs/a.txt", "/bad"})
+	err := CreateSnapshot(ctx, db, "snap-mixed-invalid", "partial", nil, nil, []string{"docs/a.txt", "/bad"})
 	if err == nil {
 		t.Fatal("expected mixed valid/invalid paths to fail")
 	}
@@ -729,19 +730,20 @@ func TestCreateSnapshotPartialDeterministicAcrossInputOrder(t *testing.T) {
 	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
 	insertPhysicalFile(t, db, "img/x.png", logicalC, sql.NullInt64{}, sql.NullTime{})
 
-	if err := CreateSnapshot(ctx, db, "snap-deterministic-1", "partial", nil, []string{"docs/", "img/x.png"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-deterministic-1", "partial", nil, nil, []string{"docs/", "img/x.png"}); err != nil {
 		t.Fatalf("CreateSnapshot first ordering: %v", err)
 	}
-	if err := CreateSnapshot(ctx, db, "snap-deterministic-2", "partial", nil, []string{"img/x.png", "docs/"}); err != nil {
+	if err := CreateSnapshot(ctx, db, "snap-deterministic-2", "partial", nil, nil, []string{"img/x.png", "docs/"}); err != nil {
 		t.Fatalf("CreateSnapshot second ordering: %v", err)
 	}
 
 	rows, err := db.Query(`
-		SELECT a.path, a.logical_file_id, a.size, a.mode, a.mtime
+		SELECT sp.path, a.logical_file_id, a.size, a.mode, a.mtime
 		FROM snapshot_file a
-		JOIN snapshot_file b ON b.path = a.path
+		JOIN snapshot_file b ON b.path_id = a.path_id
+		JOIN snapshot_path sp ON sp.id = a.path_id
 		WHERE a.snapshot_id = ? AND b.snapshot_id = ?
-		ORDER BY a.path
+		ORDER BY sp.path
 	`, "snap-deterministic-1", "snap-deterministic-2")
 	if err != nil {
 		t.Fatalf("query joined deterministic snapshot rows: %v", err)
@@ -767,7 +769,7 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 	logicalA := insertLogicalFileWithSize(t, db, "hash-exact-vs-dir-a", 31)
 	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
 
-	err := CreateSnapshot(ctx, db, "snap-exact-no-dir-expand", "partial", nil, []string{"docs"})
+	err := CreateSnapshot(ctx, db, "snap-exact-no-dir-expand", "partial", nil, nil, []string{"docs"})
 	if err == nil {
 		t.Fatal("expected exact path 'docs' to fail when only docs/* files exist")
 	}
@@ -775,7 +777,7 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 		t.Fatalf("expected path-not-found error for exact path docs, got: %v", err)
 	}
 
-	err = CreateSnapshot(ctx, db, "snap-dir-expand", "partial", nil, []string{"docs/"})
+	err = CreateSnapshot(ctx, db, "snap-dir-expand", "partial", nil, nil, []string{"docs/"})
 	if err != nil {
 		t.Fatalf("expected directory prefix docs/ to succeed, got: %v", err)
 	}
@@ -789,6 +791,337 @@ func TestCreateSnapshotPartialExactPathDoesNotAutoExpandDirectory(t *testing.T) 
 	}
 }
 
+func TestCreateSnapshotReusesSnapshotPathRowsAcrossSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-path-reuse-a", 31)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-path-reuse-b", 32)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-reuse-1", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot first full: %v", err)
+	}
+	if err := CreateSnapshot(ctx, db, "snap-reuse-2", "partial", nil, nil, []string{"docs/a.txt"}); err != nil {
+		t.Fatalf("CreateSnapshot second partial: %v", err)
+	}
+
+	var snapshotPathCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&snapshotPathCount); err != nil {
+		t.Fatalf("count snapshot_path rows: %v", err)
+	}
+	if snapshotPathCount != 2 {
+		t.Fatalf("expected exactly 2 normalized snapshot_path rows for two distinct paths, got %d", snapshotPathCount)
+	}
+
+	var docsAPathRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_path WHERE path = ?`, "docs/a.txt").Scan(&docsAPathRows); err != nil {
+		t.Fatalf("count docs/a.txt snapshot_path rows: %v", err)
+	}
+	if docsAPathRows != 1 {
+		t.Fatalf("expected docs/a.txt to exist once in snapshot_path, got %d rows", docsAPathRows)
+	}
+
+	var firstPathID int64
+	if err := db.QueryRow(`
+		SELECT sf.path_id
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ? AND sp.path = ?
+	`, "snap-reuse-1", "docs/a.txt").Scan(&firstPathID); err != nil {
+		t.Fatalf("query first snapshot path_id for docs/a.txt: %v", err)
+	}
+
+	var secondPathID int64
+	if err := db.QueryRow(`
+		SELECT sf.path_id
+		FROM snapshot_file sf
+		JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sf.snapshot_id = ? AND sp.path = ?
+	`, "snap-reuse-2", "docs/a.txt").Scan(&secondPathID); err != nil {
+		t.Fatalf("query second snapshot path_id for docs/a.txt: %v", err)
+	}
+
+	if firstPathID != secondPathID {
+		t.Fatalf("expected snapshots to reuse the same path_id for docs/a.txt, got first=%d second=%d", firstPathID, secondPathID)
+	}
+}
+
+func TestCreateSnapshotStoresParentIDForFullSnapshotWithoutChangingSelectionBehavior(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-parent-inert-docs", 17)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-parent-inert-img", 29)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-inert", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	parentID := "snap-parent-inert"
+	if err := CreateSnapshot(ctx, db, "snap-child-inert", "full", nil, &parentID, nil); err != nil {
+		t.Fatalf("CreateSnapshot child full with parent_id: %v", err)
+	}
+
+	var storedParentID sql.NullString
+	if err := db.QueryRow(`SELECT parent_id FROM snapshot WHERE id = ?`, "snap-child-inert").Scan(&storedParentID); err != nil {
+		t.Fatalf("query child snapshot parent_id: %v", err)
+	}
+	if !storedParentID.Valid || storedParentID.String != parentID {
+		t.Fatalf("expected stored parent_id=%q, got %+v", parentID, storedParentID)
+	}
+
+	gotChild, err := GetSnapshot(ctx, db, "snap-child-inert")
+	if err != nil {
+		t.Fatalf("GetSnapshot child: %v", err)
+	}
+	if !gotChild.ParentID.Valid || gotChild.ParentID.String != parentID {
+		t.Fatalf("expected model ParentID=%q, got %+v", parentID, gotChild.ParentID)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, "snap-child-inert", 10, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles child: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected full snapshot to include both paths, got %d files", len(files))
+	}
+	if files[0].Path != "docs/a.txt" || files[1].Path != "img/x.png" {
+		t.Fatalf("expected full snapshot behavior to remain docs/a.txt,img/x.png, got paths=%q,%q", files[0].Path, files[1].Path)
+	}
+}
+
+func TestCreateSnapshotWithParentUsesCurrentStateNotParentContents(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-parent-state-docs", 17)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-state", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	// Change live state after parent creation: child must capture this new file too.
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-parent-state-img", 29)
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	parentID := "snap-parent-state"
+	if err := CreateSnapshot(ctx, db, "snap-child-state", "full", nil, &parentID, nil); err != nil {
+		t.Fatalf("CreateSnapshot child full with parent_id: %v", err)
+	}
+
+	parentFiles, err := ListSnapshotFiles(ctx, db, "snap-parent-state", 10, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles parent: %v", err)
+	}
+	if len(parentFiles) != 1 {
+		t.Fatalf("expected parent snapshot to remain at its original single file, got %d", len(parentFiles))
+	}
+	if parentFiles[0].Path != "docs/a.txt" {
+		t.Fatalf("expected parent snapshot path docs/a.txt, got %q", parentFiles[0].Path)
+	}
+
+	childFiles, err := ListSnapshotFiles(ctx, db, "snap-child-state", 10, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles child: %v", err)
+	}
+	if len(childFiles) != 2 {
+		t.Fatalf("expected child snapshot to reflect current state with 2 files, got %d", len(childFiles))
+	}
+	if childFiles[0].Path != "docs/a.txt" || childFiles[1].Path != "img/x.png" {
+		t.Fatalf("expected child snapshot paths docs/a.txt,img/x.png, got paths=%q,%q", childFiles[0].Path, childFiles[1].Path)
+	}
+}
+
+func TestCreateSnapshotRejectsParentLineageForChildPartialSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-scope-child-partial-docs", 17)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-scope-child-partial-img", 29)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-full", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	parentID := "snap-parent-full"
+	err := CreateSnapshot(ctx, db, "snap-child-partial", "partial", nil, &parentID, []string{"docs/"})
+	if err == nil {
+		t.Fatal("expected child partial lineage create to fail")
+	}
+	if !strings.Contains(err.Error(), "--from is currently supported only for full snapshots") {
+		t.Fatalf("expected child partial lineage restriction error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-partial").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query child snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no child snapshot row for partial lineage rejection, got count=%d", snapshotCount)
+	}
+}
+
+func TestCreateSnapshotRejectsParentLineageForParentPartialSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocs := insertLogicalFileWithSize(t, db, "hash-scope-parent-partial-docs", 17)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-scope-parent-partial-img", 29)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalDocs, sql.NullInt64{}, sql.NullTime{})
+	insertPhysicalFile(t, db, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-partial", "partial", nil, nil, []string{"docs/"}); err != nil {
+		t.Fatalf("CreateSnapshot parent partial: %v", err)
+	}
+
+	parentID := "snap-parent-partial"
+	err := CreateSnapshot(ctx, db, "snap-child-full", "full", nil, &parentID, nil)
+	if err == nil {
+		t.Fatal("expected parent partial lineage create to fail")
+	}
+	if !strings.Contains(err.Error(), `parent snapshot "snap-parent-partial" is partial; --from is currently supported only for full snapshots`) {
+		t.Fatalf("expected parent partial lineage restriction error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-full").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query child snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no child snapshot row for parent partial lineage rejection, got count=%d", snapshotCount)
+	}
+}
+
+func TestCreateSnapshotRejectsMissingParentAndRollsBack(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-missing-parent-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	parentID := "snap-parent-missing"
+	err := CreateSnapshot(ctx, db, "snap-child-missing-parent", "full", nil, &parentID, nil)
+	if err == nil {
+		t.Fatal("expected missing parent snapshot to fail")
+	}
+	if !strings.Contains(err.Error(), `parent snapshot "snap-parent-missing" not found`) {
+		t.Fatalf("expected parent-not-found error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-missing-parent").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no snapshot row when parent is missing, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-child-missing-parent").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected no snapshot_file rows when parent is missing, got count=%d", fileCount)
+	}
+}
+
+func TestCreateSnapshotRejectsSelfParenting(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-self-parent-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	parentID := "snap-self-parent"
+	err := CreateSnapshot(ctx, db, "snap-self-parent", "full", nil, &parentID, nil)
+	if err == nil {
+		t.Fatal("expected self-parent snapshot to fail")
+	}
+	if !strings.Contains(err.Error(), `parent snapshot "snap-self-parent" cannot reference itself`) {
+		t.Fatalf("expected self-parent validation error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-self-parent").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no snapshot row for self-parent failure, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-self-parent").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected no snapshot_file rows for self-parent failure, got count=%d", fileCount)
+	}
+}
+
+func TestCreateSnapshotWithoutParentStoresNullParentID(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-null-parent-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-null-parent", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot full without parent: %v", err)
+	}
+
+	var storedParentID sql.NullString
+	if err := db.QueryRow(`SELECT parent_id FROM snapshot WHERE id = ?`, "snap-null-parent").Scan(&storedParentID); err != nil {
+		t.Fatalf("query snapshot parent_id: %v", err)
+	}
+	if storedParentID.Valid {
+		t.Fatalf("expected NULL parent_id when parent is omitted, got %+v", storedParentID)
+	}
+}
+
+func TestCreateSnapshotWithParentFailureLeavesNoChildRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-parent-rollback-a", 10)
+	insertPhysicalFile(t, db, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	if err := CreateSnapshot(ctx, db, "snap-parent-ok", "full", nil, nil, nil); err != nil {
+		t.Fatalf("CreateSnapshot parent full: %v", err)
+	}
+
+	parentID := "snap-parent-ok"
+	err := CreateSnapshot(ctx, db, "snap-child-rollback", "partial", nil, &parentID, []string{"docs/"})
+	if err == nil {
+		t.Fatal("expected child snapshot create with parent to fail for unsupported partial lineage")
+	}
+	if !strings.Contains(err.Error(), "--from is currently supported only for full snapshots") {
+		t.Fatalf("expected full-only lineage error, got: %v", err)
+	}
+
+	var snapshotCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = ?`, "snap-child-rollback").Scan(&snapshotCount); err != nil {
+		t.Fatalf("query snapshot row count: %v", err)
+	}
+	if snapshotCount != 0 {
+		t.Fatalf("expected no snapshot row after rollback, got count=%d", snapshotCount)
+	}
+
+	var fileCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, "snap-child-rollback").Scan(&fileCount); err != nil {
+		t.Fatalf("query snapshot_file row count: %v", err)
+	}
+	if fileCount != 0 {
+		t.Fatalf("expected no snapshot_file rows after rollback, got count=%d", fileCount)
+	}
+}
+
 // ---- RestoreSnapshot helper tests ----
 
 func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, mode sql.NullInt64, mtime sql.NullTime) {
@@ -798,10 +1131,15 @@ func insertSnapshotFileRow(t *testing.T, db *sql.DB, snapshotID, path string, lo
 
 func insertSnapshotFileRowWithSize(t *testing.T, db *sql.DB, snapshotID, path string, logicalFileID int64, size sql.NullInt64, mode sql.NullInt64, mtime sql.NullTime) {
 	t.Helper()
-	_, err := db.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id, size, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
+	ctx := context.Background()
+	pathID, err := ResolveSnapshotPath(ctx, db, path)
+	if err != nil {
+		t.Fatalf("resolve snapshot_path for insert snapshot_id=%s path=%s: %v", snapshotID, path, err)
+	}
+	_, err = db.Exec(
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime) VALUES (?, ?, ?, ?, ?, ?)`,
 		snapshotID,
-		path,
+		pathID,
 		logicalFileID,
 		size,
 		mode,
@@ -817,7 +1155,7 @@ func TestResolveSnapshotRestoreSelectionMissingSnapshotFails(t *testing.T) {
 	ctx := context.Background()
 
 	_, _, err := resolveSnapshotRestoreSelection(ctx, db, "snap-missing", nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "snap-missing" not found`) {
 		t.Fatalf("expected missing snapshot error, got: %v", err)
 	}
 }
@@ -1250,7 +1588,7 @@ func TestRestoreSnapshotInvalidSnapshotID(t *testing.T) {
 
 	// Test: Request non-existent snapshot
 	_, err := RestoreSnapshot(ctx, db, "nonexistent-snap", []string{}, opts)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "nonexistent-snap" not found`) {
 		t.Fatalf("expected snapshot not found error, got: %v", err)
 	}
 }
@@ -1503,6 +1841,49 @@ func TestListSnapshotsReturnsOrderedRows(t *testing.T) {
 	}
 }
 
+func TestSnapshotParentIDRoundTripsInListAndGet(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	parent := Snapshot{ID: "snap-parent-model", CreatedAt: time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC), Type: "full"}
+	child := Snapshot{
+		ID:        "snap-child-model",
+		CreatedAt: time.Date(2026, 1, 11, 8, 0, 0, 0, time.UTC),
+		Type:      "partial",
+		ParentID:  sql.NullString{String: parent.ID, Valid: true},
+	}
+	for _, item := range []Snapshot{parent, child} {
+		if err := InsertSnapshot(ctx, db, item); err != nil {
+			t.Fatalf("InsertSnapshot %s: %v", item.ID, err)
+		}
+	}
+
+	listed, err := ListSnapshots(ctx, db, SnapshotListFilter{})
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(listed))
+	}
+	if listed[0].ID != child.ID {
+		t.Fatalf("expected child snapshot first by created_at, got %s", listed[0].ID)
+	}
+	if !listed[0].ParentID.Valid || listed[0].ParentID.String != parent.ID {
+		t.Fatalf("expected child parent_id=%q in list, got %+v", parent.ID, listed[0].ParentID)
+	}
+	if listed[1].ParentID.Valid {
+		t.Fatalf("expected parent snapshot parent_id NULL in list, got %+v", listed[1].ParentID)
+	}
+
+	gotChild, err := GetSnapshot(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshot child: %v", err)
+	}
+	if !gotChild.ParentID.Valid || gotChild.ParentID.String != parent.ID {
+		t.Fatalf("expected child parent_id=%q in get, got %+v", parent.ID, gotChild.ParentID)
+	}
+}
+
 func TestListSnapshotsFiltersByTypeLabelAndLimit(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -1598,7 +1979,7 @@ func TestListSnapshotFilesMissingSnapshotFails(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := ListSnapshotFiles(ctx, db, "snap-missing-show", 10, nil)
-	if err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if err == nil || !strings.Contains(err.Error(), `snapshot "snap-missing-show" not found`) {
 		t.Fatalf("expected missing snapshot error, got: %v", err)
 	}
 }
@@ -1634,6 +2015,355 @@ func TestGetSnapshotStatsGlobalAndPerSnapshot(t *testing.T) {
 	}
 	if perSnapshot.SnapshotCount != 1 || perSnapshot.SnapshotFileCount != 2 || perSnapshot.TotalSizeBytes != 2 {
 		t.Fatalf("unexpected per-snapshot stats: %+v", perSnapshot)
+	}
+	if perSnapshot.ParentSnapshotID.Valid || perSnapshot.ReusedFileCount.Valid || perSnapshot.NewFileCount.Valid || perSnapshot.ReuseRatioPct.Valid {
+		t.Fatalf("expected no lineage metrics when snapshot has no parent, got: %+v", perSnapshot)
+	}
+}
+
+func TestGetSnapshotStatsIncludesLineageReuseBreakdown(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalDocsV1 := insertLogicalFileWithSize(t, db, "hash-lineage-docs-v1", 10)
+	logicalDocsV2 := insertLogicalFileWithSize(t, db, "hash-lineage-docs-v2", 10)
+	logicalImg := insertLogicalFileWithSize(t, db, "hash-lineage-img", 11)
+
+	parent := Snapshot{ID: "snap-lineage-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalDocsV1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, parent.ID, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{
+		ID:        "snap-lineage-child",
+		CreatedAt: time.Now().UTC().Add(time.Second),
+		Type:      "full",
+		ParentID:  sql.NullString{String: parent.ID, Valid: true},
+	}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalDocsV2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "img/x.png", logicalImg, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+
+	if !stats.ParentSnapshotID.Valid || stats.ParentSnapshotID.String != parent.ID {
+		t.Fatalf("expected parent snapshot id %q, got %+v", parent.ID, stats.ParentSnapshotID)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 1 {
+		t.Fatalf("expected reused_file_count=1, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 1 {
+		t.Fatalf("expected new_file_count=1, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 50.0 {
+		t.Fatalf("expected reuse_ratio_pct=50.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsSkipsLineageWhenParentDeleted(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalParent := insertLogicalFileWithSize(t, db, "hash-lineage-parent-deleted", 10)
+	logicalChild := insertLogicalFileWithSize(t, db, "hash-lineage-child-deleted", 11)
+
+	parent := Snapshot{ID: "snap-stats-parent-delete", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalParent, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-stats-child-delete", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalChild, sql.NullInt64{}, sql.NullTime{})
+
+	if err := DeleteSnapshot(ctx, db, parent.ID); err != nil {
+		t.Fatalf("DeleteSnapshot parent: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child after parent delete: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected child total file count=1, got %+v", stats)
+	}
+	if stats.ParentSnapshotID.Valid || stats.ReusedFileCount.Valid || stats.NewFileCount.Valid || stats.ReuseRatioPct.Valid {
+		t.Fatalf("expected lineage metrics to be skipped after parent deletion, got %+v", stats)
+	}
+}
+
+func TestGetSnapshotStatsSkipsLineageWhenParentMissingMetadataRemains(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-missing-parent", 12)
+
+	child := Snapshot{ID: "snap-stats-child-missing-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	// Simulate legacy/corrupt state where parent metadata points to a missing snapshot.
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, "snap-never-existed", child.ID); err != nil {
+		t.Fatalf("inject missing parent metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child with missing parent metadata: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected child total file count=1, got %+v", stats)
+	}
+	if stats.ParentSnapshotID.Valid || stats.ReusedFileCount.Valid || stats.NewFileCount.Valid || stats.ReuseRatioPct.Valid {
+		t.Fatalf("expected lineage metrics to be skipped when parent is missing, got %+v", stats)
+	}
+}
+
+func TestGetSnapshotStatsLineageEdgeCaseEmptyChildSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-empty-parent", 10)
+
+	parent := Snapshot{ID: "snap-lineage-empty-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-empty-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 0 {
+		t.Fatalf("expected total files=0, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 0 {
+		t.Fatalf("expected reused=0, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 0 {
+		t.Fatalf("expected new=0, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 0.0 {
+		t.Fatalf("expected reuse ratio 0.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsLineageEdgeCaseIdenticalSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-identical-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-lineage-identical-b", 11)
+
+	parent := Snapshot{ID: "snap-lineage-identical-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, parent.ID, "img/x.png", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-identical-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "img/x.png", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 2 {
+		t.Fatalf("expected total files=2, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 2 {
+		t.Fatalf("expected reused=2, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 0 {
+		t.Fatalf("expected new=0, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 100.0 {
+		t.Fatalf("expected reuse ratio 100.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsLineageEdgeCaseCompletelyDifferentSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalParent := insertLogicalFileWithSize(t, db, "hash-lineage-diff-parent", 10)
+	logicalChildA := insertLogicalFileWithSize(t, db, "hash-lineage-diff-child-a", 11)
+	logicalChildB := insertLogicalFileWithSize(t, db, "hash-lineage-diff-child-b", 12)
+
+	parent := Snapshot{ID: "snap-lineage-diff-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalParent, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-diff-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "new/a.txt", logicalChildA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "new/b.txt", logicalChildB, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 2 {
+		t.Fatalf("expected total files=2, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 0 {
+		t.Fatalf("expected reused=0, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 2 {
+		t.Fatalf("expected new=2, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 0.0 {
+		t.Fatalf("expected reuse ratio 0.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsCountsBrandNewPathAsNew(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalShared := insertLogicalFileWithSize(t, db, "hash-lineage-new-shared", 10)
+	logicalNew := insertLogicalFileWithSize(t, db, "hash-lineage-new-path", 11)
+
+	parent := Snapshot{ID: "snap-lineage-new-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/a.txt", logicalShared, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-new-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalShared, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "docs/new.txt", logicalNew, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 2 {
+		t.Fatalf("expected total files=2, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 1 {
+		t.Fatalf("expected reused=1, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 1 {
+		t.Fatalf("expected new=1 for brand-new child path, got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 50.0 {
+		t.Fatalf("expected reuse ratio 50.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsIgnoresParentOnlyDeletedFiles(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalKeep := insertLogicalFileWithSize(t, db, "hash-lineage-del-keep", 10)
+	logicalDeleted := insertLogicalFileWithSize(t, db, "hash-lineage-del-parent-only", 11)
+
+	parent := Snapshot{ID: "snap-lineage-del-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+	insertSnapshotFileRow(t, db, parent.ID, "docs/keep.txt", logicalKeep, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, parent.ID, "docs/deleted.txt", logicalDeleted, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-lineage-del-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: parent.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/keep.txt", logicalKeep, sql.NullInt64{}, sql.NullTime{})
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats child: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected child total files=1, got %+v", stats)
+	}
+	if !stats.ReusedFileCount.Valid || stats.ReusedFileCount.Int64 != 1 {
+		t.Fatalf("expected reused=1, got %+v", stats.ReusedFileCount)
+	}
+	if !stats.NewFileCount.Valid || stats.NewFileCount.Int64 != 0 {
+		t.Fatalf("expected new=0 (parent-only deleted path must not be counted), got %+v", stats.NewFileCount)
+	}
+	if !stats.ReuseRatioPct.Valid || stats.ReuseRatioPct.Float64 != 100.0 {
+		t.Fatalf("expected reuse ratio 100.0, got %+v", stats.ReuseRatioPct)
+	}
+}
+
+func TestGetSnapshotStatsSkipsLineageForPartialSnapshotParentMetadata(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-lineage-partial-scope", 10)
+
+	parent := Snapshot{ID: "snap-lineage-partial-parent", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, parent); err != nil {
+		t.Fatalf("InsertSnapshot parent: %v", err)
+	}
+
+	child := Snapshot{ID: "snap-lineage-partial-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "partial"}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot partial child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+
+	// Simulate legacy/corrupt partial lineage metadata and ensure stats does not
+	// attempt misleading cross-scope reused/new computation.
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, parent.ID, child.ID); err != nil {
+		t.Fatalf("inject partial lineage metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	stats, err := GetSnapshotStats(ctx, db, child.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotStats partial child: %v", err)
+	}
+	if stats.SnapshotFileCount != 1 {
+		t.Fatalf("expected partial child total files=1, got %+v", stats)
+	}
+	if stats.ParentSnapshotID.Valid || stats.ReusedFileCount.Valid || stats.NewFileCount.Valid || stats.ReuseRatioPct.Valid {
+		t.Fatalf("expected lineage metrics to be skipped for partial snapshot scope, got %+v", stats)
 	}
 }
 
@@ -1718,6 +2448,297 @@ func TestDeleteSnapshotRemovesSnapshotRowsOnly(t *testing.T) {
 	}
 	if _, ok := after.RetainedLogicalIDs[logicalB]; ok {
 		t.Fatalf("expected logicalB=%d to become unretained after deleting snapshot %s", logicalB, s1.ID)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLCountsAddedRemovedModified(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-a2", 10)
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-base-only", 11)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-target-only", 12)
+
+	base := Snapshot{ID: "snap-diffsql-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+
+	insertSnapshotFileRow(t, db, target.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/added.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL: %v", err)
+	}
+	if summary.Added != 1 || summary.Removed != 1 || summary.Modified != 1 {
+		t.Fatalf("unexpected SQL summary counts: %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLNoChanges(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-nochange-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-nochange-b", 11)
+
+	base := Snapshot{ID: "snap-diffsql-same-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-same-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL: %v", err)
+	}
+	if summary.Added != 0 || summary.Removed != 0 || summary.Modified != 0 {
+		t.Fatalf("expected no diff counts, got %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLParentChildCountsRemainCorrect(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-child-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-child-a2", 10)
+	logicalAdded := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-child-added", 11)
+
+	base := Snapshot{ID: "snap-diffsql-parent-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalAdded, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-diffsql-parent-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: base.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "docs/added.txt", logicalAdded, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, child.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL parent-child: %v", err)
+	}
+	if summary.Added != 1 || summary.Removed != 1 || summary.Modified != 1 {
+		t.Fatalf("unexpected parent-child SQL summary counts: %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLMatchesDetailedSummary(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-match-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-match-a2", 10)
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-match-base-only", 11)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-match-target-only", 12)
+
+	base := Snapshot{ID: "snap-diffsql-match-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-match-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/added.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+
+	sqlSummary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL: %v", err)
+	}
+
+	detailed, err := DiffSnapshots(ctx, db, base.ID, target.ID, nil)
+	if err != nil {
+		t.Fatalf("DiffSnapshots detailed: %v", err)
+	}
+
+	if sqlSummary.Added != detailed.Summary.Added || sqlSummary.Removed != detailed.Summary.Removed || sqlSummary.Modified != detailed.Summary.Modified {
+		t.Fatalf("summary mismatch sql=%+v detailed=%+v", sqlSummary, detailed.Summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLParentChildMatchesDetailedSummary(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA1 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-a1", 10)
+	logicalA2 := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-a2", 10)
+	logicalBaseOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-base-only", 11)
+	logicalTargetOnly := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-match-target-only", 12)
+
+	base := Snapshot{ID: "snap-diffsql-parent-match-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	insertSnapshotFileRow(t, db, base.ID, "docs/mod.txt", logicalA1, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, base.ID, "docs/removed.txt", logicalBaseOnly, sql.NullInt64{}, sql.NullTime{})
+
+	child := Snapshot{ID: "snap-diffsql-parent-match-child", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full", ParentID: sql.NullString{String: base.ID, Valid: true}}
+	if err := InsertSnapshot(ctx, db, child); err != nil {
+		t.Fatalf("InsertSnapshot child: %v", err)
+	}
+	insertSnapshotFileRow(t, db, child.ID, "docs/mod.txt", logicalA2, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, child.ID, "docs/added.txt", logicalTargetOnly, sql.NullInt64{}, sql.NullTime{})
+
+	sqlSummary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, child.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL parent-child: %v", err)
+	}
+
+	detailed, err := DiffSnapshots(ctx, db, base.ID, child.ID, nil)
+	if err != nil {
+		t.Fatalf("DiffSnapshots detailed parent-child: %v", err)
+	}
+
+	if sqlSummary.Added != detailed.Summary.Added || sqlSummary.Removed != detailed.Summary.Removed || sqlSummary.Modified != detailed.Summary.Modified {
+		t.Fatalf("parent-child summary mismatch sql=%+v detailed=%+v", sqlSummary, detailed.Summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLMissingBaseReturnsNotFound(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	target := Snapshot{ID: "snap-diffsql-target-missing-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, "snap-diffsql-missing-base", target.ID); err != nil {
+		t.Fatalf("inject missing base parent_id metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	_, err := DiffSnapshotsSummarySQL(ctx, db, "snap-diffsql-missing-base", target.ID)
+	if err == nil || !strings.Contains(err.Error(), `snapshot "snap-diffsql-missing-base" not found`) {
+		t.Fatalf("expected missing base error, got: %v", err)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLOneEmptySnapshotDirectionality(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-empty-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-empty-b", 11)
+
+	empty := Snapshot{ID: "snap-diffsql-empty", CreatedAt: time.Now().UTC(), Type: "full"}
+	nonEmpty := Snapshot{ID: "snap-diffsql-nonempty", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, empty); err != nil {
+		t.Fatalf("InsertSnapshot empty: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, nonEmpty); err != nil {
+		t.Fatalf("InsertSnapshot non-empty: %v", err)
+	}
+	insertSnapshotFileRow(t, db, nonEmpty.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, nonEmpty.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	summaryAdded, err := DiffSnapshotsSummarySQL(ctx, db, empty.ID, nonEmpty.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL empty->nonEmpty: %v", err)
+	}
+	if summaryAdded.Added != 2 || summaryAdded.Removed != 0 || summaryAdded.Modified != 0 {
+		t.Fatalf("expected all files added when base empty, got %+v", summaryAdded)
+	}
+
+	summaryRemoved, err := DiffSnapshotsSummarySQL(ctx, db, nonEmpty.ID, empty.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL nonEmpty->empty: %v", err)
+	}
+	if summaryRemoved.Added != 0 || summaryRemoved.Removed != 2 || summaryRemoved.Modified != 0 {
+		t.Fatalf("expected all files removed when target empty, got %+v", summaryRemoved)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLSameSnapshotZeroDiff(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-same-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-same-b", 11)
+
+	same := Snapshot{ID: "snap-diffsql-same", CreatedAt: time.Now().UTC(), Type: "full"}
+	if err := InsertSnapshot(ctx, db, same); err != nil {
+		t.Fatalf("InsertSnapshot same: %v", err)
+	}
+	insertSnapshotFileRow(t, db, same.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, same.ID, "docs/b.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, same.ID, same.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL same->same: %v", err)
+	}
+	if summary.Added != 0 || summary.Removed != 0 || summary.Modified != 0 {
+		t.Fatalf("expected zero diff for same snapshot, got %+v", summary)
+	}
+}
+
+func TestDiffSnapshotsSummarySQLParentMetadataMissingStillWorks(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	logicalA := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-missing-a", 10)
+	logicalB := insertLogicalFileWithSize(t, db, "hash-diffsql-parent-missing-b", 11)
+
+	base := Snapshot{ID: "snap-diffsql-parent-missing-base", CreatedAt: time.Now().UTC(), Type: "full"}
+	target := Snapshot{ID: "snap-diffsql-parent-missing-target", CreatedAt: time.Now().UTC().Add(time.Second), Type: "full"}
+	if err := InsertSnapshot(ctx, db, base); err != nil {
+		t.Fatalf("InsertSnapshot base: %v", err)
+	}
+	if err := InsertSnapshot(ctx, db, target); err != nil {
+		t.Fatalf("InsertSnapshot target: %v", err)
+	}
+	insertSnapshotFileRow(t, db, base.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/a.txt", logicalA, sql.NullInt64{}, sql.NullTime{})
+	insertSnapshotFileRow(t, db, target.ID, "docs/new.txt", logicalB, sql.NullInt64{}, sql.NullTime{})
+
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE snapshot SET parent_id = ? WHERE id = ?`, "snap-deleted-parent", target.ID); err != nil {
+		t.Fatalf("inject missing parent metadata: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	summary, err := DiffSnapshotsSummarySQL(ctx, db, base.ID, target.ID)
+	if err != nil {
+		t.Fatalf("DiffSnapshotsSummarySQL should ignore missing parent metadata while diffing existing snapshots: %v", err)
+	}
+	if summary.Added != 1 || summary.Removed != 0 || summary.Modified != 0 {
+		t.Fatalf("unexpected summary with missing parent metadata: %+v", summary)
 	}
 }
 
@@ -1893,7 +2914,7 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	if _, err := DiffSnapshots(ctx, db, "snap-base", "", nil); err == nil || !strings.Contains(err.Error(), "target snapshot id cannot be empty") {
 		t.Fatalf("expected target empty id error, got: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target", nil); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if _, err := DiffSnapshots(ctx, db, "missing-base", "missing-target", nil); err == nil || !strings.Contains(err.Error(), `snapshot "missing-base" not found`) {
 		t.Fatalf("expected missing base snapshot error, got: %v", err)
 	}
 
@@ -1901,7 +2922,7 @@ func TestDiffSnapshotsErrorsForMissingAndEmptyIDs(t *testing.T) {
 	if err := InsertSnapshot(ctx, db, base); err != nil {
 		t.Fatalf("InsertSnapshot base: %v", err)
 	}
-	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target", nil); err == nil || !strings.Contains(err.Error(), "snapshot not found") {
+	if _, err := DiffSnapshots(ctx, db, base.ID, "missing-target", nil); err == nil || !strings.Contains(err.Error(), `snapshot "missing-target" not found`) {
 		t.Fatalf("expected missing target snapshot error, got: %v", err)
 	}
 }

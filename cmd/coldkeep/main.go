@@ -57,6 +57,7 @@ var flagsWithValues = map[string]bool{
 	"offset":          true,
 	"name":            true,
 	"id":              true,
+	"from":            true,
 	"label":           true,
 	"since":           true,
 	"type":            true,
@@ -120,14 +121,16 @@ var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var runGCPhase = maintenance.RunGCWithContainersDirResult
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
-var createSnapshotPhase = snapshot.CreateSnapshot
+var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
 var listSnapshotsPhase = snapshot.ListSnapshots
 var getSnapshotPhase = snapshot.GetSnapshot
 var listSnapshotFilesPhase = snapshot.ListSnapshotFiles
 var snapshotStatsPhase = snapshot.GetSnapshotStats
 var deleteSnapshotPhase = snapshot.DeleteSnapshot
+var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
+var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
 
 type cliError struct {
@@ -2434,7 +2437,137 @@ func snapshotSummaryJSON(item snapshot.Snapshot) map[string]any {
 		"type":       item.Type,
 		"created_at": item.CreatedAt.UTC().Format(time.RFC3339),
 		"label":      snapshotLabelJSONValue(item.Label),
+		"parent_id":  snapshotLabelJSONValue(item.ParentID),
 	}
+}
+
+func snapshotSortAscending(items []snapshot.Snapshot) []snapshot.Snapshot {
+	if len(items) < 2 {
+		return append([]snapshot.Snapshot(nil), items...)
+	}
+
+	isAscending := true
+	isDescending := true
+	for i := 1; i < len(items); i++ {
+		prev := items[i-1]
+		curr := items[i]
+
+		prevBeforeCurr := prev.CreatedAt.Before(curr.CreatedAt) || (prev.CreatedAt.Equal(curr.CreatedAt) && prev.ID < curr.ID)
+		currBeforePrev := curr.CreatedAt.Before(prev.CreatedAt) || (prev.CreatedAt.Equal(curr.CreatedAt) && curr.ID < prev.ID)
+
+		if !prevBeforeCurr {
+			isAscending = false
+		}
+		if !currBeforePrev {
+			isDescending = false
+		}
+		if !isAscending && !isDescending {
+			break
+		}
+	}
+
+	if isAscending {
+		return append([]snapshot.Snapshot(nil), items...)
+	}
+	if isDescending {
+		ordered := append([]snapshot.Snapshot(nil), items...)
+		for i, j := 0, len(ordered)-1; i < j; i, j = i+1, j-1 {
+			ordered[i], ordered[j] = ordered[j], ordered[i]
+		}
+		return ordered
+	}
+
+	ordered := append([]snapshot.Snapshot(nil), items...)
+	// Defensive fallback for unsorted/custom inputs; normal list flow should not hit this.
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].CreatedAt.Equal(ordered[j].CreatedAt) {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
+	})
+	return ordered
+}
+
+func renderSnapshotTreeLines(items []snapshot.Snapshot) []string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Tree visualization is derived only from snapshot metadata (id, parent_id,
+	// created_at). Missing/NULL parent links are treated as roots so rendering
+	// stays resilient after parent deletion or lineage cleanup.
+	ordered := snapshotSortAscending(items)
+	byID := make(map[string]snapshot.Snapshot, len(ordered))
+	children := make(map[string][]snapshot.Snapshot)
+	roots := make([]snapshot.Snapshot, 0)
+	for _, item := range ordered {
+		byID[item.ID] = item
+	}
+	for _, item := range ordered {
+		if item.ParentID.Valid {
+			if _, ok := byID[item.ParentID.String]; ok {
+				children[item.ParentID.String] = append(children[item.ParentID.String], item)
+				continue
+			}
+		}
+		roots = append(roots, item)
+	}
+
+	lines := make([]string, 0, len(ordered))
+	visited := make(map[string]struct{}, len(ordered))
+	var walk func(node snapshot.Snapshot, prefix string, isLast bool, hasParent bool)
+	walk = func(node snapshot.Snapshot, prefix string, isLast bool, hasParent bool) {
+		if _, seen := visited[node.ID]; seen {
+			return
+		}
+		visited[node.ID] = struct{}{}
+
+		linePrefix := prefix
+		if hasParent {
+			if isLast {
+				linePrefix += "└── "
+			} else {
+				linePrefix += "├── "
+			}
+		}
+		lines = append(lines, linePrefix+node.ID)
+
+		nextPrefix := prefix
+		if hasParent {
+			if isLast {
+				nextPrefix += "    "
+			} else {
+				nextPrefix += "│   "
+			}
+		}
+
+		childItems := children[node.ID]
+		for idx, child := range childItems {
+			if _, seen := visited[child.ID]; seen {
+				log.Printf("WARNING: snapshot tree cycle detected; skipping edge parent=%s child=%s", node.ID, child.ID)
+				continue
+			}
+			walk(child, nextPrefix, idx == len(childItems)-1, true)
+		}
+	}
+
+	emitTopLevel := func(node snapshot.Snapshot) {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		walk(node, "", true, false)
+	}
+
+	for idx, root := range roots {
+		_ = idx
+		emitTopLevel(root)
+	}
+	for _, item := range ordered {
+		if _, seen := visited[item.ID]; !seen {
+			emitTopLevel(item)
+		}
+	}
+	return lines
 }
 
 func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
@@ -2454,15 +2587,16 @@ func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "tree", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return usageErrorf("Usage: coldkeep snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]")
 	}
 	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
 		return err
 	}
+	treeMode := parsed.hasFlag("tree")
 
 	filter := snapshot.SnapshotListFilter{}
 	if value, ok := parsed.lastFlagValue("type"); ok {
@@ -2520,31 +2654,47 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		for _, item := range items {
 			jsonItems = append(jsonItems, snapshotSummaryJSON(item))
 		}
+		data := map[string]any{
+			"action":      "list",
+			"count":       len(items),
+			"duration_ms": time.Since(startedAt).Milliseconds(),
+			"snapshots":   jsonItems,
+		}
+		if treeMode {
+			data["tree_mode"] = true
+			data["tree_lines"] = renderSnapshotTreeLines(items)
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
-			"data": map[string]any{
-				"action":      "list",
-				"count":       len(items),
-				"duration_ms": time.Since(startedAt).Milliseconds(),
-				"snapshots":   jsonItems,
-			},
+			"data":    data,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
-	if len(items) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "  (none)")
-	} else {
-		for _, item := range items {
-			label := ""
-			if item.Label.Valid {
-				label = "  label=" + item.Label.String
+	if treeMode {
+		lines := renderSnapshotTreeLines(items)
+		if len(lines) == 0 {
+			_, _ = fmt.Fprintln(os.Stdout, "no snapshots found")
+		} else {
+			for _, line := range lines {
+				_, _ = fmt.Fprintln(os.Stdout, line)
 			}
-			_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
+		}
+	} else {
+		_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
+		if len(items) == 0 {
+			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
+		} else {
+			for _, item := range items {
+				label := ""
+				if item.Label.Valid {
+					label = "  label=" + item.Label.String
+				}
+				_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
+			}
 		}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
@@ -2675,17 +2825,30 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 	}
 
 	if outputMode == outputModeJSON {
+		data := map[string]any{
+			"action":              "stats",
+			"snapshot_id":         snapshotID,
+			"snapshot_count":      stats.SnapshotCount,
+			"snapshot_file_count": stats.SnapshotFileCount,
+			"total_size_bytes":    stats.TotalSizeBytes,
+			"duration_ms":         time.Since(startedAt).Milliseconds(),
+		}
+		if stats.ParentSnapshotID.Valid {
+			if stats.ReusedFileCount.Valid {
+				data["reused"] = stats.ReusedFileCount.Int64
+			}
+			if stats.NewFileCount.Valid {
+				data["new"] = stats.NewFileCount.Int64
+			}
+			if stats.ReuseRatioPct.Valid {
+				data["reuse_ratio"] = stats.ReuseRatioPct.Float64
+			}
+		}
+
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
-			"data": map[string]any{
-				"action":              "stats",
-				"snapshot_id":         snapshotID,
-				"snapshot_count":      stats.SnapshotCount,
-				"snapshot_file_count": stats.SnapshotFileCount,
-				"total_size_bytes":    stats.TotalSizeBytes,
-				"duration_ms":         time.Since(startedAt).Milliseconds(),
-			},
+			"data":    data,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -2698,6 +2861,13 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot: %s\n", snapshotID)
 		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", stats.SnapshotFileCount)
+		if stats.ParentSnapshotID.Valid {
+			_, _ = fmt.Fprintf(os.Stdout, "  Reused: %d\n", stats.ReusedFileCount.Int64)
+			_, _ = fmt.Fprintf(os.Stdout, "  New: %d\n", stats.NewFileCount.Int64)
+			_, _ = fmt.Fprintf(os.Stdout, "  Reuse ratio: %.1f%%\n", stats.ReuseRatioPct.Float64)
+		} else {
+			_, _ = fmt.Fprintf(os.Stdout, "  (%s)\n", snapshotLineageUnavailableMessage(stats.LineageStatus))
+		}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "Total logical size: %d bytes\n", stats.TotalSizeBytes)
 	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
@@ -2705,17 +2875,31 @@ func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode)
 	return nil
 }
 
+func snapshotLineageUnavailableMessage(status snapshot.SnapshotLineageStatus) string {
+	switch status {
+	case snapshot.SnapshotLineageStatusNoParent, "":
+		return "Reused/New not available -- no parent snapshot metadata"
+	case snapshot.SnapshotLineageStatusParentMissing:
+		return "Reused/New not available -- parent snapshot metadata exists but parent snapshot is missing"
+	case snapshot.SnapshotLineageStatusSkipped:
+		return "Reused/New not available -- lineage analysis was intentionally skipped for this snapshot scope"
+	default:
+		return "Reused/New not available"
+	}
+}
+
 func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "force", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "force", "dry-run", "dryRun", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep snapshot delete <snapshotID> --force [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]")
 	}
-	if !parsed.hasFlag("force") {
-		return usageErrorf("snapshot delete requires --force")
+	dryRun := parsed.hasFlag("dry-run", "dryRun")
+	if !dryRun && !parsed.hasFlag("force") {
+		return usageErrorf("snapshot delete requires --force or --dry-run")
 	}
 
 	snapshotID := strings.TrimSpace(parsed.positionals[1])
@@ -2732,18 +2916,41 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
-		return err
+	var preview *snapshotDeleteLineagePreview
+	if dryRun {
+		loadedPreview, err := snapshotDeleteLineagePreviewPhase(ctx, sgctx.DB, snapshotID)
+		if err != nil {
+			return err
+		}
+		preview = loadedPreview
+	}
+
+	if !dryRun {
+		if err := deleteSnapshotPhase(ctx, sgctx.DB, snapshotID); err != nil {
+			return err
+		}
 	}
 
 	if outputMode == outputModeJSON {
+		action := "delete"
+		if dryRun {
+			action = "delete_dry_run"
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot",
 			"data": map[string]any{
-				"action":      "delete",
-				"snapshot_id": snapshotID,
-				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"action":         action,
+				"snapshot_id":    snapshotID,
+				"dry_run":        dryRun,
+				"parent_id":      snapshotLabelJSONValue(previewParentID(preview)),
+				"parent_missing": previewParentMissing(preview),
+				"children":       previewChildren(preview),
+				"total_files":    previewTotalFiles(preview),
+				"unique_files":   previewUniqueFiles(preview),
+				"shared_files":   previewSharedFiles(preview),
+				"warnings":       previewWarnings(preview),
+				"duration_ms":    time.Since(startedAt).Milliseconds(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -2751,20 +2958,259 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		return nil
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	if dryRun {
+		output := formatSnapshotDeleteDryRunOutput(snapshotID, preview)
+		_, _ = fmt.Fprint(os.Stdout, output)
+	} else {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot deleted: id=%s\n", snapshotID)
+		_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
+		_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
+	}
 	return nil
+}
+
+type snapshotDeleteLineagePreview struct {
+	SnapshotID       string
+	ParentID         sql.NullString
+	ParentMissing    bool
+	ChildSnapshotIDs []string
+	TotalFiles       int64
+	UniqueFiles      int64
+	SharedFiles      int64
+}
+
+func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+	if dbconn == nil {
+		return nil, errors.New("snapshot db cannot be nil")
+	}
+	trimmedID := strings.TrimSpace(snapshotID)
+	if trimmedID == "" {
+		return nil, errors.New("snapshot id cannot be empty")
+	}
+
+	preview := &snapshotDeleteLineagePreview{}
+	if err := dbconn.QueryRowContext(ctx, `SELECT id, parent_id FROM snapshot WHERE id = $1`, trimmedID).Scan(&preview.SnapshotID, &preview.ParentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("snapshot %q not found", trimmedID)
+		}
+		return nil, fmt.Errorf("load snapshot delete preview snapshot_id=%s: %w", trimmedID, err)
+	}
+	if preview.ParentID.Valid {
+		var parentExists bool
+		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = $1)`, preview.ParentID.String).Scan(&parentExists); err != nil {
+			return nil, fmt.Errorf("load snapshot delete preview parent existence snapshot_id=%s parent_id=%s: %w", trimmedID, preview.ParentID.String, err)
+		}
+		preview.ParentMissing = !parentExists
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `SELECT id FROM snapshot WHERE parent_id = $1 ORDER BY id`, trimmedID)
+	if err != nil {
+		return nil, fmt.Errorf("load snapshot delete preview children snapshot_id=%s: %w", trimmedID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var childID string
+		if err := rows.Scan(&childID); err != nil {
+			return nil, fmt.Errorf("scan snapshot delete preview child row snapshot_id=%s: %w", trimmedID, err)
+		}
+		preview.ChildSnapshotIDs = append(preview.ChildSnapshotIDs, childID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshot delete preview child rows snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	// Query total files referenced by this snapshot
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, trimmedID).Scan(&preview.TotalFiles); err != nil {
+		return nil, fmt.Errorf("load snapshot delete preview count total files snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	// Query unique files (only referenced by this snapshot).
+	// A file is shared only when BOTH path_id and logical_file_id match another snapshot row.
+	// Same path_id with different logical_file_id is intentionally treated as unique.
+	//
+	// Performance note:
+	// - This NOT EXISTS anti-join relies on snapshot_file indexes for acceptable latency:
+	//   idx_snapshot_file_unique (snapshot_id, path_id), idx_snapshot_file_path_id (path_id),
+	//   and idx_snapshot_file_logical_file (logical_file_id).
+	// - This runs in a dry-run operator path for cold-storage workflows where snapshot counts are
+	//   expected to remain much smaller than file counts, so current cost is acceptable.
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		WHERE sf.snapshot_id = $1
+		AND NOT EXISTS (
+			SELECT 1
+			FROM snapshot_file sf2
+			WHERE sf2.path_id = sf.path_id
+			  AND sf2.logical_file_id = sf.logical_file_id
+			  AND sf2.snapshot_id != sf.snapshot_id
+		)
+	`, trimmedID).Scan(&preview.UniqueFiles); err != nil {
+		return nil, fmt.Errorf("load snapshot delete preview count unique files snapshot_id=%s: %w", trimmedID, err)
+	}
+
+	// Calculate shared files
+	preview.SharedFiles = preview.TotalFiles - preview.UniqueFiles
+
+	return preview, nil
+}
+
+func previewParentID(preview *snapshotDeleteLineagePreview) sql.NullString {
+	if preview == nil {
+		return sql.NullString{}
+	}
+	return preview.ParentID
+}
+
+func previewParentMissing(preview *snapshotDeleteLineagePreview) bool {
+	if preview == nil {
+		return false
+	}
+	return preview.ParentMissing
+}
+
+func previewChildren(preview *snapshotDeleteLineagePreview) []string {
+	if preview == nil {
+		return nil
+	}
+	return append([]string(nil), preview.ChildSnapshotIDs...)
+}
+
+func previewTotalFiles(preview *snapshotDeleteLineagePreview) int64 {
+	if preview == nil {
+		return 0
+	}
+	return preview.TotalFiles
+}
+
+func previewUniqueFiles(preview *snapshotDeleteLineagePreview) int64 {
+	if preview == nil {
+		return 0
+	}
+	return preview.UniqueFiles
+}
+
+func previewSharedFiles(preview *snapshotDeleteLineagePreview) int64 {
+	if preview == nil {
+		return 0
+	}
+	return preview.SharedFiles
+}
+
+// formatNumberWithCommas formats a number int64 with comma separators for readability
+func formatNumberWithCommas(n int64) string {
+	if n < 0 {
+		return "-" + formatNumberWithCommas(-n)
+	}
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+
+	var result strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result.WriteRune(',')
+		}
+		result.WriteRune(c)
+	}
+	return result.String()
+}
+
+func previewWarnings(preview *snapshotDeleteLineagePreview) []map[string]any {
+	if preview == nil || len(preview.ChildSnapshotIDs) == 0 {
+		return nil
+	}
+	return []map[string]any{
+		{
+			"type":    "lineage_breakage",
+			"message": "Deleting this snapshot will break lineage visualization for its children.",
+			"details": map[string]any{
+				"affected_snapshots": preview.ChildSnapshotIDs,
+				"note":               "Affected snapshots remain fully usable; only lineage information is affected.",
+			},
+		},
+	}
+}
+
+// formatSnapshotDeleteDryRunOutput builds the formatted text output for dry-run delete
+func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDeleteLineagePreview) string {
+	var buf strings.Builder
+
+	// Header
+	fmt.Fprintf(&buf, "Snapshot: %s\n", snapshotID)
+	buf.WriteString("\n")
+
+	if preview != nil {
+		// Files section
+		buf.WriteString("Files:\n")
+		fmt.Fprintf(&buf, "  Total:        %s\n", formatNumberWithCommas(preview.TotalFiles))
+		fmt.Fprintf(&buf, "  Unique:       %s\n", formatNumberWithCommas(preview.UniqueFiles))
+		fmt.Fprintf(&buf, "  Shared:       %s\n", formatNumberWithCommas(preview.SharedFiles))
+		buf.WriteString("\n")
+
+		// Lineage section
+		buf.WriteString("Lineage:\n")
+		if preview.ParentID.Valid {
+			if preview.ParentMissing {
+				buf.WriteString("  Parent: (missing)\n")
+				buf.WriteString("  Parent note: parent snapshot metadata is missing; this snapshot remains usable\n")
+			} else {
+				fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
+			}
+		} else {
+			buf.WriteString("  Parent: none\n")
+		}
+		if len(preview.ChildSnapshotIDs) > 0 {
+			buf.WriteString("  Children:\n")
+			for _, childID := range preview.ChildSnapshotIDs {
+				fmt.Fprintf(&buf, "    - %s\n", childID)
+			}
+		} else {
+			buf.WriteString("  Children: none\n")
+		}
+		buf.WriteString("\n")
+
+		// Warning section (only if has children)
+		if len(preview.ChildSnapshotIDs) > 0 {
+			buf.WriteString("Warning:\n")
+			buf.WriteString("  This snapshot is parent of:\n")
+			for _, childID := range preview.ChildSnapshotIDs {
+				fmt.Fprintf(&buf, "    - %s\n", childID)
+			}
+			buf.WriteString("\n")
+			buf.WriteString("  Deleting it will break lineage visualization,\n")
+			buf.WriteString("  but snapshots remain fully usable.\n")
+			buf.WriteString("\n")
+		}
+
+		// Impact section
+		buf.WriteString("Impact:\n")
+		buf.WriteString("  Deleting this snapshot will:\n")
+		buf.WriteString("    - remove snapshot metadata\n")
+		buf.WriteString("    - NOT delete shared data\n")
+		if preview.UniqueFiles > 0 {
+			fmt.Fprintf(&buf, "    - remove %s unique snapshot file reference(s) from metadata\n", formatNumberWithCommas(preview.UniqueFiles))
+			buf.WriteString("      (reference impact only; does not guarantee reclaimed disk space)\n")
+		}
+		buf.WriteString("\n")
+	}
+
+	// Dry-run notice
+	buf.WriteString("Dry run: no changes applied.\n")
+
+	return buf.String()
 }
 
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "filter", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+	if err := ensureAllowedFlags(parsed, "filter", "summary", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 3 {
-		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <timestamp>] [--modified-before <timestamp>] [--output <text|json>]")
 	}
 
 	baseID := strings.TrimSpace(parsed.positionals[1])
@@ -2777,6 +3223,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	filterType := ""
+	summaryMode := parsed.hasFlag("summary")
 	if value, ok := parsed.lastFlagValue("filter"); ok {
 		filterType = strings.ToLower(strings.TrimSpace(value))
 		switch filterType {
@@ -2799,6 +3246,42 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+
+	useSummaryFastPath := summaryMode && filterType == "" && query == nil
+	if useSummaryFastPath {
+		summary, err := diffSnapshotSummaryPhase(ctx, sgctx.DB, baseID, targetID)
+		if err != nil {
+			return err
+		}
+		totalEntryCount := int(summary.Added + summary.Removed + summary.Modified)
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "snapshot diff",
+				"data": map[string]any{
+					"base":                   baseID,
+					"target":                 targetID,
+					"entry_count":            totalEntryCount,
+					"matched_entry_count":    totalEntryCount,
+					"total_diff_entry_count": totalEntryCount,
+					"summary":                summary,
+					"summary_mode":           true,
+					"duration_ms":            time.Since(startedAt).Milliseconds(),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
+		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
+		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
+		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
+		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalEntryCount)
+		return nil
+	}
 
 	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
 	if err != nil {
@@ -2826,31 +3309,49 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	if outputMode == outputModeJSON {
 		jsonEntries := make([]map[string]any, 0, len(entries))
-		for _, entry := range entries {
-			jsonEntries = append(jsonEntries, map[string]any{
-				"path":              entry.Path,
-				"type":              entry.Type,
-				"base_logical_id":   snapshotIntJSONValue(entry.BaseLogicalID),
-				"target_logical_id": snapshotIntJSONValue(entry.TargetLogicalID),
-			})
+		if !summaryMode {
+			for _, entry := range entries {
+				jsonEntries = append(jsonEntries, map[string]any{
+					"path":              entry.Path,
+					"type":              entry.Type,
+					"base_logical_id":   snapshotIntJSONValue(entry.BaseLogicalID),
+					"target_logical_id": snapshotIntJSONValue(entry.TargetLogicalID),
+				})
+			}
+		}
+
+		data := map[string]any{
+			"base":                   baseID,
+			"target":                 targetID,
+			"entry_count":            matchedEntryCount,
+			"matched_entry_count":    matchedEntryCount,
+			"total_diff_entry_count": totalEntryCount,
+			"summary":                summary,
+			"duration_ms":            time.Since(startedAt).Milliseconds(),
+		}
+		if summaryMode {
+			data["summary_mode"] = true
+		} else {
+			data["entries"] = jsonEntries
 		}
 
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "snapshot diff",
-			"data": map[string]any{
-				"base":                   baseID,
-				"target":                 targetID,
-				"entry_count":            matchedEntryCount,
-				"matched_entry_count":    matchedEntryCount,
-				"total_diff_entry_count": totalEntryCount,
-				"summary":                summary,
-				"entries":                jsonEntries,
-				"duration_ms":            time.Since(startedAt).Milliseconds(),
-			},
+			"data":    data,
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
+		return nil
+	}
+
+	if summaryMode {
+		totalChanges := summary.Added + summary.Removed + summary.Modified
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
+		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
+		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
+		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
+		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalChanges)
 		return nil
 	}
 
@@ -2888,11 +3389,11 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "id", "label", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "id", "label", "from", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]")
+		return usageErrorf("Usage: coldkeep snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--from <snapshotID>] [--output <text|json>]")
 	}
 
 	paths := parsed.positionals[1:]
@@ -2920,6 +3421,15 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		labelPtr = &trimmed
 	}
 
+	var parentIDPtr *string
+	if fromID, hasFrom := parsed.lastFlagValue("from"); hasFrom {
+		trimmed := strings.TrimSpace(fromID)
+		if trimmed == "" {
+			return usageErrorf("--from cannot be empty")
+		}
+		parentIDPtr = &trimmed
+	}
+
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
@@ -2933,7 +3443,13 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	if err := createSnapshotPhase(ctx, sgctx.DB, snapshotID, snapshotType, labelPtr, paths); err != nil {
+	if err := createSnapshotPhase(ctx, sgctx.DB, snapshot.SnapshotCreateOptions{
+		ID:       snapshotID,
+		Type:     snapshotType,
+		Label:    labelPtr,
+		ParentID: parentIDPtr,
+		Paths:    paths,
+	}); err != nil {
 		return err
 	}
 
@@ -2964,12 +3480,17 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		if labelPtr != nil {
 			data["label"] = *labelPtr
 		}
+		if parentIDPtr != nil {
+			data["parent_id"] = *parentIDPtr
+		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
 	}
 
-	if snapshotType == "full" {
+	if parentIDPtr != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "Snapshot %q created from parent %q\n", snapshotID, *parentIDPtr)
+	} else if snapshotType == "full" {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s (all paths)\n", snapshotID, snapshotType)
 	} else {
 		_, _ = fmt.Fprintf(os.Stdout, "Snapshot created: id=%s type=%s paths=%d\n", snapshotID, snapshotType, len(paths))
@@ -3127,13 +3648,13 @@ func printHelp() {
 		{"  version", "Show version information"},
 		{"  list [--limit <count>] [--offset <count>]", "List stored logical files"},
 		{"  search [filters] [--limit <count>] [--offset <count>]", "Search files by filters"},
-		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
+		{"  snapshot create [<path> ...] [--id <snapshotID>] [--label <label>] [--from <snapshotID>] [--output <text|json>]", "Create a full snapshot (no paths) or partial snapshot (with paths)"},
 		{"  snapshot restore <snapshotID> [<path> ...] [--mode ...] [--destination <path>] [--overwrite] [--strict] [--no-metadata] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Restore full or partial content from snapshot_file history"},
-		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--output <text|json>]", "List snapshots with optional filters"},
+		{"  snapshot list [--type <full|partial>] [--label <substring>] [--since <RFC3339|YYYY-MM-DD>] [--until <RFC3339|YYYY-MM-DD>] [--limit <count>] [--tree] [--output <text|json>]", "List snapshots with optional filters; use --tree for lineage view"},
 		{"  snapshot show <snapshotID> [--limit <count>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Inspect one snapshot and list its files with optional query filters"},
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
-		{"  snapshot delete <snapshotID> --force [--output <text|json>]", "Delete a snapshot row and its snapshot_file rows only"},
-		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare two snapshots by path and logical_file_id"},
+		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
+		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -3149,6 +3670,11 @@ func printHelp() {
 	fmt.Println("      snapshot_id is the system identifier (set via --id on create)")
 	fmt.Println("      pass snapshot_id positionally to show/restore/stats/diff/delete")
 	fmt.Println("      --label is optional metadata only and is never used for targeting")
+	fmt.Println("      --from records lineage metadata only; it does not make a snapshot depend on its parent")
+	fmt.Println("      --tree renders metadata lineage only")
+	fmt.Println("      --summary returns count-only diff output (no entry list)")
+	fmt.Println("      --dry-run performs a read-only preview and never writes data")
+	fmt.Println("      missing lineage parent metadata is shown as Parent: (missing); snapshot data remains usable")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
 	fmt.Println("      aes-gcm")
@@ -3216,15 +3742,19 @@ func printHelp() {
 	fmt.Println("  coldkeep verify file 12 --deep")
 	fmt.Println("  coldkeep snapshot create")
 	fmt.Println("  coldkeep snapshot create docs/ report.txt --label release-2026-04")
+	fmt.Println("  coldkeep snapshot create --id day2 --from day1")
 	fmt.Println("  coldkeep snapshot restore snap-123 --mode prefix --destination ./restored")
 	fmt.Println("  coldkeep snapshot restore snap-123 docs/ --mode prefix --destination ./restored")
 	fmt.Println("  coldkeep snapshot restore snap-123 docs/a.txt --mode override --destination ./restored/a.txt")
 	fmt.Println("  coldkeep snapshot list --type full --limit 10")
+	fmt.Println("  coldkeep snapshot list --tree")
 	fmt.Println("  coldkeep snapshot show snap-123 --limit 50")
 	fmt.Println("  coldkeep snapshot stats")
 	fmt.Println("  coldkeep snapshot stats snap-123")
 	fmt.Println("  coldkeep snapshot delete snap-123 --force")
+	fmt.Println("  coldkeep snapshot delete snap-123 --dry-run")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2")
+	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --summary")
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --filter modified")
 	fmt.Println("  coldkeep snapshot show snap-123 --prefix docs/")
 	fmt.Println("  coldkeep snapshot show snap-123 --pattern \"*.txt\" --min-size 1024")

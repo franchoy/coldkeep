@@ -17,6 +17,8 @@ import (
 // consistency checks audited during verify.
 type SnapshotReachabilityIntegritySummary struct {
 	SnapshotFileRows               int64
+	OrphanSnapshotPathRefs         int64
+	DuplicateSnapshotPathPairs     int64
 	SnapshotReferencedLogicalFiles int64
 	SnapshotOnlyLogicalFiles       int64
 	SharedLogicalFiles             int64
@@ -26,12 +28,12 @@ type SnapshotReachabilityIntegritySummary struct {
 }
 
 func (s SnapshotReachabilityIntegritySummary) totalIssues() int64 {
-	return s.OrphanSnapshotLogicalRefs + s.InvalidSnapshotLifecycleStates + s.RetainedMissingChunkGraph
+	return s.OrphanSnapshotPathRefs + s.DuplicateSnapshotPathPairs + s.OrphanSnapshotLogicalRefs + s.InvalidSnapshotLifecycleStates + s.RetainedMissingChunkGraph
 }
 
 func snapshotGraphInvariantCode(summary SnapshotReachabilityIntegritySummary) string {
-	onlyOrphans := summary.OrphanSnapshotLogicalRefs > 0 && summary.InvalidSnapshotLifecycleStates == 0 && summary.RetainedMissingChunkGraph == 0
-	onlyLifecycle := summary.OrphanSnapshotLogicalRefs == 0 && summary.InvalidSnapshotLifecycleStates > 0 && summary.RetainedMissingChunkGraph == 0
+	onlyOrphans := (summary.OrphanSnapshotLogicalRefs > 0 || summary.OrphanSnapshotPathRefs > 0) && summary.InvalidSnapshotLifecycleStates == 0 && summary.RetainedMissingChunkGraph == 0
+	onlyLifecycle := summary.OrphanSnapshotPathRefs == 0 && summary.OrphanSnapshotLogicalRefs == 0 && summary.InvalidSnapshotLifecycleStates > 0 && summary.RetainedMissingChunkGraph == 0
 
 	switch {
 	case onlyOrphans:
@@ -73,9 +75,72 @@ func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityInt
 		}
 	}
 
-	orphanRows, err := dbconn.QueryContext(ctx, `
-		SELECT sf.id, sf.snapshot_id, sf.path, sf.logical_file_id
+	duplicatePathRows, err := dbconn.QueryContext(ctx, `
+		SELECT sf.snapshot_id, sf.path_id, sp.path, COUNT(*)
 		FROM snapshot_file sf
+		LEFT JOIN snapshot_path sp ON sp.id = sf.path_id
+		GROUP BY sf.snapshot_id, sf.path_id, sp.path
+		HAVING COUNT(*) > 1
+		ORDER BY sf.snapshot_id ASC, sf.path_id ASC
+	`)
+	if err != nil {
+		return SnapshotReachabilityIntegritySummary{}, fmt.Errorf("query duplicate snapshot_file path pairs: %w", err)
+	}
+	defer func() { _ = duplicatePathRows.Close() }()
+
+	for duplicatePathRows.Next() {
+		var snapshotID string
+		var pathID int64
+		var path sql.NullString
+		var rowCount int64
+		if err := duplicatePathRows.Scan(&snapshotID, &pathID, &path, &rowCount); err != nil {
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("scan duplicate snapshot_file path pair: %w", err))
+			summary.DuplicateSnapshotPathPairs++
+			continue
+		}
+		summary.DuplicateSnapshotPathPairs++
+		pathText := "<missing>"
+		if path.Valid {
+			pathText = path.String
+		}
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("duplicate snapshot_file path pair: snapshot_id=%q path_id=%d path=%q rows=%d", snapshotID, pathID, pathText, rowCount))
+	}
+	if err := duplicatePathRows.Err(); err != nil {
+		return SnapshotReachabilityIntegritySummary{}, fmt.Errorf("iterate duplicate snapshot_file path pairs: %w", err)
+	}
+
+	orphanPathRows, err := dbconn.QueryContext(ctx, `
+		SELECT sf.id, sf.snapshot_id, sf.path_id
+		FROM snapshot_file sf
+		LEFT JOIN snapshot_path sp ON sp.id = sf.path_id
+		WHERE sp.id IS NULL
+		ORDER BY sf.id ASC
+	`)
+	if err != nil {
+		return SnapshotReachabilityIntegritySummary{}, fmt.Errorf("query orphan snapshot_file path refs: %w", err)
+	}
+	defer func() { _ = orphanPathRows.Close() }()
+
+	for orphanPathRows.Next() {
+		var rowID int64
+		var snapshotID string
+		var pathID int64
+		if err := orphanPathRows.Scan(&rowID, &snapshotID, &pathID); err != nil {
+			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("scan orphan snapshot_file path ref: %w", err))
+			summary.OrphanSnapshotPathRefs++
+			continue
+		}
+		summary.OrphanSnapshotPathRefs++
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("snapshot_file orphan path reference: snapshot_file_id=%d snapshot_id=%q path_id=%d", rowID, snapshotID, pathID))
+	}
+	if err := orphanPathRows.Err(); err != nil {
+		return SnapshotReachabilityIntegritySummary{}, fmt.Errorf("iterate orphan snapshot_file path refs: %w", err)
+	}
+
+	orphanRows, err := dbconn.QueryContext(ctx, `
+		SELECT sf.id, sf.snapshot_id, sp.path, sf.logical_file_id
+		FROM snapshot_file sf
+		LEFT JOIN snapshot_path sp ON sp.id = sf.path_id
 		LEFT JOIN logical_file lf ON lf.id = sf.logical_file_id
 		WHERE lf.id IS NULL
 		ORDER BY sf.id ASC
@@ -88,7 +153,7 @@ func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityInt
 	for orphanRows.Next() {
 		var rowID int64
 		var snapshotID string
-		var path string
+		var path sql.NullString
 		var logicalFileID int64
 		if err := orphanRows.Scan(&rowID, &snapshotID, &path, &logicalFileID); err != nil {
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("scan orphan snapshot_file logical ref: %w", err))
@@ -96,7 +161,11 @@ func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityInt
 			continue
 		}
 		summary.OrphanSnapshotLogicalRefs++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("snapshot_file orphan logical reference: snapshot_file_id=%d snapshot_id=%q path=%q logical_file_id=%d", rowID, snapshotID, path, logicalFileID))
+		pathText := "<missing>"
+		if path.Valid {
+			pathText = path.String
+		}
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("snapshot_file orphan logical reference: snapshot_file_id=%d snapshot_id=%q path=%q logical_file_id=%d", rowID, snapshotID, pathText, logicalFileID))
 	}
 	if err := orphanRows.Err(); err != nil {
 		return SnapshotReachabilityIntegritySummary{}, fmt.Errorf("iterate orphan snapshot_file logical refs: %w", err)
@@ -160,10 +229,14 @@ func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityInt
 	}
 
 	if summary.totalIssues() > 0 {
+		// Note: unused snapshot_path rows are allowed and intentionally ignored here.
+		// They are harmless dictionary leftovers and are not considered corruption.
 		log.Println(" ERROR ")
 		log.Printf(
-			"Found %d snapshot reachability integrity errors: orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d",
+			"Found %d snapshot reachability integrity errors: orphan_snapshot_path_refs=%d duplicate_snapshot_path_pairs=%d orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d",
 			summary.totalIssues(),
+			summary.OrphanSnapshotPathRefs,
+			summary.DuplicateSnapshotPathPairs,
 			summary.OrphanSnapshotLogicalRefs,
 			summary.InvalidSnapshotLifecycleStates,
 			summary.RetainedMissingChunkGraph,
@@ -175,8 +248,10 @@ func CheckSnapshotReachabilityIntegrity(dbconn *sql.DB) (SnapshotReachabilityInt
 			log.Printf(" - %v", err)
 		}
 		message := fmt.Sprintf(
-			"found %d errors in snapshot reachability checks: orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d",
+			"found %d errors in snapshot reachability checks: orphan_snapshot_path_refs=%d duplicate_snapshot_path_pairs=%d orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d",
 			summary.totalIssues(),
+			summary.OrphanSnapshotPathRefs,
+			summary.DuplicateSnapshotPathPairs,
 			summary.OrphanSnapshotLogicalRefs,
 			summary.InvalidSnapshotLifecycleStates,
 			summary.RetainedMissingChunkGraph,

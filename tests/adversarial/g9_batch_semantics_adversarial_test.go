@@ -505,4 +505,100 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 			t.Fatalf("invalid token result must not serialize id field (no id=0): %v", invalid)
 		}
 	})
+
+	t.Run("partial failure resilience restore", func(t *testing.T) {
+		id1 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-res-partial-a.txt", "g9-res-partial-a-content")
+		id2 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-res-partial-b.txt", "g9-res-partial-b-content")
+
+		// Corrupt the container of id1 so its restore fails
+		record := testutils.FetchFirstFileChunkRecord(t, dbconn, id1)
+		containerPath := testutils.ContainerPathForRecord(record)
+		f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatalf("open container for restore partial-failure corruption: %v", err)
+		}
+		corruptOffset := record.BlockOffset
+		if record.StoredSize > 10 {
+			corruptOffset += 10
+		}
+		if _, err := f.WriteAt([]byte{0x5A, 0x5A, 0x5A}, corruptOffset); err != nil {
+			_ = f.Close()
+			t.Fatalf("write corruption bytes: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close container after corruption: %v", err)
+		}
+
+		outDir := filepath.Join(tmp, "g9-restore-partial-out")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", id1), fmt.Sprintf("%d", id2), outDir, "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero exit for partial restore failure\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		if summaryCount(t, payload, "success") < 1 {
+			t.Fatalf("expected at least 1 success in partial restore, got summary: %v", payload)
+		}
+		if summaryCount(t, payload, "failed") < 1 {
+			t.Fatalf("expected at least 1 failure in partial restore, got summary: %v", payload)
+		}
+
+		results, ok := payload["results"].([]any)
+		if !ok {
+			t.Fatalf("partial restore results missing: %v", payload)
+		}
+		var foundFailedWithError bool
+		for _, raw := range results {
+			item, _ := raw.(map[string]any)
+			if status, _ := item["status"].(string); status == "failed" {
+				if errText, _ := item["error"].(string); strings.TrimSpace(errText) != "" {
+					foundFailedWithError = true
+				}
+			}
+		}
+		if !foundFailedWithError {
+			t.Fatalf("expected failed restore item to include non-empty error field: results=%v", results)
+		}
+	})
+
+	t.Run("fail-fast correctness restore", func(t *testing.T) {
+		id1 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-ff-a.txt", "g9-failfast-a-content")
+		id2 := storeAdversarialBatchFile(t, repoRoot, binPath, env, inputDir, "g9-ff-b.txt", "g9-failfast-b-content")
+
+		// Corrupt the container of id1 so its restore fails
+		record := testutils.FetchFirstFileChunkRecord(t, dbconn, id1)
+		containerPath := testutils.ContainerPathForRecord(record)
+		f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatalf("open container for fail-fast corruption: %v", err)
+		}
+		corruptOffset := record.BlockOffset
+		if record.StoredSize > 10 {
+			corruptOffset += 10
+		}
+		if _, err := f.WriteAt([]byte{0xDE, 0xAD, 0xBE}, corruptOffset); err != nil {
+			_ = f.Close()
+			t.Fatalf("write corruption bytes for fail-fast: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close container after fail-fast corruption: %v", err)
+		}
+
+		outDir := filepath.Join(tmp, "g9-ff-out")
+		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+			"restore", fmt.Sprintf("%d", id1), fmt.Sprintf("%d", id2), outDir, "--fail-fast", "--output", "json")
+		if res.ExitCode == 0 {
+			t.Fatalf("expected non-zero exit for fail-fast restore\nstdout:\n%s\nstderr:\n%s", res.Stdout, res.Stderr)
+		}
+
+		payload := parseBatchPayload(t, res)
+		// With fail-fast, we expect 0 successes and id2 should either be skipped or never attempted
+		if summaryCount(t, payload, "success") > 0 {
+			t.Fatalf("expected no successes with fail-fast after first failure: summary=%v", payload)
+		}
+		if summaryCount(t, payload, "failed") < 1 {
+			t.Fatalf("expected at least 1 failure in fail-fast mode: summary=%v", payload)
+		}
+	})
 }

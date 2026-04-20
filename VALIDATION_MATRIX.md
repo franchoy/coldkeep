@@ -8,7 +8,7 @@ and enforced evidence (tests and verify checks).
 
 Guarantee IDs (G1–G17+) are part of the public validation contract.
 
-- IDs are stable across v0.10, v1.0, v1.1, v1.2, and v1.3+
+- IDs are stable across v0.10, v1.0, v1.1, v1.2, v1.3, and v1.4+
 - Guarantees may be reworded, but IDs must not change
 - New guarantees must use new IDs (G18, G19, ...)
 
@@ -19,11 +19,12 @@ All guarantees below are enforced through integration tests and verified under r
 This document originated from the v0.9/v0.10 trust-validation work and is now
 the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
 guarantees (G1-G8), v1.1 interface-correctness extensions (G9), v1.2 physical-file
-graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G14-G17).
+graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G14-G17),
+with v1.4 clarifying lineage semantics without introducing new guarantee IDs.
 
 ## Scope
 
-- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+ interface contracts
+- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+/v1.4+ interface contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 

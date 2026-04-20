@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -1395,16 +1396,18 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 		gotID        string
 		gotType      string
 		gotLabel     *string
+		gotParentID  *string
 		gotPaths     []string
 		gotDBNonNil  bool
 		gotCtxNonNil bool
 	)
-	createSnapshotPhase = func(ctx context.Context, db *sql.DB, snapshotID string, snapshotType string, label *string, paths []string) error {
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
 		called = true
-		gotID = snapshotID
-		gotType = snapshotType
-		gotLabel = label
-		gotPaths = append([]string(nil), paths...)
+		gotID = opts.ID
+		gotType = opts.Type
+		gotLabel = opts.Label
+		gotParentID = opts.ParentID
+		gotPaths = append([]string(nil), opts.Paths...)
 		gotDBNonNil = db != nil
 		gotCtxNonNil = ctx != nil
 		return nil
@@ -1439,6 +1442,9 @@ func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	}
 	if gotLabel == nil || *gotLabel != "release-candidate" {
 		t.Fatalf("snapshot label mismatch: got=%v", gotLabel)
+	}
+	if gotParentID != nil {
+		t.Fatalf("expected nil parentID when --from is not provided, got=%v", gotParentID)
 	}
 	if len(gotPaths) != 2 || gotPaths[0] != "docs/" || gotPaths[1] != "a.txt" {
 		t.Fatalf("snapshot paths mismatch: got=%v", gotPaths)
@@ -1478,9 +1484,9 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 
 	gotType := ""
 	gotPathCount := -1
-	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string, snapshotType string, _ *string, paths []string) error {
-		gotType = snapshotType
-		gotPathCount = len(paths)
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		gotType = opts.Type
+		gotPathCount = len(opts.Paths)
 		return nil
 	}
 
@@ -1498,6 +1504,76 @@ func TestRunSnapshotCommandCreateInfersFullWhenNoPaths(t *testing.T) {
 	}
 	if gotPathCount != 0 {
 		t.Fatalf("expected zero paths for full snapshot, got %d", gotPathCount)
+	}
+}
+
+func TestRunSnapshotCommandCreateForwardsFromParentID(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	var gotParentID *string
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		gotParentID = opts.ParentID
+		return nil
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags: map[string][]string{
+			"id":   {"snap-child"},
+			"from": {"snap-parent"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSnapshotCommand returned error: %v", err)
+	}
+
+	if gotParentID == nil || *gotParentID != "snap-parent" {
+		t.Fatalf("expected forwarded parentID snap-parent, got=%v", gotParentID)
+	}
+}
+
+func TestRunSnapshotCommandCreateRejectsEmptyFrom(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags: map[string][]string{
+			"from": {"   "},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "--from cannot be empty") {
+		t.Fatalf("expected empty --from usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineTreatsFromAsValueFlag(t *testing.T) {
+	parsed, err := parseCommandLine([]string{"snapshot", "create", "--id", "snap-child", "--from", "snap-parent"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	from, ok := parsed.lastFlagValue("from")
+	if !ok {
+		t.Fatalf("expected --from to be present in parsed flags: %+v", parsed.flags)
+	}
+	if from != "snap-parent" {
+		t.Fatalf("expected --from value snap-parent, got %q", from)
 	}
 }
 
@@ -1919,6 +1995,585 @@ func TestRunSnapshotCommandListForwardsFilters(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandListRejectsUnsupportedFilterFlag(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"list"},
+		flags: map[string][]string{
+			"tree":   {""},
+			"filter": {"label:day"},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for snapshot") || !strings.Contains(err.Error(), "filter") {
+		t.Fatalf("expected unsupported --filter usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSnapshotCommandListTreeFlagSwitchesTextOutputMode(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "child", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "partial", ParentID: sql.NullString{String: "root", Valid: true}},
+		}, nil
+	}
+
+	flatOutput := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(flatOutput, "  root  full  2026-04-10T10:00:00Z") {
+		t.Fatalf("expected default list output to include flat root row, got:\n%s", flatOutput)
+	}
+	if !strings.Contains(flatOutput, "  child  partial  2026-04-10T11:00:00Z") {
+		t.Fatalf("expected default list output to include flat child row, got:\n%s", flatOutput)
+	}
+	if strings.Contains(flatOutput, "├──") || strings.Contains(flatOutput, "└──") {
+		t.Fatalf("expected default list output to remain flat, got:\n%s", flatOutput)
+	}
+
+	treeOutput := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(treeOutput, "root") || !strings.Contains(treeOutput, "└── child") {
+		t.Fatalf("expected --tree output to include rendered tree, got:\n%s", treeOutput)
+	}
+	if strings.Contains(treeOutput, "Snapshots:") {
+		t.Fatalf("expected --tree output to contain tree only, got:\n%s", treeOutput)
+	}
+	if strings.Contains(treeOutput, "  root  full  2026-04-10T10:00:00Z") || strings.Contains(treeOutput, "  child  partial  2026-04-10T11:00:00Z") {
+		t.Fatalf("expected --tree output to omit flat list rows, got:\n%s", treeOutput)
+	}
+}
+
+func TestRunSnapshotCommandListTreeSingleSnapshot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"}}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.HasPrefix(output, "day1\n") {
+		t.Fatalf("expected single-snapshot tree output to start with day1, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeNoSnapshotsFound(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return nil, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.HasPrefix(output, "no snapshots found\n") {
+		t.Fatalf("expected no snapshots found message, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeSeparatesMultipleRoots(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "backup1", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "backup2", CreatedAt: time.Date(2026, 4, 10, 13, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "backup1", Valid: true}},
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list --tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "day1\n└── day2\n\nbackup1\n└── backup2\n") {
+		t.Fatalf("expected separate root trees, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeTextRendersHierarchy(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "experiment2", CreatedAt: time.Date(2026, 4, 10, 13, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "experiment1", Valid: true}},
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+			{ID: "experiment1", CreatedAt: time.Date(2026, 4, 10, 11, 30, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+			{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"day1",
+		"├── day2",
+		"│   └── day3",
+		"└── experiment1",
+		"    └── experiment2",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected tree output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunSnapshotCommandListTreeJSONIncludesParentMetadata(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree":   {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot list JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if treeMode, ok := data["tree_mode"].(bool); !ok || !treeMode {
+		t.Fatalf("expected tree_mode=true, got data=%v", data)
+	}
+	snapshots := data["snapshots"].([]any)
+	if len(snapshots) != 2 {
+		t.Fatalf("expected two snapshots, got data=%v", data)
+	}
+	second := snapshots[1].(map[string]any)
+	if got, _ := second["parent_id"].(string); got != "day1" {
+		t.Fatalf("expected parent_id=day1 in snapshot JSON, got snapshot=%v", second)
+	}
+	treeLines := data["tree_lines"].([]any)
+	if len(treeLines) == 0 {
+		t.Fatalf("expected tree_lines in tree JSON output, got data=%v", data)
+	}
+	for _, forbidden := range []string{"graph", "nodes", "edges", "stats", "size"} {
+		if _, exists := data[forbidden]; exists {
+			t.Fatalf("expected no %q field in tree list JSON output, got data=%v", forbidden, data)
+		}
+	}
+}
+
+func TestRunSnapshotCommandListTreeTreatsMissingParentAsRoot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "orphan", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "missing-parent", Valid: true}},
+			{ID: "child", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "orphan", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "day1\n\norphan\n└── child\n") {
+		t.Fatalf("expected missing parent to be treated as a separate root tree, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeTreatsNullParentAsRoot(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{}},
+			{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "day1\n\nday2\n└── day3\n") {
+		t.Fatalf("expected NULL parent to be treated as root, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeIsReadOnlyAndSnapshotOnly(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	originalListFiles := listSnapshotFilesPhase
+	originalCreate := createSnapshotPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+		listSnapshotFilesPhase = originalListFiles
+		createSnapshotPhase = originalCreate
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "child", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		}, nil
+	}
+
+	listSnapshotFilesPhase = func(_ context.Context, _ *sql.DB, _ string, _ int, _ *snapshot.SnapshotQuery) ([]snapshot.SnapshotFileEntry, error) {
+		t.Fatal("listSnapshotFilesPhase should not be called by snapshot list --tree")
+		return nil, nil
+	}
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotCreateOptions) error {
+		t.Fatal("createSnapshotPhase should not be called by snapshot list --tree")
+		return nil
+	}
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase should not be called by snapshot list --tree")
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "root\n└── child\n") {
+		t.Fatalf("expected metadata-only tree output, got:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandListTreeSortsChildrenByCreatedAtAscending(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalList := listSnapshotsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		listSnapshotsPhase = originalList
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	listSnapshotsPhase = func(_ context.Context, _ *sql.DB, _ snapshot.SnapshotListFilter) ([]snapshot.Snapshot, error) {
+		return []snapshot.Snapshot{
+			{ID: "child-late", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+			{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+			{ID: "child-early", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+			{ID: "child-middle", CreatedAt: time.Date(2026, 4, 10, 11, 30, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"list"},
+			flags: map[string][]string{
+				"tree": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand list tree returned error: %v", err)
+		}
+	})
+
+	earlyIdx := strings.Index(output, "├── child-early")
+	middleIdx := strings.Index(output, "├── child-middle")
+	lateIdx := strings.Index(output, "└── child-late")
+	if earlyIdx == -1 || middleIdx == -1 || lateIdx == -1 {
+		t.Fatalf("expected ordered child entries in output, got:\n%s", output)
+	}
+	if earlyIdx >= middleIdx || middleIdx >= lateIdx {
+		t.Fatalf("expected child order early -> middle -> late, got:\n%s", output)
+	}
+}
+
+func TestRenderSnapshotTreeLinesBreaksCyclesAndLogsWarning(t *testing.T) {
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	var logBuffer bytes.Buffer
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	})
+
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day3", Valid: true}},
+		{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+	})
+
+	if strings.Join(lines, "\n") != "day2\n└── day3" {
+		t.Fatalf("expected cycle to be broken into a finite tree, got: %#v", lines)
+	}
+	if !strings.Contains(logBuffer.String(), "snapshot tree cycle detected") {
+		t.Fatalf("expected cycle warning log, got: %q", logBuffer.String())
+	}
+}
+
+func TestRenderSnapshotTreeLinesLinearChain(t *testing.T) {
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "day3", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day2", Valid: true}},
+		{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+	})
+
+	if got := strings.Join(lines, "\n"); got != "day1\n└── day2\n    └── day3" {
+		t.Fatalf("expected linear chain day1 -> day2 -> day3, got: %q", got)
+	}
+}
+
+func TestRenderSnapshotTreeLinesBranching(t *testing.T) {
+	lines := renderSnapshotTreeLines([]snapshot.Snapshot{
+		{ID: "exp1", CreatedAt: time.Date(2026, 4, 10, 11, 30, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+		{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "day2", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "day1", Valid: true}},
+	})
+
+	if got := strings.Join(lines, "\n"); got != "day1\n├── day2\n└── exp1" {
+		t.Fatalf("expected branching tree under day1, got: %q", got)
+	}
+}
+
+func TestRenderSnapshotTreeLinesDeterministicAcrossCalls(t *testing.T) {
+	items := []snapshot.Snapshot{
+		{ID: "child-b", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		{ID: "root", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC), Type: "full"},
+		{ID: "child-a", CreatedAt: time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC), Type: "full", ParentID: sql.NullString{String: "root", Valid: true}},
+		{ID: "day1", CreatedAt: time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC), Type: "full"},
+	}
+
+	first := strings.Join(renderSnapshotTreeLines(items), "\n")
+	second := strings.Join(renderSnapshotTreeLines(items), "\n")
+	if first != second {
+		t.Fatalf("expected deterministic tree output across calls, first=%q second=%q", first, second)
+	}
+	if first != "day1\n\nroot\n├── child-a\n└── child-b" {
+		t.Fatalf("unexpected deterministic tree output, got: %q", first)
+	}
+}
+
 func TestRunSnapshotCommandShowReturnsSnapshotAndFiles(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalGet := getSnapshotPhase
@@ -2180,14 +2835,295 @@ func TestRunSnapshotCommandStatsSupportsGlobalAndPerSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandStatsTextShowsLineageBreakdownWhenParentExists(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 100,
+			TotalSizeBytes:    2048,
+			ParentSnapshotID:  sql.NullString{String: "snap-parent", Valid: true},
+			ReusedFileCount:   sql.NullInt64{Int64: 99, Valid: true},
+			NewFileCount:      sql.NullInt64{Int64: 1, Valid: true},
+			ReuseRatioPct:     sql.NullFloat64{Float64: 99.0, Valid: true},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Reused: 99") {
+		t.Fatalf("expected reused count in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "New: 1") {
+		t.Fatalf("expected new count in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "Reuse ratio: 99.0%") {
+		t.Fatalf("expected reuse ratio in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsTextShowsNoParentFallback(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 4, TotalSizeBytes: 2048}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-root"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "(Reused/New not available -- no parent snapshot metadata)") {
+		t.Fatalf("expected no-parent fallback line in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsTextShowsMissingParentFallback(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 4,
+			TotalSizeBytes:    2048,
+			LineageStatus:     snapshot.SnapshotLineageStatusParentMissing,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child-missing-parent"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "(Reused/New not available -- parent snapshot metadata exists but parent snapshot is missing)") {
+		t.Fatalf("expected missing-parent fallback line in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsTextShowsSkippedLineageFallback(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 4,
+			TotalSizeBytes:    2048,
+			LineageStatus:     snapshot.SnapshotLineageStatusSkipped,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child-skipped-lineage"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "(Reused/New not available -- lineage analysis was intentionally skipped for this snapshot scope)") {
+		t.Fatalf("expected skipped-lineage fallback line in text output, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandStatsJSONIncludesLineageFieldsWhenParentExists(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{
+			SnapshotID:        snapshotID,
+			SnapshotCount:     1,
+			SnapshotFileCount: 10,
+			TotalSizeBytes:    512,
+			ParentSnapshotID:  sql.NullString{String: "snap-parent-json", Valid: true},
+			ReusedFileCount:   sql.NullInt64{Int64: 8, Valid: true},
+			NewFileCount:      sql.NullInt64{Int64: 2, Valid: true},
+			ReuseRatioPct:     sql.NullFloat64{Float64: 80.0, Valid: true},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-child-json"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot stats JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got := int64(data["reused"].(float64)); got != 8 {
+		t.Fatalf("expected reused=8, got %d data=%v", got, data)
+	}
+	if got := int64(data["new"].(float64)); got != 2 {
+		t.Fatalf("expected new=2, got %d data=%v", got, data)
+	}
+	if got := data["reuse_ratio"].(float64); got != 80.0 {
+		t.Fatalf("expected reuse_ratio=80.0, got %v data=%v", got, data)
+	}
+	if _, exists := data["parent_snapshot_id"]; exists {
+		t.Fatalf("did not expect parent_snapshot_id field in stats output, got data=%v", data)
+	}
+}
+
+func TestRunSnapshotCommandStatsJSONOmitsLineageFieldsWhenNoParent(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalStats := snapshotStatsPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		snapshotStatsPhase = originalStats
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	snapshotStatsPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshot.SnapshotStats, error) {
+		return &snapshot.SnapshotStats{SnapshotID: snapshotID, SnapshotCount: 1, SnapshotFileCount: 5, TotalSizeBytes: 1024}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"stats", "snap-no-parent-json"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand stats returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot stats JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if _, exists := data["reused"]; exists {
+		t.Fatalf("did not expect reused field without parent, got data=%v", data)
+	}
+	if _, exists := data["new"]; exists {
+		t.Fatalf("did not expect new field without parent, got data=%v", data)
+	}
+	if _, exists := data["reuse_ratio"]; exists {
+		t.Fatalf("did not expect reuse_ratio field without parent, got data=%v", data)
+	}
+}
+
 func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",
 		positionals: []string{"delete", "snap-del-1"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "requires --force") {
-		t.Fatalf("expected --force requirement error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
+		t.Fatalf("expected --force/--dry-run requirement error, got: %v", err)
 	}
 
 	originalLoad := loadDefaultStorageContextPhase
@@ -2235,6 +3171,957 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	data := payload["data"].(map[string]any)
 	if got, _ := data["action"].(string); got != "delete" {
 		t.Fatalf("expected action=delete, got %v", data)
+	}
+	if got, _ := data["dry_run"].(bool); got {
+		t.Fatalf("expected dry_run=false for normal delete, got %v", data)
+	}
+}
+
+func TestRunSnapshotCommandDeleteRejectsDeleteUnusedFlag(t *testing.T) {
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags: map[string][]string{
+			"dry-run":       {""},
+			"delete-unused": {""},
+		},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected error when using unsupported --delete-unused flag")
+	}
+	if !strings.Contains(err.Error(), "delete-unused") {
+		t.Fatalf("expected error mentioning delete-unused, got: %v", err)
+	}
+}
+
+func TestFormatNumberWithCommas(t *testing.T) {
+	tests := []struct {
+		input    int64
+		expected string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{10, "10"},
+		{100, "100"},
+		{1000, "1,000"},
+		{10000, "10,000"},
+		{100000, "100,000"},
+		{1000000, "1,000,000"},
+		{99500, "99,500"},
+		{500, "500"},
+		{-1000, "-1,000"},
+	}
+
+	for _, tt := range tests {
+		got := formatNumberWithCommas(tt.input)
+		if got != tt.expected {
+			t.Fatalf("formatNumberWithCommas(%d) = %q, expected %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutput(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "snapshot-123",
+		ParentID:         sql.NullString{String: "parent-snap", Valid: true},
+		ChildSnapshotIDs: []string{"child-1", "child-2"},
+		TotalFiles:       100000,
+		UniqueFiles:      500,
+		SharedFiles:      99500,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("snapshot-123", preview)
+
+	// Verify structure
+	if !strings.Contains(output, "Snapshot: snapshot-123") {
+		t.Fatalf("missing snapshot header in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Files:") {
+		t.Fatalf("missing Files section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "100,000") {
+		t.Fatalf("missing formatted total files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Lineage:") {
+		t.Fatalf("missing Lineage section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "parent-snap") {
+		t.Fatalf("missing parent in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Impact:") {
+		t.Fatalf("missing Impact section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Dry run: no changes applied.") {
+		t.Fatalf("missing dry-run notice in output:\n%s", output)
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutputWithNoParentNoChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "root-snap",
+		ParentID:         sql.NullString{Valid: false},
+		ChildSnapshotIDs: []string{},
+		TotalFiles:       50,
+		UniqueFiles:      50,
+		SharedFiles:      0,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("root-snap", preview)
+
+	if !strings.Contains(output, "Parent: none") {
+		t.Fatalf("expected 'Parent: none' for null parent, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Children: none") {
+		t.Fatalf("expected 'Children: none' for empty children, got:\n%s", output)
+	}
+	if strings.Contains(output, "Warning:") {
+		t.Fatalf("expected no Warning section when there are no children, got:\n%s", output)
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutputWithMissingParent(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "child-snap",
+		ParentID:         sql.NullString{String: "missing-parent", Valid: true},
+		ParentMissing:    true,
+		ChildSnapshotIDs: []string{},
+		TotalFiles:       0,
+		UniqueFiles:      0,
+		SharedFiles:      0,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("child-snap", preview)
+
+	if !strings.Contains(output, "Parent: (missing)") {
+		t.Fatalf("expected missing-parent marker in output, got:\n%s", output)
+	}
+}
+
+func TestFormatSnapshotDeleteDryRunOutputIncludesWarningWhenHasChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "day1",
+		ParentID:         sql.NullString{Valid: false},
+		ChildSnapshotIDs: []string{"day2", "exp1"},
+		TotalFiles:       1000,
+		UniqueFiles:      100,
+		SharedFiles:      900,
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("day1", preview)
+
+	if !strings.Contains(output, "Warning:") {
+		t.Fatalf("expected 'Warning:' section when there are children, got:\n%s", output)
+	}
+	if !strings.Contains(output, "This snapshot is parent of:") {
+		t.Fatalf("expected 'This snapshot is parent of:' in warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "- day2") || !strings.Contains(output, "- exp1") {
+		t.Fatalf("expected children listed in warning, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Deleting it will break lineage visualization") {
+		t.Fatalf("expected lineage warning text, got:\n%s", output)
+	}
+	if !strings.Contains(output, "snapshots remain fully usable") {
+		t.Fatalf("expected usability note, got:\n%s", output)
+	}
+}
+
+func TestPreviewWarningsIncludesLineageBreakageWhenHasChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "snap1",
+		ChildSnapshotIDs: []string{"child1", "child2"},
+	}
+
+	warnings := previewWarnings(preview)
+	if len(warnings) == 0 {
+		t.Fatalf("expected warnings when there are children, got none")
+	}
+
+	warning := warnings[0]
+	if warningType, ok := warning["type"].(string); !ok || warningType != "lineage_breakage" {
+		t.Fatalf("expected type='lineage_breakage', got %v", warning["type"])
+	}
+
+	if msg, ok := warning["message"].(string); !ok || !strings.Contains(msg, "break lineage visualization") {
+		t.Fatalf("expected lineage breakage message, got %v", warning["message"])
+	}
+
+	details := warning["details"].(map[string]any)
+	affected := details["affected_snapshots"].([]string)
+	if len(affected) != 2 || affected[0] != "child1" || affected[1] != "child2" {
+		t.Fatalf("expected affected_snapshots=['child1', 'child2'], got %v", affected)
+	}
+}
+
+func TestPreviewWarningsEmptyWhenNoChildren(t *testing.T) {
+	preview := &snapshotDeleteLineagePreview{
+		SnapshotID:       "snap1",
+		ChildSnapshotIDs: []string{},
+	}
+
+	warnings := previewWarnings(preview)
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings when there are no children, got %d warnings", len(warnings))
+	}
+
+	// Also test with nil preview
+	warnings = previewWarnings(nil)
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings for nil preview, got %d warnings", len(warnings))
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunIsReadOnly(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{String: "snap-parent", Valid: true},
+			ChildSnapshotIDs: []string{"snap-child-1", "snap-child-2"},
+			TotalFiles:       10,
+			UniqueFiles:      3,
+			SharedFiles:      7,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "snap-del-2"},
+			flags: map[string][]string{
+				"dry-run": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete dry-run JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "delete_dry_run" {
+		t.Fatalf("expected action=delete_dry_run, got %v", data)
+	}
+	if got, _ := data["dry_run"].(bool); !got {
+		t.Fatalf("expected dry_run=true for dry-run delete, got %v", data)
+	}
+	if got, _ := data["parent_id"].(string); got != "snap-parent" {
+		t.Fatalf("expected parent_id=snap-parent, got %v", data)
+	}
+	children, ok := data["children"].([]any)
+	if !ok || len(children) != 2 {
+		t.Fatalf("expected two child snapshots in preview, got %v", data)
+	}
+	if totalFiles, _ := data["total_files"].(float64); totalFiles != 10 {
+		t.Fatalf("expected total_files=10, got %v", data["total_files"])
+	}
+	if uniqueFiles, _ := data["unique_files"].(float64); uniqueFiles != 3 {
+		t.Fatalf("expected unique_files=3, got %v", data["unique_files"])
+	}
+	if sharedFiles, _ := data["shared_files"].(float64); sharedFiles != 7 {
+		t.Fatalf("expected shared_files=7, got %v", data["shared_files"])
+	}
+	if parentMissing, _ := data["parent_missing"].(bool); parentMissing {
+		t.Fatalf("expected parent_missing=false, got true")
+	}
+
+	// Check warnings field (should have lineage_breakage warning since has children)
+	warnings, ok := data["warnings"].([]any)
+	if !ok || len(warnings) != 1 {
+		t.Fatalf("expected one warning for snapshot with children, got %v", data["warnings"])
+	}
+	warningObj := warnings[0].(map[string]any)
+	if warningType, _ := warningObj["type"].(string); warningType != "lineage_breakage" {
+		t.Fatalf("expected warning type='lineage_breakage', got %v", warningObj["type"])
+	}
+
+	// v1 non-goal lock: no GC simulation / disk impact metrics in snapshot delete dry-run.
+	for _, forbidden := range []string{"bytes_freed", "disk_space_freed", "chunks_affected", "containers_affected", "gc_plan", "gc_simulation"} {
+		if _, exists := data[forbidden]; exists {
+			t.Fatalf("did not expect GC simulation field %q in delete dry-run output: %v", forbidden, data)
+		}
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunJSONNoChildrenHasNoWarnings(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{Valid: false},
+			ChildSnapshotIDs: []string{},
+			TotalFiles:       0,
+			UniqueFiles:      0,
+			SharedFiles:      0,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "root-snap"},
+			flags: map[string][]string{
+				"dry-run": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete dry-run JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if warnings, exists := data["warnings"]; exists && warnings != nil {
+		if arr, ok := warnings.([]any); ok && len(arr) > 0 {
+			t.Fatalf("expected no warnings for snapshot without children, got %v", warnings)
+		}
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunSnapshotNotFound(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called when preview fails")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return nil, fmt.Errorf("snapshot %q not found", snapshotID)
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "missing-snap"},
+		flags: map[string][]string{
+			"dry-run": {""},
+		},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected not found error, got nil")
+	}
+	if got := err.Error(); got != `snapshot "missing-snap" not found` {
+		t.Fatalf("expected exact not-found error, got %q", got)
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunTextOutput(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{String: "day1-parent", Valid: true},
+			ChildSnapshotIDs: []string{"day2", "exp1"},
+			TotalFiles:       100000,
+			UniqueFiles:      500,
+			SharedFiles:      99500,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "day1"},
+			flags: map[string][]string{
+				"dry-run": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	// Verify key output elements are present
+	if !strings.Contains(output, "Snapshot: day1") {
+		t.Fatalf("expected 'Snapshot: day1' header in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Files:") {
+		t.Fatalf("expected 'Files:' section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "100,000") {
+		t.Fatalf("expected '100,000' total files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "500") {
+		t.Fatalf("expected '500' unique files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "99,500") {
+		t.Fatalf("expected '99,500' shared files in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Lineage:") {
+		t.Fatalf("expected 'Lineage:' section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "day1-parent") {
+		t.Fatalf("expected parent 'day1-parent' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "- day2") {
+		t.Fatalf("expected child '- day2' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "- exp1") {
+		t.Fatalf("expected child '- exp1' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Impact:") {
+		t.Fatalf("expected 'Impact:' section in output:\n%s", output)
+	}
+	if !strings.Contains(output, "remove snapshot metadata") {
+		t.Fatalf("expected 'remove snapshot metadata' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "NOT delete shared data") {
+		t.Fatalf("expected 'NOT delete shared data' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "remove 500 unique snapshot file reference") {
+		t.Fatalf("expected 'remove 500 unique snapshot file reference' in output:\n%s", output)
+	}
+	if !strings.Contains(output, "reference impact only; does not guarantee reclaimed disk space") {
+		t.Fatalf("expected explicit reference-impact note in output:\n%s", output)
+	}
+	if !strings.Contains(output, "Dry run: no changes applied.") {
+		t.Fatalf("expected 'Dry run: no changes applied.' in output:\n%s", output)
+	}
+
+	// Most importantly, verify the warning section is present
+	if !strings.Contains(output, "Warning:") {
+		t.Fatalf("expected 'Warning:' section in text output when has children:\n%s", output)
+	}
+	if !strings.Contains(output, "This snapshot is parent of:") {
+		t.Fatalf("expected 'This snapshot is parent of:' in warning:\n%s", output)
+	}
+	if !strings.Contains(output, "Deleting it will break lineage visualization") {
+		t.Fatalf("expected lineage warning text:\n%s", output)
+	}
+	if !strings.Contains(output, "snapshots remain fully usable") {
+		t.Fatalf("expected usability note:\n%s", output)
+	}
+}
+
+func TestRunSnapshotCommandDeleteDryRunTextOutputNoChildren(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		t.Fatal("deleteSnapshotPhase must not be called in --dry-run mode")
+		return nil
+	}
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{
+			SnapshotID:       snapshotID,
+			ParentID:         sql.NullString{Valid: false},
+			ChildSnapshotIDs: []string{}, // No children
+			TotalFiles:       50,
+			UniqueFiles:      50,
+			SharedFiles:      0,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "root-snap"},
+			flags: map[string][]string{
+				"dry-run": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --dry-run returned error: %v", err)
+		}
+	})
+
+	// Verify warning section is NOT present when no children
+	if strings.Contains(output, "Warning:") {
+		t.Fatalf("expected NO 'Warning:' section when there are no children:\n%s", output)
+	}
+
+	// Verify other sections are still present
+	if !strings.Contains(output, "Snapshot: root-snap") {
+		t.Fatalf("expected snapshot header:\n%s", output)
+	}
+	if !strings.Contains(output, "Parent: none") {
+		t.Fatalf("expected 'Parent: none':\n%s", output)
+	}
+	if !strings.Contains(output, "Children: none") {
+		t.Fatalf("expected 'Children: none':\n%s", output)
+	}
+}
+
+func TestLoadSnapshotDeleteLineagePreviewLoadsSnapshotAndChildren(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
+		('day1', NULL),
+		('day2', 'day1'),
+		('day3', 'day2'),
+		('experiment1', 'day1')`); err != nil {
+		t.Fatalf("seed snapshots: %v", err)
+	}
+
+	// day1: 4 files (3 unique to day1, 1 shared with day2)
+	// day2: 3 files (1 shared with day1, 1 shared with day3, 1 unique to day2)
+	// day3: 2 files (1 shared with day2, 1 unique to day3)
+	// experiment1: 2 files (1 shared with day1, 1 unique to experiment1)
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file(snapshot_id, path_id, logical_file_id) VALUES
+		('day1', 1, 'file1'),
+		('day1', 2, 'file2'),
+		('day1', 3, 'file3'),
+		('day1', 4, 'file4'),
+		('day2', 4, 'file4'),
+		('day2', 5, 'file5'),
+		('day2', 6, 'file6'),
+		('day3', 6, 'file6'),
+		('day3', 7, 'file7'),
+		('experiment1', 1, 'file1'),
+		('experiment1', 8, 'file8')`); err != nil {
+		t.Fatalf("seed snapshot_file: %v", err)
+	}
+
+	preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "day1")
+	if err != nil {
+		t.Fatalf("loadSnapshotDeleteLineagePreview returned error: %v", err)
+	}
+	if preview.SnapshotID != "day1" {
+		t.Fatalf("expected snapshot id day1, got %q", preview.SnapshotID)
+	}
+	if preview.ParentID.Valid {
+		t.Fatalf("expected parent_id NULL for root snapshot, got %+v", preview.ParentID)
+	}
+	if len(preview.ChildSnapshotIDs) != 2 || preview.ChildSnapshotIDs[0] != "day2" || preview.ChildSnapshotIDs[1] != "experiment1" {
+		t.Fatalf("expected ordered child IDs [day2 experiment1], got %#v", preview.ChildSnapshotIDs)
+	}
+
+	// day1 has 4 total files:
+	// file1 (path_id=1): shared with experiment1 (shared)
+	// file2 (path_id=2): unique to day1
+	// file3 (path_id=3): unique to day1
+	// file4 (path_id=4): shared with day2 (shared)
+	// Expected: 4 total, 2 unique, 2 shared
+	if preview.TotalFiles != 4 {
+		t.Fatalf("expected 4 total files, got %d", preview.TotalFiles)
+	}
+	if preview.UniqueFiles != 2 {
+		t.Fatalf("expected 2 unique files, got %d", preview.UniqueFiles)
+	}
+	if preview.SharedFiles != 2 {
+		t.Fatalf("expected 2 shared files, got %d", preview.SharedFiles)
+	}
+}
+
+func TestLoadSnapshotDeleteLineagePreviewNotFound(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+
+	_, err = loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "X")
+	if err == nil {
+		t.Fatal("expected not found error, got nil")
+	}
+	if got := err.Error(); got != `snapshot "X" not found` {
+		t.Fatalf("expected exact error %q, got %q", `snapshot "X" not found`, got)
+	}
+}
+
+func TestLoadSnapshotDeleteLineagePreviewEdgeCaseStats(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
+		('empty', NULL),
+		('shared-a', NULL),
+		('shared-b', NULL),
+		('unique-a', NULL)`); err != nil {
+		t.Fatalf("seed snapshots: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file(snapshot_id, path_id, logical_file_id) VALUES
+		('shared-a', 10, 'f10'),
+		('shared-a', 11, 'f11'),
+		('shared-b', 10, 'f10'),
+		('shared-b', 11, 'f11'),
+		('unique-a', 20, 'f20'),
+		('unique-a', 21, 'f21')`); err != nil {
+		t.Fatalf("seed snapshot_file: %v", err)
+	}
+
+	t.Run("empty snapshot totals are zero", func(t *testing.T) {
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "empty")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 0 || preview.UniqueFiles != 0 || preview.SharedFiles != 0 {
+			t.Fatalf("expected empty stats 0/0/0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+
+	t.Run("all files shared means unique is zero", func(t *testing.T) {
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "shared-a")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 2 || preview.UniqueFiles != 0 || preview.SharedFiles != 2 {
+			t.Fatalf("expected shared stats total=2 unique=0 shared=2, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+
+	t.Run("all files unique means shared is zero", func(t *testing.T) {
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "unique-a")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 2 || preview.UniqueFiles != 2 || preview.SharedFiles != 0 {
+			t.Fatalf("expected unique stats total=2 unique=2 shared=0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+
+	t.Run("same path but different logical_file_id is NOT shared", func(t *testing.T) {
+		if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES
+			('same-path-a', NULL),
+			('same-path-b', NULL)`); err != nil {
+			t.Fatalf("seed same-path snapshots: %v", err)
+		}
+
+		// Same path_id (30), different logical_file_id values. These must NOT be treated as shared.
+		if _, err := dbconn.Exec(`INSERT INTO snapshot_file(snapshot_id, path_id, logical_file_id) VALUES
+			('same-path-a', 30, 'L1'),
+			('same-path-b', 30, 'L2')`); err != nil {
+			t.Fatalf("seed same-path different-logical rows: %v", err)
+		}
+
+		preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "same-path-a")
+		if err != nil {
+			t.Fatalf("load preview: %v", err)
+		}
+		if preview.TotalFiles != 1 || preview.UniqueFiles != 1 || preview.SharedFiles != 0 {
+			t.Fatalf("expected same-path/different-logical to be unique: total=1 unique=1 shared=0, got total=%d unique=%d shared=%d", preview.TotalFiles, preview.UniqueFiles, preview.SharedFiles)
+		}
+	})
+}
+
+func TestLoadSnapshotDeleteLineagePreviewDetectsMissingParent(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot table: %v", err)
+	}
+	if _, err := dbconn.Exec(`CREATE TABLE snapshot_file (
+		snapshot_id TEXT NOT NULL,
+		path_id INTEGER NOT NULL,
+		logical_file_id TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create snapshot_file table: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot(id, parent_id) VALUES ('child', 'ghost-parent')`); err != nil {
+		t.Fatalf("seed snapshot with missing parent: %v", err)
+	}
+
+	preview, err := loadSnapshotDeleteLineagePreview(context.Background(), dbconn, "child")
+	if err != nil {
+		t.Fatalf("loadSnapshotDeleteLineagePreview returned error: %v", err)
+	}
+	if !preview.ParentID.Valid || preview.ParentID.String != "ghost-parent" {
+		t.Fatalf("expected parent_id ghost-parent, got %+v", preview.ParentID)
+	}
+	if !preview.ParentMissing {
+		t.Fatal("expected ParentMissing=true when parent row does not exist")
+	}
+
+	output := formatSnapshotDeleteDryRunOutput("child", preview)
+	if !strings.Contains(output, "Parent: (missing)") {
+		t.Fatalf("expected formatted output to show Parent: (missing), got:\n%s", output)
+	}
+	if !strings.Contains(output, "Parent note: parent snapshot metadata is missing") {
+		t.Fatalf("expected formatted output to include missing-parent note, got:\n%s", output)
+	}
+}
+
+func TestPrintHelpSnapshotFlagDocs(t *testing.T) {
+	output := captureStdout(t, func() {
+		printHelp()
+	})
+
+	for _, expected := range []string{
+		"--from records lineage metadata only",
+		"--tree renders metadata lineage only",
+		"--summary returns count-only diff output",
+		"--dry-run performs a read-only preview and never writes data",
+		"missing lineage parent metadata is shown as Parent: (missing)",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected help output to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
+	// CRITICAL BEHAVIOR LOCK (v1 contract):
+	// --force must execute deletion immediately without confirmation or blocking.
+	// This test ensures Phase 7 dry-run feature doesn't change actual delete behavior.
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	// Track if delete was called and when
+	deleteCallOrder := []string{}
+	deleteCalled := false
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		deleteCallOrder = append(deleteCallOrder, "delete:"+snapshotID)
+		deleteCalled = true
+		return nil
+	}
+
+	// Execute delete with --force (no --dry-run)
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "parent-snap"},
+			flags: map[string][]string{
+				"force":  {""},
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete --force returned error: %v", err)
+		}
+	})
+
+	// VERIFY: Delete must be called immediately without any prompts or delays
+	if !deleteCalled {
+		t.Fatalf("expected deleteSnapshotPhase to be called with --force, but it wasn't")
+	}
+
+	// VERIFY: Delete must be the only operation
+	if len(deleteCallOrder) != 1 || deleteCallOrder[0] != "delete:parent-snap" {
+		t.Fatalf("expected single delete operation, got: %v", deleteCallOrder)
+	}
+
+	// VERIFY: Output must confirm deletion (not simulation/preview)
+	if strings.Contains(output, "dry-run") || strings.Contains(output, "simulation") {
+		t.Fatalf("--force output should not mention dry-run or simulation, got: %s", output)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete JSON output: %v", err)
+	}
+	data := payload["data"].(map[string]any)
+
+	// VERIFY: action must be "delete" not "delete_dry_run"
+	if action, _ := data["action"].(string); action != "delete" {
+		t.Fatalf("expected action=delete for --force, got %v", action)
+	}
+
+	// VERIFY: dry_run must be false
+	if dryRun, _ := data["dry_run"].(bool); dryRun {
+		t.Fatalf("expected dry_run=false for --force, got true")
+	}
+}
+
+func TestRunSnapshotCommandDeleteWithForceNoCascadeDelete(t *testing.T) {
+	// CRITICAL BEHAVIOR LOCK (v1 contract):
+	// Deleting a parent snapshot must NOT cascade-delete children.
+	// Children remain fully usable with null parent_id.
+
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	// Track what gets deleted
+	deletedSnapshots := []string{}
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, snapshotID string) error {
+		deletedSnapshots = append(deletedSnapshots, snapshotID)
+		return nil
+	}
+
+	// Execute delete of parent snapshot with --force
+	_ = captureStdout(t, func() {
+		_ = runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "parent-snap"},
+			flags: map[string][]string{
+				"force": {""},
+			},
+		}, outputModeText)
+	})
+
+	// CRITICAL: Only the specified snapshot should be deleted, NOT children
+	if len(deletedSnapshots) != 1 {
+		t.Fatalf("expected exactly 1 snapshot deleted (only parent), got %d: %v", len(deletedSnapshots), deletedSnapshots)
+	}
+	if deletedSnapshots[0] != "parent-snap" {
+		t.Fatalf("expected parent-snap deleted, got: %v", deletedSnapshots)
 	}
 }
 
@@ -2616,6 +4503,231 @@ func TestRunSnapshotCommandDiffTextShowsMatchedAndTotalCounts(t *testing.T) {
 	}
 	if !strings.Contains(output, "entries (total): 3") {
 		t.Fatalf("expected text output to include total entry count, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryTextShowsOnlySummary(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified, BaseLogicalID: sql.NullInt64{Int64: 3, Valid: true}, TargetLogicalID: sql.NullInt64{Int64: 4, Valid: true}},
+			},
+		}, nil
+	}
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		return &snapshot.SnapshotDiffSummary{Added: 1, Removed: 1, Modified: 1}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "day1", "day2"},
+			flags: map[string][]string{
+				"summary": {""},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff summary returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Snapshot diff: day1 -> day2") {
+		t.Fatalf("expected summary header, got: %q", output)
+	}
+	if !strings.Contains(output, "Added:     1 files") || !strings.Contains(output, "Removed:   1 files") || !strings.Contains(output, "Modified:  1 files") {
+		t.Fatalf("expected summary counters, got: %q", output)
+	}
+	if !strings.Contains(output, "Total changes: 3") {
+		t.Fatalf("expected total changes line, got: %q", output)
+	}
+	if strings.Contains(output, "+ docs/new.txt") || strings.Contains(output, "- docs/old.txt") || strings.Contains(output, "~ docs/config.yaml") {
+		t.Fatalf("did not expect detailed entries in summary mode, got: %q", output)
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryJSONOmitsEntries(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded, TargetLogicalID: sql.NullInt64{Int64: 2, Valid: true}},
+				{Path: "docs/old.txt", Type: snapshot.DiffRemoved, BaseLogicalID: sql.NullInt64{Int64: 1, Valid: true}},
+			},
+		}, nil
+	}
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		return &snapshot.SnapshotDiffSummary{Added: 1, Removed: 1, Modified: 0}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"diff", "day1", "day2"},
+			flags: map[string][]string{
+				"summary": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand diff summary returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot diff JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if summaryMode, ok := data["summary_mode"].(bool); !ok || !summaryMode {
+		t.Fatalf("expected summary_mode=true, got data=%v", data)
+	}
+	if _, exists := data["entries"]; exists {
+		t.Fatalf("did not expect entries in summary mode JSON, got data=%v", data)
+	}
+	summary := data["summary"].(map[string]any)
+	if int64(summary["added"].(float64)) != 1 || int64(summary["removed"].(float64)) != 1 || int64(summary["modified"].(float64)) != 0 {
+		t.Fatalf("unexpected summary payload: %v", summary)
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryUsesSQLFastPathWithoutFilters(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledSummary := false
+	calledDetailed := false
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		calledSummary = true
+		return &snapshot.SnapshotDiffSummary{Added: 2, Removed: 1, Modified: 3}, nil
+	}
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, _, _ string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		calledDetailed = true
+		return &snapshot.SnapshotDiffResult{}, nil
+	}
+
+	if err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "base", "target"},
+		flags: map[string][]string{
+			"summary": {""},
+		},
+	}, outputModeText); err != nil {
+		t.Fatalf("runSnapshotCommand diff summary returned error: %v", err)
+	}
+
+	if !calledSummary {
+		t.Fatal("expected SQL summary fast path to be called")
+	}
+	if calledDetailed {
+		t.Fatal("did not expect detailed diff path to be called in unfiltered summary mode")
+	}
+}
+
+func TestRunSnapshotCommandDiffSummaryWithFilterUsesDetailedPath(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDiff := diffSnapshotsPhase
+	originalSummary := diffSnapshotSummaryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		diffSnapshotsPhase = originalDiff
+		diffSnapshotSummaryPhase = originalSummary
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	calledSummary := false
+	calledDetailed := false
+	diffSnapshotSummaryPhase = func(_ context.Context, _ *sql.DB, _, _ string) (*snapshot.SnapshotDiffSummary, error) {
+		calledSummary = true
+		return &snapshot.SnapshotDiffSummary{}, nil
+	}
+	diffSnapshotsPhase = func(_ context.Context, _ *sql.DB, baseID, targetID string, _ *snapshot.SnapshotQuery) (*snapshot.SnapshotDiffResult, error) {
+		calledDetailed = true
+		return &snapshot.SnapshotDiffResult{
+			BaseSnapshotID:   baseID,
+			TargetSnapshotID: targetID,
+			Entries: []snapshot.SnapshotDiffEntry{
+				{Path: "docs/new.txt", Type: snapshot.DiffAdded},
+				{Path: "docs/config.yaml", Type: snapshot.DiffModified},
+			},
+		}, nil
+	}
+
+	if err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"diff", "base", "target"},
+		flags: map[string][]string{
+			"summary": {""},
+			"filter":  {"modified"},
+		},
+	}, outputModeText); err != nil {
+		t.Fatalf("runSnapshotCommand diff summary/filter returned error: %v", err)
+	}
+
+	if calledSummary {
+		t.Fatal("did not expect SQL summary fast path when filter is present")
+	}
+	if !calledDetailed {
+		t.Fatal("expected detailed diff path when filter is present")
 	}
 }
 

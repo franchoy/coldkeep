@@ -7,6 +7,7 @@ import (
 	"time"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/tests/testdb"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -64,13 +65,8 @@ func TestRunStatsResultIncludesSnapshotRetentionVisibility(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
-	if _, err := dbconn.Exec(
-		`INSERT INTO snapshot_file (snapshot_id, path, logical_file_id) VALUES (?, ?, ?), (?, ?, ?)`,
-		"snap-stats-retention", "snap/snapshot-only", snapshotOnlyID,
-		"snap-stats-retention", "snap/shared", sharedID,
-	); err != nil {
-		t.Fatalf("insert snapshot_file rows: %v", err)
-	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-stats-retention", "snap/snapshot-only", snapshotOnlyID)
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-stats-retention", "snap/shared", sharedID)
 
 	stats, err := runStatsResultWithDB(ctx, dbconn)
 	if err != nil {
