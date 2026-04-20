@@ -1273,6 +1273,98 @@ func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
 	}
 }
 
+func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	tmp := t.TempDir()
+	filePath := filepath.Join(tmp, "retry-reclaim.bin")
+	payload := []byte("retry-reclaim-payload-that-needs-clean-start")
+	if err := os.WriteFile(filePath, payload, 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat temp file: %v", err)
+	}
+	sum := sha256.Sum256(payload)
+	fileHash := hex.EncodeToString(sum[:])
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		fileInfo.Name(),
+		fileInfo.Size(),
+		fileHash,
+		filestate.LogicalFileAborted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert aborted logical_file: %v", err)
+	}
+
+	insertChunk := func(hash string) int64 {
+		t.Helper()
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+			 VALUES ($1, $2, $3, $4)
+			 RETURNING id`,
+			hash,
+			int64(len(payload) / 2),
+			filestate.ChunkCompleted,
+			1,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk %s: %v", hash, err)
+		}
+		return chunkID
+	}
+
+	chunkA := insertChunk("retry-reclaim-chunk-a")
+	chunkB := insertChunk("retry-reclaim-chunk-b")
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkA, 0)
+	insertReusableTestFileChunk(t, dbconn, fileID, chunkB, 1)
+
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	claimedID, claimedStatus, err := claimLogicalFileWithContext(ctx, dbconn, fileInfo, fileHash, tmp)
+	if err != nil {
+		t.Fatalf("claim logical file for retry: %v", err)
+	}
+	if claimedID != fileID {
+		t.Fatalf("expected claimed logical file %d, got %d", fileID, claimedID)
+	}
+	if claimedStatus != filestate.LogicalFileProcessing {
+		t.Fatalf("expected claimed status PROCESSING, got %s", claimedStatus)
+	}
+
+	var mappingCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&mappingCount); err != nil {
+		t.Fatalf("count stale file_chunk rows after reclaim: %v", err)
+	}
+	if mappingCount != 0 {
+		t.Fatalf("expected stale file_chunk rows to be removed before retry, got %d", mappingCount)
+	}
+
+	for _, chunkID := range []int64{chunkA, chunkB} {
+		var refCount int64
+		if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&refCount); err != nil {
+			t.Fatalf("read live_ref_count for chunk %d: %v", chunkID, err)
+		}
+		if refCount != 0 {
+			t.Fatalf("expected live_ref_count=0 for chunk %d after reclaim cleanup, got %d", chunkID, refCount)
+		}
+	}
+}
+
 func TestMarkLogicalFileForReuseValidationFailureMarksEachChunkSuspiciousOnce(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

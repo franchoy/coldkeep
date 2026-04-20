@@ -13094,6 +13094,52 @@ func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
 		t.Fatalf("expected contiguous linked chunk orders despite finalization failure: min=%d max=%d count=%d", minOrder, maxOrder, linkedCount)
 	}
 
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_logical_complete_trg ON logical_file`); err != nil {
+		t.Fatalf("drop logical completion trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_logical_complete()`); err != nil {
+		t.Fatalf("drop logical completion trigger function: %v", err)
+	}
+
+	retryCtx := testutils.NewTestContext(dbconn)
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(retryCtx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("retry store after final completion failure: %v", err)
+	}
+	if result.FileID != fileID {
+		t.Fatalf("expected retry to reclaim logical file %d, got %d", fileID, result.FileID)
+	}
+
+	var refreshedStatus string
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&refreshedStatus); err != nil {
+		t.Fatalf("query logical_file status after retry: %v", err)
+	}
+	if refreshedStatus != filestate.LogicalFileCompleted {
+		t.Fatalf("expected logical_file to be COMPLETED after retry, got %q", refreshedStatus)
+	}
+
+	var staleMappings int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&staleMappings); err != nil {
+		t.Fatalf("count file_chunk rows after retry: %v", err)
+	}
+	if staleMappings != linkedCount {
+		t.Fatalf("expected retry to rebuild a clean chunk graph with %d rows, got %d", linkedCount, staleMappings)
+	}
+
+	outDir := filepath.Join(tmp, "retry-out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir retry output dir: %v", err)
+	}
+	outPath := filepath.Join(outDir, "retried.bin")
+	restoreCtx := testutils.NewTestContext(dbconn)
+	if err := storage.RestoreFileWithStorageContext(restoreCtx, fileID, outPath); err != nil {
+		t.Fatalf("restore after retry: %v", err)
+	}
+	restoredHash := testutils.SHA256File(t, outPath)
+	if restoredHash != fileHash {
+		t.Fatalf("restored file hash mismatch after retry: want %s got %s", fileHash, restoredHash)
+	}
+
 	var nonCompletedRefs int
 	if err := dbconn.QueryRow(`
 		SELECT COUNT(*)

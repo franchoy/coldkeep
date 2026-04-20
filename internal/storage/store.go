@@ -260,6 +260,70 @@ type reusableCompletedChunkSummary struct {
 	quarantinedContainerRows int64
 }
 
+func cleanupLogicalFileChunkMappingsWithContext(ctx context.Context, tx *sql.Tx, fileID int64, markChunksSuspicious bool) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	)
+	if err != nil {
+		return fmt.Errorf("query stale file_chunk rows for logical file %d: %w", fileID, err)
+	}
+	var chunkIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan stale chunk id for logical file %d: %w", fileID, err)
+		}
+		chunkIDs = append(chunkIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close stale file_chunk cursor for logical file %d: %w", fileID, err)
+	}
+
+	for _, chunkID := range chunkIDs {
+		var remaining int64
+		err := tx.QueryRowContext(ctx,
+			`UPDATE chunk
+			 SET live_ref_count = live_ref_count - 1
+			 WHERE id = $1 AND live_ref_count > 0
+			 RETURNING live_ref_count`,
+			chunkID,
+		).Scan(&remaining)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("decrement live_ref_count for chunk %d (logical file %d): %w", chunkID, fileID, err)
+		}
+	}
+
+	if markChunksSuspicious {
+		seenChunkIDs := make(map[int64]struct{}, len(chunkIDs))
+		for _, chunkID := range chunkIDs {
+			if _, ok := seenChunkIDs[chunkID]; ok {
+				continue
+			}
+			seenChunkIDs[chunkID] = struct{}{}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE chunk SET retry_count = retry_count + 1 WHERE id = $1`,
+				chunkID,
+			); err != nil {
+				return fmt.Errorf("mark chunk %d suspicious during logical file %d rebuild: %w", chunkID, fileID, err)
+			}
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM file_chunk WHERE logical_file_id = $1`,
+		fileID,
+	); err != nil {
+		return fmt.Errorf("delete stale file_chunk rows for logical file %d: %w", fileID, err)
+	}
+
+	return nil
+}
+
 func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64, containersDir string) error {
 	var summary reusableCompletedChunkSummary
 	err := dbconn.QueryRowContext(ctx, `
@@ -738,79 +802,22 @@ func markLogicalFileForRebuildWithPolicyWithContext(ctx context.Context, dbconn 
 		return fmt.Errorf("rows affected while marking logical file %d for rebuild: %w", fileID, err)
 	}
 	if rowsAffected == 0 {
-		// Another goroutine already transitioned this row; nothing left to do.
-		txclosed = true
-		return tx.Rollback()
-	}
-
-	// Collect chunk IDs referenced by stale file_chunk mappings so we can
-	// decrement their live_ref_count before removing the mappings.
-	rows, err := tx.QueryContext(ctx,
-		`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1`,
-		fileID,
-	)
-	if err != nil {
-		return fmt.Errorf("query stale file_chunk rows for logical file %d: %w", fileID, err)
-	}
-	var chunkIDs []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan stale chunk id for logical file %d: %w", fileID, err)
-		}
-		chunkIDs = append(chunkIDs, id)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close stale file_chunk cursor for logical file %d: %w", fileID, err)
-	}
-
-	// Decrement live_ref_count for every stale mapping.  We guard against
-	// going below zero (which the DB schema CHECK constraint would reject anyway)
-	// by only decrementing when live_ref_count > 0.
-	for _, chunkID := range chunkIDs {
-		var remaining int64
-		err := tx.QueryRowContext(ctx,
-			`UPDATE chunk
-			 SET live_ref_count = live_ref_count - 1
-			 WHERE id = $1 AND live_ref_count > 0
-			 RETURNING live_ref_count`,
-			chunkID,
-		).Scan(&remaining)
-		if err == sql.ErrNoRows {
-			// live_ref_count was already 0; inconsistent but non-fatal here –
-			// the mapping is being removed regardless.
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("decrement live_ref_count for chunk %d (logical file %d): %w", chunkID, fileID, err)
-		}
-	}
-
-	if markChunksSuspicious {
-		// Mark implicated chunks as suspicious so future reuse in suspicious mode
-		// performs semantic validation rather than trusting stale completion state.
-		seenChunkIDs := make(map[int64]struct{}, len(chunkIDs))
-		for _, chunkID := range chunkIDs {
-			if _, ok := seenChunkIDs[chunkID]; ok {
-				continue
+		var currentStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM logical_file WHERE id = $1`, fileID).Scan(&currentStatus); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("logical file %d does not exist", fileID)
 			}
-			seenChunkIDs[chunkID] = struct{}{}
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE chunk SET retry_count = retry_count + 1 WHERE id = $1`,
-				chunkID,
-			); err != nil {
-				return fmt.Errorf("mark chunk %d suspicious during logical file %d rebuild: %w", chunkID, fileID, err)
-			}
+			return fmt.Errorf("read logical file %d status during rebuild reset: %w", fileID, err)
+		}
+		if currentStatus != filestate.LogicalFileAborted {
+			// Another goroutine already transitioned this row; nothing left to do.
+			txclosed = true
+			return tx.Rollback()
 		}
 	}
 
-	// Remove all stale file_chunk mappings for this logical file.
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM file_chunk WHERE logical_file_id = $1`,
-		fileID,
-	); err != nil {
-		return fmt.Errorf("delete stale file_chunk rows for logical file %d: %w", fileID, err)
+	if err := cleanupLogicalFileChunkMappingsWithContext(ctx, tx, fileID, markChunksSuspicious); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -935,15 +942,23 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 					_ = tx2.Rollback()
 					return 0, "", rowsErr
 				}
-				if commitErr := tx2.Commit(); commitErr != nil {
-					_ = tx2.Rollback()
-					return 0, "", commitErr
-				}
 
 				if rowsAffected == 1 {
+					if cleanupErr := cleanupLogicalFileChunkMappingsWithContext(ctx, tx2, existingID, false); cleanupErr != nil {
+						_ = tx2.Rollback()
+						return 0, "", cleanupErr
+					}
+					if commitErr := tx2.Commit(); commitErr != nil {
+						_ = tx2.Rollback()
+						return 0, "", commitErr
+					}
 					fileID = existingID
 					filestatus = filestate.LogicalFileProcessing
 					break
+				}
+
+				if rollbackErr := tx2.Rollback(); rollbackErr != nil {
+					return 0, "", rollbackErr
 				}
 
 				var latestStatus string
