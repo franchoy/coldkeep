@@ -2013,29 +2013,29 @@ func formatDoctorTextReport(report doctorReport) string {
 
 	var b strings.Builder
 	b.WriteString("Doctor health report\n")
-	b.WriteString(fmt.Sprintf("  Overall status:      %s\n", overallStatus))
-	b.WriteString(fmt.Sprintf("  Verify level:        %s\n", report.VerifyLevel))
-	b.WriteString(fmt.Sprintf("  Phase 1 - Recovery:  %s\n", report.RecoveryStatus))
-	b.WriteString(fmt.Sprintf("  Phase 2 - Verify:    %s\n", report.VerifyStatus))
+	_, _ = fmt.Fprintf(&b, "  Overall status:      %s\n", overallStatus)
+	_, _ = fmt.Fprintf(&b, "  Verify level:        %s\n", report.VerifyLevel)
+	_, _ = fmt.Fprintf(&b, "  Phase 1 - Recovery:  %s\n", report.RecoveryStatus)
+	_, _ = fmt.Fprintf(&b, "  Phase 2 - Verify:    %s\n", report.VerifyStatus)
 	if report.SchemaStatus == "ok" {
-		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s (version=%d)\n", report.SchemaStatus, report.SchemaVersion))
+		_, _ = fmt.Fprintf(&b, "  Phase 3 - Schema:    %s (version=%d)\n", report.SchemaStatus, report.SchemaVersion)
 	} else {
-		b.WriteString(fmt.Sprintf("  Phase 3 - Schema:    %s\n", report.SchemaStatus))
+		_, _ = fmt.Fprintf(&b, "  Phase 3 - Schema:    %s\n", report.SchemaStatus)
 	}
 	b.WriteString("  Note: Recovery phase may have modified metadata\n")
-	b.WriteString(fmt.Sprintf("  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
+	_, _ = fmt.Fprintf(&b, "  Recovery summary: aborted_logical_files=%d aborted_chunks=%d quarantined_missing_containers=%d quarantined_corrupt_tail_containers=%d quarantined_orphan_containers=%d\n",
 		report.Recovery.AbortedLogicalFiles,
 		report.Recovery.AbortedChunks,
 		report.Recovery.QuarantinedMissing,
 		report.Recovery.QuarantinedCorruptTail,
 		report.Recovery.QuarantinedOrphan,
-	))
-	b.WriteString(fmt.Sprintf("  Physical mapping integrity: orphan_physical_file_rows=%d logical_ref_count_mismatches=%d negative_logical_ref_count_rows=%d\n",
+	)
+	_, _ = fmt.Fprintf(&b, "  Physical mapping integrity: orphan_physical_file_rows=%d logical_ref_count_mismatches=%d negative_logical_ref_count_rows=%d\n",
 		report.physicalAudit.OrphanPhysicalFileRows,
 		report.physicalAudit.LogicalRefCountMismatches,
 		report.physicalAudit.NegativeLogicalRefCounts,
-	))
-	b.WriteString(fmt.Sprintf("  Snapshot retention integrity: snapshot_file_rows=%d snapshot_referenced_logical_files=%d snapshot_only_logical_files=%d shared_logical_files=%d orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d\n",
+	)
+	_, _ = fmt.Fprintf(&b, "  Snapshot retention integrity: snapshot_file_rows=%d snapshot_referenced_logical_files=%d snapshot_only_logical_files=%d shared_logical_files=%d orphan_snapshot_logical_refs=%d invalid_snapshot_lifecycle_states=%d retained_missing_chunk_graph=%d\n",
 		report.snapshotAudit.SnapshotFileRows,
 		report.snapshotAudit.SnapshotReferencedLogicalFiles,
 		report.snapshotAudit.SnapshotOnlyLogicalFiles,
@@ -2043,8 +2043,8 @@ func formatDoctorTextReport(report doctorReport) string {
 		report.snapshotAudit.OrphanSnapshotLogicalRefs,
 		report.snapshotAudit.InvalidSnapshotLifecycleStates,
 		report.snapshotAudit.RetainedMissingChunkGraph,
-	))
-	b.WriteString(fmt.Sprintf("  Recommended next step: %s\n", recommendedNextStep))
+	)
+	_, _ = fmt.Fprintf(&b, "  Recommended next step: %s\n", recommendedNextStep)
 
 	return b.String()
 }
