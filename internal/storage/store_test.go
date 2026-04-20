@@ -1318,7 +1318,7 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 			 VALUES ($1, $2, $3, $4)
 			 RETURNING id`,
 			hash,
-			int64(len(payload) / 2),
+			int64(len(payload)/2),
 			filestate.ChunkCompleted,
 			1,
 		).Scan(&chunkID); err != nil {
