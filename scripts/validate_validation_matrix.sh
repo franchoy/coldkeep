@@ -62,7 +62,7 @@ require_readme_guarantee_bullet '- GC is reference-safe: no reachable chunk is e
 require_readme_guarantee_bullet '- Atomic restore replacement (within single-node local filesystem semantics)'
 require_readme_guarantee_bullet '- Safe in-process concurrent storage operations'
 
-require_pattern "$MATRIX_FILE" '^# v1\.0 Validation Matrix$' 'matrix title'
+require_pattern "$MATRIX_FILE" '^# (v1\.0 )?Validation Matrix$' 'matrix title (legacy or current style)'
 require_pattern "$MATRIX_FILE" '^## Scope$' 'scope section'
 require_pattern "$MATRIX_FILE" '^## Guarantees to Evidence$' 'guarantees-to-evidence section'
 require_pattern "$MATRIX_FILE" '^| G1 |' 'G1: deterministic restore row'
