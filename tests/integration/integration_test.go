@@ -6611,7 +6611,7 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 	}
 }
 
-func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
+func TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
@@ -6634,6 +6634,7 @@ func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
 	if err := os.WriteFile(orphanPath, orphanBytes, 0o644); err != nil {
 		t.Fatalf("write orphan file: %v", err)
 	}
+	expectedSize := int64(len(orphanBytes))
 
 	if _, err := dbconn.Exec(
 		`INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3)`,
@@ -6644,8 +6645,29 @@ func TestStartupRecoveryFailsOnSuspiciousOrphanConflictState(t *testing.T) {
 		t.Fatalf("insert preexisting mismatched quarantine row: %v", err)
 	}
 
-	_, err = recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
-	testutils.AssertErrorContains(t, err, "suspicious orphan container conflict", "startup recovery suspicious orphan conflict")
+	report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	if err != nil {
+		t.Fatalf("expected strict recovery to resync preexisting quarantine row, got: %v", err)
+	}
+	if report.QuarantinedOrphan != 0 {
+		t.Fatalf("expected no new orphan quarantine rows, got %d", report.QuarantinedOrphan)
+	}
+
+	var isQuarantined bool
+	var currentSize int64
+	var maxSize int64
+	if err := dbconn.QueryRow(
+		`SELECT quarantine, current_size, max_size FROM container WHERE filename = $1`,
+		orphanFilename,
+	).Scan(&isQuarantined, &currentSize, &maxSize); err != nil {
+		t.Fatalf("query resynced quarantine row: %v", err)
+	}
+	if !isQuarantined {
+		t.Fatalf("expected preexisting orphan row to remain quarantined")
+	}
+	if currentSize != expectedSize || maxSize != expectedSize {
+		t.Fatalf("expected quarantine row sizes to resync to physical size %d, got current=%d max=%d", expectedSize, currentSize, maxSize)
+	}
 }
 
 func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T) {
@@ -6724,6 +6746,7 @@ func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *tes
 	if err := os.WriteFile(orphanPath, orphanBytes, 0o644); err != nil {
 		t.Fatalf("write orphan file: %v", err)
 	}
+	expectedSize := int64(len(orphanBytes))
 
 	if _, err := dbconn.Exec(
 		`INSERT INTO container (filename, quarantine, current_size, max_size) VALUES ($1, TRUE, $2, $3)`,
@@ -6737,6 +6760,18 @@ func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *tes
 	_, err = recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
 	if err != nil {
 		t.Fatalf("expected non-strict recovery to continue, got: %v", err)
+	}
+
+	var currentSize int64
+	var maxSize int64
+	if err := dbconn.QueryRow(
+		`SELECT current_size, max_size FROM container WHERE filename = $1`,
+		orphanFilename,
+	).Scan(&currentSize, &maxSize); err != nil {
+		t.Fatalf("query non-strict resynced quarantine row: %v", err)
+	}
+	if currentSize != expectedSize || maxSize != expectedSize {
+		t.Fatalf("expected non-strict recovery to resync quarantine row sizes to %d, got current=%d max=%d", expectedSize, currentSize, maxSize)
 	}
 }
 
@@ -9616,8 +9651,8 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 	if afterStat.Size() <= beforeStat.Size() {
 		t.Fatalf("expected physical append to persist before rollback failure (Size %d -> %d)", beforeStat.Size(), afterStat.Size())
 	}
-	if afterStat.Size() <= dbSizeAfter || dbSizeAfter != dbSizeBefore {
-		t.Fatalf("expected quarantined container to show physical/db mismatch after failed rollback (physical=%d db_before=%d db_after=%d)", afterStat.Size(), dbSizeBefore, dbSizeAfter)
+	if dbSizeAfter != afterStat.Size() || dbSizeAfter <= dbSizeBefore {
+		t.Fatalf("expected quarantined container metadata to resync to physical size after failed rollback (physical=%d db_before=%d db_after=%d)", afterStat.Size(), dbSizeBefore, dbSizeAfter)
 	}
 }
 
