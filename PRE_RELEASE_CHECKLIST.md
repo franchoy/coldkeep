@@ -9,6 +9,10 @@ Audience:
 
 If you only need day-to-day contributor setup, start with `README.md` and `CONTRIBUTING.md` instead. This document is intentionally heavier and more exhaustive.
 
+Newcomer rule of thumb: if you are not preparing a release, a release candidate,
+or a broad correctness-sensitive validation pass, this is probably not the first
+document you want.
+
 Execution model (step-by-step):
 
 - Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.

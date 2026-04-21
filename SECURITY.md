@@ -25,6 +25,10 @@ Security posture summary:
 The security model described below reflects current capabilities,
 assumptions, and limits.
 
+Read this document when you need the security boundary, threat model, or
+deployment caveats. For setup and normal operation, start with
+[README.md](README.md) instead.
+
 ------------------------------------------------------------------------
 
 ## Threat Model

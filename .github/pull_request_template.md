@@ -5,6 +5,10 @@ scope: short summary
 Use this template fully for release-sensitive or correctness-sensitive PRs.
 If a section is not relevant, mark it `N/A` rather than deleting reviewer context silently.
 
+If this is your first small PR and it does not change correctness-sensitive
+behavior, a shorter PR description is fine, but keep the validation evidence
+section explicit.
+
 ## Summary
 
 Describe the release-facing changes introduced in this PR.

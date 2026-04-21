@@ -138,6 +138,9 @@ Not a fit (v1.x scope):
 
 A small samples directory is included for local testing.
 
+If you only want the fastest successful first run, use the Local (no Docker)
+path below, then come back to the later sections as needed.
+
 ### Local (no Docker)
 
 ```bash

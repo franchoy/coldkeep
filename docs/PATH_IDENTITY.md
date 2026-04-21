@@ -7,6 +7,9 @@ the `physical_file` layer. Snapshot query/path behavior is documented separately
 in `README.md` because snapshots use slash-normalized stored paths rather than
 host filesystem identity.
 
+Read this only if your change touches stored paths, restore-by-path behavior, or
+filesystem identity rules. Most users do not need it for basic operation.
+
 ## Rules
 
 1. Paths are canonicalized structurally using:

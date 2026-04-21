@@ -9,6 +9,9 @@ Use it as the detailed companion to `README.md`:
 - use this document when you need to answer "how do we know this guarantee is enforced?"
 - use `PRE_RELEASE_CHECKLIST.md` when you need to execute the release gate locally
 
+This file is intentionally dense. If you are brand new, skim the guarantee names
+first and only drill into evidence rows relevant to the behavior you are changing.
+
 ## Guarantee ID Stability
 
 Guarantee IDs (G1–G17+) are part of the public validation contract.

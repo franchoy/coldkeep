@@ -29,6 +29,9 @@ If you are new to coldkeep, read docs in this order:
 
 This order minimizes cognitive load while preserving full access to the correctness model.
 
+If you only have 10-15 minutes, stop after steps 1-2, build the binary, and run
+one command such as `./coldkeep doctor` before reading the deeper release docs.
+
 ------------------------------------------------------------------------
 
 ## Project Philosophy

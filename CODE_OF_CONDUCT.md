@@ -21,6 +21,10 @@ regardless of:
 We are committed to fostering an open, welcoming, and respectful
 community.
 
+If you are new here, the short version is simple: be respectful, assume good
+intent when possible, and avoid turning technical disagreement into personal
+conflict.
+
 ------------------------------------------------------------------------
 
 ## Our Standards
@@ -89,4 +93,4 @@ maintaining a respectful and constructive environment.
 This Code of Conduct is adapted from the Contributor Covenant, version
 2.1:
 
-https://www.contributor-covenant.org/version/2/1/code_of_conduct/
+[Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)

@@ -14,6 +14,9 @@ For the current operator-facing contract, see [README.md](README.md).
 For guarantee-to-evidence mapping, see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
 For release-gate execution, see [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md).
 
+Use this file for milestone history and release deltas. If you are new to the
+project, do not start here; start with [README.md](README.md).
+
 ------------------------------------------------------------------------
 
 ## [1.4.0] - 2026-04-19
