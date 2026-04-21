@@ -57,7 +57,7 @@ captures immutable point-in-time views, protects snapshot-retained content from
 GC deletion, and audits persisted snapshot reachability as part of standard
 verification and health reporting.
 
-### Added
+### Added (1.3.0)
 
 - **`snapshot` and `snapshot_file` tables** — new schema objects (schema version 7) for immutable point-in-time captures
 - **`snapshot create [--id ID] [--label LABEL] [--from PARENT_ID] [paths…]`** — full snapshot (all current files) or partial (filtered paths/prefixes); `--from` stores lineage metadata only and is currently full-to-full only
@@ -127,7 +127,7 @@ v1.2 establishes physical-graph coherence: the system now knows and audits
 *where* each logical file lives, can repair drifted reference counts explicitly,
 and refuses GC when the physical root graph is inconsistent.
 
-### Added
+### Added (1.2.0)
 
 - **`physical_file` table** — new schema object (schema version 6) that maps each
   current-state filesystem path to its owning `logical_file`. Managed by the
@@ -175,7 +175,7 @@ and refuses GC when the physical root graph is inconsistent.
 - Schema migration to version 6 (`physical_file` table, index on
   `physical_file(logical_file_id)`).
 
-### Changed
+### Changed (1.2.0)
 
 - `list --output json` and `search --output json` now include `stored_path` per
   file entry when a physical mapping exists.
@@ -188,7 +188,7 @@ and refuses GC when the physical root graph is inconsistent.
   `skipped`, `planned` (per-item). Exit `0` when no item fails, `1` when any
   item fails, `2` for pre-execution usage/validation errors.
 
-### Fixed
+### Fixed (1.2.0)
 
 - `strings.TrimLeft` path separator cutset in `restore.go` corrected to handle
   both `/` and `\` reliably.
@@ -202,7 +202,7 @@ and refuses GC when the physical root graph is inconsistent.
 - Dry-run support for `remove --stored-path` is deferred beyond v1.2 (rationale
   documented in [ARCHITECTURE.md](ARCHITECTURE.md) under "Dry-run Support").
 
-### Notes
+### Notes (1.2.0)
 
 - `remove --stored-path` unlinks one physical mapping at a time; the logical
   file and its data remain restorable as long as any physical mapping still
@@ -214,7 +214,7 @@ and refuses GC when the physical root graph is inconsistent.
   `repair ref-counts` is the only write-path for fixing drift.
 - On-disk format and internal structures may evolve in future versions.
 
-### Guarantees
+### Guarantees (1.2.0)
 
 - Introduces G10: physical graph audit (orphan/ref-count coherence in `verify system`)
 - Introduces G11: audited GC root gate (pre-flight refusal on drifted graph)
@@ -234,7 +234,7 @@ This release introduces a unified batch execution layer for `restore` and
 `remove`, focused on deterministic behavior, structured observability, and
 correctness under real-world mixed-input scenarios.
 
-### Added
+### Added (1.1.0)
 
 - Multi-target support for `restore` and `remove` commands (multiple IDs in a
   single invocation)
@@ -250,7 +250,7 @@ correctness under real-world mixed-input scenarios.
   including mixed input, duplicate handling, ordering guarantees, and dry-run
   parity
 
-### Changed
+### Changed (1.1.0)
 
 - Unified CLI → batch → reporting pipeline so all inputs (valid, invalid,
   duplicates) are processed through a single deterministic execution model
@@ -272,7 +272,7 @@ correctness under real-world mixed-input scenarios.
 - Exit-code behavior aligned with batch semantics: non-zero exit when any item
   fails while still emitting full structured results
 
-### Notes
+### Notes (1.1.0)
 
 - Batch operations are best-effort by default: failures do not prevent execution
   of other valid targets unless `--fail-fast` is used
@@ -282,7 +282,7 @@ correctness under real-world mixed-input scenarios.
   (G9): deterministic orchestration, machine-readable contract stability, and
   automation-safe partial-failure behavior
 
-### Guarantees
+### Guarantees (1.1.0)
 
 - Introduces G9: interface correctness for batch CLI orchestration
 
@@ -300,7 +300,7 @@ v1.0 consolidates the guarantees defined in v0.9 and validated in v0.10,
 establishing coldkeep as a correctness-first storage engine with deterministic
 restore, verifiable integrity, and safe garbage collection.
 
-### Added
+### Added (1.0.0)
 
 - Formalized v1.0 trust model consolidating:
   - storage correctness guarantees
@@ -309,14 +309,14 @@ restore, verifiable integrity, and safe garbage collection.
 - Established `doctor` as the primary operator-facing health and recovery command
 - Defined CLI behavior and output contracts as stable for v1.x evolution
 
-### Changed
+### Changed (1.0.0)
 
 - Promoted validation and adversarial testing results (v0.10) to baseline
   correctness guarantees
 - Frozen CLI surface and operational semantics as a v1.0 contract
 - Clarified system trust boundaries and non-goals for the v1.x line
 
-### Notes
+### Notes (1.0.0)
 
 - v1.0 defines a correctness and operational baseline, not long-term
   compatibility guarantees
@@ -374,7 +374,7 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `SELECT ... FOR UPDATE` to plain `SELECT` when the dialect does not support
   row-lock syntax
 
-### Added
+### Added (0.10.0)
 
 - Added integration coverage for non-strict startup recovery on suspicious
   orphan-container conflicts (`COLDKEEP_STRICT_RECOVERY=false`)
@@ -388,7 +388,7 @@ eliminate remaining correctness risks before the v1.0 milestone.
   `TestStoreRemoveGCRestartStoreConvergesChunkGraph` to assert store/remove/GC/
   restart cycles converge to a stable chunk graph and restorable output
 
-### Changed
+### Changed (0.10.0)
 
 - Clarified verification operational contract as a recovered-state checker,
   not a live online-consistency checker during in-flight writes
@@ -549,7 +549,8 @@ strengthening the CI gate that enforces storage correctness guarantees.
 It also formalizes the v0.9 storage guarantees model so operators and automation
 can reason explicitly about validity, restore safety, and recovery behavior.
 
-### Added
+### Added (0.9.0)
+
 - Added a formal v0.9 storage guarantees definition in project documentation
 - Defined explicit validity rules for restorable logical files (`COMPLETED`
   lifecycle and readable referenced blocks)
@@ -559,7 +560,8 @@ can reason explicitly about validity, restore safety, and recovery behavior.
 - Documented explicit v0.9 non-guarantees (format compatibility and
   multi-node/distributed consistency are not guaranteed pre-v1)
 
-### Changed
+### Changed (0.9.0)
+
 - Hardened GitHub Actions CI with workflow concurrency cancellation and job timeouts
 - Extended CI execution to release-style tags matching `v*`
 - Upgraded integration correctness runs to use the Go race detector
@@ -572,7 +574,8 @@ can reason explicitly about validity, restore safety, and recovery behavior.
 - Clarified and tightened user-facing behavior expectations for data integrity,
   crash recovery, concurrency, and verification semantics
 
-### Notes
+### Notes (0.9.0)
+
 - The repository now exposes a single aggregate status check, `CI Required Gate`,
   intended to be configured as the mandatory required check in GitHub.
 - GitHub branch protection and tag protection remain repository settings; they
@@ -592,7 +595,8 @@ and more predictable to automate. It introduces dry-run simulation, structured
 JSON output for CLI commands, richer operation result models, and stronger
 verification and integration coverage.
 
-### Added
+### Added (0.8.0)
+
 - `simulate store` and `simulate store-folder` commands
 - Simulated storage backend for dry-run ingestion without writing container data
 - Structured JSON output mode for CLI commands via `--output json`
@@ -611,7 +615,8 @@ verification and integration coverage.
   - shared-chunk safety
   - startup recovery behavior
 
-### Changed
+### Changed (0.8.0)
+
 - Stabilized CLI command behavior and output handling
 - Improved exit-code classification using typed CLI errors
 - Refined simulation reporting to reflect realistic container usage
@@ -623,7 +628,8 @@ verification and integration coverage.
 - Improved retry handling around already-existing block metadata during chunk store
 - Improved search filter validation at CLI level for numeric size arguments
 
-### Fixed
+### Fixed (0.8.0)
+
 - Fixed restore path to use explicit read-only container access
 - Fixed several CLI usage/error paths to classify correctly as usage failures
 - Fixed simulation command argument handling and error reporting
@@ -631,7 +637,8 @@ verification and integration coverage.
 - Fixed container counting in simulation output to better match completed stored data
 - Fixed fragile retry behavior that previously depended on string-matching some storage errors
 
-### Notes
+### Notes (0.8.0)
+
 - `simulate` reuses the real chunking, block encoding, and metadata pipeline, but
   does not persist container payloads to physical storage.
 - coldkeep remains an experimental project and is not production ready.
@@ -648,7 +655,7 @@ This release introduces a major evolution of the storage engine by decoupling
 logical data (chunks) from physical storage (blocks), and adding a pluggable
 encoding layer with support for encryption.
 
-### Added
+### Added (0.7.0)
 
 - Block abstraction layer separating logical chunks from physical storage
 - New `blocks` table storing codec, offsets, sizes, and encryption metadata
@@ -661,7 +668,7 @@ encoding layer with support for encryption.
 - Dual-mode CI testing (plain + encrypted storage paths)
 - Improved CLI structure and help output
 
-### Changed
+### Changed (0.7.0)
 
 - Storage engine now writes encoded blocks instead of raw chunk records
 - Restore pipeline now decodes blocks before reconstructing files
@@ -670,20 +677,20 @@ encoding layer with support for encryption.
 - Garbage collection operates on blocks and uses `live_ref_count OR pin_count` as deletion invariant
 - CLI command handling refactored for extensibility and clarity
 
-### Removed
+### Removed (0.7.0)
 
 - Legacy chunk physical fields (`chunk.container_id`, `chunk.chunk_offset`)
 - Chunk record header format (`ChunkRecordHeaderSize` and related logic)
 - Direct chunk-to-container storage model
 
-### Security
+### Security (0.7.0)
 
 - Data at rest can now be encrypted using AES-GCM
 - Encryption keys are externalized via environment variables (not stored in DB or repo)
 - `.env` files are created with restricted permissions (0600)
 - Fail-fast behavior when encryption is requested but no key is provided
 
-### Notes
+### Notes (0.7.0)
 
 - This is a foundational release for future features such as key rotation,
   multi-key support, and advanced encoding strategies.
@@ -697,29 +704,29 @@ encoding layer with support for encryption.
 
 Storage model evolution and container API redesign.
 
-### Added
+### Added (0.6.0)
 
-* New container abstraction with Append / ReadAt / Sync / Close API
-* Container sealing with full-file hash verification
-* Multi-layer verification system (standard, full, deep)
-* Stress tests for concurrency, retries, and rotation
+- New container abstraction with Append / ReadAt / Sync / Close API
+- Container sealing with full-file hash verification
+- Multi-layer verification system (standard, full, deep)
+- Stress tests for concurrency, retries, and rotation
 
-### Changed
+### Changed (0.6.0)
 
-* Refactored storage pipeline to use container interface
-* Simplified container header format
-* Improved concurrency handling with row-level locking and retry logic
-* Container rotation behavior under concurrent workloads
+- Refactored storage pipeline to use container interface
+- Simplified container header format
+- Improved concurrency handling with row-level locking and retry logic
+- Container rotation behavior under concurrent workloads
 
-### Removed
+### Removed (0.6.0)
 
-* Whole-container compression flag
-* Whole-container encryption flag
+- Whole-container compression flag
+- Whole-container encryption flag
 
-### Notes
+### Notes (0.6.0)
 
-* On-disk format is still evolving and may change before v1.0
-* Container size limit is enforced on a best-effort basis under concurrency
+- On-disk format is still evolving and may change before v1.0
+- Container size limit is enforced on a best-effort basis under concurrency
 
 ------------------------------------------------------------------------
 
@@ -727,7 +734,7 @@ Storage model evolution and container API redesign.
 
 Deterministic restore guarantees for stored files and dataset-level workflows.
 
-### Added
+### Added (0.5.0)
 
 - End-to-end integration tests using real fixture datasets:
   - `samples`
@@ -741,7 +748,7 @@ Deterministic restore guarantees for stored files and dataset-level workflows.
   - restore all stored logical files
   - hash comparison against original inputs
 
-### Scope
+### Scope (0.5.0)
 
 - This release validates deterministic restore at the logical-file level:
   - stable stored logical files under deduplication
@@ -751,7 +758,7 @@ Deterministic restore guarantees for stored files and dataset-level workflows.
 - It does **not** yet define a first-class “restore folder tree layout exactly”
   contract, as current tests restore logical files individually.
 
-### Notes
+### Notes (0.5.0)
 
 - Whole-container compression remains readable for backward compatibility,
   but is no longer used for new writes.
@@ -775,7 +782,7 @@ The system is designed in three verification levels:
 - Full: metadata + container structure and hash validation
 - Deep: full physical verification by reading container data and recomputing chunk hashes
 
-### Added
+### Added (0.4.0)
 
 - `verify system` command with three verification levels (standard, full, deep)
 - `verify file <id>` command with per-file verification (standard, full, deep)
@@ -784,13 +791,13 @@ The system is designed in three verification levels:
 - Container-wide integrity verification across all sealed containers
 - Comprehensive integration tests for verification (positive and corruption scenarios)
 
-### Improved
+### Improved (0.4.0)
 
 - Verification coverage across file, chunk, and container layers
 - Error reporting with aggregated verification failures
 - Internal consistency checks for chunk offsets, sizes, and container bounds
 
-### Notes
+### Notes (0.4.0)
 
 - Deep verification performs full disk reads and may be slow on large datasets
 - Whole-container compression is still present but will be removed in a future release in favor of block-level compression
@@ -804,7 +811,7 @@ The on-disk format may change before v1.0.
 
 Safe garbage collection foundation.
 
-### Added
+### Added (0.3.0)
 
 - Repository verification command (`coldkeep verify`)
 - Verification levels: standard, full, deep
@@ -813,13 +820,13 @@ Safe garbage collection foundation.
 - Chunk offset validation
 - Deep data verification (hash validation)
 
-### Improved
+### Improved (0.3.0)
 
 - Garbage collection safety via transactional re-checks
 - Advisory lock preventing concurrent GC runs
 - `gc --dry-run` simulation mode
 
-### Testing
+### Testing (0.3.0)
 
 - Integration tests for GC safety
 - Verification corruption detection tests
@@ -830,7 +837,7 @@ Safe garbage collection foundation.
 
 Crash-consistency foundation for the storage engine
 
-### Added
+### Added (0.2.0)
 
 - Logical file lifecycle management
 - Chunk lifecycle management
@@ -841,20 +848,20 @@ Crash-consistency foundation for the storage engine
 - Smoke test improvements
 - Durable container writes with fsync to guarantee on-disk persistence
 
-### Improved
+### Improved (0.2.0)
 
 - Concurrent file ingestion
 - Garbage collection safety
 - Operational observability
 
-### Notes
+### Notes (0.2.0)
 
 This version introduces the core reliability model for the storage
 engine.
 
 The on-disk format and APIs may still change in future releases.
 
-### Known Limitations
+### Known Limitations (0.2.0)
 
 - Basic crash recovery exists, but full end-to-end crash consistency across
   filesystem and database layers is still evolving.
@@ -873,7 +880,7 @@ The on-disk format and APIs may still change in future releases.
 
 Initial public research prototype (POC).
 
-### Added
+### Added (0.1.0)
 
 - Content-addressed chunking using SHA-256
 - File-level SHA-256 deduplication guard
@@ -898,14 +905,14 @@ Initial public research prototype (POC).
   - CODE_OF_CONDUCT.md
   - README.md
 
-### Design Characteristics
+### Design Characteristics (0.1.0)
 
 - Per-file transactional metadata
 - `SELECT ... FOR UPDATE SKIP LOCKED` container selection
 - Deterministic chunk ordering for restore correctness
 - Chunk-level and full-file integrity verification on restore
 
-### Known Limitations
+### Known Limitations (0.1.0)
 
 - Not crash-consistent; filesystem and database state may diverge on
     failure.
