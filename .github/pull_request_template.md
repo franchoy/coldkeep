@@ -1,6 +1,9 @@
 # Title
 
-v1.4: Snapshot clarity, recovery hardening, and release-readiness
+scope: short summary
+
+Use this template fully for release-sensitive or correctness-sensitive PRs.
+If a section is not relevant, mark it `N/A` rather than deleting reviewer context silently.
 
 ## Summary
 

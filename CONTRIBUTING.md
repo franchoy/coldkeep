@@ -4,10 +4,13 @@ Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.
 
-The project currently has two explicit correctness layers:
+The project currently has five explicit correctness layers:
 
 - storage correctness (v1.0 core)
-- interaction correctness for CLI/automation contracts (v1.1 layer)
+- interaction correctness for CLI/automation contracts (v1.1)
+- physical-graph coherence and explicit repair semantics (v1.2)
+- snapshot-retention safety and reachability auditing (v1.3)
+- snapshot clarity and release-process hardening (v1.4)
 
 The project originated as a research prototype, and continues to
 prioritize correctness, determinism, and clarity over feature velocity.
@@ -20,8 +23,9 @@ If you are new to coldkeep, read docs in this order:
 
 1. [`README.md`](README.md) for project scope, quickstart, and command basics.
 2. [`ARCHITECTURE.md`](ARCHITECTURE.md) for internals: data model, invariants, lifecycle, recovery, and trust assumptions.
-3. [`VALIDATION_MATRIX.md`](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping (G1-G9).
-4. [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) for CI-parity and release readiness workflow.
+3. [`VALIDATION_MATRIX.md`](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping (G1-G17).
+4. [`docs/PATH_IDENTITY.md`](docs/PATH_IDENTITY.md) if your change touches stored paths, restore-by-path, or current-state path identity.
+5. [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) for CI-parity and release readiness workflow.
 
 This order minimizes cognitive load while preserving full access to the correctness model.
 
@@ -31,12 +35,12 @@ This order minimizes cognitive load while preserving full access to the correctn
 
 coldkeep v1.x prioritizes:
 
--   Correctness over performance
--   Deterministic storage behavior
--   Deterministic interaction behavior for automation workflows
--   Transactional metadata safety
--   Clear and readable code
--   Simplicity over abstraction
+- Correctness over performance
+- Deterministic storage behavior
+- Deterministic interaction behavior for automation workflows
+- Transactional metadata safety
+- Clear and readable code
+- Simplicity over abstraction
 
 Stability and conceptual clarity remain more important than feature velocity.
 
@@ -47,12 +51,12 @@ Major architectural changes should be discussed before implementation.
 The v0.10 validation phase established a contribution posture that remains important across v1.x.
 Contributions should prioritize:
 
--   strengthening storage invariants and correctness guarantees
--   preserving stable machine-readable CLI contracts for automation
--   preserving G9 interface correctness guarantees for CLI and automation
--   improving stress and adversarial validation coverage, including long-run tests
--   identifying and reproducing edge-case failures
--   improving observability and operator-facing behavior
+- strengthening storage invariants and correctness guarantees
+- preserving stable machine-readable CLI contracts for automation
+- preserving G9 interface correctness guarantees for CLI and automation
+- improving stress and adversarial validation coverage, including long-run tests
+- identifying and reproducing edge-case failures
+- improving observability and operator-facing behavior
 
 New storage features or architectural changes are discouraged unless they address
 a demonstrated correctness issue.
@@ -66,9 +70,27 @@ This focus preserves system reliability as the primary delivery criterion.
 
 ## Development Requirements
 
--   Go 1.23+ (or the version specified in go.mod)
--   PostgreSQL 14+
--   Docker (recommended for reproducibility)
+- Go 1.23+ (or the version specified in go.mod)
+- PostgreSQL 14+
+- Docker (recommended for reproducibility)
+- `psql` if you plan to run `scripts/smoke.sh` from the host or follow the full pre-release checklist
+- `jq` if you plan to run the smoke gate on the host
+- `golangci-lint` if you want local parity with the CI quality job
+
+------------------------------------------------------------------------
+
+## Fast Path For First Contributions
+
+If this is your first change, do not start with the full release checklist.
+Use this shorter loop first:
+
+1. Read `README.md`, then skim `ARCHITECTURE.md` for the invariants your change could affect.
+2. Start PostgreSQL with `docker compose up -d coldkeep_postgres`.
+3. Build the binary with `go build -o coldkeep ./cmd/coldkeep`.
+4. Run one health command such as `./coldkeep doctor`.
+5. Run the smallest relevant test slice for your change before expanding to broader suites.
+
+Use `PRE_RELEASE_CHECKLIST.md` when you are preparing a release, validating a broad correctness-sensitive change, or trying to mirror CI end-to-end.
 
 ------------------------------------------------------------------------
 
@@ -140,12 +162,12 @@ Run:
 
 ## Code Style & Quality
 
--   Code must pass `gofmt`
--   Code must pass `go vet`
--   Keep functions small and readable
--   Avoid premature optimization
--   Prefer clarity over cleverness
--   Avoid hidden or implicit concurrency patterns
+- Code must pass `gofmt`
+- Code must pass `go vet`
+- Keep functions small and readable
+- Avoid premature optimization
+- Prefer clarity over cleverness
+- Avoid hidden or implicit concurrency patterns
 
 Before submitting:
 
@@ -161,21 +183,21 @@ go test ./...
 
 coldkeep uses:
 
--   Per-file PostgreSQL transactions
--   `SELECT ... FOR UPDATE SKIP LOCKED`
--   Deterministic container append logic
+- Per-file PostgreSQL transactions
+- `SELECT ... FOR UPDATE SKIP LOCKED`
+- Deterministic container append logic
 
 When modifying storage logic:
 
--   Do not remove transactional boundaries
--   Do not introduce partial metadata commits
--   Do not bypass container locking semantics
--   Do not introduce non-deterministic container writes
--   Preserve chunk ordering guarantees
+- Do not remove transactional boundaries
+- Do not introduce partial metadata commits
+- Do not bypass container locking semantics
+- Do not introduce non-deterministic container writes
+- Preserve chunk ordering guarantees
 
 Canonical append lifecycle contract:
 
--   Use the state machine comment in
+- Use the state machine comment in
     [`internal/storage/store.go`](internal/storage/store.go) ("Append lifecycle state machine")
     as the single source of truth for append/rollback/commit-ack/failure handling.
     Writer implementation comments should remain pointers to this contract.
@@ -186,19 +208,19 @@ If unsure, open a discussion before implementing changes.
 
 ## Testing Guidelines
 
--   Unit tests should not require Docker
--   Integration tests must be explicitly gated by environment variables
--   Avoid flaky timing-based tests
--   Prefer deterministic inputs
+- Unit tests should not require Docker
+- Integration tests must be explicitly gated by environment variables
+- Avoid flaky timing-based tests
+- Prefer deterministic inputs
 
 For v1.x, changes that affect storage, restore, verification, recovery, GC,
 batch orchestration, or CLI contracts are expected to pass the full GitHub Actions pipeline:
 
--   quality
--   integration-correctness
--   integration-stress
--   smoke
--   the aggregate `CI Required Gate`
+- quality
+- integration-correctness
+- integration-stress
+- smoke
+- the aggregate `CI Required Gate`
 
 The repository also has a separate `integration-long-run` soak job for extended
 stability coverage. It is intentionally isolated from the required gate so it
@@ -206,6 +228,10 @@ can be enabled, tuned, or temporarily disabled without changing the standard
 correctness/stress merge path.
 
 If adding storage logic, include at least one restore verification test.
+
+If your change touches snapshots, retention, recovery, quarantine behavior, or
+GC eligibility, include at least one test that proves the intended lifecycle
+behavior rather than only a happy-path CLI assertion.
 
 Maintainers preparing a release should also run the
 [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) flow.
@@ -222,7 +248,7 @@ docker compose up -d coldkeep_postgres
 bash scripts/clean_test_storage.sh
 ```
 
-2. Export shared test environment:
+1. Export shared test environment:
 
 ``` bash
 export COLDKEEP_TEST_DB=1
@@ -242,7 +268,7 @@ simulation loop sets it per run (`plain` then `aes-gcm`).
 
 If you do not want auto-bootstrap, apply `db/schema_postgres.sql` manually first.
 
-3. Run the quality job equivalent (same intent as CI `quality`):
+1. Run the quality job equivalent (same intent as CI `quality`):
 
 Run this block from a clean working tree when possible.
 If `go mod tidy && git diff --exit-code` fails while you have local edits,
@@ -274,7 +300,7 @@ bash scripts/audit_ci_enforcement.sh --local-only
 go build -o coldkeep ./cmd/coldkeep
 ```
 
-4. Run full required CI matrix locally (all required gate jobs, both codecs):
+1. Run full required CI matrix locally (all required gate jobs, both codecs):
 
 ``` bash
 for codec in plain aes-gcm; do
@@ -316,7 +342,11 @@ scripts/run_snapshot_release_gate.sh --count 1
 If you prefer to run smoke outside this loop (or need troubleshooting), use the
 dual guidance in [`README.md`](README.md) under "Smoke Validation (Two Approaches)".
 
-5. Optional but recommended full sweep before pushing:
+Newcomer note: if the full matrix is too slow for the change you are making,
+start with targeted package or integration tests and expand to the full matrix
+before opening the PR.
+
+1. Optional but recommended full sweep before pushing:
 
 ``` bash
 go test ./... -count=1 -timeout 25m
@@ -344,18 +374,18 @@ If your shell does not keep exported variables between commands, prefix each com
 
 ## Submitting Changes
 
-1.  Fork the repository
-2.  Create a feature branch
-3.  Keep commits small and focused
-4.  Run formatting and tests
-5.  Open a Pull Request
+1. Fork the repository
+1. Create a feature branch
+1. Keep commits small and focused
+1. Run formatting and tests
+1. Open a Pull Request
 
 Pull requests should include:
 
--   A clear description of the change
--   Why it is needed
--   Tradeoffs introduced
--   Any schema impact (if applicable)
+- A clear description of the change
+- Why it is needed
+- Tradeoffs introduced
+- Any schema impact (if applicable)
 
 Repository maintainers should protect `main`, `release/**`, and `hotfix/**`
 with required status checks and require the exact final job name
@@ -377,11 +407,11 @@ Breaking changes must include migration notes.
 
 When opening an issue, include:
 
--   coldkeep version (commit hash if possible)
--   Exact command used
--   Full console output
--   Steps to reproduce
--   Expected vs. actual behavior
+- coldkeep version (commit hash if possible)
+- Exact command used
+- Full console output
+- Steps to reproduce
+- Expected vs. actual behavior
 
 If the issue involves potential corruption or security impact, see
 SECURITY.md before filing publicly.
@@ -397,11 +427,11 @@ Please open a design discussion issue first.
 
 coldkeep continues to evolve in areas such as:
 
--   Block-layout refinements and format hardening
--   Authenticated metadata
--   Key rotation and encryption lifecycle hardening
--   Background verification / compaction
--   Cloud backend experimentation
+- Block-layout refinements and format hardening
+- Authenticated metadata
+- Key rotation and encryption lifecycle hardening
+- Background verification / compaction
+- Cloud backend experimentation
 
 ------------------------------------------------------------------------
 
@@ -409,11 +439,11 @@ coldkeep continues to evolve in areas such as:
 
 The following are unlikely to be accepted in v1.x:
 
--   Large framework rewrites
--   ORM introduction
--   Non-deterministic storage logic
--   Breaking schema changes without migration strategy
--   Heavy dependency additions without strong justification
+- Large framework rewrites
+- ORM introduction
+- Non-deterministic storage logic
+- Breaking schema changes without migration strategy
+- Heavy dependency additions without strong justification
 
 ------------------------------------------------------------------------
 

@@ -2,12 +2,27 @@
 
 Use this checklist before cutting a release tag.
 
+Audience:
+
+- Maintainers preparing a release or a release candidate
+- Contributors validating a broad correctness-sensitive change end-to-end
+
+If you only need day-to-day contributor setup, start with `README.md` and `CONTRIBUTING.md` instead. This document is intentionally heavier and more exhaustive.
+
 Execution model (step-by-step):
 
 - Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.
 - Capture evidence as you go (command output snippets, failing/success states, and any remediation notes).
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 13-16 as required release gates after sections 1-12.
+
+Suggested preflight before Step 1:
+
+- `docker compose` available locally
+- `psql` available locally if you will run host-side smoke or schema checks
+- `jq` available locally if you will run host-side smoke output checks
+- `golangci-lint` available locally if you want full quality-job parity
+- no important artifacts stored under `./storage`, `.ci-storage`, or `/tmp/coldkeep*`
 
 ## Prerequisite: PostgreSQL assumptions and operator surface
 
@@ -140,6 +155,8 @@ go test -p 1 ./tests/... -count=1 -v -timeout 20m
 Run this only while the PostgreSQL service from step 1 is still reachable.
 The `-p 1` package-level serialization avoids cross-package interference when
 multiple test packages share the same PostgreSQL instance.
+
+New maintainer note: if this step fails while steps 2-3 passed, treat it as extra investigation work, not an automatic release blocker. The required release gate remains the CI-parity flow above.
 
 ## 5) Run doctor
 

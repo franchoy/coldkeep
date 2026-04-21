@@ -1,8 +1,13 @@
-
-# v1.0 Validation Matrix
+# Validation Matrix
 
 This document is the authoritative mapping between public guarantees (README)
 and enforced evidence (tests and verify checks).
+
+Use it as the detailed companion to `README.md`:
+
+- read `README.md` first for the high-level contract
+- use this document when you need to answer "how do we know this guarantee is enforced?"
+- use `PRE_RELEASE_CHECKLIST.md` when you need to execute the release gate locally
 
 ## Guarantee ID Stability
 
@@ -31,6 +36,12 @@ with v1.4 clarifying lineage semantics without introducing new guarantee IDs.
 Evidence is mapped by behavior, not by test filename prefix. In particular,
 some older adversarial files keep their original campaign naming even when the
 guarantee they now best evidence sits under a different matrix row.
+
+Reading note:
+
+- `Primary verify evidence` names the main runtime verification surface, not every internal helper involved
+- `Primary test evidence` highlights the most representative automated coverage, not an exhaustive list of all related tests
+- `covered` means the guarantee is intentionally mapped to concrete automated evidence in the current tree
 
 ## Guarantees to Evidence
 
