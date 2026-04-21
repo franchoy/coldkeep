@@ -70,7 +70,9 @@ Coldkeep has five explicit correctness layers:
 - v1.3: snapshot-based retention as a correctness layer (immutable point-in-time captures, snapshot-protected GC, reachability audits)
 - v1.4: snapshot clarity and lifecycle hardening (explicit lineage semantics, safer dry-run wording, stricter pre-release verification guidance)
 
-Guarantees are enforced through automated validation and CI gates; see VALIDATION_MATRIX.md for guarantee-to-evidence mapping.
+Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
+
+If you are new to the project, start here, then continue to [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model and [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for the guarantee-to-evidence map.
 
 ## Core Guarantees
 
@@ -84,7 +86,7 @@ Guarantees are enforced through automated validation and CI gates; see VALIDATIO
 
 ### Core invariants
 
-Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
+Guarantee IDs are stable and tracked in [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md):
 
 - G1: deterministic, byte-identical restore
 - G2: repeat store does not drift chunk graph
@@ -104,14 +106,20 @@ Guarantee IDs are stable and tracked in VALIDATION_MATRIX.md:
 - G16: stats expose snapshot-retention pressure to operators (retained-only-by-current, retained-only-by-snapshot, shared)
 - G17: verify and doctor audit persisted snapshot reachability integrity and report retention context
 
-Definitions and evidence mapping for G1-G17 are tracked in VALIDATION_MATRIX.md.
+Definitions and evidence mapping for G1-G17 are tracked in [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
 
 Documentation is split into:
 
-- README.md (overview and usage)
-- ARCHITECTURE.md (internal model and invariants)
+- [README.md](README.md) for overview, quickstart, and CLI usage
+- [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model, invariants, lifecycle, and trust boundary
+- [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
+- [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow and local CI guidance
+- [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
+- [SECURITY.md](SECURITY.md) for the threat model and security limits
+- [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
+- [CHANGELOG.md](CHANGELOG.md) for milestone history
 
-For the deeper model (invariants, lifecycle, validity, recovery, trust boundary), see ARCHITECTURE.md.
+For the deeper model (invariants, lifecycle, validity, recovery, trust boundary), see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## When to use coldkeep
 
@@ -172,6 +180,7 @@ workflow below. Both are valid and both are used by contributors.
 
 PR author tip: use the PR template at [`.github/pull_request_template.md`](.github/pull_request_template.md)
 to summarize invariants and lifecycle-semantics impact for reviewers.
+For a contributor-oriented local CI path before that, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Approach A: Docker runner
 
@@ -318,7 +327,7 @@ Example JSON payload:
 }
 ```
 
-For full batch contract details and examples, see ARCHITECTURE.md and PRE_RELEASE_CHECKLIST.md.
+For full batch contract details and examples, see [ARCHITECTURE.md](ARCHITECTURE.md) and [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md).
 
 ## Snapshot Layer (v1.4)
 
@@ -489,7 +498,7 @@ coldkeep snapshot diff snap-1 snap-2 --output json
 
 Text output example:
 
-```
+```text
 [SNAPSHOT DIFF]
 
 Base:    snap-1
@@ -585,7 +594,7 @@ Expected behavior:
 
 ### Snapshot release gate (operator quick checklist)
 
-Before tagging a release, run the dedicated snapshot/retention contract gate in `PRE_RELEASE_CHECKLIST.md`.
+Before tagging a release, run the dedicated snapshot/retention contract gate in [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md).
 
 For the focused automated snapshot gate, run:
 
@@ -605,7 +614,7 @@ Manual lifecycle expected in the release gate:
 - delete snapshot
 - confirm GC eligibility changes only after delete
 
-For the full release criteria, use the snapshot sign-off sections in `PRE_RELEASE_CHECKLIST.md`:
+For the full release criteria, use the snapshot sign-off sections in [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md):
 
 - `13) Snapshot sign-off checklist (Phases 1-7)`
 - `C. Test surface checklist`
@@ -655,11 +664,13 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 
 ## Documentation Map
 
-- Architecture and internals: ARCHITECTURE.md
-- Guarantee mapping and evidence: VALIDATION_MATRIX.md
-- Contribution workflow: CONTRIBUTING.md
-- Release readiness flow: PRE_RELEASE_CHECKLIST.md
-- Security reporting and threat guidance: SECURITY.md
+- Architecture and internals: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Guarantee mapping and evidence: [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md)
+- Contribution workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Release readiness flow: [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md)
+- Security reporting and threat guidance: [SECURITY.md](SECURITY.md)
+- Current-state path identity policy: [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
+- Milestone history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Roadmap note (v1.4 and beyond)
 
@@ -668,8 +679,8 @@ v1.2 now includes the `physical_file` to `logical_file` mapping layer, explicit 
 ## Contributing
 
 Contributions and discussions are welcome.
-See CONTRIBUTING.md.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Apache-2.0. See LICENSE.
+Apache-2.0. See [LICENSE](LICENSE).

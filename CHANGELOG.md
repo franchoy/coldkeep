@@ -10,6 +10,10 @@ production stability.
 
 v1.4 clarifies snapshot lineage semantics and release-gate guidance.
 
+For the current operator-facing contract, see [README.md](README.md).
+For guarantee-to-evidence mapping, see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
+For release-gate execution, see [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md).
+
 ------------------------------------------------------------------------
 
 ## [1.4.0] - 2026-04-19
@@ -96,11 +100,11 @@ verification and health reporting.
 
 ### Validation and release-gate alignment
 
-- `VALIDATION_MATRIX.md` is expected to list and cover G14-G17 for v1.3.
+- [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) is expected to list and cover G14-G17 for v1.3.
 - v1.3 release gating explicitly includes:
   - test surface coverage (package/integration/adversarial/smoke)
-  - documentation/release checklist consistency (README + validation matrix)
-  - manual snapshot/retention lifecycle gate in `PRE_RELEASE_CHECKLIST.md`
+  - documentation/release checklist consistency ([README.md](README.md) + [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md))
+  - manual snapshot/retention lifecycle gate in [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md)
 - Manual snapshot lifecycle gate examples are aligned to CLI contracts:
   use `snapshot create --id <snapshotID>`, use positional snapshot IDs for
   `snapshot restore`/`snapshot diff`/`snapshot delete`, and use
@@ -196,7 +200,7 @@ and refuses GC when the physical root graph is inconsistent.
 - `BuildPlan` and `ExecutePlan` are deprecated transitional helpers and are
   candidates for removal beyond v1.2 or isolation into a dedicated legacy file.
 - Dry-run support for `remove --stored-path` is deferred beyond v1.2 (rationale
-  documented in ARCHITECTURE.md under "Dry-run Support").
+  documented in [ARCHITECTURE.md](ARCHITECTURE.md) under "Dry-run Support").
 
 ### Notes
 
@@ -282,7 +286,6 @@ correctness under real-world mixed-input scenarios.
 
 - Introduces G9: interface correctness for batch CLI orchestration
 
-
 ------------------------------------------------------------------------
 
 ## [1.0.0] - 2026-04-06
@@ -321,9 +324,7 @@ restore, verifiable integrity, and safe garbage collection.
 - coldkeep remains a research-oriented project, but with a stable and validated
   correctness model for local-first usage
 
-
 ------------------------------------------------------------------------
-
 
 ## [0.10.0] - Pre-v1.0 Validation Phase
 

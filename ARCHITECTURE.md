@@ -1,8 +1,18 @@
 # coldkeep Architecture
 
 This document contains the internal architecture model for coldkeep.
-It complements README.md, which is intentionally newcomer-first.
+It complements [README.md](README.md), which is intentionally newcomer-first.
 This document is intended for contributors and advanced users who need to understand system invariants and internal behavior.
+
+Read [README.md](README.md) first if you need installation, quickstart, CLI examples, or the operator-facing contract summary.
+
+Companion documents:
+
+- [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
+- [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow and local CI guidance
+- [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
+- [SECURITY.md](SECURITY.md) for the threat model and security limits
+- [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
 
 ## System Overview
 
@@ -129,7 +139,7 @@ Lifecycle intent:
 
 Contributor note:
 
-- The authoritative append lifecycle state machine is documented in internal/storage/store.go.
+- The authoritative append lifecycle state machine is documented in [internal/storage/store.go](internal/storage/store.go).
 - Writer comments should point to that state machine instead of duplicating lifecycle logic.
 
 ## Core Invariants
@@ -277,7 +287,7 @@ Beyond storage-core correctness, v1.1 adds interface correctness for batch CLI o
 - stable machine-readable status/summary/results envelopes
 - automation-safe process exit behavior
 
-These contracts are validated by targeted adversarial orchestration tests and tracked in VALIDATION_MATRIX.md under G9.
+These contracts are validated by targeted adversarial orchestration tests and tracked in [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) under G9.
 
 ## Evolution Note: v1.2 physical_file Layer
 
@@ -304,7 +314,7 @@ Future performance work may introduce optional post-batch invariant enforcement 
 
 For v1.2 physical path identity rules (canonicalization strategy, case behavior, and rationale), see:
 
-- docs/PATH_IDENTITY.md
+- [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
 
 ### Remove Semantics Consistency
 
@@ -443,3 +453,5 @@ Dry-run support for `remove --stored-path` will be added when:
 Users can currently force-verify remove safety via explicit `verify` before `remove`, which provides correctness assurance without dry-run.
 
 This means architecture documentation should evolve by extension, not by rewrite.
+
+When release-facing behavior changes, keep this document aligned with [README.md](README.md), [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md), and [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) so operator-facing semantics and internal-model semantics do not drift apart.
