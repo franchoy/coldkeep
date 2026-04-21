@@ -33,11 +33,17 @@ export DB_PASSWORD=coldkeep
 export DB_NAME=coldkeep
 export DB_SSLMODE=disable
 export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+export COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/manual-checks"
 ```
 
 `COLDKEEP_CODEC` is intentionally not exported globally here because step 3
 sets it per loop iteration (`plain` then `aes-gcm`).
 `COLDKEEP_KEY` is only required when codec is `aes-gcm`; it is ignored by `plain`.
+
+If `docker compose up -d coldkeep_postgres` fails because port `5432` is already
+allocated, stop or reuse the existing local PostgreSQL container before
+continuing. The remaining steps assume a reachable PostgreSQL instance on the
+host/port above.
 
 ## 2) Run quality-equivalent checks (CI quality job parity)
 
@@ -73,6 +79,10 @@ go build -o coldkeep ./cmd/coldkeep
 
 Expected: local quality checks match CI intent and produce no diff or lint/format failures.
 
+Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
+`/tmp/coldkeep*`. Do not keep one-off repro scripts or evidence you care about
+under those paths while running this checklist.
+
 ## 3) Run full required CI matrix locally (all gate jobs, both codecs)
 
 ```bash
@@ -102,6 +112,10 @@ for codec in plain aes-gcm; do
 done
 ```
 
+Prerequisite for the smoke leg: `scripts/smoke.sh` shells out to `psql` when
+`COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql` is used. Install a local
+PostgreSQL client first if it is not already available.
+
 Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`) across both codecs.
 
 For the snapshot contract gate, run the focused integration suite after the matrix loop:
@@ -110,18 +124,27 @@ For the snapshot contract gate, run the focused integration suite after the matr
 scripts/run_snapshot_release_gate.sh --count 1
 ```
 
+After step 3, unset or override `COLDKEEP_CODEC` before manual CLI checks below.
+Otherwise the last loop iteration leaves `COLDKEEP_CODEC=aes-gcm`, which changes
+the behavior of later `store` commands.
+
 ## 4) Run integration umbrella suite (optional extra confidence, not a release gate)
 
 This step is intentionally non-blocking for release sign-off.
 Use it to catch broader regressions outside the required CI-equivalent gate set in steps 2-3.
 
 ```bash
-go test ./tests/... -count=1 -v -timeout 20m
+go test -p 1 ./tests/... -count=1 -v -timeout 20m
 ```
+
+Run this only while the PostgreSQL service from step 1 is still reachable.
+The `-p 1` package-level serialization avoids cross-package interference when
+multiple test packages share the same PostgreSQL instance.
 
 ## 5) Run doctor
 
 ```bash
+unset COLDKEEP_CODEC
 ./coldkeep doctor
 ./coldkeep doctor --output json
 ```
@@ -141,6 +164,7 @@ Expected: required v1.0 core guarantee rows (G1-G8), post-v1.0 extension rows (G
 Bootstrap ON (clean schema bootstrap path):
 
 ```bash
+unset COLDKEEP_CODEC
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ./coldkeep stats
 ```
@@ -169,11 +193,15 @@ docker compose run --rm coldkeep doctor
 
 Expected: no manual local state is required beyond documented setup, and basic commands succeed.
 
+If another local PostgreSQL container already binds host port `5432`, this step
+will fail until that container is stopped or reconfigured.
+
 ## 9) Verify CLI contract stability
 
 Run core command paths in JSON mode and validate both success and failure envelopes.
 
 ```bash
+unset COLDKEEP_CODEC
 ./coldkeep doctor --output json
 ./coldkeep verify system --standard --output json
 ./coldkeep verify system --invalid-level --output json
@@ -235,6 +263,8 @@ go test ./tests/integration -run 'TestRepairThenVerifyThenGCSmoke|TestBatchFlags
 Manual spot-checks against a populated DB (run after step 1 and step 3):
 
 ```bash
+export COLDKEEP_CODEC=plain
+
 # store two files and confirm stored_path is in JSON output
 ./coldkeep store samples/hello.txt --output json
 ./coldkeep store samples/lorem.txt --output json
@@ -472,17 +502,21 @@ Additional CLI validation and policy checks:
 Run this manual lifecycle gate after core CI/test gates pass.
 
 ```bash
+# Prefer a single retaining snapshot for this gate unless you intentionally want
+# to test multi-snapshot retention. If multiple snapshots retain the same logical
+# file, GC eligibility will not change until all retaining snapshots are deleted.
+
 # create snapshot
 ./coldkeep snapshot create --id pre-gc-gate --output json
 
-# remove current mapping (use an existing stored path from store output)
+# confirm current-path removal is blocked while the logical file is retained by a snapshot
 ./coldkeep remove --stored-path <stored-path-from-store-output> --output json
 
 # confirm GC dry-run reports snapshot-retained logical files
 ./coldkeep gc --dry-run --output json
 
 # restore from snapshot
-./coldkeep snapshot restore pre-gc-gate --destination ./out --output json
+./coldkeep snapshot restore pre-gc-gate --mode prefix --destination ./out --output json
 
 # diff two snapshots
 ./coldkeep snapshot diff pre-gc-gate <second-snapshot-id> --output json
@@ -499,12 +533,12 @@ Naming note: in this gate, `pre-gc-gate` is the `snapshot_id` system identifier.
 Confirm:
 
 - [ ] Snapshot create succeeds
-- [ ] Removing current mapping does not immediately make snapshot-retained data GC-eligible
+- [ ] Removing current mapping is refused while the logical file is snapshot-retained
 - [ ] GC dry-run reports snapshot-retained logical files before snapshot delete
 - [ ] Snapshot restore succeeds from retained snapshot data
 - [ ] Snapshot diff works and output is consistent with returned entries
 - [ ] Snapshot delete succeeds only with `--force`
-- [ ] GC eligibility changes only after snapshot delete
+- [ ] GC eligibility changes only after all retaining snapshots are deleted
 
 ## 16) Final global sign-off
 
