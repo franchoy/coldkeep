@@ -145,8 +145,8 @@ func bindWriterDB(writer payloadStatefulWriter, dbconn *sql.DB) {
 	}
 }
 
-func quarantineContainerNow(dbconn *sql.DB, containerID int64) error {
-	return container.QuarantineContainer(dbconn, containerID)
+func quarantineContainerNow(dbconn *sql.DB, containerID int64, containersDir string) error {
+	return container.QuarantineContainerInDir(dbconn, containerID, containersDir)
 }
 
 type optionalContainerSealer interface {
@@ -1621,7 +1621,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				_ = tx.Rollback()
 				var brokenOpenErr *container.BrokenOpenContainerError
 				if errors.As(err, &brokenOpenErr) {
-					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID); quarantineErr != nil {
+					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID, sgctx.EffectiveContainerDir()); quarantineErr != nil {
 						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d after rollback: %w", brokenOpenErr.ContainerID, quarantineErr))
 					}
 					return StoreFileResult{}, err
@@ -1727,7 +1727,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err, rbErr)
 					}
-					quarantineErr := quarantineContainerNow(sgctx.DB, placement.PreviousID)
+					quarantineErr := quarantineContainerNow(sgctx.DB, placement.PreviousID, sgctx.EffectiveContainerDir())
 					if quarantineErr != nil {
 						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, quarantineErr))
 					}
@@ -1775,7 +1775,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, errors.Join(err, rbErr)
 					}
-					quarantineErr := quarantineContainerNow(sgctx.DB, placement.ContainerID)
+					quarantineErr := quarantineContainerNow(sgctx.DB, placement.ContainerID, sgctx.EffectiveContainerDir())
 					if quarantineErr != nil {
 						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, quarantineErr))
 					}
