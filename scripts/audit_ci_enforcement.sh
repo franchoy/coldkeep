@@ -115,7 +115,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_LONG_RUN_RESULT.*!= "success"' 'required gate rejects skipped integration long-run job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job' || check_status=1
-  require_pattern "$VALIDATION_MATRIX_FILE" '^# v1\.0 Validation Matrix$' 'validation matrix artifact' || check_status=1
+  require_pattern "$VALIDATION_MATRIX_FILE" '^# (v1\.0 )?Validation Matrix$' 'validation matrix artifact (legacy or current style)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G1 \|' 'validation matrix deterministic restore row (G1)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G2 \|' 'validation matrix repeat store does not drift chunk graph row (G2)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G3 \|' 'validation matrix partial/inconsistent exposure row (G3)' || check_status=1
