@@ -14,6 +14,7 @@ import (
 	idb "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/storage"
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -76,6 +77,27 @@ func insertPhysicalFile(t *testing.T, db *sql.DB, path string, logicalFileID int
 	)
 	if err != nil {
 		t.Fatalf("insert physical_file path=%q logical_file_id=%d: %v", path, logicalFileID, err)
+	}
+}
+
+func TestSnapshotSourceQuerySQLiteDoesNotAppendForUpdate(t *testing.T) {
+	dbconn := openTestDB(t)
+	query := snapshotSourceQuery(dbconn)
+	if strings.Contains(query, "FOR UPDATE") {
+		t.Fatalf("expected sqlite snapshot source query to avoid FOR UPDATE, got %q", query)
+	}
+}
+
+func TestSnapshotSourceQueryPostgresAppendsForUpdate(t *testing.T) {
+	dbconn, err := sql.Open("postgres", "host=127.0.0.1 port=1 user=invalid dbname=invalid sslmode=disable")
+	if err != nil {
+		t.Fatalf("open postgres driver handle: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	query := snapshotSourceQuery(dbconn)
+	if !strings.Contains(query, "FOR UPDATE") {
+		t.Fatalf("expected postgres snapshot source query to append FOR UPDATE, got %q", query)
 	}
 }
 
