@@ -229,6 +229,80 @@ func TestAdversarialG2RecoveryQuarantinesMissingContainerRecordAndPreservesHealt
 	}
 }
 
+func TestAdversarialG2PreexistingQuarantinedOrphanSizeDriftResyncsAndPreservesHealthyRestore(t *testing.T) {
+	testgate.RequireDB(t)
+
+	for _, codec := range adversarialG2Codecs() {
+		t.Run(codec, func(t *testing.T) {
+			configureAdversarialG2Codec(t, codec)
+
+			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG2Env(t)
+			defer dbconn.Close()
+
+			inputDir := filepath.Join(tmp, "input")
+			restoreDir := filepath.Join(tmp, "restore")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+			if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+				t.Fatalf("mkdir restore: %v", err)
+			}
+
+			anchorPath := testutils.CreateTempFile(t, inputDir, "g2-quarantine-resync-anchor.bin", 448*1024)
+			anchorHash := testutils.SHA256File(t, anchorPath)
+			anchorID := storeFileWithCodecCLIG2(t, repoRoot, binPath, env, codec, anchorPath)
+
+			if err := os.MkdirAll(container.ContainersDir, 0o755); err != nil {
+				t.Fatalf("mkdir containers dir: %v", err)
+			}
+
+			const orphanFilename = "g2-quarantine-size-drift.bin"
+			orphanPath := filepath.Join(container.ContainersDir, orphanFilename)
+			orphanBytes := []byte("g2-preexisting-quarantined-orphan-file-grew-after-row-was-marked")
+			if err := os.WriteFile(orphanPath, orphanBytes, 0o644); err != nil {
+				t.Fatalf("write orphan file: %v", err)
+			}
+
+			if _, err := dbconn.Exec(`
+				INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+				VALUES ($1, $2, $3, FALSE, FALSE, TRUE)
+			`, orphanFilename, int64(1), int64(1)); err != nil {
+				t.Fatalf("insert stale quarantined orphan row: %v", err)
+			}
+
+			report, err := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+			if err != nil {
+				t.Fatalf("strict recovery should resync preexisting quarantined orphan row: %v", err)
+			}
+			if report.QuarantinedOrphan != 0 {
+				t.Fatalf("expected no new orphan quarantine rows, got %d", report.QuarantinedOrphan)
+			}
+
+			var quarantine bool
+			var currentSize int64
+			var maxSize int64
+			if err := dbconn.QueryRow(
+				`SELECT quarantine, current_size, max_size FROM container WHERE filename = $1`,
+				orphanFilename,
+			).Scan(&quarantine, &currentSize, &maxSize); err != nil {
+				t.Fatalf("query resynced quarantined orphan row: %v", err)
+			}
+			if !quarantine {
+				t.Fatalf("expected preexisting orphan row to remain quarantined after resync")
+			}
+			expectedSize := int64(len(orphanBytes))
+			if currentSize != expectedSize || maxSize != expectedSize {
+				t.Fatalf("expected quarantined orphan row sizes to resync to %d, got current=%d max=%d", expectedSize, currentSize, maxSize)
+			}
+
+			testutils.AssertNoProcessingRows(t, dbconn)
+
+			anchorOut := filepath.Join(restoreDir, "g2-quarantine-resync-anchor.restored.bin")
+			restoreMustMatchHashG2(t, dbconn, anchorID, anchorOut, anchorHash)
+		})
+	}
+}
+
 func TestAdversarialG2RepeatedDoctorConvergesOnRecoverableState(t *testing.T) {
 	testgate.RequireDB(t)
 
