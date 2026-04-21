@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	idb "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -59,6 +60,19 @@ type snapshotFileDBRow struct {
 	Size          sql.NullInt64
 	Mode          sql.NullInt64
 	MTime         sql.NullTime
+}
+
+func snapshotSourceQuery(dbconn *sql.DB) string {
+	query := `
+		SELECT pf.path, pf.logical_file_id, lf.total_size, pf.mode, pf.mtime
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		ORDER BY pf.path, pf.logical_file_id
+	`
+	// On PostgreSQL, lock the rows that define the current-state snapshot view so
+	// concurrent remove operations cannot delete logical_file/physical_file rows
+	// between enumeration and snapshot_file insertion.
+	return idb.QueryWithOptionalForUpdate(dbconn, query)
 }
 
 func newSnapshotFileDBRow(sf SnapshotFile, pathID int64) snapshotFileDBRow {
@@ -1295,7 +1309,7 @@ func RestoreSnapshot(
 // When opts.Paths is non-empty, rows are filtered by exact paths and directory prefixes ending with '/'.
 func CreateSnapshotWithOptions(
 	ctx context.Context,
-	db *sql.DB,
+	dbconn *sql.DB,
 	opts SnapshotCreateOptions,
 ) error {
 	snapshotID := opts.ID
@@ -1304,7 +1318,7 @@ func CreateSnapshotWithOptions(
 	parentID := opts.ParentID
 	paths := opts.Paths
 
-	if db == nil {
+	if dbconn == nil {
 		return errors.New("snapshot db cannot be nil")
 	}
 	if snapshotID == "" {
@@ -1322,7 +1336,7 @@ func CreateSnapshotWithOptions(
 		return fmt.Errorf("snapshot type must be 'full' when no paths are provided, got %q", snapshotType)
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin snapshot transaction: %w", err)
 	}
@@ -1401,14 +1415,7 @@ func CreateSnapshotWithOptions(
 		}
 	}
 
-	query := `
-		SELECT pf.path, pf.logical_file_id, lf.total_size, pf.mode, pf.mtime
-		FROM physical_file pf
-		JOIN logical_file lf ON lf.id = pf.logical_file_id
-	`
-	query += " ORDER BY pf.path, pf.logical_file_id"
-
-	rows, err := tx.QueryContext(ctx, query)
+	rows, err := tx.QueryContext(ctx, snapshotSourceQuery(dbconn))
 	if err != nil {
 		return fmt.Errorf("query snapshot source rows: %w", err)
 	}
