@@ -298,7 +298,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 
 	fullPath := filepath.Join(containersDir, filename)
 	retireNewContainer := func(openErr error) error {
-		retireErr := QuarantineContainer(dbconn, id)
+		retireErr := QuarantineContainerInDir(dbconn, id, containersDir)
 		removeErr := os.Remove(fullPath)
 		var errs []error
 		errs = append(errs, openErr)
@@ -413,27 +413,62 @@ func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containe
 }
 
 func QuarantineContainer(dbconn *sql.DB, containerID int64) error {
+	return QuarantineContainerInDir(dbconn, containerID, ContainersDir)
+}
+
+func QuarantineContainerInDir(dbconn *sql.DB, containerID int64, containersDir string) error {
 	if dbconn == nil || containerID <= 0 {
 		return nil
 	}
+	containersDir = containersDirOrDefault(containersDir)
 
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	backend := db.BackendFromDB(dbconn)
 
-	tx, err := dbconn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin quarantine tx for container %d: %w", containerID, err)
+	selectFilenameQuery := `SELECT filename FROM container WHERE id = $1`
+	updateQuarantineQuery := `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`
+	updateQuarantineWithSizeQuery := `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = $2, max_size = $2 WHERE id = $1`
+	if backend == db.BackendSQLite {
+		selectFilenameQuery = `SELECT filename FROM container WHERE id = ?`
+		updateQuarantineQuery = `UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = ?`
+		updateQuarantineWithSizeQuery = `UPDATE container SET quarantine = TRUE, sealing = FALSE, current_size = ?, max_size = ? WHERE id = ?`
 	}
-	if _, err = tx.ExecContext(ctx,
-		`UPDATE container SET quarantine = TRUE, sealing = FALSE WHERE id = $1`,
-		containerID,
-	); err != nil {
-		_ = tx.Rollback()
+
+	var filename string
+	if err := dbconn.QueryRowContext(ctx, selectFilenameQuery, containerID).Scan(&filename); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("query container %d before quarantine: %w", containerID, err)
+	}
+
+	var updateQuery string
+	var updateArgs []any
+	if info, statErr := os.Stat(filepath.Join(containersDir, filename)); statErr == nil {
+		updateQuery = updateQuarantineWithSizeQuery
+		if backend == db.BackendSQLite {
+			updateArgs = []any{info.Size(), info.Size(), containerID}
+		} else {
+			updateArgs = []any{containerID, info.Size()}
+		}
+	} else if os.IsNotExist(statErr) {
+		updateQuery = updateQuarantineQuery
+		updateArgs = []any{containerID}
+	} else {
+		return fmt.Errorf("stat container %d before quarantine: %w", containerID, statErr)
+	}
+
+	result, err := dbconn.ExecContext(ctx, updateQuery, updateArgs...)
+	if err != nil {
 		return fmt.Errorf("mark container %d quarantine: %w", containerID, err)
 	}
-	if err = tx.Commit(); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("commit quarantine for container %d: %w", containerID, err)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected while quarantining container %d: %w", containerID, err)
+	}
+	if rowsAffected == 0 {
+		return nil
 	}
 	return nil
 }
