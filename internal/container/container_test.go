@@ -1,11 +1,15 @@
 package container
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/franchoy/coldkeep/internal/db"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func createTestContainerFile(t *testing.T, path string, maxSize int64) {
@@ -120,5 +124,77 @@ func TestBrokenOpenContainerErrorNilReceiverBehavior(t *testing.T) {
 	}
 	if err.Unwrap() != nil {
 		t.Fatalf("expected nil-receiver Unwrap to return nil")
+	}
+}
+
+func TestQuarantineContainerInDirUpdatesSizesToPhysicalFile(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	filename := "quarantine-size-sync.bin"
+	path := filepath.Join(containersDir, filename)
+	createTestContainerFile(t, path, ContainerHdrLen+128)
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o666)
+	if err != nil {
+		t.Fatalf("open container file for append: %v", err)
+	}
+	if _, err := f.Write([]byte("payload-expands-physical-size")); err != nil {
+		_ = f.Close()
+		t.Fatalf("append payload: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close container file: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat container file: %v", err)
+	}
+
+	res, err := dbconn.Exec(`
+		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+		VALUES (?, ?, ?, FALSE, TRUE, FALSE)
+	`, filename, ContainerHdrLen, ContainerHdrLen+128)
+	if err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+	containerID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+
+	if err := QuarantineContainerInDir(dbconn, containerID, containersDir); err != nil {
+		t.Fatalf("quarantine container in dir: %v", err)
+	}
+
+	var quarantine int
+	var sealing int
+	var currentSize int64
+	var maxSize int64
+	if err := dbconn.QueryRow(`SELECT quarantine, sealing, current_size, max_size FROM container WHERE id = ?`, containerID).Scan(&quarantine, &sealing, &currentSize, &maxSize); err != nil {
+		t.Fatalf("query quarantined container row: %v", err)
+	}
+	if quarantine != 1 {
+		t.Fatalf("expected container to be quarantined, got %d", quarantine)
+	}
+	if sealing != 0 {
+		t.Fatalf("expected quarantine to clear sealing flag, got %d", sealing)
+	}
+	if currentSize != info.Size() {
+		t.Fatalf("expected current_size=%d, got %d", info.Size(), currentSize)
+	}
+	if maxSize != info.Size() {
+		t.Fatalf("expected max_size=%d, got %d", info.Size(), maxSize)
 	}
 }
