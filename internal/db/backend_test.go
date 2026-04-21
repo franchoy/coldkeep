@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -158,5 +159,19 @@ func TestQueryWithOptionalForUpdateNowaitNil(t *testing.T) {
 	got := QueryWithOptionalForUpdateNowait(nil, query)
 	if got != query {
 		t.Fatalf("expected nil-db query %q, got %q", query, got)
+	}
+}
+
+func TestQueryWithOptionalForUpdatePostgresAppendsClause(t *testing.T) {
+	dbconn, err := sql.Open("postgres", "host=127.0.0.1 port=1 user=invalid dbname=invalid sslmode=disable")
+	if err != nil {
+		t.Fatalf("open postgres driver handle: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	const query = "SELECT pf.path FROM physical_file pf JOIN logical_file lf ON lf.id = pf.logical_file_id ORDER BY pf.path"
+	got := QueryWithOptionalForUpdate(dbconn, query)
+	if got != query+" FOR UPDATE" {
+		t.Fatalf("expected postgres FOR UPDATE query %q, got %q", query+" FOR UPDATE", got)
 	}
 }
