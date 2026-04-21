@@ -439,7 +439,7 @@ func (w *LocalWriter) quarantineContainer(containerID int64) error {
 	w.prevAppendFile = ""
 	w.prevAppendSize = 0
 	w.clearActive()
-	if err := QuarantineContainer(w.dbconn, containerID); err != nil {
+	if err := QuarantineContainerInDir(w.dbconn, containerID, w.dir); err != nil {
 		if closeErr != nil {
 			return errors.Join(closeErr, err)
 		}
