@@ -6,17 +6,17 @@ We as members, contributors, and maintainers pledge to make
 participation in coldkeep a harassment-free experience for everyone,
 regardless of:
 
--   Age
--   Body size
--   Disability
--   Ethnicity
--   Gender identity or expression
--   Level of experience
--   Nationality
--   Personal appearance
--   Race
--   Religion
--   Sexual orientation
+- Age
+- Body size
+- Disability
+- Ethnicity
+- Gender identity or expression
+- Level of experience
+- Nationality
+- Personal appearance
+- Race
+- Religion
+- Sexual orientation
 
 We are committed to fostering an open, welcoming, and respectful
 community.
@@ -27,20 +27,20 @@ community.
 
 Examples of behavior that contributes to a positive environment include:
 
--   Being respectful of differing opinions and experiences
--   Giving and gracefully accepting constructive feedback
--   Focusing on what is best for the project and community
--   Showing empathy toward other contributors
--   Assuming good intent when possible
+- Being respectful of differing opinions and experiences
+- Giving and gracefully accepting constructive feedback
+- Focusing on what is best for the project and community
+- Showing empathy toward other contributors
+- Assuming good intent when possible
 
 Examples of unacceptable behavior include:
 
--   Harassment or discrimination of any kind
--   Trolling, insulting, or derogatory comments
--   Personal attacks (public or private)
--   Publishing private information without explicit consent
--   Sustained disruption of discussions or collaboration
--   Any conduct that could reasonably be considered inappropriate in a
+- Harassment or discrimination of any kind
+- Trolling, insulting, or derogatory comments
+- Personal attacks (public or private)
+- Publishing private information without explicit consent
+- Sustained disruption of discussions or collaboration
+- Any conduct that could reasonably be considered inappropriate in a
     professional environment
 
 ------------------------------------------------------------------------
@@ -49,8 +49,8 @@ Examples of unacceptable behavior include:
 
 Project maintainers are responsible for:
 
--   Clarifying standards of acceptable behavior
--   Taking appropriate and fair corrective action in response to
+- Clarifying standards of acceptable behavior
+- Taking appropriate and fair corrective action in response to
     violations
 
 Maintainers have the right to remove, edit, or reject comments, commits,
@@ -63,8 +63,8 @@ of Conduct.
 
 This Code of Conduct applies within:
 
--   Project spaces (GitHub issues, pull requests, discussions, etc.)
--   Public spaces when representing the project or its community
+- Project spaces (GitHub issues, pull requests, discussions, etc.)
+- Public spaces when representing the project or its community
 
 ------------------------------------------------------------------------
 
