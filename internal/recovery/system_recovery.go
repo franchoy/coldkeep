@@ -434,6 +434,7 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *recoveryStats) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	backend := db.BackendFromDB(dbconn)
 
 	var reusedCount int64
 	var skippedExistingCount int64
@@ -513,22 +514,31 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 			continue
 		}
 
+		if existingQuarantine {
+			resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
+			resyncArgs := []any{name, fileSize}
+			if backend == db.BackendSQLite {
+				resyncQuery = `UPDATE container SET current_size = ?, max_size = ? WHERE filename = ?`
+				resyncArgs = []any{fileSize, fileSize, name}
+			}
+			if _, err := dbconn.ExecContext(ctx, resyncQuery, resyncArgs...); err != nil {
+				return fmt.Errorf("resync quarantined orphan container %s: %w", name, err)
+			}
+			reusedCount++
+			logRecoveryEvent(
+				"quarantine_orphan_container_resynced",
+				"filename="+name,
+				fmt.Sprintf("old_current_size=%d", existingCurrentSize),
+				fmt.Sprintf("old_max_size=%d", existingMaxSize),
+				fmt.Sprintf("new_size=%d", fileSize),
+			)
+			continue
+		}
+
 		if !existingQuarantine {
 			skippedExistingCount++
 			continue
 		}
-
-		if !isStrictRecovery() {
-			warningCount++
-			continue
-		}
-		return fmt.Errorf(
-			"suspicious orphan container conflict for filename=%s: existing quarantine row has current_size=%d max_size=%d expected_size=%d",
-			name,
-			existingCurrentSize,
-			existingMaxSize,
-			fileSize,
-		)
 	}
 
 	logRecoveryEvent(
