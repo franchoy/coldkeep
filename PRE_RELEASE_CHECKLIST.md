@@ -143,6 +143,13 @@ multiple test packages share the same PostgreSQL instance.
 
 ## 5) Run doctor
 
+Before steps 5-11, confirm your local CLI environment points at storage that
+matches the database state you want to inspect. Step 2 deletes
+`$PWD/.ci-storage/manual-checks`, and steps 3-4 mutate the shared `coldkeep`
+database. If you continue from those steps without resetting `DB_NAME` and
+`COLDKEEP_STORAGE_DIR`, doctor/stats/verify may legitimately report missing
+containers from an earlier storage path rather than a product defect.
+
 ```bash
 unset COLDKEEP_CODEC
 ./coldkeep doctor
