@@ -840,6 +840,10 @@ func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, db
 // -----------------------------------------------------------------------------
 
 func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, chunkerVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	if strings.TrimSpace(chunkerVersion) == "" {
+		return 0, "", fmt.Errorf("logical_file.chunker_version must not be empty")
+	}
+
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err
@@ -871,13 +875,17 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 	case sql.ErrNoRows:
 		// Conflict happened: someone else already stored this file hash
 		var existingID int64
+		var existingChunkerVersion string
 		if err := tx.QueryRowContext(
 			ctx,
-			`SELECT id, status FROM logical_file WHERE file_hash = $1 and total_size = $2`,
+			`SELECT id, status, chunker_version FROM logical_file WHERE file_hash = $1 and total_size = $2`,
 			fileHash,
 			fileinfo.Size(),
-		).Scan(&existingID, &filestatus); err != nil {
+		).Scan(&existingID, &filestatus, &existingChunkerVersion); err != nil {
 			return 0, "", err
+		}
+		if strings.TrimSpace(existingChunkerVersion) == "" {
+			return 0, "", fmt.Errorf("logical_file %d has empty chunker_version (repository corruption or incomplete migration)", existingID)
 		}
 
 		switch filestatus {
@@ -1046,6 +1054,9 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 }
 
 func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, chunkerVersion string, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	if strings.TrimSpace(chunkerVersion) == "" {
+		return 0, "", false, fmt.Errorf("chunk.chunker_version must not be empty")
+	}
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1082,6 +1093,9 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		var existingChunkerVersion string
 		if err := tx.QueryRowContext(ctx, `SELECT id, status, chunker_version FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus, &existingChunkerVersion); err != nil {
 			return 0, "", false, err
+		}
+		if strings.TrimSpace(existingChunkerVersion) == "" {
+			return 0, "", false, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", chunkID)
 		}
 		switch chunkstatus {
 		case filestate.ChunkCompleted:

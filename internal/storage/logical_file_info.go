@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -32,6 +33,10 @@ func GetLogicalFileInfoWithDB(dbconn *sql.DB, fileID int64) (LogicalFileInfo, er
 			return LogicalFileInfo{}, err
 		}
 		return LogicalFileInfo{}, fmt.Errorf("query logical_file info for %d: %w", fileID, err)
+	}
+
+	if strings.TrimSpace(string(info.ChunkerVersion)) == "" {
+		return LogicalFileInfo{}, fmt.Errorf("logical_file %d has empty chunker_version (repository corruption or incomplete migration)", fileID)
 	}
 
 	return info, nil

@@ -406,6 +406,41 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 	}
 }
 
+func TestClaimChunkRejectsExistingRowWithEmptyChunkerVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id`,
+		"empty-version-existing-chunk",
+		123,
+		filestate.ChunkProcessing,
+		0,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert existing chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunker_version = '' WHERE id = $1`, chunkID); err != nil {
+		t.Fatalf("set empty chunker_version: %v", err)
+	}
+
+	ctx := context.Background()
+	_, _, _, err = claimChunkWithContext(ctx, dbconn, "empty-version-existing-chunk", 123, string(chunk.DefaultChunkerVersion), container.ContainersDir)
+	if err == nil || !strings.Contains(err.Error(), "empty chunker_version") {
+		t.Fatalf("expected empty chunker_version error, got: %v", err)
+	}
+}
+
 func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

@@ -92,17 +92,21 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 
 	var expectedFileHash string
 	var originalName string
+	var logicalFileChunkerVersion string
 	err = tx.QueryRowContext(
 		ctx,
-		"SELECT original_name, file_hash FROM logical_file WHERE status = $1 AND id = $2",
+		"SELECT original_name, file_hash, chunker_version FROM logical_file WHERE status = $1 AND id = $2",
 		filestate.LogicalFileCompleted,
 		fileID,
-	).Scan(&originalName, &expectedFileHash)
+	).Scan(&originalName, &expectedFileHash, &logicalFileChunkerVersion)
 	if err == sql.ErrNoRows {
 		return "", "", nil, nil, fmt.Errorf("logical file id %d not found", fileID)
 	}
 	if err != nil {
 		return "", "", nil, nil, fmt.Errorf("query logical_file: %w", err)
+	}
+	if strings.TrimSpace(logicalFileChunkerVersion) == "" {
+		return "", "", nil, nil, fmt.Errorf("logical file %d has empty chunker_version (repository corruption or incomplete migration)", fileID)
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -156,6 +160,9 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			&row.chunkID,
 		); err != nil {
 			return "", "", nil, nil, fmt.Errorf("scan chunk row: %w", err)
+		}
+		if strings.TrimSpace(row.chunkerVersion) == "" {
+			return "", "", nil, nil, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", row.chunkID)
 		}
 		// If the container is missing (quarantined), filename will be NULL
 		// Allow the chunk row, but mark filename as empty string

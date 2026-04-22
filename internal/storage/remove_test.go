@@ -223,6 +223,38 @@ func TestGetLogicalFileInfoWithDBNotFound(t *testing.T) {
 	}
 }
 
+func TestGetLogicalFileInfoWithDBFailsOnEmptyChunkerVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		"logical-file-info-empty-version.bin",
+		int64(10),
+		strings.Repeat("e", 64),
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE logical_file SET chunker_version = '' WHERE id = $1`, fileID); err != nil {
+		t.Fatalf("set empty chunker_version: %v", err)
+	}
+
+	_, err = GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err == nil || !strings.Contains(err.Error(), "empty chunker_version") {
+		t.Fatalf("expected empty chunker_version error, got: %v", err)
+	}
+}
+
 func TestRemoveByStoredPathUnlinksSingleMappingAndKeepsSharedLogicalAlive(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
