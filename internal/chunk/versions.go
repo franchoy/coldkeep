@@ -3,6 +3,6 @@ package chunk
 type Version string
 
 const (
-	VersionSimpleRolling Version = "v1-simple-rolling"
-	DefaultVersion       Version = VersionSimpleRolling
+	VersionV1SimpleRolling Version = "v1-simple-rolling"
+	DefaultChunkerVersion  Version = VersionV1SimpleRolling
 )

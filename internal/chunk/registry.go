@@ -64,7 +64,7 @@ func ChunkerByVersion(version Version) (Chunker, error) {
 }
 
 func buildDefaultRegistry() *Registry {
-	registry := NewRegistry(DefaultVersion)
+	registry := NewRegistry(DefaultChunkerVersion)
 	registry.MustRegister(simplecdc.New())
 	return registry
 }
