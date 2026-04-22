@@ -6,3 +6,8 @@ type Info struct {
 	// optional (future-safe)
 	Offset int64
 }
+
+type Result struct {
+	Info Info
+	Data []byte
+}

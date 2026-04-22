@@ -1561,10 +1561,11 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
 	// not by this low-level result function.
 
-	for _, chunkData := range chunks {
+	for _, chunkResult := range chunks {
 		if err := ctx.Err(); err != nil {
 			return StoreFileResult{}, err
 		}
+		chunkData := chunkResult.Data
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
