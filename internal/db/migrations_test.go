@@ -292,6 +292,9 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if sqliteTestTableHasColumn(t, dbconn, "snapshot_file", "path") {
 		t.Fatal("did not expect legacy snapshot_file.path in direct sqlite bootstrap")
 	}
+	if sqliteTestTableHasColumn(t, dbconn, "file_chunk", "chunker_version") {
+		t.Fatal("did not expect file_chunk.chunker_version in direct sqlite bootstrap")
+	}
 }
 
 func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) {
