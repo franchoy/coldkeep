@@ -362,6 +362,14 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Fatalf("claim reused chunk with override version: %v", err)
 	}
 
+	var sameIdentityRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, "shared-chunk-hash", 777).Scan(&sameIdentityRows); err != nil {
+		t.Fatalf("count chunk rows by dedup identity: %v", err)
+	}
+	if sameIdentityRows != 1 {
+		t.Fatalf("expected dedup identity hash+size to keep a single chunk row, got %d", sameIdentityRows)
+	}
+
 	var persistedChunkerVersion string
 	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, chunkID).Scan(&persistedChunkerVersion); err != nil {
 		t.Fatalf("read chunk.chunker_version: %v", err)
