@@ -4391,6 +4391,95 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	}
 }
 
+// TestChunkerAbstractionStoreRestoreRoundTrip proves that the injected Chunker
+// field in StorageContext flows end-to-end through store and restore without
+// any functional regression.  It exercises the explicit injection path
+// (StorageContext.Chunker = chunk.DefaultChunker()) rather than the nil
+// fallback, so a broken EffectiveChunker() wiring would be caught here.
+func TestChunkerAbstractionStoreRestoreRoundTrip(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Use a file larger than MaxChunkSize so multiple chunks are produced,
+	// exercising the full chunker loop rather than the single-chunk fast path.
+	inPath := testutils.CreateTempFile(t, inputDir, "chunker_abstraction.bin", chunk.MaxChunkSize+1)
+	wantBytes := testutils.MustRead(t, inPath)
+	wantHash := testutils.SHA256File(t, inPath)
+
+	// Build StorageContext with EXPLICIT chunker injection — this is the
+	// distinguishing property of this test versus TestRoundTripStoreRestore.
+	sgctx := storage.StorageContext{
+		DB:      dbconn,
+		Writer:  container.NewLocalWriter(container.GetContainerMaxSize()),
+		Chunker: chunk.DefaultChunker(),
+	}
+
+	// Verify the injected chunker reports the expected version before any I/O.
+	if got, want := sgctx.EffectiveChunker().Version(), chunk.DefaultChunkerVersion; got != want {
+		t.Fatalf("EffectiveChunker version mismatch: got %q want %q", got, want)
+	}
+
+	// First store: must not report AlreadyStored.
+	result1, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("first StoreFileWithStorageContextResult: %v", err)
+	}
+	if result1.AlreadyStored {
+		t.Fatalf("expected first store to be new, got AlreadyStored=true")
+	}
+
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	outPath := filepath.Join(outDir, "chunker_abstraction.restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("RestoreFileWithDB: %v", err)
+	}
+
+	gotBytes := testutils.MustRead(t, outPath)
+	if !bytes.Equal(wantBytes, gotBytes) {
+		t.Fatalf("restored bytes differ from original (%d original vs %d restored)", len(wantBytes), len(gotBytes))
+	}
+
+	gotHash := testutils.SHA256File(t, outPath)
+	if gotHash != wantHash {
+		t.Fatalf("hash mismatch: want %s got %s", wantHash, gotHash)
+	}
+
+	// Second store of the same file must report AlreadyStored=true, proving
+	// dedup still works through the abstraction layer.
+	result2, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("second StoreFileWithStorageContextResult: %v", err)
+	}
+	if !result2.AlreadyStored {
+		t.Fatalf("expected second store to be deduplicated (AlreadyStored=true)")
+	}
+}
+
 func TestConcurrentStoreFolderStress(t *testing.T) {
 	testgate.RequireDB(t)
 	testgate.RequireStress(t)
