@@ -223,8 +223,8 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Helper()
 		var fileID int64
 		err := dbconn.QueryRow(
-			`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+			 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 			 RETURNING id`,
 			name,
 			123,
@@ -380,8 +380,8 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"orphan-completed-chunk",
 		123,
@@ -427,8 +427,8 @@ func TestClaimChunkRejectsExistingRowWithEmptyChunkerVersion(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"empty-version-existing-chunk",
 		123,
@@ -462,8 +462,8 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"quarantined-completed-chunk",
 		321,
@@ -899,8 +899,8 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithMissingContainerFile(t *testing
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"missing-file-completed-chunk",
 		456,
@@ -1132,8 +1132,8 @@ func insertReusableTestLogicalFile(t *testing.T, dbconn *sql.DB, totalSize int64
 
 	var fileID int64
 	err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"reusable.bin",
 		totalSize,
@@ -1165,8 +1165,8 @@ func insertReusableTestChunk(t *testing.T, dbconn *sql.DB, hash string, status s
 
 	var chunkID int64
 	err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		hash,
 		64,
@@ -1260,8 +1260,8 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 	// Create a completed logical file.
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"rebuild_test.bin", 128, "rebuild-file-hash", filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1272,8 +1272,8 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 		t.Helper()
 		var id int64
 		if err := dbconn.QueryRow(
-			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-			 VALUES ($1, 64, $2, 1) RETURNING id`,
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, 64, $2, 1, 'v1-simple-rolling') RETURNING id`,
 			hash, filestate.ChunkCompleted,
 		).Scan(&id); err != nil {
 			t.Fatalf("insert chunk %s: %v", hash, err)
@@ -1344,8 +1344,8 @@ func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"stale-garbage.bin", 256, "stale-garbage-hash", filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1355,8 +1355,8 @@ func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
 		t.Helper()
 		var id int64
 		if err := dbconn.QueryRow(
-			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-			 VALUES ($1, 64, $2, 1) RETURNING id`,
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, 64, $2, 1, 'v1-simple-rolling') RETURNING id`,
 			hash, filestate.ChunkCompleted,
 		).Scan(&id); err != nil {
 			t.Fatalf("insert chunk %s: %v", hash, err)
@@ -1418,8 +1418,8 @@ func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"idempotent_test.bin", 0, "idempotent-file-hash", filestate.LogicalFileAborted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1457,8 +1457,8 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		fileInfo.Name(),
 		fileInfo.Size(),
@@ -1472,8 +1472,8 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 		t.Helper()
 		var chunkID int64
 		if err := dbconn.QueryRow(
-			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 			 RETURNING id`,
 			hash,
 			int64(len(payload)/2),
@@ -1536,8 +1536,8 @@ func TestMarkLogicalFileForReuseValidationFailureMarksEachChunkSuspiciousOnce(t 
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"duplicate-chunk-ref.bin", 128, "duplicate-ref-hash", filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1545,8 +1545,8 @@ func TestMarkLogicalFileForReuseValidationFailureMarksEachChunkSuspiciousOnce(t 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, 64, $2, 2) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, 64, $2, 2, 'v1-simple-rolling') RETURNING id`,
 		"duplicate-ref-chunk", filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1631,8 +1631,8 @@ func TestFinalizeLogicalFileStorageAtomicBoundary(t *testing.T) {
 
 			var fileID int64
 			if err := dbconn.QueryRow(
-				`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-				 VALUES ($1, $2, $3, $4) RETURNING id`,
+				`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+				 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 				"finalize_test.bin", 1024, "finalize-test-hash", filestate.LogicalFileProcessing,
 			).Scan(&fileID); err != nil {
 				t.Fatalf("insert logical_file: %v", err)

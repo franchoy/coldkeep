@@ -45,8 +45,8 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"sample.txt",
 		5,
@@ -58,8 +58,8 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"chunk-hash-1",
 		5,
@@ -157,8 +157,8 @@ func TestRestorePinningFailsOnEmptyLogicalFileChunkerVersion(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"empty-logical-chunker-version.txt",
 		5,
@@ -203,8 +203,8 @@ func TestRestorePinningFailsOnEmptyChunkChunkerVersion(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"sample-empty-chunk-version.txt",
 		5,
@@ -216,8 +216,8 @@ func TestRestorePinningFailsOnEmptyChunkChunkerVersion(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"chunk-hash-empty-version",
 		5,
@@ -315,8 +315,8 @@ func TestRestoreFileByStoredPathUsesPhysicalPathIdentity(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash,
 		int64(len(payload)),
 		filestate.ChunkCompleted,
@@ -339,8 +339,8 @@ func TestRestoreFileByStoredPathUsesPhysicalPathIdentity(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"legacy-original-name.bin",
 		int64(len(payload)),
 		hash,
@@ -449,8 +449,8 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash,
 		int64(len(payload)),
 		filestate.ChunkCompleted,
@@ -473,8 +473,8 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"prefix-mode-original.bin",
 		int64(len(payload)),
 		hash,
@@ -566,8 +566,8 @@ func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash,
 		int64(len(payload)),
 		filestate.ChunkCompleted,
@@ -590,8 +590,8 @@ func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"override-mode-original.bin",
 		int64(len(payload)),
 		hash,
@@ -755,8 +755,8 @@ func TestRestoreFailsWhenContainerFileMissing(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		chunkHash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -772,8 +772,8 @@ func TestRestoreFailsWhenContainerFileMissing(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"missing-container-test.bin", int64(len(payload)), chunkHash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -829,8 +829,8 @@ func TestRestoreFailsOnChunkHashMismatch(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		wrongChunkHash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -846,8 +846,8 @@ func TestRestoreFailsOnChunkHashMismatch(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"hash-mismatch-test.bin", int64(len(payload)), fileHash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -881,8 +881,8 @@ func TestRestoreFailsWhenNonEmptyFileHasNoChunks(t *testing.T) {
 	nonEmptyHash := strings.Repeat("a", 64)
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"no-chunks.bin", int64(123), nonEmptyHash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -929,8 +929,8 @@ func TestRestoreFailsOnPlaintextSizeMismatch(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -947,8 +947,8 @@ func TestRestoreFailsOnPlaintextSizeMismatch(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"plaintext-size-mismatch-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1006,8 +1006,8 @@ func TestRestoreFailsOnAESGCMDecodeFailure(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1028,8 +1028,8 @@ func TestRestoreFailsOnAESGCMDecodeFailure(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"aesgcm-decode-failure-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1065,8 +1065,8 @@ func TestRestoreNonCompletedChunkMappingReturnsNoRestorableChunksError(t *testin
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"processing-chunk-restore.bin", int64(64), nonEmptyHash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1074,8 +1074,8 @@ func TestRestoreNonCompletedChunkMappingReturnsNoRestorableChunksError(t *testin
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		nonEmptyHash, int64(64), filestate.ChunkProcessing, int64(1),
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
@@ -1141,8 +1141,8 @@ func TestRestoreFailsWhenAESGCMTransformerKeyIsMissing(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1164,8 +1164,8 @@ func TestRestoreFailsWhenAESGCMTransformerKeyIsMissing(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"aesgcm-missing-key-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1241,8 +1241,8 @@ func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
 
 	var chunkID0 int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash0, int64(len(payload0)), filestate.ChunkCompleted,
 	).Scan(&chunkID0); err != nil {
 		t.Fatalf("insert first chunk: %v", err)
@@ -1250,8 +1250,8 @@ func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
 
 	var chunkID2 int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash2, int64(len(payload2)), filestate.ChunkCompleted,
 	).Scan(&chunkID2); err != nil {
 		t.Fatalf("insert second chunk: %v", err)
@@ -1275,8 +1275,8 @@ func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"chunk-order-discontinuity.bin", int64(len(payload0)+len(payload2)), strings.Repeat("d", 64), filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1342,8 +1342,8 @@ func TestRestoreFailsOnPayloadReadShortRead(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1365,8 +1365,8 @@ func TestRestoreFailsOnPayloadReadShortRead(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"payload-read-short-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1422,8 +1422,8 @@ func TestRestoreFailsWhenOutputParentPathIsFile(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1444,8 +1444,8 @@ func TestRestoreFailsWhenOutputParentPathIsFile(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"rename-failure-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1511,8 +1511,8 @@ func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1533,8 +1533,8 @@ func TestRestoreFailsOnCreateTempFilePermissionDenied(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"create-temp-perm-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1603,8 +1603,8 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1625,8 +1625,8 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"atomic-restore-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1708,8 +1708,8 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash, int64(len(payload)), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1730,8 +1730,8 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"atomic-restore-failure-test.bin", int64(len(payload)), hash, filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -1814,8 +1814,8 @@ func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash,
 		int64(len(payload)),
 		filestate.ChunkCompleted,
@@ -1838,8 +1838,8 @@ func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		originalName,
 		int64(len(payload)),
 		hash,
@@ -1916,8 +1916,8 @@ func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash,
 		int64(len(payload)),
 		filestate.ChunkCompleted,
@@ -1940,8 +1940,8 @@ func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		originalName,
 		int64(len(payload)),
 		hash,
@@ -2031,8 +2031,8 @@ func setupStoredPathRestoreFixture(
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 1) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
 		hash,
 		int64(len(payload)),
 		filestate.ChunkCompleted,
@@ -2057,8 +2057,8 @@ func setupStoredPathRestoreFixture(
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, 1) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 1, 'v1-simple-rolling') RETURNING id`,
 		"restore-metadata-fixture.bin",
 		int64(len(payload)),
 		hash,
