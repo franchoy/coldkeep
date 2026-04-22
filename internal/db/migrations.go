@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 8
+const requiredPostgresSchemaVersion = 9
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -384,6 +384,40 @@ func runSQLiteSnapshotMigration(dbconn sqliteContextExecutor, ctx context.Contex
 	return nil
 }
 
+func runSQLiteChunkerVersionMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	hasChunkerVersion, err := sqliteTableHasColumn(dbconn, ctx, "logical_file", "chunker_version")
+	if err != nil {
+		return fmt.Errorf("inspect logical_file.chunker_version: %w", err)
+	}
+	if !hasChunkerVersion {
+		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE logical_file ADD COLUMN chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'`); err != nil {
+			return fmt.Errorf("add logical_file.chunker_version: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE logical_file
+		SET chunker_version = 'v1-simple-rolling'
+		WHERE chunker_version IS NULL
+	`); err != nil {
+		return fmt.Errorf("backfill logical_file.chunker_version: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 9
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 9: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (9)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 9: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -516,6 +550,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteSnapshotMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteChunkerVersionMigration(tx, ctx); err != nil {
 		return err
 	}
 

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS logical_file (
   total_size BIGINT NOT NULL CHECK (total_size >= 0),
   file_hash TEXT NOT NULL,
   ref_count BIGINT NOT NULL DEFAULT 1 CHECK (ref_count >= 0),
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling',
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -394,5 +395,17 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logic
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id);
 
 UPDATE schema_version SET version = 8 WHERE version < 8;
+
+-- Schema version 9: explicit chunker metadata on logical files.
+-- Canonical persisted identifier for historical rows: 'v1-simple-rolling'
+-- (matches chunk.VersionV1SimpleRolling in Go code).
+ALTER TABLE logical_file ADD COLUMN IF NOT EXISTS chunker_version TEXT;
+ALTER TABLE logical_file ALTER COLUMN chunker_version SET DEFAULT 'v1-simple-rolling';
+UPDATE logical_file
+SET chunker_version = 'v1-simple-rolling'
+WHERE chunker_version IS NULL;
+ALTER TABLE logical_file ALTER COLUMN chunker_version SET NOT NULL;
+
+UPDATE schema_version SET version = 9 WHERE version < 9;
 
 COMMIT;
