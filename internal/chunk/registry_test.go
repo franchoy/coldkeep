@@ -69,6 +69,22 @@ func TestRegistryMustGetPanicsOnMissing(t *testing.T) {
 	r.MustGet("nonexistent")
 }
 
+func TestNewDefaultRegistryIsValid(t *testing.T) {
+	r, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry returned error: %v", err)
+	}
+
+	if got := r.DefaultVersion(); got != VersionV1SimpleRolling {
+		t.Fatalf("default version mismatch: got %q want %q", got, VersionV1SimpleRolling)
+	}
+
+	c := r.Default()
+	if c.Version() != VersionV1SimpleRolling {
+		t.Fatalf("default chunker version mismatch: got %q", c.Version())
+	}
+}
+
 func TestChunkFileMatchesDefaultChunker(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "input.bin")

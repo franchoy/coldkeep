@@ -55,6 +55,14 @@ func (r *Registry) DefaultVersion() Version {
 	return r.defaultV
 }
 
+// NewDefaultRegistry constructs a fresh Registry pre-loaded with the
+// v1-simple-rolling chunker set as the default. Callers that need an
+// isolated registry (tests, config-driven selection) should use this
+// instead of the package-level DefaultRegistry().
+func NewDefaultRegistry() (*Registry, error) {
+	return NewRegistry(VersionV1SimpleRolling, simplecdc.New())
+}
+
 // DefaultRegistry returns the package-level default registry.
 func DefaultRegistry() *Registry {
 	return defaultRegistry
