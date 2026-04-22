@@ -156,8 +156,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 9 {
-		t.Fatalf("expected schema version 9 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 10 {
+		t.Fatalf("expected schema version 10 after first migration pass, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -191,8 +191,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 9 {
-		t.Fatalf("expected schema version to stay 9 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 10 {
+		t.Fatalf("expected schema version to stay 10 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -227,6 +227,8 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 
 	checks := []string{
 		"UPDATE schema_version SET version = 9 WHERE version < 9",
+		"UPDATE schema_version SET version = 10 WHERE version < 10",
+		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
 		"ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id",
 		"ON DELETE SET NULL",
 		"CREATE TABLE IF NOT EXISTS snapshot_path",
@@ -267,8 +269,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 9 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 9, got %d", schemaVersion)
+	if schemaVersion != 10 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 10, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -401,8 +403,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 9 {
-		t.Fatalf("expected schema version 9 after migration, got %d", schemaVersion)
+	if schemaVersion != 10 {
+		t.Fatalf("expected schema version 10 after migration, got %d", schemaVersion)
 	}
 
 	if !sqliteTestTableHasColumn(t, dbconn, "snapshot", "parent_id") {
@@ -620,8 +622,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
-	if schemaVersion != 9 {
-		t.Fatalf("expected schema_version=9 after fresh postgres bootstrap, got %d", schemaVersion)
+	if schemaVersion != 10 {
+		t.Fatalf("expected schema_version=10 after fresh postgres bootstrap, got %d", schemaVersion)
 	}
 
 	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {

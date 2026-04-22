@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 9
+const requiredPostgresSchemaVersion = 10
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -418,6 +418,73 @@ func runSQLiteChunkerVersionMigration(dbconn sqliteContextExecutor, ctx context.
 	return nil
 }
 
+func sqliteHasTable(dbconn sqliteContextExecutor, ctx context.Context, tableName string) (bool, error) {
+	rows, err := dbconn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		return true, rows.Err()
+	}
+	return false, rows.Err()
+}
+
+func runSQLiteChunkChunkerVersionMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	tableExists, err := sqliteHasTable(dbconn, ctx, "chunk")
+	if err != nil {
+		return fmt.Errorf("inspect chunk table existence: %w", err)
+	}
+	if !tableExists {
+		// chunk table absent in legacy schemas; still advance schema version.
+		if _, err := dbconn.ExecContext(ctx, `
+			DELETE FROM schema_version WHERE version < 10
+		`); err != nil {
+			return fmt.Errorf("clean sqlite schema_version before 10: %w", err)
+		}
+
+		if _, err := dbconn.ExecContext(ctx, `
+			INSERT OR IGNORE INTO schema_version(version) VALUES (10)
+		`); err != nil {
+			return fmt.Errorf("insert sqlite schema_version 10: %w", err)
+		}
+
+		return nil
+	}
+
+	hasChunkerVersion, err := sqliteTableHasColumn(dbconn, ctx, "chunk", "chunker_version")
+	if err != nil {
+		return fmt.Errorf("inspect chunk.chunker_version: %w", err)
+	}
+	if !hasChunkerVersion {
+		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE chunk ADD COLUMN chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'`); err != nil {
+			return fmt.Errorf("add chunk.chunker_version: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE chunk
+		SET chunker_version = 'v1-simple-rolling'
+		WHERE chunker_version IS NULL
+	`); err != nil {
+		return fmt.Errorf("backfill chunk.chunker_version: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 10
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 10: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (10)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 10: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -554,6 +621,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteChunkerVersionMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteChunkChunkerVersionMigration(tx, ctx); err != nil {
 		return err
 	}
 

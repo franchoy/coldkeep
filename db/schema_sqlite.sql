@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 9 WHERE version < 9;
-INSERT OR IGNORE INTO schema_version(version) VALUES (9);
+UPDATE schema_version SET version = 10 WHERE version < 10;
+INSERT OR IGNORE INTO schema_version(version) VALUES (10);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS chunk (
   pin_count INTEGER NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);

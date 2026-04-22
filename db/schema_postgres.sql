@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS chunk (
   pin_count BIGINT NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
@@ -407,5 +408,18 @@ WHERE chunker_version IS NULL;
 ALTER TABLE logical_file ALTER COLUMN chunker_version SET NOT NULL;
 
 UPDATE schema_version SET version = 9 WHERE version < 9;
+
+
+-- Schema version 10: explicit chunker metadata on dedup chunks.
+-- Canonical persisted identifier for historical rows: 'v1-simple-rolling'
+-- (matches chunk.VersionV1SimpleRolling in Go code).
+ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT;
+ALTER TABLE chunk ALTER COLUMN chunker_version SET DEFAULT 'v1-simple-rolling';
+UPDATE chunk
+SET chunker_version = 'v1-simple-rolling'
+WHERE chunker_version IS NULL;
+ALTER TABLE chunk ALTER COLUMN chunker_version SET NOT NULL;
+
+UPDATE schema_version SET version = 10 WHERE version < 10;
 
 COMMIT;
