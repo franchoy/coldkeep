@@ -7,74 +7,68 @@ import (
 )
 
 type Registry struct {
-	chunkers       map[Version]Chunker
-	defaultVersion Version
+	byVersion map[Version]Chunker
+	defaultV  Version
 }
 
-func NewRegistry(defaultVersion Version) *Registry {
-	return &Registry{
-		chunkers:       make(map[Version]Chunker),
-		defaultVersion: defaultVersion,
+// NewRegistry constructs a Registry with the given default version and chunkers.
+// It returns an error if:
+//   - any chunker version is duplicated
+//   - defaultV is not present among the provided chunkers
+func NewRegistry(defaultV Version, chunkers ...Chunker) (*Registry, error) {
+	byVersion := make(map[Version]Chunker, len(chunkers))
+	for _, c := range chunkers {
+		v := c.Version()
+		if _, exists := byVersion[v]; exists {
+			return nil, fmt.Errorf("duplicate chunker registration for version %q", v)
+		}
+		byVersion[v] = c
 	}
+	if _, ok := byVersion[defaultV]; !ok {
+		return nil, fmt.Errorf("default version %q not present in registered chunkers", defaultV)
+	}
+	return &Registry{byVersion: byVersion, defaultV: defaultV}, nil
 }
 
-func (r *Registry) Register(chunker Chunker) error {
-	if chunker == nil {
-		return fmt.Errorf("chunker cannot be nil")
-	}
-	version := Version(chunker.Version())
-	if version == "" {
-		return fmt.Errorf("chunker version cannot be empty")
-	}
-	if _, exists := r.chunkers[version]; exists {
-		return fmt.Errorf("chunker already registered for version %q", version)
-	}
-	r.chunkers[version] = chunker
-	return nil
+// Get returns the Chunker registered for version, and whether it was found.
+func (r *Registry) Get(version Version) (Chunker, bool) {
+	c, ok := r.byVersion[version]
+	return c, ok
 }
 
-func (r *Registry) MustRegister(chunker Chunker) {
-	if err := r.Register(chunker); err != nil {
-		panic(err)
-	}
-}
-
-func (r *Registry) Get(version Version) (Chunker, error) {
-	chunker, ok := r.chunkers[version]
+// MustGet returns the Chunker for version or panics if not registered.
+func (r *Registry) MustGet(version Version) Chunker {
+	c, ok := r.Get(version)
 	if !ok {
-		return nil, fmt.Errorf("unknown chunker version %q", version)
+		panic(fmt.Sprintf("chunk: chunker for version %q not registered", version))
 	}
-	return chunker, nil
+	return c
 }
 
-func (r *Registry) Default() (Chunker, error) {
-	return r.Get(r.defaultVersion)
+// Default returns the default Chunker for this registry.
+func (r *Registry) Default() Chunker {
+	return r.MustGet(r.defaultV)
 }
 
+// DefaultVersion returns the version identifier of the default chunker.
+func (r *Registry) DefaultVersion() Version {
+	return r.defaultV
+}
+
+// DefaultRegistry returns the package-level default registry.
 func DefaultRegistry() *Registry {
 	return defaultRegistry
 }
 
+// DefaultChunker returns the default Chunker from the package-level registry.
 func DefaultChunker() Chunker {
-	return defaultChunker
+	return defaultRegistry.Default()
 }
 
-func ChunkerByVersion(version Version) (Chunker, error) {
-	return defaultRegistry.Get(version)
-}
-
-func buildDefaultRegistry() *Registry {
-	registry := NewRegistry(DefaultChunkerVersion)
-	registry.MustRegister(simplecdc.New())
-	return registry
-}
-
-var defaultRegistry = buildDefaultRegistry()
-
-var defaultChunker = func() Chunker {
-	chunker, err := defaultRegistry.Default()
+var defaultRegistry = func() *Registry {
+	r, err := NewRegistry(DefaultChunkerVersion, simplecdc.New())
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("chunk: failed to build default registry: %v", err))
 	}
-	return chunker
+	return r
 }()

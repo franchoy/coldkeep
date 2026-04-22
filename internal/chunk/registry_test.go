@@ -14,6 +14,61 @@ func TestDefaultChunkerVersion(t *testing.T) {
 	}
 }
 
+func TestNewRegistryRejectsUnknownDefault(t *testing.T) {
+	_, err := NewRegistry("nonexistent-version")
+	if err == nil {
+		t.Fatal("expected error for unknown default version, got nil")
+	}
+}
+
+func TestNewRegistryRejectsDuplicateChunker(t *testing.T) {
+	_, err := NewRegistry(VersionV1SimpleRolling,
+		DefaultChunker(),
+		DefaultChunker(),
+	)
+	if err == nil {
+		t.Fatal("expected error for duplicate chunker registration, got nil")
+	}
+}
+
+func TestRegistryGetAndDefaultVersion(t *testing.T) {
+	r, err := NewRegistry(VersionV1SimpleRolling, DefaultChunker())
+	if err != nil {
+		t.Fatalf("unexpected registry construction error: %v", err)
+	}
+
+	if got := r.DefaultVersion(); got != VersionV1SimpleRolling {
+		t.Fatalf("DefaultVersion mismatch: got %q want %q", got, VersionV1SimpleRolling)
+	}
+
+	c, ok := r.Get(VersionV1SimpleRolling)
+	if !ok {
+		t.Fatal("expected Get to find registered chunker")
+	}
+	if c.Version() != VersionV1SimpleRolling {
+		t.Fatalf("chunker version mismatch: got %q", c.Version())
+	}
+
+	_, ok = r.Get("nonexistent")
+	if ok {
+		t.Fatal("expected Get to return false for unknown version")
+	}
+}
+
+func TestRegistryMustGetPanicsOnMissing(t *testing.T) {
+	r, err := NewRegistry(VersionV1SimpleRolling, DefaultChunker())
+	if err != nil {
+		t.Fatalf("unexpected registry construction error: %v", err)
+	}
+
+	defer func() {
+		if rec := recover(); rec == nil {
+			t.Fatal("expected MustGet to panic for unknown version")
+		}
+	}()
+	r.MustGet("nonexistent")
+}
+
 func TestChunkFileMatchesDefaultChunker(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "input.bin")

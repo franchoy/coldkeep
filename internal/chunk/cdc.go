@@ -5,7 +5,7 @@ import "github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 const MaxChunkSize = simplecdc.MaxChunkSize
 
 func ChunkFile(filePath string) ([][]byte, error) {
-	results, err := defaultChunker.ChunkFile(filePath)
+	results, err := DefaultChunker().ChunkFile(filePath)
 	if err != nil {
 		return nil, err
 	}
