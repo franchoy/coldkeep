@@ -1526,12 +1526,13 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	storeService := NewStoreService(sgctx.EffectiveChunker())
 	activeChunker := storeService.ResolveActiveChunker()
 	effectiveChunker := activeChunker.Chunker
-	// Phase 3: resolve once, then reuse one authoritative source for both chunking
-	// behavior and persisted chunker_version metadata throughout this store operation.
-	persistedChunkerVersion := string(activeChunker.Version)
-
+	activeVersion := activeChunker.Version
+	if strings.TrimSpace(string(activeVersion)) == "" {
+		return StoreFileResult{}, fmt.Errorf("resolved active chunker version must not be empty")
+	}
+	activeVersionString := string(activeVersion)
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, persistedChunkerVersion, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, activeVersionString, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -1593,7 +1594,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), persistedChunkerVersion, validationContainerDir)
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), activeVersionString, validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
