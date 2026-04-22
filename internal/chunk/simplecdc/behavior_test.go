@@ -2,7 +2,7 @@ package simplecdc
 
 // Deterministic behavior equivalence tests for the v1-simple-rolling chunker.
 //
-// These tests fix the observable contract of the legacy implementation:
+// These tests fix the observable contract of the historical implementation:
 //   - correct version identity
 //   - correct chunk count for each fixture class
 //   - offsets are strictly sequential (offset[i+1] == offset[i] + size[i])
