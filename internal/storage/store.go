@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -1547,7 +1546,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}()
 
 	// At this point, we have a logical_file row in "PROCESSING" status for this file hash, either created by us or by another process.
-	chunks, err := chunk.DefaultChunker().ChunkFile(path)
+	chunks, err := sgctx.EffectiveChunker().ChunkFile(path)
 	if err != nil {
 		return StoreFileResult{}, err
 	}

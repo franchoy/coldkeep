@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -22,6 +23,18 @@ type StorageContext struct {
 	Writer       container.ContainerWriter
 	ContainerDir string
 	TempDBPath   string
+	// Chunker overrides the chunking strategy used during store operations.
+	// If nil, chunk.DefaultChunker() is used. Set this in tests or when a
+	// specific chunker version is required.
+	Chunker chunk.Chunker
+}
+
+// EffectiveChunker returns the configured Chunker or the default if none was set.
+func (s StorageContext) EffectiveChunker() chunk.Chunker {
+	if s.Chunker != nil {
+		return s.Chunker
+	}
+	return chunk.DefaultChunker()
 }
 
 func (s StorageContext) EffectiveContainerDir() string {
