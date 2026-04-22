@@ -1,3 +1,12 @@
+// Package simplecdc contains the frozen v1-simple-rolling chunker.
+//
+// This implementation corresponds to historical repository data written with
+// version v1-simple-rolling. Its observable behavior is part of the on-disk
+// compatibility contract and must remain stable once introduced.
+//
+// Algorithm tuning constants (min/max chunk sizes, rolling mask, and rolling
+// behavior) are implementation-specific and intentionally kept local here.
+// Future chunkers (for example FastCDC) may use different tuning.
 package simplecdc
 
 import (
