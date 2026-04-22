@@ -1053,8 +1053,8 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 	return fileID, filestatus, nil
 }
 
-func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, chunkerVersion string, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
-	if strings.TrimSpace(chunkerVersion) == "" {
+func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion string, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	if strings.TrimSpace(activeVersion) == "" {
 		return 0, "", false, fmt.Errorf("chunk.chunker_version must not be empty")
 	}
 
@@ -1080,7 +1080,7 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		chunkHash,
 		chunksize,
 		filestate.ChunkProcessing,
-		chunkerVersion,
+		activeVersion,
 	).Scan(&chunkID)
 
 	switch insErr {
@@ -1089,7 +1089,9 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		chunkstatus = filestate.ChunkProcessing
 		isNew = true
 	case sql.ErrNoRows:
-		// Someone else inserted it first
+		// Someone else inserted a content-identical chunk first.
+		// Reuse as-is: do NOT require version match, do NOT update existing
+		// chunker_version, and do NOT duplicate rows by version.
 		var existingChunkerVersion string
 		if err := tx.QueryRowContext(ctx, `SELECT id, status, chunker_version FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus, &existingChunkerVersion); err != nil {
 			return 0, "", false, err
