@@ -1,6 +1,8 @@
 package chunk
 
-const MaxChunkSize = 2 * 1024 * 1024
+import "github.com/franchoy/coldkeep/internal/chunk/simplecdc"
+
+const MaxChunkSize = simplecdc.MaxChunkSize
 
 func ChunkFile(filePath string) ([][]byte, error) {
 	results, err := defaultChunker.ChunkFile(filePath)

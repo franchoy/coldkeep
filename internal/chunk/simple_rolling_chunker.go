@@ -3,7 +3,7 @@ package chunk
 import "github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 
 type simpleRollingChunker struct {
-	impl *simplecdc.Chunker
+	impl simplecdc.Chunker
 }
 
 func newSimpleRollingChunker() Chunker {
