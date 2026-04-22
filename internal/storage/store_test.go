@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -1335,7 +1336,7 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	claimedID, claimedStatus, err := claimLogicalFileWithContext(ctx, dbconn, fileInfo, fileHash, tmp)
+	claimedID, claimedStatus, err := claimLogicalFileWithContext(ctx, dbconn, fileInfo, fileHash, string(chunk.DefaultChunkerVersion), tmp)
 	if err != nil {
 		t.Fatalf("claim logical file for retry: %v", err)
 	}

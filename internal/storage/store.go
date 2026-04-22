@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -838,7 +839,7 @@ func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, db
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
 
-func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
+func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, chunkerVersion string, containersDir string) (fileID int64, filestatus string, err error) {
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err
@@ -855,14 +856,15 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 
 	insErr := tx.QueryRowContext(
 		ctx,
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, 0)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, $5)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
 		RETURNING id`,
 		fileinfo.Name(),
 		fileinfo.Size(),
 		fileHash,
 		filestate.LogicalFileProcessing,
+		chunkerVersion,
 	).Scan(&fileID)
 
 	switch insErr {
@@ -1004,11 +1006,11 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
-	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, container.ContainersDir)
+	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, string(chunk.DefaultChunkerVersion), container.ContainersDir)
 }
 
-func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, containersDir)
+func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, chunkerVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, chunkerVersion, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
@@ -1027,7 +1029,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return 0, "", errors.Join(reuseErr, err)
 	}
 
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, containersDir)
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, chunkerVersion, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
@@ -1043,7 +1045,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 	return fileID, filestatus, nil
 }
 
-func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, chunkerVersion string, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1060,13 +1062,14 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 	// If another goroutine inserts the same hash at the same time, we won't error.
 	insErr := tx.QueryRowContext(
 		ctx,
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-				VALUES ($1, $2, $3, 0)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+				VALUES ($1, $2, $3, 0, $4)
 				ON CONFLICT (chunk_hash, size) DO NOTHING
 				RETURNING id`,
 		chunkHash,
 		chunksize,
 		filestate.ChunkProcessing,
+		chunkerVersion,
 	).Scan(&chunkID)
 
 	switch insErr {
@@ -1505,8 +1508,11 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		validationContainerDir = ""
 	}
 
+	effectiveChunker := sgctx.EffectiveChunker()
+	chunkerVersion := string(effectiveChunker.Version())
+
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, chunkerVersion, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -1546,7 +1552,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}()
 
 	// At this point, we have a logical_file row in "PROCESSING" status for this file hash, either created by us or by another process.
-	chunks, err := sgctx.EffectiveChunker().ChunkFile(path)
+	chunks, err := effectiveChunker.ChunkFile(path)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -1568,7 +1574,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), validationContainerDir)
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), chunkerVersion, validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
