@@ -1026,6 +1026,124 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	}
 }
 
+func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			blocks,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if schemaVersion < 10 {
+		t.Fatalf("expected schema version >= 10 for phase2 regression, got %d", schemaVersion)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "phase2-post-migration.bin", 96*1024)
+	wantHash := testutils.SHA256File(t, inPath)
+
+	storePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	storedPath, ok := storeData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedPath) == "" {
+		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
+	}
+	trimmedStoredPath := strings.TrimLeft(filepath.ToSlash(storedPath), "/")
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB: %v", err)
+	}
+	defer dbconn.Close()
+
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
+
+	var logicalFileChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, fileID).Scan(&logicalFileChunkerVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalFileChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("logical_file.chunker_version mismatch: got=%q want=%q", logicalFileChunkerVersion, chunk.DefaultChunkerVersion)
+	}
+
+	var mismatchedChunkVersions int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2
+	`, fileID, string(chunk.DefaultChunkerVersion)).Scan(&mismatchedChunkVersions); err != nil {
+		t.Fatalf("count mismatched chunk versions: %v", err)
+	}
+	if mismatchedChunkVersions != 0 {
+		t.Fatalf("expected all chunk rows to persist chunker_version=%q, mismatches=%d", chunk.DefaultChunkerVersion, mismatchedChunkVersions)
+	}
+
+	directRestoreOut := filepath.Join(tmp, "direct-restore.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, directRestoreOut); err != nil {
+		t.Fatalf("direct restore after store: %v", err)
+	}
+	if got := testutils.SHA256File(t, directRestoreOut); got != wantHash {
+		t.Fatalf("direct restore hash mismatch: got=%s want=%s", got, wantHash)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase2-post-migration", "--output", "json"), "snapshot")
+
+	snapshotRestoreRoot := filepath.Join(tmp, "snapshot-restore")
+	if err := os.MkdirAll(snapshotRestoreRoot, 0o755); err != nil {
+		t.Fatalf("mkdir snapshot restore root: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-phase2-post-migration", "--mode", "prefix", "--destination", snapshotRestoreRoot, "--output", "json"), "snapshot")
+
+	snapshotRestoredPath := filepath.Join(snapshotRestoreRoot, filepath.FromSlash(trimmedStoredPath))
+	if got := testutils.SHA256File(t, snapshotRestoredPath); got != wantHash {
+		t.Fatalf("snapshot restore hash mismatch: got=%s want=%s", got, wantHash)
+	}
+
+	verifyPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+	if got, _ := verifyPayload["status"].(string); got != "ok" {
+		t.Fatalf("verify system should remain ok after post-migration regression flow: payload=%v", verifyPayload)
+	}
+}
+
 func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 
