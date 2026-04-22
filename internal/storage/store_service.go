@@ -8,6 +8,13 @@ type StoreService struct {
 	chunker chunk.Chunker
 }
 
+// ActiveChunkerResolution is the per-operation resolved chunker decision.
+// It is resolved once and then reused for chunking and metadata persistence.
+type ActiveChunkerResolution struct {
+	Chunker chunk.Chunker
+	Version chunk.Version
+}
+
 // NewStoreService builds a store service with an explicit active chunker.
 // If active is nil, it resolves the current runtime default from the registry.
 func NewStoreService(active chunk.Chunker) StoreService {
@@ -25,4 +32,15 @@ func (s StoreService) ActiveChunker() chunk.Chunker {
 // ActiveChunkerVersion returns the persisted version marker for this store operation.
 func (s StoreService) ActiveChunkerVersion() chunk.Version {
 	return s.chunker.Version()
+}
+
+// ResolveActiveChunker resolves and snapshots the active chunker decision for one
+// store operation. Callers should invoke this once at operation start and reuse
+// the returned Chunker and Version for the rest of the flow.
+func (s StoreService) ResolveActiveChunker() ActiveChunkerResolution {
+	active := s.ActiveChunker()
+	return ActiveChunkerResolution{
+		Chunker: active,
+		Version: active.Version(),
+	}
 }

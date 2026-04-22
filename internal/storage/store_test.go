@@ -90,10 +90,17 @@ func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	if service.ActiveChunker() == nil {
 		t.Fatal("expected non-nil active chunker")
 	}
+	resolved := service.ResolveActiveChunker()
+	if resolved.Chunker == nil {
+		t.Fatal("expected resolved chunker to be non-nil")
+	}
 
 	defaultVersion := chunk.DefaultRegistry().DefaultVersion()
 	if service.ActiveChunkerVersion() != defaultVersion {
 		t.Fatalf("unexpected default active chunker version: got=%q want=%q", service.ActiveChunkerVersion(), defaultVersion)
+	}
+	if resolved.Version != defaultVersion {
+		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, defaultVersion)
 	}
 }
 
@@ -107,6 +114,11 @@ func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 
 	if service.ActiveChunkerVersion() != customChunkerVersion {
 		t.Fatalf("unexpected active chunker version: got=%q want=%q", service.ActiveChunkerVersion(), customChunkerVersion)
+	}
+
+	resolved := service.ResolveActiveChunker()
+	if resolved.Version != customChunkerVersion {
+		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, customChunkerVersion)
 	}
 }
 
