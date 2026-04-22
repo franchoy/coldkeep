@@ -251,6 +251,14 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Fatalf("unexpected first chunk status: %s", chunkStatus)
 	}
 
+	var insertedChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, chunkID).Scan(&insertedChunkerVersion); err != nil {
+		t.Fatalf("read inserted chunk.chunker_version: %v", err)
+	}
+	if insertedChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("unexpected inserted chunker_version: got=%q want=%q", insertedChunkerVersion, chunk.DefaultChunkerVersion)
+	}
+
 	tx1, err := dbconn.Begin()
 	if err != nil {
 		t.Fatalf("begin tx1: %v", err)

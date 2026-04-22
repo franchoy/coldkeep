@@ -186,6 +186,14 @@ func TestGetLogicalFileInfoWithDBFound(t *testing.T) {
 		t.Fatalf("insert logical file: %v", err)
 	}
 
+	var rawChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, fileID).Scan(&rawChunkerVersion); err != nil {
+		t.Fatalf("read raw logical_file.chunker_version: %v", err)
+	}
+	if rawChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("unexpected raw chunker_version: got=%q want=%q", rawChunkerVersion, chunk.DefaultChunkerVersion)
+	}
+
 	info, err := GetLogicalFileInfoWithDB(dbconn, fileID)
 	if err != nil {
 		t.Fatalf("GetLogicalFileInfoWithDB: %v", err)
