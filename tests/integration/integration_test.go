@@ -5300,7 +5300,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 		t.Fatalf("write input file: %v", err)
 	}
 
-	chunks, err := chunk.ChunkFile(inPath)
+	chunks, err := chunk.DefaultChunker().ChunkFile(inPath)
 	if err != nil {
 		t.Fatalf("chunk file: %v", err)
 	}
@@ -5308,13 +5308,12 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 		t.Fatalf("expected single chunk test input, got %d chunks", len(chunks))
 	}
 
-	sum := sha256.Sum256(chunks[0])
+	sum := sha256.Sum256(chunks[0].Data)
 	chunkHash := hex.EncodeToString(sum[:])
-	chunkSize := int64(len(chunks[0]))
+	chunkSize := chunks[0].Info.Size
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
 		VALUES ($1, $2, $3, 0)
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
@@ -5386,7 +5385,7 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		t.Fatalf("write input file: %v", err)
 	}
 
-	chunks, err := chunk.ChunkFile(inPath)
+	chunks, err := chunk.DefaultChunker().ChunkFile(inPath)
 	if err != nil {
 		t.Fatalf("chunk file: %v", err)
 	}
@@ -5394,9 +5393,9 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		t.Fatalf("expected single chunk test input, got %d chunks", len(chunks))
 	}
 
-	sum := sha256.Sum256(chunks[0])
+	sum := sha256.Sum256(chunks[0].Data)
 	chunkHash := hex.EncodeToString(sum[:])
-	chunkSize := int64(len(chunks[0]))
+	chunkSize := chunks[0].Info.Size
 
 	// Pre-seed a quarantined container with a COMPLETED chunk pointing into it.
 	var quarantinedContainerID int64
