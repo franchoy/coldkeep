@@ -1510,9 +1510,10 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 
 	effectiveChunker := sgctx.EffectiveChunker()
 	chunkerVersion := string(effectiveChunker.Version())
+	logicalFileChunkerVersion := string(chunk.DefaultChunkerVersion)
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, chunkerVersion, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, logicalFileChunkerVersion, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}

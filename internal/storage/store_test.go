@@ -582,8 +582,8 @@ func TestStoreFilePersistsInjectedChunkerVersionMetadata(t *testing.T) {
 	).Scan(&logicalFileVersion); err != nil {
 		t.Fatalf("read logical_file.chunker_version: %v", err)
 	}
-	if logicalFileVersion != string(customChunkerVersion) {
-		t.Fatalf("logical_file.chunker_version mismatch: got %q want %q", logicalFileVersion, customChunkerVersion)
+	if logicalFileVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("logical_file.chunker_version mismatch: got %q want %q", logicalFileVersion, chunk.DefaultChunkerVersion)
 	}
 
 	var linkedChunkCount int

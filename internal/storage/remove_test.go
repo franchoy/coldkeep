@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -197,6 +198,9 @@ func TestGetLogicalFileInfoWithDBFound(t *testing.T) {
 	}
 	if info.Status != filestate.LogicalFileCompleted {
 		t.Fatalf("unexpected status: got=%q want=%q", info.Status, filestate.LogicalFileCompleted)
+	}
+	if info.ChunkerVersion != chunk.DefaultChunkerVersion {
+		t.Fatalf("unexpected chunker version: got=%q want=%q", info.ChunkerVersion, chunk.DefaultChunkerVersion)
 	}
 }
 
