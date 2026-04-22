@@ -31,8 +31,8 @@ func TestVerifySystemStandardPassesOnConsistentPhysicalGraph(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"healthy.bin", int64(0), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -76,8 +76,8 @@ func TestVerifySystemStandardDetectsLogicalRefCountMismatch(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"mismatch.bin", int64(0), strings.Repeat("b", 64), filestate.LogicalFileCompleted, int64(5),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -103,7 +103,7 @@ func TestVerifySystemStandardDetectsNegativeLogicalRefCount(t *testing.T) {
 		t.Fatalf("disable sqlite check constraints: %v", err)
 	}
 	if _, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count) VALUES ($1, $2, $3, $4, $5)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')`,
 		"negative.bin", int64(0), strings.Repeat("c", 64), filestate.LogicalFileCompleted, int64(-1),
 	); err != nil {
 		t.Fatalf("insert logical file with negative ref_count: %v", err)

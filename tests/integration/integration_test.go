@@ -3072,8 +3072,8 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	// Use a Hash/name that will not conflict with the real stored file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"dangling_write.bin", 1024,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
@@ -3161,8 +3161,8 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	// Inject recoverable corruption: dangling PROCESSING logical file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"doctor_operator_story_dangling.bin", 1024,
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		filestate.LogicalFileProcessing,
@@ -3245,8 +3245,8 @@ func TestEndToEndTrustProof(t *testing.T) {
 
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"trust_proof_crash.bin", 4096,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
@@ -4970,8 +4970,8 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 
 	// Seed a PROCESSING logical_file to simulate incomplete store (crash during store)
 	_, err = dbconn.Exec(`
-		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count, ref_count)
-		VALUES ($1, $2, $3, $4, 0, $5)
+		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, $5, 'v1-simple-rolling')
 	`, "incomplete_file.bin", "0000000000000000000000000000000000000000000000000000000000000000", 512, filestate.LogicalFileProcessing, int64(0))
 	if err != nil {
 		t.Fatalf("seed PROCESSING logical_file: %v", err)
@@ -5133,8 +5133,8 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 
 		var danglingLogicalID int64
 		err = dbconn.QueryRow(`
-			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+			VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 			fmt.Sprintf("doctor_dangling_%02d.bin", round),
 			int64(2048+round),
 			fmt.Sprintf("%064x", round+1),
@@ -5147,8 +5147,8 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 
 		var danglingChunkID int64
 		err = dbconn.QueryRow(`
-			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
-			VALUES ($1, $2, $3, 0, 0, 0) RETURNING id`,
+			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count, chunker_version)
+			VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling') RETURNING id`,
 			fmt.Sprintf("doctor-processing-chunk-%02d", round),
 			int64(4096+round),
 			filestate.ChunkProcessing,
@@ -5617,8 +5617,8 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		VALUES ($1, $2, $3, 0)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, chunker_version)
+		VALUES ($1, $2, $3, 0, 'v1-simple-rolling')
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
 	if err != nil {
@@ -6132,8 +6132,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	Size := int64(256 * 1024)
 
 	_, err = dbconn.Exec(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
-		VALUES ($1, $2, $3, $4, 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, 'v1-simple-rolling')
 	`, filepath.Base(inPath), Size, Hash, filestate.LogicalFileProcessing)
 	if err != nil {
 		t.Fatalf("insert processing logical file: %v", err)
@@ -6151,8 +6151,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
-		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-		VALUES ($1, $2, $3, 0, 0)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+		VALUES ($1, $2, $3, 0, 0, 'v1-simple-rolling')
 	`, "dummy_chunk_hash", int64(128*1024), filestate.ChunkProcessing)
 	if err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
@@ -7041,8 +7041,8 @@ func TestVerifyStandard(t *testing.T) {
 	t.Run("detects orphan chunk", func(t *testing.T) {
 		// Insert a chunk with live_ref_count > 0 but no file_chunk referencing it
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
@@ -7063,8 +7063,8 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects completed chunk missing block row", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-				VALUES ('completed_chunk_without_block_row', 2048, $1, 0, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+				VALUES ('completed_chunk_without_block_row', 2048, $1, 0, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert completed chunk without block row: %v", err)
 		}
@@ -7085,8 +7085,8 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects pin_count on non-completed chunk", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
-				VALUES ('invalid_pinned_processing_chunk', 1024, $1, 0, 1, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count, chunker_version)
+				VALUES ('invalid_pinned_processing_chunk', 1024, $1, 0, 1, 0, 'v1-simple-rolling')
 		`, filestate.ChunkProcessing); err != nil {
 			t.Fatalf("insert invalid pinned processing chunk: %v", err)
 		}
@@ -7107,8 +7107,8 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects pinned chunk missing block metadata", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
-				VALUES ('invalid_pinned_unplaced_chunk', 1024, $1, 0, 1, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count, chunker_version)
+				VALUES ('invalid_pinned_unplaced_chunk', 1024, $1, 0, 1, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert invalid pinned unplaced chunk: %v", err)
 		}
@@ -7208,8 +7208,8 @@ func TestVerifyFull(t *testing.T) {
 
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0)
+			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
 		}
@@ -9018,8 +9018,8 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 
 	var ChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"gc-restore-race-chunk",
 		int64(16),
@@ -9151,8 +9151,8 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 
 	var ChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"gc-remove-restore-race-chunk",
 		int64(22),
@@ -9180,8 +9180,8 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 
 	var fileID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"interleaving.txt",
 		int64(22),
@@ -10127,8 +10127,8 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 	var processingFileID int64
 
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
-		VALUES ($1, $2, $3, $4, 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, 'v1-simple-rolling')
 		RETURNING id
 	`, "processing-file.bin", processingSize, processingHash, filestate.LogicalFileProcessing).Scan(&processingFileID)
 	if err != nil {
@@ -12416,8 +12416,8 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 
 	var deadChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')
 		 RETURNING id`,
 		"dry-run-dead-chunk",
 		int64(14),
@@ -12459,8 +12459,8 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 
 	var liveChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')
 		 RETURNING id`,
 		"dry-run-live-chunk",
 		int64(14),

@@ -29,7 +29,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func insertLogical(t *testing.T, dbconn *sql.DB, name string) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		name, int64(10), name+"-hash", "COMPLETED",
 	)
 	if err != nil {
@@ -45,7 +45,7 @@ func insertLogical(t *testing.T, dbconn *sql.DB, name string) int64 {
 func insertLogicalWithSize(t *testing.T, dbconn *sql.DB, name string, size int64) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		name, size, name+"-hash", "COMPLETED",
 	)
 	if err != nil {

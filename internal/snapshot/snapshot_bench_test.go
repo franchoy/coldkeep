@@ -38,7 +38,7 @@ func seedBenchmarkPhysicalFiles(b *testing.B, dbconn *sql.DB, fileCount int) {
 	defer func() { _ = tx.Rollback() }()
 
 	insertLogicalStmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES ($1, $2, $3, $4, 'v1-simple-rolling')`,
 	)
 	if err != nil {
 		b.Fatalf("prepare logical_file insert: %v", err)

@@ -36,7 +36,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func insertLogicalFile(t *testing.T, db *sql.DB, hash string) int64 {
 	t.Helper()
 	res, err := db.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		"file.txt", int64(128), hash, "COMPLETED",
 	)
 	if err != nil {
@@ -52,7 +52,7 @@ func insertLogicalFile(t *testing.T, db *sql.DB, hash string) int64 {
 func insertLogicalFileWithSize(t *testing.T, db *sql.DB, hash string, totalSize int64) int64 {
 	t.Helper()
 	res, err := db.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		fmt.Sprintf("%s.txt", hash), totalSize, hash, "COMPLETED",
 	)
 	if err != nil {

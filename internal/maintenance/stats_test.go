@@ -29,7 +29,7 @@ func openStatsTestDB(t *testing.T) *sql.DB {
 func insertStatsLogicalFile(t *testing.T, dbconn *sql.DB, name string, totalSize int64) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		name, totalSize, name+"-hash", "COMPLETED",
 	)
 	if err != nil {
