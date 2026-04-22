@@ -839,8 +839,8 @@ func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, db
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
 
-func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, chunkerVersion string, containersDir string) (fileID int64, filestatus string, err error) {
-	if strings.TrimSpace(chunkerVersion) == "" {
+func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	if strings.TrimSpace(activeVersion) == "" {
 		return 0, "", fmt.Errorf("logical_file.chunker_version must not be empty")
 	}
 
@@ -868,7 +868,7 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 		fileinfo.Size(),
 		fileHash,
 		filestate.LogicalFileProcessing,
-		chunkerVersion,
+		activeVersion,
 	).Scan(&fileID)
 
 	switch insErr {
@@ -1017,8 +1017,8 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int6
 	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, string(chunk.DefaultChunkerVersion), container.ContainersDir)
 }
 
-func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, chunkerVersion string, containersDir string) (fileID int64, filestatus string, err error) {
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, chunkerVersion, containersDir)
+func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
@@ -1037,7 +1037,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return 0, "", errors.Join(reuseErr, err)
 	}
 
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, chunkerVersion, containersDir)
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
