@@ -900,10 +900,10 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 		t.Fatal("expected idx_snapshot_file_unique index")
 	}
 
-	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ('p1.txt', 10, 'phase1-hash-1', 'COMPLETED')`); err != nil {
+	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES ('p1.txt', 10, 'phase1-hash-1', 'COMPLETED', 'v1-simple-rolling')`); err != nil {
 		t.Fatalf("insert logical_file row 1: %v", err)
 	}
-	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ('p2.txt', 20, 'phase1-hash-2', 'COMPLETED')`); err != nil {
+	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES ('p2.txt', 20, 'phase1-hash-2', 'COMPLETED', 'v1-simple-rolling')`); err != nil {
 		t.Fatalf("insert logical_file row 2: %v", err)
 	}
 
@@ -1472,11 +1472,12 @@ func TestRunMigrationsAllowsMultiplePhysicalFilesPerLogicalFile(t *testing.T) {
 	}
 
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
 		"data.bin",
 		int64(64),
 		"hash-shared",
 		"COMPLETED",
+		"v1-simple-rolling",
 	)
 	if err != nil {
 		t.Fatalf("insert logical_file row: %v", err)
@@ -1526,11 +1527,12 @@ func TestRunMigrationsRejectsEmptyPhysicalFilePath(t *testing.T) {
 	}
 
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
 		"tiny.txt",
 		int64(4),
 		"hash-tiny",
 		"COMPLETED",
+		"v1-simple-rolling",
 	)
 	if err != nil {
 		t.Fatalf("insert logical_file row: %v", err)
