@@ -115,8 +115,8 @@ func runChunker(t *testing.T, data []byte, name string) []shared.Result {
 // ---------------------------------------------------------------------------
 
 func TestChunkerVersionIdentity(t *testing.T) {
-	if got := New().Version(); string(got) != "v1-simple-rolling" {
-		t.Fatalf("Version() = %q, want %q", got, "v1-simple-rolling")
+	if got := New().Version(); got != Version {
+		t.Fatalf("Version() = %q, want %q", got, Version)
 	}
 }
 
