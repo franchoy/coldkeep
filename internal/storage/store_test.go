@@ -639,8 +639,9 @@ func TestStoreFilePersistsExplicitChunkerVersionMetadata(t *testing.T) {
 	).Scan(&logicalFileVersion); err != nil {
 		t.Fatalf("read logical_file.chunker_version: %v", err)
 	}
-	if logicalFileVersion != string(chunk.DefaultChunkerVersion) {
-		t.Fatalf("logical_file.chunker_version mismatch: got %q want %q", logicalFileVersion, chunk.DefaultChunkerVersion)
+	// Phase 3: the persisted version must come from the resolved chunker, not a hardcoded constant.
+	if logicalFileVersion != string(customChunkerVersion) {
+		t.Fatalf("logical_file.chunker_version mismatch: got %q want %q", logicalFileVersion, customChunkerVersion)
 	}
 
 	var linkedChunkCount int
@@ -661,12 +662,12 @@ func TestStoreFilePersistsExplicitChunkerVersionMetadata(t *testing.T) {
 		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
 		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2`,
 		result.FileID,
-		string(chunk.DefaultChunkerVersion),
+		string(customChunkerVersion),
 	).Scan(&mismatchedChunkVersions); err != nil {
 		t.Fatalf("count chunk version mismatches: %v", err)
 	}
 	if mismatchedChunkVersions != 0 {
-		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", chunk.DefaultChunkerVersion, mismatchedChunkVersions)
+		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", customChunkerVersion, mismatchedChunkVersions)
 	}
 }
 
