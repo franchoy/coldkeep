@@ -72,6 +72,19 @@ type rollbackCleanupFailureWriter struct {
 	db                  *sql.DB
 }
 
+type fixedVersionChunker struct {
+	delegate chunk.Chunker
+	version  chunk.Version
+}
+
+func (c fixedVersionChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c fixedVersionChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	return c.delegate.ChunkFile(path)
+}
+
 func (w *commitAckWriter) FinalizeContainer() error {
 	return nil
 }
@@ -511,6 +524,93 @@ func TestStoreFileUsesAppendLevelDurabilityWithoutExtraSyncHook(t *testing.T) {
 		t.Fatalf("expected container to remain healthy after successful store")
 	}
 
+}
+
+func TestStoreFilePersistsInjectedChunkerVersionMetadata(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"chunker_version_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "chunker-version-metadata.txt")
+	if err := os.WriteFile(path, []byte("verify persisted chunker_version metadata"), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-override"
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+		Chunker: fixedVersionChunker{
+			delegate: chunk.DefaultChunker(),
+			version:  customChunkerVersion,
+		},
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file with injected chunker: %v", err)
+	}
+
+	var logicalFileVersion string
+	if err := dbconn.QueryRow(
+		`SELECT chunker_version FROM logical_file WHERE id = $1`,
+		result.FileID,
+	).Scan(&logicalFileVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalFileVersion != string(customChunkerVersion) {
+		t.Fatalf("logical_file.chunker_version mismatch: got %q want %q", logicalFileVersion, customChunkerVersion)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`,
+		result.FileID,
+	).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunks: %v", err)
+	}
+	if linkedChunkCount == 0 {
+		t.Fatal("expected at least one linked chunk for stored file")
+	}
+
+	var mismatchedChunkVersions int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2`,
+		result.FileID,
+		string(customChunkerVersion),
+	).Scan(&mismatchedChunkVersions); err != nil {
+		t.Fatalf("count chunk version mismatches: %v", err)
+	}
+	if mismatchedChunkVersions != 0 {
+		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", customChunkerVersion, mismatchedChunkVersions)
+	}
 }
 
 func TestStoreFileSuccessfulCommitAcknowledgesWriterAppendState(t *testing.T) {
