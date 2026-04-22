@@ -34,7 +34,7 @@ func (s StorageContext) EffectiveChunker() chunk.Chunker {
 	if s.Chunker != nil {
 		return s.Chunker
 	}
-	return chunk.DefaultChunker()
+	return chunk.DefaultRegistry().Default()
 }
 
 func (s StorageContext) EffectiveContainerDir() string {

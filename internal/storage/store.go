@@ -1523,12 +1523,13 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		validationContainerDir = ""
 	}
 
-	effectiveChunker := sgctx.EffectiveChunker()
-	// Phase 3: persist the version declared by the resolved chunker.
+	storeService := NewStoreService(sgctx.EffectiveChunker())
+	effectiveChunker := storeService.ActiveChunker()
+	// Phase 3: persist the version declared by the resolved store service chunker.
 	// The write path is now chunker-aware: logical_file and chunk rows carry the version
 	// of the chunker that produced them, not a compile-time constant.
 	// The active runtime is still v1-simple-rolling, so existing behavior is unchanged.
-	persistedChunkerVersion := string(effectiveChunker.Version())
+	persistedChunkerVersion := string(storeService.ActiveChunkerVersion())
 
 	// Try to claim logical file for this hash (concurrency-safe)
 	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, persistedChunkerVersion, validationContainerDir)

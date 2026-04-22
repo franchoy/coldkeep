@@ -85,6 +85,31 @@ func (c fixedVersionChunker) ChunkFile(path string) ([]chunk.Result, error) {
 	return c.delegate.ChunkFile(path)
 }
 
+func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
+	service := NewStoreService(nil)
+	if service.ActiveChunker() == nil {
+		t.Fatal("expected non-nil active chunker")
+	}
+
+	defaultVersion := chunk.DefaultRegistry().DefaultVersion()
+	if service.ActiveChunkerVersion() != defaultVersion {
+		t.Fatalf("unexpected default active chunker version: got=%q want=%q", service.ActiveChunkerVersion(), defaultVersion)
+	}
+}
+
+func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
+	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-injected"
+
+	service := NewStoreService(fixedVersionChunker{
+		delegate: chunk.DefaultChunker(),
+		version:  customChunkerVersion,
+	})
+
+	if service.ActiveChunkerVersion() != customChunkerVersion {
+		t.Fatalf("unexpected active chunker version: got=%q want=%q", service.ActiveChunkerVersion(), customChunkerVersion)
+	}
+}
+
 func (w *commitAckWriter) FinalizeContainer() error {
 	return nil
 }
