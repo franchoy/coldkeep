@@ -61,6 +61,7 @@ type restoreChunkRow struct {
 	plaintextSize       int64
 	storedSize          int64
 	expectedChunkHash   string
+	chunkerVersion      string
 	chunkSize           int64
 	blocksCodec         string
 	blocksFormatVersion int
@@ -111,6 +112,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			b.plaintext_size,
 			b.stored_size,
 			c.chunk_hash,
+			c.chunker_version,
 			c.size,
 			b.codec,
 			b.format_version,
@@ -142,6 +144,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			&row.plaintextSize,
 			&row.storedSize,
 			&row.expectedChunkHash,
+			&row.chunkerVersion,
 			&row.chunkSize,
 			&row.blocksCodec,
 			&row.blocksFormatVersion,

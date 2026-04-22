@@ -1079,7 +1079,8 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		isNew = true
 	case sql.ErrNoRows:
 		// Someone else inserted it first
-		if err := tx.QueryRowContext(ctx, `SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
+		var existingChunkerVersion string
+		if err := tx.QueryRowContext(ctx, `SELECT id, status, chunker_version FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus, &existingChunkerVersion); err != nil {
 			return 0, "", false, err
 		}
 		switch chunkstatus {
@@ -1509,7 +1510,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}
 
 	effectiveChunker := sgctx.EffectiveChunker()
-	chunkerVersion := string(effectiveChunker.Version())
+	chunkerVersion := string(chunk.DefaultChunkerVersion)
 	logicalFileChunkerVersion := string(chunk.DefaultChunkerVersion)
 
 	// Try to claim logical file for this hash (concurrency-safe)

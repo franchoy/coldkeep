@@ -311,6 +311,20 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Fatalf("unexpected reused chunk status: %s", chunkStatus2)
 	}
 
+	ctx := context.Background()
+	_, _, _, err = claimChunkWithContext(ctx, dbconn, "shared-chunk-hash", 777, "v1-simple-rolling-test-override", container.ContainersDir)
+	if err != nil {
+		t.Fatalf("claim reused chunk with override version: %v", err)
+	}
+
+	var persistedChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, chunkID).Scan(&persistedChunkerVersion); err != nil {
+		t.Fatalf("read chunk.chunker_version: %v", err)
+	}
+	if persistedChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("expected reused chunk row chunker_version to remain %q, got %q", chunk.DefaultChunkerVersion, persistedChunkerVersion)
+	}
+
 	tx2, err := dbconn.Begin()
 	if err != nil {
 		t.Fatalf("begin tx2: %v", err)
@@ -526,7 +540,7 @@ func TestStoreFileUsesAppendLevelDurabilityWithoutExtraSyncHook(t *testing.T) {
 
 }
 
-func TestStoreFilePersistsInjectedChunkerVersionMetadata(t *testing.T) {
+func TestStoreFilePersistsExplicitChunkerVersionMetadata(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -604,12 +618,12 @@ func TestStoreFilePersistsInjectedChunkerVersionMetadata(t *testing.T) {
 		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
 		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2`,
 		result.FileID,
-		string(customChunkerVersion),
+		string(chunk.DefaultChunkerVersion),
 	).Scan(&mismatchedChunkVersions); err != nil {
 		t.Fatalf("count chunk version mismatches: %v", err)
 	}
 	if mismatchedChunkVersions != 0 {
-		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", customChunkerVersion, mismatchedChunkVersions)
+		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", chunk.DefaultChunkerVersion, mismatchedChunkVersions)
 	}
 }
 
