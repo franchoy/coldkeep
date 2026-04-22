@@ -1510,11 +1510,11 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}
 
 	effectiveChunker := sgctx.EffectiveChunker()
-	chunkerVersion := string(chunk.DefaultChunkerVersion)
-	logicalFileChunkerVersion := string(chunk.DefaultChunkerVersion)
+	// Phase 2: persist the current default chunker version explicitly in DB writes.
+	persistedChunkerVersion := string(chunk.DefaultChunkerVersion)
 
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, logicalFileChunkerVersion, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, persistedChunkerVersion, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -1576,7 +1576,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), chunkerVersion, validationContainerDir)
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), persistedChunkerVersion, validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
