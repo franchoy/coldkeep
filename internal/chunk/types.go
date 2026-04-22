@@ -1,13 +1,7 @@
 package chunk
 
-type Info struct {
-	Hash string
-	Size int64
-	// optional (future-safe)
-	Offset int64
-}
+import "github.com/franchoy/coldkeep/internal/chunk/shared"
 
-type Result struct {
-	Info Info
-	Data []byte
-}
+type Info = shared.Info
+
+type Result = shared.Result

@@ -1,8 +1,10 @@
 package chunk
 
-type Version string
+import "github.com/franchoy/coldkeep/internal/chunk/shared"
+
+type Version = shared.Version
 
 const (
-	VersionV1SimpleRolling Version = "v1-simple-rolling"
-	DefaultChunkerVersion  Version = VersionV1SimpleRolling
+	VersionV1SimpleRolling = shared.VersionV1SimpleRolling
+	DefaultChunkerVersion  = VersionV1SimpleRolling
 )

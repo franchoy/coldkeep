@@ -2,6 +2,8 @@ package chunk
 
 import (
 	"fmt"
+
+	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 )
 
 type Registry struct {
@@ -63,7 +65,7 @@ func ChunkerByVersion(version Version) (Chunker, error) {
 
 func buildDefaultRegistry() *Registry {
 	registry := NewRegistry(DefaultChunkerVersion)
-	registry.MustRegister(newSimpleRollingChunker())
+	registry.MustRegister(simplecdc.New())
 	return registry
 }
 
