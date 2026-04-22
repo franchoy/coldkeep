@@ -9,7 +9,7 @@ import (
 )
 
 func TestDefaultChunkerVersion(t *testing.T) {
-	if got := DefaultChunker().Version(); got != string(VersionV1SimpleRolling) {
+	if got := DefaultChunker().Version(); got != VersionV1SimpleRolling {
 		t.Fatalf("default chunker version mismatch: got %q want %q", got, VersionV1SimpleRolling)
 	}
 }
