@@ -945,6 +945,102 @@ func TestStoreFileReusedChunkDoesNotRequireVersionMatchInLookup(t *testing.T) {
 	}
 }
 
+func TestStoreFileLogicalRecipeSingleVersionInvariance(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "single-recipe-version.bin")
+	content := []byte(strings.Repeat("A", 32) + strings.Repeat("B", 32) + strings.Repeat("C", 32))
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	const recipeVersion chunk.Version = "v1-simple-rolling-test-recipe"
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+		Chunker: fixedBoundaryChunker{
+			version:  recipeVersion,
+			boundary: 32,
+		},
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var logicalVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, result.FileID).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalVersion != string(recipeVersion) {
+		t.Fatalf("logical recipe version mismatch: got %q want %q", logicalVersion, recipeVersion)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunks: %v", err)
+	}
+	if linkedChunkCount < 2 {
+		t.Fatalf("expected multiple linked chunks for invariance test, got %d", linkedChunkCount)
+	}
+
+	var distinctLinkedVersions int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(DISTINCT c.chunker_version)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1`,
+		result.FileID,
+	).Scan(&distinctLinkedVersions); err != nil {
+		t.Fatalf("count distinct linked chunk versions: %v", err)
+	}
+	if distinctLinkedVersions != 1 {
+		t.Fatalf("expected exactly one chunker version across logical recipe, got %d", distinctLinkedVersions)
+	}
+
+	var mismatches int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 INNER JOIN logical_file lf ON lf.id = fc.logical_file_id
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> lf.chunker_version`,
+		result.FileID,
+	).Scan(&mismatches); err != nil {
+		t.Fatalf("count recipe version mismatches: %v", err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("expected no mixed-version chunks in single logical recipe, mismatches=%d", mismatches)
+	}
+}
+
 func TestStoreFileSuccessfulCommitAcknowledgesWriterAppendState(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
