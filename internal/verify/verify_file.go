@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -127,17 +128,26 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	var id int
 	var status string
 	var totalSize int64
-	err := dbconn.QueryRowContext(ctx, `SELECT id, 
+	var chunkerVersion string
+	err := dbconn.QueryRowContext(ctx, `SELECT id,
 							status,
-							total_size
-							from logical_file 
-							where id = $1`, fileId).Scan(&id, &status, &totalSize)
+							total_size,
+							COALESCE(chunker_version, '')
+							from logical_file
+							where id = $1`, fileId).Scan(&id, &status, &totalSize, &chunkerVersion)
 	if err != nil {
 		return fmt.Errorf("failed to check if file exists: %w", err)
 	}
 
 	if status != filestate.LogicalFileCompleted {
 		return fmt.Errorf("logical file %d has invalid status: expected COMPLETED but got %s", fileId, status)
+	}
+
+	// chunker_version must be present: it is required metadata for all read-side
+	// flows. We assert presence only — we do not compare against the current
+	// active chunker, which would make version evolution impossible.
+	if strings.TrimSpace(chunkerVersion) == "" {
+		return fmt.Errorf("logical file %d has empty chunker_version; repository metadata integrity violation", fileId)
 	}
 	hasChunks := false
 	//ensure file_chunks exists for the file
@@ -181,7 +191,8 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 	chunkrows, err := dbconn.QueryContext(ctx, `SELECT
 									c.id,
 									c.status,
-									b.id
+									b.id,
+									COALESCE(c.chunker_version, '')
 								FROM chunk c
 								JOIN file_chunk fc ON fc.chunk_id = c.id
 								JOIN blocks b ON b.chunk_id = c.id
@@ -197,7 +208,8 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		var chunkid int
 		var chunkStatus string
 		var blockId sql.NullInt64
-		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId); err != nil {
+		var chunkChunkerVersion string
+		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId, &chunkChunkerVersion); err != nil {
 			return fmt.Errorf("failed to scan chunk info: %w", err)
 		}
 		if chunkStatus != filestate.ChunkCompleted {
@@ -205,6 +217,12 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		}
 		if !blockId.Valid {
 			return fmt.Errorf("chunk %d has no associated block", chunkid)
+		}
+		// chunker_version must be present on every chunk. We assert presence only —
+		// chunk version need not match the logical file version because deduped
+		// chunks can originate from a different chunker generation.
+		if strings.TrimSpace(chunkChunkerVersion) == "" {
+			return fmt.Errorf("chunk %d referenced by logical file %d has empty chunker_version; repository metadata integrity violation", chunkid, fileId)
 		}
 
 		chunkCount++
