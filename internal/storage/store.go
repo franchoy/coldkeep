@@ -1539,6 +1539,17 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		validationContainerDir = ""
 	}
 
+	// Phase 3 store flow pattern:
+	//  1. resolve one active chunker for the whole operation
+	//  2. capture one active version from that chunker
+	//  3. claim/create the logical file recipe owner with that version
+	//  4. chunk the file with the resolved chunker
+	//  5. for each chunk: hash, reuse-or-create chunk row with activeVersion when new,
+	//     then link ordered file_chunk membership
+	//  6. finalize logical-file state and attach physical-file metadata
+	// The logical_file claim happens before ChunkFile() so the store path preserves
+	// its existing concurrency and recovery semantics, but the version source is the
+	// same resolved chunker used to produce the chunk list.
 	storeService := NewStoreService(NewRepository(sgctx.DB), sgctx.EffectiveChunker())
 	dbconn := storeService.Repository().DB()
 	activeChunker := storeService.ResolveActiveChunker()
