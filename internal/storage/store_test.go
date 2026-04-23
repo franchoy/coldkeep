@@ -77,12 +77,50 @@ type fixedVersionChunker struct {
 	version  chunk.Version
 }
 
+type fixedBoundaryChunker struct {
+	version  chunk.Version
+	boundary int
+}
+
 func (c fixedVersionChunker) Version() chunk.Version {
 	return c.version
 }
 
 func (c fixedVersionChunker) ChunkFile(path string) ([]chunk.Result, error) {
 	return c.delegate.ChunkFile(path)
+}
+
+func (c fixedBoundaryChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c fixedBoundaryChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return []chunk.Result{}, nil
+	}
+	if c.boundary <= 0 || c.boundary >= len(data) {
+		boundary := len(data)
+		all := make([]byte, boundary)
+		copy(all, data)
+		return []chunk.Result{{
+			Info: chunk.Info{Size: int64(boundary), Offset: 0},
+			Data: all,
+		}}, nil
+	}
+
+	first := make([]byte, c.boundary)
+	copy(first, data[:c.boundary])
+	second := make([]byte, len(data)-c.boundary)
+	copy(second, data[c.boundary:])
+
+	return []chunk.Result{
+		{Info: chunk.Info{Size: int64(len(first)), Offset: 0}, Data: first},
+		{Info: chunk.Info{Size: int64(len(second)), Offset: int64(c.boundary)}, Data: second},
+	}, nil
 }
 
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
@@ -713,6 +751,197 @@ func TestStoreFilePersistsExplicitChunkerVersionMetadata(t *testing.T) {
 	}
 	if mismatchedChunkVersions != 0 {
 		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", customChunkerVersion, mismatchedChunkVersions)
+	}
+}
+
+func TestStoreFileDefaultChunkerPersistsLogicalFileVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "default-logical-version.txt")
+	if err := os.WriteFile(path, []byte("default chunker logical version persistence"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var logicalFileVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, result.FileID).Scan(&logicalFileVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalFileVersion != "v1-simple-rolling" {
+		t.Fatalf("expected logical_file.chunker_version=v1-simple-rolling, got %q", logicalFileVersion)
+	}
+}
+
+func TestStoreFileDefaultChunkerPersistsChunkVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "default-chunk-version.txt")
+	if err := os.WriteFile(path, []byte("default chunker chunk version persistence"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunks: %v", err)
+	}
+	if linkedChunkCount == 0 {
+		t.Fatal("expected at least one linked chunk")
+	}
+
+	var nonDefaultCount int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> 'v1-simple-rolling'`,
+		result.FileID,
+	).Scan(&nonDefaultCount); err != nil {
+		t.Fatalf("count non-default chunk versions: %v", err)
+	}
+	if nonDefaultCount != 0 {
+		t.Fatalf("expected all new linked chunk rows to persist chunker_version=v1-simple-rolling, mismatches=%d", nonDefaultCount)
+	}
+}
+
+func TestStoreFileReusedChunkDoesNotRequireVersionMatchInLookup(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	pathA := filepath.Join(tmpDir, "reuse-a.bin")
+	pathB := filepath.Join(tmpDir, "reuse-b.bin")
+
+	sharedPrefix := strings.Repeat("A", 32)
+	contentA := []byte(sharedPrefix + strings.Repeat("B", 32))
+	contentB := []byte(sharedPrefix + strings.Repeat("C", 32))
+	if err := os.WriteFile(pathA, contentA, 0o644); err != nil {
+		t.Fatalf("write first file: %v", err)
+	}
+	if err := os.WriteFile(pathB, contentB, 0o644); err != nil {
+		t.Fatalf("write second file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	defaultChunker := fixedBoundaryChunker{version: chunk.VersionV1SimpleRolling, boundary: 32}
+	overrideChunker := fixedBoundaryChunker{version: "v1-simple-rolling-test-override", boundary: 32}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	sgctxA := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: defaultChunker}
+	if _, err := StoreFileWithStorageContextAndCodecResult(sgctxA, pathA, codec); err != nil {
+		t.Fatalf("store first file: %v", err)
+	}
+
+	sharedHashSum := sha256.Sum256([]byte(sharedPrefix))
+	sharedHash := hex.EncodeToString(sharedHashSum[:])
+
+	var sharedChunkID int64
+	if err := dbconn.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1 AND size = $2`, sharedHash, 32).Scan(&sharedChunkID); err != nil {
+		t.Fatalf("locate shared chunk after first store: %v", err)
+	}
+
+	sgctxB := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: overrideChunker}
+	if _, err := StoreFileWithStorageContextAndCodecResult(sgctxB, pathB, codec); err != nil {
+		t.Fatalf("store second file with override version: %v", err)
+	}
+
+	var sharedIdentityRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, sharedHash, 32).Scan(&sharedIdentityRows); err != nil {
+		t.Fatalf("count shared identity rows: %v", err)
+	}
+	if sharedIdentityRows != 1 {
+		t.Fatalf("expected shared chunk to be reused with no duplicate row, got %d rows", sharedIdentityRows)
+	}
+
+	var sharedChunkRefCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
+		t.Fatalf("count shared chunk file references: %v", err)
+	}
+	if sharedChunkRefCount < 2 {
+		t.Fatalf("expected reused shared chunk to be referenced by both files, got %d references", sharedChunkRefCount)
 	}
 }
 
