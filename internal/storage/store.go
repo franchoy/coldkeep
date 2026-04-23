@@ -834,6 +834,15 @@ func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, db
 	return markLogicalFileForRebuildWithPolicyWithContext(ctx, dbconn, fileID, true)
 }
 
+func assertLogicalFileVersionMatchesActive(insertedLogicalFileVersion string, activeVersion string) error {
+	insertedTrimmed := strings.TrimSpace(insertedLogicalFileVersion)
+	activeTrimmed := strings.TrimSpace(activeVersion)
+	if insertedTrimmed != activeTrimmed {
+		return fmt.Errorf("logical_file chunker_version mismatch: inserted=%q active=%q", insertedLogicalFileVersion, activeVersion)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
@@ -1000,8 +1009,8 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 		// We won: this file is new and we should store it
 		// Invariant: the logical file recipe owner version must match the
 		// resolved chunker version chosen for this store operation.
-		if strings.TrimSpace(insertedLogicalFileVersion) != activeVersion {
-			return 0, "", fmt.Errorf("logical_file chunker_version mismatch: inserted=%q active=%q", insertedLogicalFileVersion, activeVersion)
+		if err := assertLogicalFileVersionMatchesActive(insertedLogicalFileVersion, activeVersion); err != nil {
+			return 0, "", err
 		}
 		filestatus = filestate.LogicalFileProcessing
 	default:

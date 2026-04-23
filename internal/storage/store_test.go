@@ -160,6 +160,23 @@ func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	}
 }
 
+func TestAssertLogicalFileVersionMatchesActiveDetectsDrift(t *testing.T) {
+	err := assertLogicalFileVersionMatchesActive("v1-simple-rolling", "v1-simple-rolling-test-override")
+	if err == nil {
+		t.Fatal("expected logical_file version drift mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "logical_file chunker_version mismatch") {
+		t.Fatalf("expected mismatch error message, got: %v", err)
+	}
+}
+
+func TestAssertLogicalFileVersionMatchesActiveAllowsMatch(t *testing.T) {
+	err := assertLogicalFileVersionMatchesActive("v1-simple-rolling", "v1-simple-rolling")
+	if err != nil {
+		t.Fatalf("expected matching versions to pass invariant, got: %v", err)
+	}
+}
+
 func (w *commitAckWriter) FinalizeContainer() error {
 	return nil
 }
