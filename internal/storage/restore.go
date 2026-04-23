@@ -73,6 +73,45 @@ type restoreChunkRow struct {
 	chunkID             int64
 }
 
+type restoreLogicalFileRow struct {
+	id             int64
+	originalName   string
+	totalSize      int64
+	fileHash       string
+	status         string
+	chunkerVersion string
+}
+
+func loadCompletedLogicalFileRowForRestore(ctx context.Context, tx *sql.Tx, fileID int64) (restoreLogicalFileRow, error) {
+	var row restoreLogicalFileRow
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT id, original_name, total_size, file_hash, status, chunker_version
+		FROM logical_file
+		WHERE status = $1 AND id = $2`,
+		filestate.LogicalFileCompleted,
+		fileID,
+	).Scan(
+		&row.id,
+		&row.originalName,
+		&row.totalSize,
+		&row.fileHash,
+		&row.status,
+		&row.chunkerVersion,
+	)
+	if err == sql.ErrNoRows {
+		return restoreLogicalFileRow{}, fmt.Errorf("logical file id %d not found", fileID)
+	}
+	if err != nil {
+		return restoreLogicalFileRow{}, fmt.Errorf("query logical_file: %w", err)
+	}
+	if strings.TrimSpace(row.chunkerVersion) == "" {
+		return restoreLogicalFileRow{}, fmt.Errorf("logical file %d has empty chunker_version (repository corruption or incomplete migration)", fileID)
+	}
+
+	return row, nil
+}
+
 func pinLogicalFileRestoreChunks(dbconn *sql.DB, fileID int64) (string, string, []restoreChunkRow, []int64, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -90,23 +129,9 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		}
 	}()
 
-	var expectedFileHash string
-	var originalName string
-	var logicalFileChunkerVersion string
-	err = tx.QueryRowContext(
-		ctx,
-		"SELECT original_name, file_hash, chunker_version FROM logical_file WHERE status = $1 AND id = $2",
-		filestate.LogicalFileCompleted,
-		fileID,
-	).Scan(&originalName, &expectedFileHash, &logicalFileChunkerVersion)
-	if err == sql.ErrNoRows {
-		return "", "", nil, nil, fmt.Errorf("logical file id %d not found", fileID)
-	}
+	logicalFileRow, err := loadCompletedLogicalFileRowForRestore(ctx, tx, fileID)
 	if err != nil {
-		return "", "", nil, nil, fmt.Errorf("query logical_file: %w", err)
-	}
-	if strings.TrimSpace(logicalFileChunkerVersion) == "" {
-		return "", "", nil, nil, fmt.Errorf("logical file %d has empty chunker_version (repository corruption or incomplete migration)", fileID)
+		return "", "", nil, nil, err
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -199,7 +224,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 	}
 	tx = nil
 
-	return originalName, expectedFileHash, chunkRows, pinnedChunkIDs, nil
+	return logicalFileRow.originalName, logicalFileRow.fileHash, chunkRows, pinnedChunkIDs, nil
 }
 
 func unpinRestoreChunks(dbconn *sql.DB, chunkIDs []int64) error {
