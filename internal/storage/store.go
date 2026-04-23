@@ -1539,7 +1539,8 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		validationContainerDir = ""
 	}
 
-	storeService := NewStoreService(sgctx.EffectiveChunker())
+	storeService := NewStoreService(NewRepository(sgctx.DB), sgctx.EffectiveChunker())
+	dbconn := storeService.Repository().DB()
 	activeChunker := storeService.ResolveActiveChunker()
 	effectiveChunker := activeChunker.Chunker
 	activeVersion := activeChunker.Version
@@ -1548,18 +1549,18 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}
 	activeVersionString := string(activeVersion)
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, activeVersionString, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, dbconn, fileinfo, fileHash, activeVersionString, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 	result.FileID = fileID
 
 	if filestatus == filestate.LogicalFileCompleted {
-		tx, err := sgctx.DB.BeginTx(ctx, nil)
+		tx, err := dbconn.BeginTx(ctx, nil)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
-		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, sgctx.DB, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
 			_ = tx.Rollback()
 			return StoreFileResult{}, err
 		}
@@ -1576,7 +1577,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		if !completed {
 			cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
 			defer cleanupCancel()
-			if _, execErr := sgctx.DB.ExecContext(
+			if _, execErr := dbconn.ExecContext(
 				cleanupCtx,
 				`UPDATE logical_file SET status = $1 WHERE id = $2`,
 				filestate.LogicalFileAborted,
@@ -1610,14 +1611,14 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), activeVersionString, validationContainerDir)
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, chunkHash, int64(len(chunkData)), activeVersionString, validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 
 		if chunkStatus == filestate.ChunkCompleted {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			tx, err := sgctx.DB.BeginTx(ctx, nil)
+			tx, err := dbconn.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
@@ -1642,7 +1643,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 			if err := ctx.Err(); err != nil {
 				return StoreFileResult{}, err
 			}
-			tx, err := sgctx.DB.BeginTx(ctx, nil)
+			tx, err := dbconn.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
@@ -1678,7 +1679,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				if getBlockErr == nil && existingBlock != nil {
 					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
 					// block metadata already exists for this chunk ID.
-					tx2, err2 := sgctx.DB.BeginTx(ctx, nil)
+					tx2, err2 := dbconn.BeginTx(ctx, nil)
 					if err2 != nil {
 						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
@@ -1723,7 +1724,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 					return StoreFileResult{}, getBlockErr
 				}
 
-				if _, err3 := sgctx.DB.ExecContext(
+				if _, err3 := dbconn.ExecContext(
 					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
 					filestate.ChunkAborted,
@@ -1843,15 +1844,15 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// either all chunks are successfully linked AND the file is marked complete, or the file
 	// remains PROCESSING for corrective recovery if any verification fails. This avoids the semantic gap
 	// where chunks could be fully committed but the file completion is left dangling.
-	if err := finalizeLogicalFileStorageWithContext(ctx, sgctx.DB, fileID, chunkOrder); err != nil {
+	if err := finalizeLogicalFileStorageWithContext(ctx, dbconn, fileID, chunkOrder); err != nil {
 		return StoreFileResult{}, err
 	}
 
-	tx, err := sgctx.DB.BeginTx(ctx, nil)
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
-	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, sgctx.DB, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
 		_ = tx.Rollback()
 		return StoreFileResult{}, err
 	}

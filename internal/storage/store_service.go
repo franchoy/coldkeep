@@ -5,6 +5,7 @@ import "github.com/franchoy/coldkeep/internal/chunk"
 // StoreService owns store-path dependencies that must be resolved once per
 // store operation. Phase 3 starts by making the active chunker explicit.
 type StoreService struct {
+	repo    *Repository
 	chunker chunk.Chunker
 }
 
@@ -19,27 +20,34 @@ type ActiveChunkerResolution struct {
 // If active is nil, it resolves the current runtime default from the registry.
 // Phase 3 intentionally keeps this internal-only (Option A): no user-facing
 // chunker selection is introduced here.
-func NewStoreService(active chunk.Chunker) StoreService {
+func NewStoreService(repo *Repository, active chunk.Chunker) *StoreService {
 	if active == nil {
 		active = chunk.DefaultRegistry().Default()
 	}
-	return StoreService{chunker: active}
+	return &StoreService{repo: repo, chunker: active}
+}
+
+func (s *StoreService) Repository() *Repository {
+	if s == nil {
+		return nil
+	}
+	return s.repo
 }
 
 // ActiveChunker returns the chunker selected for this store operation.
-func (s StoreService) ActiveChunker() chunk.Chunker {
+func (s *StoreService) ActiveChunker() chunk.Chunker {
 	return s.chunker
 }
 
 // ActiveChunkerVersion returns the persisted version marker for this store operation.
-func (s StoreService) ActiveChunkerVersion() chunk.Version {
+func (s *StoreService) ActiveChunkerVersion() chunk.Version {
 	return s.chunker.Version()
 }
 
 // ResolveActiveChunker resolves and snapshots the active chunker decision for one
 // store operation. Callers should invoke this once at operation start and reuse
 // the returned Chunker and Version for the rest of the flow.
-func (s StoreService) ResolveActiveChunker() ActiveChunkerResolution {
+func (s *StoreService) ResolveActiveChunker() ActiveChunkerResolution {
 	active := s.ActiveChunker()
 	return ActiveChunkerResolution{
 		Chunker: active,

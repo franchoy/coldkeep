@@ -124,7 +124,7 @@ func (c fixedBoundaryChunker) ChunkFile(path string) ([]chunk.Result, error) {
 }
 
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
-	service := NewStoreService(nil)
+	service := NewStoreService(nil, nil)
 	if service.ActiveChunker() == nil {
 		t.Fatal("expected non-nil active chunker")
 	}
@@ -140,12 +140,16 @@ func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	if resolved.Version != defaultVersion {
 		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, defaultVersion)
 	}
+	if service.Repository() != nil {
+		t.Fatal("expected nil repository when constructor is given nil")
+	}
 }
 
 func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-injected"
+	repo := NewRepository(nil)
 
-	service := NewStoreService(fixedVersionChunker{
+	service := NewStoreService(repo, fixedVersionChunker{
 		delegate: chunk.DefaultChunker(),
 		version:  customChunkerVersion,
 	})
@@ -157,6 +161,9 @@ func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	resolved := service.ResolveActiveChunker()
 	if resolved.Version != customChunkerVersion {
 		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, customChunkerVersion)
+	}
+	if service.Repository() != repo {
+		t.Fatal("expected service to retain injected repository")
 	}
 }
 
