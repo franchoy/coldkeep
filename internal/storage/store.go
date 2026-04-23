@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -1011,10 +1010,10 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 	return fileID, filestatus, nil
 }
 
-func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
+func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion string) (chunkID int64, chunkstatus string, isNew bool, err error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
-	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, string(chunk.DefaultChunkerVersion), container.ContainersDir)
+	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, activeVersion, container.ContainersDir)
 }
 
 func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {

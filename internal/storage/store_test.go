@@ -277,7 +277,7 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	fileA := insertLogicalFile("a.bin", "hash-a")
 	fileB := insertLogicalFile("b.bin", "hash-b")
 
-	chunkID, chunkStatus, isNew, err := claimChunk(dbconn, "shared-chunk-hash", 777)
+	chunkID, chunkStatus, isNew, err := claimChunk(dbconn, "shared-chunk-hash", 777, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim first chunk: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Fatalf("create reusable container file: %v", err)
 	}
 
-	chunkID2, chunkStatus2, isNew2, err := claimChunk(dbconn, "shared-chunk-hash", 777)
+	chunkID2, chunkStatus2, isNew2, err := claimChunk(dbconn, "shared-chunk-hash", 777, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim reused chunk: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 		t.Fatalf("insert completed chunk: %v", err)
 	}
 
-	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "orphan-completed-chunk", 123)
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "orphan-completed-chunk", 123, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim malformed completed chunk: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 	containerID := insertReusableTestContainer(t, dbconn, "quarantined-reuse.bin", true)
 	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
 
-	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "quarantined-completed-chunk", 321)
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "quarantined-completed-chunk", 321, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim quarantined completed chunk: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithMissingContainerFile(t *testing
 	containerID := insertReusableTestContainer(t, dbconn, "missing-file-reuse.bin", false)
 	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
 
-	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "missing-file-completed-chunk", 456)
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "missing-file-completed-chunk", 456, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim completed chunk with missing file: %v", err)
 	}
