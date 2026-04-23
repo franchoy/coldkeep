@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -82,6 +83,21 @@ type restoreLogicalFileRow struct {
 	chunkerVersion string
 }
 
+func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) error {
+	trimmed := strings.TrimSpace(version)
+	if trimmed == "" {
+		return fmt.Errorf("logical file %d has empty chunker_version (migration failure, schema corruption, or unsupported stale repository state)", fileID)
+	}
+
+	// Restore remains recipe-driven. Unknown versions are tolerated as persisted
+	// compatibility metadata as long as the value is present and non-empty.
+	if _, ok := chunk.DefaultRegistry().Get(chunk.Version(trimmed)); !ok {
+		log.Printf("event=restore_metadata_warning action=unknown_chunker_version file_id=%d chunker_version=%q", fileID, trimmed)
+	}
+
+	return nil
+}
+
 func loadCompletedLogicalFileRowForRestore(ctx context.Context, tx *sql.Tx, fileID int64) (restoreLogicalFileRow, error) {
 	var row restoreLogicalFileRow
 	err := tx.QueryRowContext(
@@ -105,8 +121,8 @@ func loadCompletedLogicalFileRowForRestore(ctx context.Context, tx *sql.Tx, file
 	if err != nil {
 		return restoreLogicalFileRow{}, fmt.Errorf("query logical_file: %w", err)
 	}
-	if strings.TrimSpace(row.chunkerVersion) == "" {
-		return restoreLogicalFileRow{}, fmt.Errorf("logical file %d has empty chunker_version (repository corruption or incomplete migration)", fileID)
+	if err := validateRestoreLogicalFileChunkerVersion(fileID, row.chunkerVersion); err != nil {
+		return restoreLogicalFileRow{}, err
 	}
 
 	return row, nil
