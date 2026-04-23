@@ -68,6 +68,12 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 		return err
 	}
 
+	// check that logical_file/chunk version metadata exists everywhere read-side
+	// flows expect it, without coupling verify to the current active chunker.
+	if _, err = CheckChunkerVersionMetadataIntegrity(dbconn); err != nil {
+		return err
+	}
+
 	//check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
 	if err = checkReferenceCounts(dbconn); err != nil {
 		return err
