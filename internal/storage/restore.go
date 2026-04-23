@@ -205,6 +205,10 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		if strings.TrimSpace(row.chunkerVersion) == "" {
 			return "", "", nil, nil, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", row.chunkID)
 		}
+		// Phase 4 compatibility rule: restore only requires chunk-level version
+		// metadata presence. It must not enforce per-file equality between
+		// logical_file.chunker_version and chunk.chunker_version because chunk rows
+		// are content-addressed and can be legitimately reused across version eras.
 		// If the container is missing (quarantined), filename will be NULL
 		// Allow the chunk row, but mark filename as empty string
 		if row.filename == "" {

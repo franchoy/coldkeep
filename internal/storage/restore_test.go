@@ -494,6 +494,38 @@ func TestRestoreAllowsNonDefaultChunkerVersionMetadata(t *testing.T) {
 	}
 }
 
+func TestRestoreAllowsLogicalAndChunkVersionMismatch(t *testing.T) {
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(
+		t,
+		sql.NullInt64{Int64: 0o644, Valid: true},
+		sql.NullTime{Time: time.Now().Add(-3 * time.Hour), Valid: true},
+		sql.NullInt64{},
+		sql.NullInt64{},
+		true,
+	)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`UPDATE logical_file SET chunker_version = $1`, "v2-fastcdc"); err != nil {
+		t.Fatalf("set logical_file chunker_version: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunker_version = $1`, "v1-simple-rolling"); err != nil {
+		t.Fatalf("set chunk chunker_version: %v", err)
+	}
+
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("restore with logical/chunk version mismatch metadata: %v", err)
+	}
+
+	restored, err := os.ReadFile(result.OutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if !bytes.Equal(restored, payload) {
+		t.Fatalf("restored payload mismatch with logical/chunk version mismatch: got=%q want=%q", string(restored), string(payload))
+	}
+}
+
 func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
