@@ -14,11 +14,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type failIfInvokedChunker struct {
+	called bool
+}
+
+func (c *failIfInvokedChunker) Version() chunk.Version {
+	return chunk.Version("v-test-restore-must-not-call-chunker")
+}
+
+func (c *failIfInvokedChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	c.called = true
+	return nil, fmt.Errorf("restore must not invoke chunker")
+}
 
 func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
@@ -412,6 +426,71 @@ func TestRestoreFileByStoredPathUsesPhysicalPathIdentity(t *testing.T) {
 	}
 	if refCountAfter != refCountBefore {
 		t.Fatalf("expected restore to keep ref_count unchanged, before=%d after=%d", refCountBefore, refCountAfter)
+	}
+}
+
+func TestRestoreIgnoresConfiguredRuntimeChunker(t *testing.T) {
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(
+		t,
+		sql.NullInt64{Int64: 0o640, Valid: true},
+		sql.NullTime{Time: time.Now().Add(-2 * time.Hour), Valid: true},
+		sql.NullInt64{},
+		sql.NullInt64{},
+		true,
+	)
+	defer func() { _ = dbconn.Close() }()
+
+	failingChunker := &failIfInvokedChunker{}
+	sgctx.Chunker = failingChunker
+
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("restore with configured failing chunker: %v", err)
+	}
+
+	restored, err := os.ReadFile(result.OutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if !bytes.Equal(restored, payload) {
+		t.Fatalf("restored payload mismatch: got=%q want=%q", string(restored), string(payload))
+	}
+
+	if failingChunker.called {
+		t.Fatal("restore invoked configured runtime chunker; restore must be recipe-driven")
+	}
+}
+
+func TestRestoreAllowsNonDefaultChunkerVersionMetadata(t *testing.T) {
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(
+		t,
+		sql.NullInt64{Int64: 0o644, Valid: true},
+		sql.NullTime{Time: time.Now().Add(-3 * time.Hour), Valid: true},
+		sql.NullInt64{},
+		sql.NullInt64{},
+		true,
+	)
+	defer func() { _ = dbconn.Close() }()
+
+	const futureVersion = "v9-future-cdc"
+	if _, err := dbconn.Exec(`UPDATE logical_file SET chunker_version = $1`, futureVersion); err != nil {
+		t.Fatalf("set logical_file chunker_version: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunker_version = $1`, futureVersion); err != nil {
+		t.Fatalf("set chunk chunker_version: %v", err)
+	}
+
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{Overwrite: true})
+	if err != nil {
+		t.Fatalf("restore with non-default chunker_version metadata: %v", err)
+	}
+
+	restored, err := os.ReadFile(result.OutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if !bytes.Equal(restored, payload) {
+		t.Fatalf("restored payload mismatch with non-default metadata version: got=%q want=%q", string(restored), string(payload))
 	}
 }
 
