@@ -857,18 +857,19 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 	// Insert logical file (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
 
+	var insertedLogicalFileVersion string
 	insErr := tx.QueryRowContext(
 		ctx,
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
 		VALUES ($1, $2, $3, $4, 0, $5)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
-		RETURNING id`,
+		RETURNING id, chunker_version`,
 		fileinfo.Name(),
 		fileinfo.Size(),
 		fileHash,
 		filestate.LogicalFileProcessing,
 		activeVersion,
-	).Scan(&fileID)
+	).Scan(&fileID, &insertedLogicalFileVersion)
 
 	switch insErr {
 	case sql.ErrNoRows:
@@ -997,6 +998,11 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 		}
 	case nil:
 		// We won: this file is new and we should store it
+		// Invariant: the logical file recipe owner version must match the
+		// resolved chunker version chosen for this store operation.
+		if strings.TrimSpace(insertedLogicalFileVersion) != activeVersion {
+			return 0, "", fmt.Errorf("logical_file chunker_version mismatch: inserted=%q active=%q", insertedLogicalFileVersion, activeVersion)
+		}
 		filestatus = filestate.LogicalFileProcessing
 	default:
 		return 0, "", insErr
