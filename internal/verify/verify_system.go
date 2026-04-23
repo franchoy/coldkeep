@@ -42,60 +42,93 @@ func printCounters(dbconn *sql.DB) error {
 	return nil
 }
 
+// runPhysicalIntegrityChecks confirms that stored chunk data is self-consistent
+// at the storage layer: rows exist, location metadata is valid, reference counts
+// are coherent, and version metadata is present.
+//
+// These checks are entirely read-side: no chunker algorithm is invoked. The
+// chunker_version column is treated as an opaque label — only its presence is
+// verified, never its value compared against the current active chunker.
+func runPhysicalIntegrityChecks(dbconn *sql.DB) error {
+	// Chunk rows exist and have valid location mappings.
+	if err := checkCompletedChunkBlockCardinality(dbconn); err != nil {
+		return err
+	}
+
+	// Chunk reference counts match actual file_chunk rows.
+	if err := checkReferenceCounts(dbconn); err != nil {
+		return err
+	}
+
+	// No orphan chunks (positive live_ref_count but zero file_chunk rows).
+	if err := checkOrphanChunks(dbconn); err != nil {
+		return err
+	}
+
+	// Restore pins may only be placed on COMPLETED chunks.
+	if err := checkPinnedChunkStatus(dbconn); err != nil {
+		return err
+	}
+
+	// chunker_version is non-empty on every logical_file and chunk row.
+	// This confirms the metadata is present for read-side flows; it does NOT
+	// compare versions against the current active chunker.
+	if _, err := CheckChunkerVersionMetadataIntegrity(dbconn); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// runLogicalReconstructionChecks confirms that the logical recipe stored in the
+// database is coherent: file_chunk ordering is sane, snapshot→logical_file
+// references are valid, and the physical_file graph has no drift.
+//
+// These checks operate entirely on persisted structure and never re-run the
+// chunker algorithm. A file stored under v1-simple-rolling and one stored under
+// a future v2 algorithm are treated identically — only the recipe is checked.
+func runLogicalReconstructionChecks(dbconn *sql.DB) error {
+	// Snapshots reference logical_file rows that exist and are reachable.
+	// Runs before fine-grained ordering so snapshot-graph errors surface first.
+	if _, err := CheckSnapshotReachabilityIntegrity(dbconn); err != nil {
+		return err
+	}
+
+	// physical_file rows point to existing logical_file rows; ref_count matches
+	// the actual number of physical_file mappings; no negative ref_counts.
+	if _, err := CheckPhysicalFileGraphIntegrity(dbconn); err != nil {
+		return err
+	}
+
+	// file_chunk.chunk_order is gapless and starts at 0 for every logical file.
+	if err := checkFileChunkOrdering(dbconn); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string) error {
-	//	standard
-	//		reference count check
-	//		orphan chunk check
-	//		file chunk ordering check
+	// standard
+	//   Physical integrity:  chunk rows exist, location metadata valid,
+	//                        reference counts coherent, version metadata present.
+	//   Logical reconstruction: file_chunk ordering, snapshot reachability,
+	//                           physical_file graph coherence.
+	//
+	// Neither category re-runs the chunker algorithm.
 	log.Printf("Starting standard system verification...")
 
-	var err error
-
-	//print counters to be checked
 	if err := printCounters(dbconn); err != nil {
 		return err
 	}
 
-	// check that the current-state physical_file graph is coherent:
-	// no orphan mappings, no logical ref_count drift, and no impossible negative ref_count values.
-	if _, err = CheckSnapshotReachabilityIntegrity(dbconn); err != nil {
+	// --- Physical integrity ---
+	if err := runPhysicalIntegrityChecks(dbconn); err != nil {
 		return err
 	}
 
-	// check that the current-state physical_file graph is coherent:
-	// no orphan mappings, no logical ref_count drift, and no impossible negative ref_count values.
-	if _, err = CheckPhysicalFileGraphIntegrity(dbconn); err != nil {
-		return err
-	}
-
-	// check that logical_file/chunk version metadata exists everywhere read-side
-	// flows expect it, without coupling verify to the current active chunker.
-	if _, err = CheckChunkerVersionMetadataIntegrity(dbconn); err != nil {
-		return err
-	}
-
-	//check that all chunks have correct reference counts (chunk.live_ref_count should match the actual number of file_chunk references)
-	if err = checkReferenceCounts(dbconn); err != nil {
-		return err
-	}
-
-	//check that there are no orphan chunks (chunks with live_ref_count > 0 but no file_chunk references)
-	if err = checkOrphanChunks(dbconn); err != nil {
-		return err
-	}
-
-	//check that all completed chunks have exactly one location mapping row
-	if err = checkCompletedChunkBlockCardinality(dbconn); err != nil {
-		return err
-	}
-
-	//check that temporary restore pins remain on COMPLETED chunks only
-	if err = checkPinnedChunkStatus(dbconn); err != nil {
-		return err
-	}
-
-	//check that all files have properly ordered chunks with no gaps (file_chunk.chunk_order should be sequential starting from 0 for each logical file)
-	if err = checkFileChunkOrdering(dbconn); err != nil {
+	// --- Logical reconstruction ---
+	if err := runLogicalReconstructionChecks(dbconn); err != nil {
 		return err
 	}
 
@@ -105,50 +138,52 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 }
 
 func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
-	//	full
-	//		standard checks +
-	//			container file existence and size check
-	//			container hash check
-	//			chunk-container consistency check
-	//			chunk offsets consistency check
-	//			chunk offset validity check
-	//			checkContainerCompleteness
+	// full = standard checks + extended physical storage checks.
+	//
+	// Extended physical integrity (no chunker algorithm involved):
+	//   - Container files exist on disk and sizes match DB records.
+	//   - Sealed container hashes match file content.
+	//   - Chunk ↔ container associations are consistent.
+	//   - Block offsets are coherent with chunk status.
+	//   - Block offset arithmetic is within container bounds.
+	//   - Sealed containers accept no further writes.
 	log.Printf("Starting Full system verification...")
 
 	var err error
 
-	//first verify standard checks
+	// Standard checks first (physical + logical reconstruction).
 	if err = VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
 		return err
 	}
 
-	//check that all containers have their files present on disk and that the file sizes match the DB records
+	// --- Extended physical integrity ---
+
+	// Container files exist on disk; filesystem sizes match DB current_size.
 	if err = checkContainersFileExistence(dbconn, containersDir); err != nil {
 		return err
 	}
 
-	//check that all sealed containers have a valid hash that matches the file content
+	// Sealed containers: stored hash matches actual file content.
 	if err = checkSealedContainersHash(dbconn, containersDir); err != nil {
 		return err
 	}
 
-	//check that all chunks are correctly associated with their containers (if blocks.container_id exists → chunk.status must be COMPLETED)
+	// blocks.container_id present ↔ chunk.status = COMPLETED.
 	if err = checkChunkContainerConsistency(dbconn); err != nil {
 		return err
 	}
 
-	//check that all chunks have location (blocks.container_id + blocks.block_offset) consistent with their status
-	//if status = COMPLETED → blocks row with container_id and block_offset must exist
+	// COMPLETED chunks have a blocks row with valid container_id and block_offset.
 	if err = checkChunkOffsets(dbconn); err != nil {
 		return err
 	}
 
-	//check that all chunks with status = COMPLETED have valid blocks.container_id and blocks.block_offset values and that block_offset + size does not exceed the container current_size
+	// block_offset + stored_size does not exceed container current_size.
 	if err = checkChunkOffsetValidity(dbconn); err != nil {
 		return err
 	}
 
-	//check that sealed containers should not accept new chunks
+	// Sealed containers must not accept new chunks.
 	if err = checkContainerCompleteness(dbconn); err != nil {
 		return err
 	}
@@ -159,10 +194,12 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 }
 
 func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
-	//	deep
-	//		standard checks +
-	//		full checks +
-	//			actual file integrity checks (e.g. read container files and verify chunk data against stored hashes)
+	// deep = full checks + byte-level physical integrity.
+	//
+	// For every container: open the file, read each block in offset order,
+	// decode with the stored codec, and SHA-256 the plaintext against the
+	// stored chunk_hash. No chunker algorithm is invoked at any point — the
+	// hash comparison is against the value written at ingest time.
 	log.Printf("Starting Deep system verification...")
 
 	var err error
