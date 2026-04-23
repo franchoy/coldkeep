@@ -24,7 +24,7 @@ type StorageContext struct {
 	ContainerDir string
 	TempDBPath   string
 	// Chunker overrides the chunking strategy used during store operations.
-	// If nil, chunk.DefaultChunker() is used. Set this in tests or when a
+	// If nil, the registry default chunker is used. Set this in tests or when a
 	// specific chunker version is required.
 	Chunker chunk.Chunker
 }

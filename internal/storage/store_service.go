@@ -17,6 +17,8 @@ type ActiveChunkerResolution struct {
 
 // NewStoreService builds a store service with an explicit active chunker.
 // If active is nil, it resolves the current runtime default from the registry.
+// Phase 3 intentionally keeps this internal-only (Option A): no user-facing
+// chunker selection is introduced here.
 func NewStoreService(active chunk.Chunker) StoreService {
 	if active == nil {
 		active = chunk.DefaultRegistry().Default()
