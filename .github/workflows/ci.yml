@@ -64,6 +64,9 @@ jobs:
 
       - name: Audit validation matrix coverage
         run: bash scripts/validate_validation_matrix.sh
+
+      - name: Enforce versioned row writer scope
+        run: bash scripts/check_versioned_row_writers.sh
           
       - name: Lint
         uses: golangci/golangci-lint-action@v9
