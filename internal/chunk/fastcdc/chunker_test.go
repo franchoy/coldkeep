@@ -165,6 +165,92 @@ func TestNoZeroSizeChunks(t *testing.T) {
 	assertInvariants(t, src, results)
 }
 
+// boundaryInputs returns a set of named inputs that exercise different size
+// regimes: sub-min, single-chunk, multi-chunk, and large forced-cut dominated.
+func boundaryInputs() []struct {
+	name string
+	data []byte
+} {
+	return []struct {
+		name string
+		data []byte
+	}{
+		{"sub_min", bytes.Repeat([]byte{0x01}, MinChunkSize-1)},
+		{"exact_min", bytes.Repeat([]byte{0x02}, MinChunkSize)},
+		{"exact_avg", bytes.Repeat([]byte{0x03}, AvgChunkSize)},
+		{"two_avg", bytes.Repeat([]byte{0x04}, AvgChunkSize*2)},
+		{"two_max", bytes.Repeat([]byte{0xFF}, MaxChunkSize*2+1)},
+		{"patterned", bytes.Repeat([]byte("v2-boundary-test-pattern-"), 120000)},
+	}
+}
+
+func TestBoundaryOffsetsAreStrictlyIncreasing(t *testing.T) {
+	for _, tc := range boundaryInputs() {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			results := runChunker(t, tc.name+".bin", tc.data)
+			if len(results) < 2 {
+				return // single or zero chunk — no ordering to check
+			}
+			for i := 1; i < len(results); i++ {
+				if results[i].Info.Offset <= results[i-1].Info.Offset {
+					t.Fatalf("offsets not strictly increasing: chunk %d offset=%d <= chunk %d offset=%d",
+						i, results[i].Info.Offset, i-1, results[i-1].Info.Offset)
+				}
+			}
+		})
+	}
+}
+
+func TestBoundaryChunkIPlusOneStartsAfterChunkI(t *testing.T) {
+	for _, tc := range boundaryInputs() {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			results := runChunker(t, tc.name+".bin", tc.data)
+			for i := 0; i < len(results)-1; i++ {
+				expectedNext := results[i].Info.Offset + results[i].Info.Size
+				actualNext := results[i+1].Info.Offset
+				if actualNext != expectedNext {
+					t.Fatalf("chunk %d ends at %d but chunk %d starts at %d (gap or overlap of %d bytes)",
+						i, expectedNext, i+1, actualNext, actualNext-expectedNext)
+				}
+			}
+		})
+	}
+}
+
+func TestBoundaryInteriorChunksAtLeastMinSize(t *testing.T) {
+	for _, tc := range boundaryInputs() {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			results := runChunker(t, tc.name+".bin", tc.data)
+			// All chunks except the final one must be >= MinChunkSize.
+			// The final chunk may be smaller when the file tail is shorter than min.
+			for i := 0; i < len(results)-1; i++ {
+				if int(results[i].Info.Size) < MinChunkSize {
+					t.Fatalf("interior chunk %d size=%d < MinChunkSize=%d",
+						i, results[i].Info.Size, MinChunkSize)
+				}
+			}
+		})
+	}
+}
+
+func TestBoundaryAllChunksAtMostMaxSize(t *testing.T) {
+	for _, tc := range boundaryInputs() {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			results := runChunker(t, tc.name+".bin", tc.data)
+			for i, r := range results {
+				if int(r.Info.Size) > MaxChunkSize {
+					t.Fatalf("chunk %d size=%d > MaxChunkSize=%d",
+						i, r.Info.Size, MaxChunkSize)
+				}
+			}
+		})
+	}
+}
+
 func TestShouldCutZoneBehavior(t *testing.T) {
 	// 0 -> min: never cut
 	if shouldCut(MinChunkSize-1, 0) {
