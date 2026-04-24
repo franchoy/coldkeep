@@ -12,6 +12,9 @@ import (
 type Version = shared.Version
 
 const (
+	// v1-simple-rolling is the historical chunker for pre-v1.5 data.
+	// Its behavior must not change, because existing logical file recipes
+	// and compatibility metadata depend on it.
 	// VersionV1SimpleRolling is the canonical persisted value for repository data
 	// produced by the historical v1 simple rolling chunker.
 	VersionV1SimpleRolling = shared.VersionV1SimpleRolling
