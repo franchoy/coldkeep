@@ -174,3 +174,78 @@ func TestVerifyFileStandardAcceptsMismatchedChunkAndFileVersions(t *testing.T) {
 		t.Fatalf("verify should accept mismatched chunk/file versions (dedup reuse); got: %v", err)
 	}
 }
+
+// TestVerifyFileStandardAcceptsUnknownWellFormedVersions ensures verify stays
+// decoupled from chunker implementation availability on read paths.
+//
+// If a future maintainer starts replaying chunkers during verify, this test
+// should fail because these versions are intentionally unknown to this binary.
+func TestVerifyFileStandardAcceptsUnknownWellFormedVersions(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		"future-unknown-versions.txt",
+		int64(512),
+		strings.Repeat("1", 64),
+		filestate.LogicalFileCompleted,
+		int64(0),
+		"v99-future-cdc",
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"future-unknown.bin", int64(4096), int64(4096), true, false,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		strings.Repeat("2", 64),
+		int64(512),
+		filestate.ChunkCompleted,
+		int64(1),
+		int64(0),
+		int64(0),
+		"v77-origin-meta",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, container_id, block_offset, stored_size, plaintext_size, codec, format_version, nonce)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		chunkID,
+		containerID,
+		int64(512),
+		int64(512),
+		int64(512),
+		"plain",
+		1,
+		[]byte("nonce00000000000"),
+	); err != nil {
+		t.Fatalf("insert blocks row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`,
+		logicalID,
+		chunkID,
+		0,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	if err := VerifyFileStandardWithContainersDir(dbconn, int(logicalID), t.TempDir()); err != nil {
+		t.Fatalf("verify should accept unknown well-formed version metadata; got: %v", err)
+	}
+}
