@@ -50,6 +50,11 @@ func assertInvariants(t *testing.T, src []byte, results []shared.Result) {
 		if r.Info.Size != int64(len(r.Data)) {
 			t.Fatalf("chunk %d size metadata mismatch: info=%d len=%d", i, r.Info.Size, len(r.Data))
 		}
+		sum := sha256.Sum256(r.Data)
+		expectedHash := hex.EncodeToString(sum[:])
+		if r.Info.Hash != expectedHash {
+			t.Fatalf("chunk %d hash metadata mismatch: info=%s expected=%s", i, r.Info.Hash, expectedHash)
+		}
 		if int(r.Info.Size) > MaxChunkSize {
 			t.Fatalf("chunk %d exceeds MaxChunkSize: %d > %d", i, r.Info.Size, MaxChunkSize)
 		}

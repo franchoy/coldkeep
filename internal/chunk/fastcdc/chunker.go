@@ -6,6 +6,8 @@
 package fastcdc
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 
@@ -68,13 +70,9 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 				fp ^= gearTable[b]
 
 				if shouldCut(len(buffer), fp) {
-					chunkData := make([]byte, len(buffer))
-					copy(chunkData, buffer)
-					results = append(results, shared.Result{
-						Info: shared.Info{Size: int64(len(chunkData)), Offset: chunkOffset},
-						Data: chunkData,
-					})
-					chunkOffset += int64(len(chunkData))
+					result := buildResult(chunkOffset, buffer)
+					results = append(results, result)
+					chunkOffset += result.Info.Size
 					buffer = buffer[:0]
 					fp = 0
 				}
@@ -90,15 +88,24 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 	}
 
 	if len(buffer) > 0 {
-		chunkData := make([]byte, len(buffer))
-		copy(chunkData, buffer)
-		results = append(results, shared.Result{
-			Info: shared.Info{Size: int64(len(chunkData)), Offset: chunkOffset},
-			Data: chunkData,
-		})
+		results = append(results, buildResult(chunkOffset, buffer))
 	}
 
 	return results, nil
+}
+
+func buildResult(offset int64, data []byte) shared.Result {
+	chunkData := make([]byte, len(data))
+	copy(chunkData, data)
+	sum := sha256.Sum256(chunkData)
+	return shared.Result{
+		Info: shared.Info{
+			Hash:   hex.EncodeToString(sum[:]),
+			Size:   int64(len(chunkData)),
+			Offset: offset,
+		},
+		Data: chunkData,
+	}
 }
 
 func shouldCut(size int, fp uint32) bool {
