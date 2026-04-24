@@ -15,7 +15,9 @@ const (
 	// VersionV1SimpleRolling is the canonical persisted value for repository data
 	// produced by the historical v1 simple rolling chunker.
 	VersionV1SimpleRolling = shared.VersionV1SimpleRolling
-	DefaultChunkerVersion  = VersionV1SimpleRolling
+	// VersionV2FastCDC is the canonical persisted value for the v2 fastcdc chunker.
+	VersionV2FastCDC      = Version("v2-fastcdc")
+	DefaultChunkerVersion = VersionV1SimpleRolling
 )
 
 var chunkerVersionPattern = regexp.MustCompile(`^v[0-9]+(?:-[a-z0-9]+)+$`)
