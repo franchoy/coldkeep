@@ -52,7 +52,7 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 	results := make([]shared.Result, 0)
 	buffer := make([]byte, 0, MaxChunkSize)
 	chunkOffset := int64(0)
-	var fp uint64
+	var fp uint32
 
 	tmp := make([]byte, 64*1024)
 	for {
@@ -61,7 +61,11 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 			for i := 0; i < n; i++ {
 				b := tmp[i]
 				buffer = append(buffer, b)
-				fp = (fp << 1) + gearTable[b]
+				// Phase 5 intentionally keeps the rolling hash simple and stable.
+				// Value here is from deterministic behavior + normalization windows,
+				// not from maximizing hash sophistication yet.
+				fp = (fp << 1) + uint32(b)
+				fp ^= gearTable[b]
 
 				if shouldCut(len(buffer), fp) {
 					chunkData := make([]byte, len(buffer))
@@ -97,7 +101,7 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 	return results, nil
 }
 
-func shouldCut(size int, fp uint64) bool {
+func shouldCut(size int, fp uint32) bool {
 	if size < MinChunkSize {
 		return false
 	}
@@ -111,17 +115,17 @@ func shouldCut(size int, fp uint64) bool {
 	return (fp&normalMask) == 0 || size >= MaxChunkSize
 }
 
-func initGearTable() [256]uint64 {
+func initGearTable() [256]uint32 {
 	// Deterministically generate a 256-entry table via SplitMix64 so chunk
 	// boundaries are stable across platforms and process runs.
-	var table [256]uint64
+	var table [256]uint32
 	var state uint64 = 0x9e3779b97f4a7c15
 	for i := 0; i < len(table); i++ {
 		state += 0x9e3779b97f4a7c15
 		z := state
 		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
 		z = (z ^ (z >> 27)) * 0x94d049bb133111eb
-		table[i] = z ^ (z >> 31)
+		table[i] = uint32(z ^ (z >> 31))
 	}
 	return table
 }
