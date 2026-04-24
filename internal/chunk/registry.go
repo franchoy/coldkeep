@@ -3,6 +3,7 @@ package chunk
 import (
 	"fmt"
 
+	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 )
 
@@ -60,7 +61,7 @@ func (r *Registry) DefaultVersion() Version {
 // isolated registry (tests, config-driven selection) should use this
 // instead of the package-level DefaultRegistry().
 func NewDefaultRegistry() (*Registry, error) {
-	return NewRegistry(VersionV1SimpleRolling, simplecdc.New())
+	return NewRegistry(VersionV1SimpleRolling, simplecdc.New(), fastcdc.Chunker{})
 }
 
 // DefaultRegistry returns the package-level default registry.
@@ -74,7 +75,7 @@ func DefaultChunker() Chunker {
 }
 
 var defaultRegistry = func() *Registry {
-	r, err := NewRegistry(DefaultChunkerVersion, simplecdc.New())
+	r, err := NewRegistry(DefaultChunkerVersion, simplecdc.New(), fastcdc.Chunker{})
 	if err != nil {
 		panic(fmt.Sprintf("chunk: failed to build default registry: %v", err))
 	}
