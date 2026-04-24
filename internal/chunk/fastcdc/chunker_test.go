@@ -128,6 +128,43 @@ func TestMaxChunkCapEnforced(t *testing.T) {
 	assertInvariants(t, src, results)
 }
 
+func TestFileSmallerThanMinSize(t *testing.T) {
+	src := bytes.Repeat([]byte{0xAB}, MinChunkSize-1)
+	results := runChunker(t, "sub-min.bin", src)
+	// Input is smaller than MinChunkSize; must be returned as a single chunk.
+	if len(results) != 1 {
+		t.Fatalf("expected 1 chunk for sub-min input, got %d", len(results))
+	}
+	assertInvariants(t, src, results)
+}
+
+func TestFileAroundMinSize(t *testing.T) {
+	// Exactly MinChunkSize and a few bytes above; both must produce valid output.
+	for _, extra := range []int{0, 1, 512} {
+		size := MinChunkSize + extra
+		src := bytes.Repeat([]byte{0xCD}, size)
+		results := runChunker(t, "around-min.bin", src)
+		if len(results) == 0 {
+			t.Fatalf("extra=%d: expected at least 1 chunk, got 0", extra)
+		}
+		assertInvariants(t, src, results)
+	}
+}
+
+func TestNoZeroSizeChunks(t *testing.T) {
+	src := bytes.Repeat([]byte("abcde"), 50000) // ~244 KiB; expect several chunks
+	results := runChunker(t, "no-zero.bin", src)
+	for i, r := range results {
+		if r.Info.Size == 0 {
+			t.Fatalf("chunk %d has zero size", i)
+		}
+		if len(r.Data) == 0 {
+			t.Fatalf("chunk %d has empty Data slice", i)
+		}
+	}
+	assertInvariants(t, src, results)
+}
+
 func TestShouldCutZoneBehavior(t *testing.T) {
 	// 0 -> min: never cut
 	if shouldCut(MinChunkSize-1, 0) {
