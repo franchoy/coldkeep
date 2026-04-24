@@ -14,6 +14,12 @@ import (
 // ChunkerVersionMetadataSummary captures repository-level version-metadata
 // integrity. These checks are intentionally structural: read-side flows should
 // reject missing metadata without depending on the current active chunker.
+//
+// Semantics guardrail:
+//   - logical_file.chunker_version identifies recipe provenance metadata
+//   - chunk.chunker_version identifies chunk-origin metadata
+//   - neither field is used here to enforce cross-row equality constraints
+//     because deduplicated chunks may be referenced across version eras
 type ChunkerVersionMetadataSummary struct {
 	EmptyLogicalFileVersions int64
 	EmptyChunkVersions       int64

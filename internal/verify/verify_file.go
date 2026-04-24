@@ -143,9 +143,9 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		return fmt.Errorf("logical file %d has invalid status: expected COMPLETED but got %s", fileId, status)
 	}
 
-	// chunker_version must be present: it is required metadata for all read-side
-	// flows. We assert presence only — we do not compare against the current
-	// active chunker, which would make version evolution impossible.
+	// logical_file.chunker_version captures recipe provenance for this logical
+	// file. Verify asserts presence only; it does not replay chunking or compare
+	// against the current runtime chunker.
 	if strings.TrimSpace(chunkerVersion) == "" {
 		return fmt.Errorf("logical file %d has empty chunker_version; repository metadata integrity violation", fileId)
 	}
@@ -218,9 +218,9 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		if !blockId.Valid {
 			return fmt.Errorf("chunk %d has no associated block", chunkid)
 		}
-		// chunker_version must be present on every chunk. We assert presence only —
-		// chunk version need not match the logical file version because deduped
-		// chunks can originate from a different chunker generation.
+		// chunk.chunker_version is chunk-origin metadata. Verify asserts presence,
+		// but does not require equality with logical_file.chunker_version because
+		// deduped chunks may be reused across chunker generations.
 		if strings.TrimSpace(chunkChunkerVersion) == "" {
 			return fmt.Errorf("chunk %d referenced by logical file %d has empty chunker_version; repository metadata integrity violation", chunkid, fileId)
 		}

@@ -75,11 +75,13 @@ type restoreChunkRow struct {
 }
 
 type restoreLogicalFileRow struct {
-	id             int64
-	originalName   string
-	totalSize      int64
-	fileHash       string
-	status         string
+	id           int64
+	originalName string
+	totalSize    int64
+	fileHash     string
+	status       string
+	// chunkerVersion identifies the provenance of the persisted file recipe.
+	// It is metadata about how the logical recipe was originally produced.
 	chunkerVersion string
 }
 
@@ -88,12 +90,18 @@ func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) erro
 	if trimmed == "" {
 		return fmt.Errorf("logical file %d has empty chunker_version (migration failure, schema corruption, or unsupported stale repository state)", fileID)
 	}
+	// Restore policy: require syntactic sanity for persisted version metadata so
+	// corruption/migration issues fail fast, but do not require runtime support
+	// for the specific version string to replay already-persisted recipes.
 	if !chunk.IsWellFormedVersion(chunk.Version(trimmed)) {
 		return fmt.Errorf("logical file %d has malformed chunker_version %q (expected format like v1-simple-rolling)", fileID, trimmed)
 	}
 
 	// Restore remains recipe-driven. Unknown versions are tolerated as persisted
-	// compatibility metadata as long as the value is present and non-empty.
+	// compatibility metadata as long as the value is well-formed.
+	//
+	// Critical invariant: restore replays persisted chunk references and bytes; it
+	// does not recompute chunk boundaries with the active runtime chunker.
 	if _, ok := chunk.DefaultRegistry().Get(chunk.Version(trimmed)); !ok {
 		log.Printf("event=restore_metadata_warning action=unknown_chunker_version file_id=%d chunker_version=%q", fileID, trimmed)
 	}
@@ -213,9 +221,12 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			return "", "", nil, nil, fmt.Errorf("chunk %d has malformed chunker_version %q (expected format like v1-simple-rolling)", row.chunkID, trimmedChunkVersion)
 		}
 		// Phase 4 compatibility rule: restore only requires chunk-level version
-		// metadata presence. It must not enforce per-file equality between
+		// metadata sanity/presence. It must not enforce per-file equality between
 		// logical_file.chunker_version and chunk.chunker_version because chunk rows
 		// are content-addressed and can be legitimately reused across version eras.
+		//
+		// chunk.chunker_version is origin metadata for the chunk row, not a restore
+		// compatibility constraint for every logical file that references it.
 		// If the container is missing (quarantined), filename will be NULL
 		// Allow the chunk row, but mark filename as empty string
 		if row.filename == "" {
