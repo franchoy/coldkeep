@@ -122,3 +122,31 @@ func TestMaxChunkCapEnforced(t *testing.T) {
 	}
 	assertInvariants(t, src, results)
 }
+
+func TestShouldCutZoneBehavior(t *testing.T) {
+	// 0 -> min: never cut
+	if shouldCut(MinChunkSize-1, 0) {
+		t.Fatal("expected no cut below MinChunkSize")
+	}
+
+	// min -> avg: strict mask gate
+	if shouldCut(MinChunkSize, 1) {
+		t.Fatal("expected strict-zone non-cut for non-matching fingerprint")
+	}
+	if !shouldCut(MinChunkSize, 0) {
+		t.Fatal("expected strict-zone cut when strictMask matches")
+	}
+
+	// avg -> max: normal mask gate
+	if shouldCut(AvgChunkSize, 1) {
+		t.Fatal("expected normal-zone non-cut for non-matching fingerprint")
+	}
+	if !shouldCut(AvgChunkSize, 0) {
+		t.Fatal("expected normal-zone cut when normalMask matches")
+	}
+
+	// max: force cut
+	if !shouldCut(MaxChunkSize, 1) {
+		t.Fatal("expected force cut at MaxChunkSize")
+	}
+}

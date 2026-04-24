@@ -17,14 +17,17 @@ const (
 	Version = shared.Version("v2-fastcdc")
 
 	// Tuning targets for the first v2-fastcdc implementation.
-	MinChunkSize = 256 * 1024
-	AvgChunkSize = 1024 * 1024
-	MaxChunkSize = 2 * 1024 * 1024
+	//
+	// Phase 5 comparison rule: keep target sizes aligned for fair behavior
+	// comparisons while we validate implementation isolation.
+	MinChunkSize = 32 * 1024
+	AvgChunkSize = 64 * 1024
+	MaxChunkSize = 128 * 1024
 
-	// Before AvgChunkSize, use a stricter mask to reduce early cuts.
-	maskBeforeAvg = (1 << 21) - 1
-	// After AvgChunkSize, use a looser mask to increase cut probability.
-	maskAfterAvg = (1 << 19) - 1
+	// Between MinChunkSize and AvgChunkSize, cut only on a stricter condition.
+	strictMask = (1 << 16) - 1
+	// Between AvgChunkSize and MaxChunkSize, cut on a looser condition.
+	normalMask = (1 << 15) - 1
 )
 
 var gearTable = initGearTable()
@@ -98,13 +101,14 @@ func shouldCut(size int, fp uint64) bool {
 	if size < MinChunkSize {
 		return false
 	}
-	if size >= MaxChunkSize {
-		return true
-	}
+
+	// min -> avg: strict cut mask
 	if size < AvgChunkSize {
-		return (fp & maskBeforeAvg) == 0
+		return (fp & strictMask) == 0
 	}
-	return (fp & maskAfterAvg) == 0
+
+	// avg -> max: normal/looser cut mask, with force-cut cap at max
+	return (fp&normalMask) == 0 || size >= MaxChunkSize
 }
 
 func initGearTable() [256]uint64 {
