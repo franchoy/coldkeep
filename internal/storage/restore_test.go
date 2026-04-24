@@ -192,6 +192,40 @@ func TestRestorePinningFailsOnEmptyLogicalFileChunkerVersion(t *testing.T) {
 	}
 }
 
+func TestRestorePinningFailsOnMalformedLogicalFileChunkerVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+		 RETURNING id`,
+		"malformed-logical-chunker-version.txt",
+		5,
+		"file-hash-malformed-logical-version",
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE logical_file SET chunker_version = $1 WHERE id = $2`, "future-v9", fileID); err != nil {
+		t.Fatalf("set malformed logical_file.chunker_version: %v", err)
+	}
+
+	_, _, _, _, err = pinLogicalFileRestoreChunks(dbconn, fileID)
+	if err == nil || !strings.Contains(err.Error(), "malformed chunker_version") {
+		t.Fatalf("expected malformed chunker_version error, got: %v", err)
+	}
+}
+
 func TestRestorePinningFailsOnEmptyChunkChunkerVersion(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -273,6 +307,90 @@ func TestRestorePinningFailsOnEmptyChunkChunkerVersion(t *testing.T) {
 	_, _, _, _, err = pinLogicalFileRestoreChunks(dbconn, fileID)
 	if err == nil || !strings.Contains(err.Error(), "empty chunker_version") {
 		t.Fatalf("expected empty chunker_version error, got: %v", err)
+	}
+}
+
+func TestRestorePinningFailsOnMalformedChunkChunkerVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE)
+		 RETURNING id`,
+		"restore-malformed-chunk-version.bin",
+		4096,
+		1048576,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+		 RETURNING id`,
+		"sample-malformed-chunk-version.txt",
+		5,
+		"file-hash-malformed-chunk-version",
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+		 RETURNING id`,
+		"chunk-hash-malformed-version",
+		5,
+		filestate.ChunkCompleted,
+		1,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunker_version = $1 WHERE id = $2`, "vx-future", chunkID); err != nil {
+		t.Fatalf("set malformed chunk.chunker_version: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		chunkID,
+		"plain",
+		1,
+		5,
+		5,
+		[]byte{},
+		containerID,
+		0,
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)`,
+		fileID,
+		chunkID,
+		0,
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	_, _, _, _, err = pinLogicalFileRestoreChunks(dbconn, fileID)
+	if err == nil || !strings.Contains(err.Error(), "malformed chunker_version") {
+		t.Fatalf("expected malformed chunker_version error, got: %v", err)
 	}
 }
 

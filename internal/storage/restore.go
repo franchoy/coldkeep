@@ -88,6 +88,9 @@ func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) erro
 	if trimmed == "" {
 		return fmt.Errorf("logical file %d has empty chunker_version (migration failure, schema corruption, or unsupported stale repository state)", fileID)
 	}
+	if !chunk.IsWellFormedVersion(chunk.Version(trimmed)) {
+		return fmt.Errorf("logical file %d has malformed chunker_version %q (expected format like v1-simple-rolling)", fileID, trimmed)
+	}
 
 	// Restore remains recipe-driven. Unknown versions are tolerated as persisted
 	// compatibility metadata as long as the value is present and non-empty.
@@ -202,8 +205,12 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		); err != nil {
 			return "", "", nil, nil, fmt.Errorf("scan chunk row: %w", err)
 		}
-		if strings.TrimSpace(row.chunkerVersion) == "" {
+		trimmedChunkVersion := strings.TrimSpace(row.chunkerVersion)
+		if trimmedChunkVersion == "" {
 			return "", "", nil, nil, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", row.chunkID)
+		}
+		if !chunk.IsWellFormedVersion(chunk.Version(trimmedChunkVersion)) {
+			return "", "", nil, nil, fmt.Errorf("chunk %d has malformed chunker_version %q (expected format like v1-simple-rolling)", row.chunkID, trimmedChunkVersion)
 		}
 		// Phase 4 compatibility rule: restore only requires chunk-level version
 		// metadata presence. It must not enforce per-file equality between
