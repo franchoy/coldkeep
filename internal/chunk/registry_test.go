@@ -85,6 +85,27 @@ func TestNewDefaultRegistryIsValid(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistryResolvesV2FastCDC(t *testing.T) {
+	r, err := NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry returned error: %v", err)
+	}
+
+	// v2-fastcdc must be resolvable by version key.
+	c, ok := r.Get(VersionV2FastCDC)
+	if !ok {
+		t.Fatalf("expected v2-fastcdc to be registered; Get returned false")
+	}
+	if c.Version() != VersionV2FastCDC {
+		t.Fatalf("resolved chunker version: got %q want %q", c.Version(), VersionV2FastCDC)
+	}
+
+	// Default must still be v1.
+	if got := r.DefaultVersion(); got != VersionV1SimpleRolling {
+		t.Fatalf("default version must remain v1 after v2 registration: got %q", got)
+	}
+}
+
 func TestChunkFileMatchesDefaultChunker(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "input.bin")
