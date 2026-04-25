@@ -283,6 +283,13 @@ Typical outcomes to expect (informational ranges):
 Interpretation note: the shifted-data reuse gap is the main justification signal for v2 FastCDC boundary stability improvements.
 Critical insight: this indicates FastCDC improves not only dedup ratio, but dedup stability over time under boundary-shifting changes.
 
+Common mistakes to avoid:
+
+- Do not assert exact chunk counts; implementations can vary slightly while preserving correctness.
+- Do not use non-deterministic input data; keep all generated data seed-driven for CI reliability.
+- Do not ignore shifted-data comparisons; this is the most important stability signal.
+- Do not overcomplicate metrics; keep interpretation focused on reuse percentage, chunk count, and coverage invariants.
+
 ## Batch Operations (v1.2)
 
 Batch restore/remove/repair extends the automation contract with deterministic orchestration and invariant-aware reporting.

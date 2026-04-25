@@ -258,6 +258,15 @@ The benchmark suite covers three repository sizes:
 Interpretation guidance:
 
 - compare your branch against `main` on the same machine when possible
+
+### Chunker Benchmark Validation Pitfalls
+
+When touching `internal/chunk/benchmark` or `coldkeep benchmark chunkers`, keep this validation posture:
+
+- Avoid exact chunk-count assertions across versions; use relative expectations and coverage invariants instead.
+- Use deterministic, seed-driven input generation only.
+- Keep shifted-data scenarios in scope; this is the primary boundary-stability signal.
+- Keep metrics simple and stable for review: reuse percentage, chunk count, and coverage invariants.
 - treat large jumps in `ns/op`, `B/op`, or `allocs/op` as a review trigger
 - prefer preserving simple grouped queries over adding per-row or per-file loops
 - mixed-version repositories are expected; benchmark coverage intentionally exercises both v1 and v2 metadata in one run
