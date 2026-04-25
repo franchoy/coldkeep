@@ -387,6 +387,99 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	}
 }
 
+func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseError(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	originalLoad := loadDefaultStorageContextPhase
+	originalStartupRecovery := startupRecoveryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		startupRecoveryPhase = originalStartupRecovery
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	payload := []byte("runcli-store-cross-version-collision")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+			Chunker:      singleChunkV2CLITestChunker{},
+		}, nil
+	}
+
+	inPath := filepath.Join(t.TempDir(), "runcli-cross-version.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		code := runCLI([]string{"store", "--output", "json", inPath})
+		if code != exitGeneral {
+			t.Fatalf("expected exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two stderr JSON lines (startup event + command error), got %d output=%q", len(lines), stderr)
+	}
+
+	var startupPayload map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &startupPayload); err != nil {
+		t.Fatalf("parse startup JSON payload: %v line=%q", err, lines[0])
+	}
+	if got, _ := startupPayload["event"].(string); got != "startup_recovery" {
+		t.Fatalf("startup event mismatch: payload=%v", startupPayload)
+	}
+	if got, _ := startupPayload["status"].(string); got != "ok" {
+		t.Fatalf("startup status mismatch: payload=%v", startupPayload)
+	}
+
+	var errorPayload map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &errorPayload); err != nil {
+		t.Fatalf("parse command error JSON payload: %v line=%q", err, lines[1])
+	}
+	if got, _ := errorPayload["status"].(string); got != "error" {
+		t.Fatalf("error payload status mismatch: payload=%v", errorPayload)
+	}
+	if got, _ := errorPayload["error_class"].(string); got != "GENERAL" {
+		t.Fatalf("error_class mismatch: payload=%v", errorPayload)
+	}
+	msg, _ := errorPayload["message"].(string)
+	if !strings.Contains(msg, "cross-version chunk reuse rejected") {
+		t.Fatalf("expected cross-version rejection in message, payload=%v", errorPayload)
+	}
+}
+
 func TestPrintBatchHumanReportSymbolsAndAlignment(t *testing.T) {
 	report := batch.Report{
 		Operation: batch.OperationRestore,

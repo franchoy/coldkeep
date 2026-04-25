@@ -121,6 +121,7 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var runGCPhase = maintenance.RunGCWithContainersDirResult
+var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
@@ -273,7 +274,7 @@ func runCLI(args []string) int {
 
 func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Report, error) {
 	if mode != outputModeText || !isQuietHealthyStartupRecoveryEnabled() {
-		return recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+		return startupRecoveryPhase(container.ContainersDir)
 	}
 
 	prevOutput := log.Writer()
@@ -285,7 +286,7 @@ func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Re
 		log.SetFlags(prevFlags)
 	}()
 
-	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	recoveryReport, recoveryErr := startupRecoveryPhase(container.ContainersDir)
 	if shouldReplayBufferedRecoveryLogs(recoveryReport, recoveryErr) {
 		if _, err := io.Copy(prevOutput, &buf); err != nil {
 			log.Printf("failed to replay buffered startup recovery logs: %v", err)
