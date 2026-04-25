@@ -122,146 +122,13 @@ Documentation is split into:
 
 For the deeper model (invariants, lifecycle, validity, recovery, trust boundary), see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Guarantee 1: Restore Correctness
+## Chunking at a Glance
 
-Contract statement:
+coldkeep uses content-defined chunking (CDC).
 
-- Any stored logical file can be restored byte-identically regardless of chunker version.
-
-Operational meaning:
-
-- restore does not depend on the current default chunker.
-- restore replays persisted `file_chunk -> chunk -> blocks` references.
-- chunker version is persisted metadata for provenance and observability, not a runtime dependency for restore execution.
-
-What this guarantee does not imply:
-
-- it does not guarantee identical chunk boundaries across chunker versions.
-- it does not guarantee identical dedup ratio across chunker versions.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the full chunker evolution and cross-version expectations contract.
-
-## Guarantee 2: Snapshot Stability
-
-Contract statement:
-
-- Snapshots remain valid across future versions under the v1.x compatibility policy.
-
-Operational meaning:
-
-- snapshots reference logical files via persisted snapshot metadata.
-- logical files are immutable reconstruction recipes once committed.
-- chunker evolution changes future write behavior, but does not invalidate existing snapshots.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed compatibility scope and non-guarantees.
-
-## Guarantee 3: No Automatic Data Migration
-
-Contract statement:
-
-- coldkeep never rewrites stored data unless explicitly instructed.
-
-Operational meaning:
-
-- no automatic re-chunking.
-- no background migration.
-- no silent data transformation.
-
-Practical consequence:
-
-- chunker-default changes affect future writes, not previously stored payload layout.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for migration-boundary details.
-
-## Guarantee 4: Chunker Evolution Safety
-
-Contract statement:
-
-- multiple chunker versions can coexist safely in one repository.
-
-Operational meaning:
-
-- each logical file carries one chunker-version label.
-- identical content may be deduplicated across version eras.
-- dedup behavior is content-identity driven with repository safety constraints.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for cross-version coexistence details.
-
-## Explicit Non-Guarantee 1: Cross-Version Dedup Efficiency
-
-Contract statement:
-
-- coldkeep does not guarantee dedup efficiency between different chunker versions.
-
-Clarifications:
-
-- dedup may occur when chunk identities align,
-- but it is not guaranteed,
-- and chunker upgrades may reduce dedup temporarily.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
-
-## Explicit Non-Guarantee 2: Stable Chunk Boundaries Across Versions
-
-Contract statement:
-
-- coldkeep does not guarantee stable chunk boundaries across chunker versions.
-
-Clarification:
-
-- different chunkers may produce different chunk layouts for the same input.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
-
-## Explicit Non-Guarantee 3: Automatic Optimization
-
-Contract statement:
-
-- coldkeep does not automatically optimize or re-chunk existing data.
-
-Clarification:
-
-- optimization/re-chunk behavior requires explicit operator instruction.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
-
-## Guarantee 5: Deterministic Behavior
-
-Contract statement:
-
-- chunking is deterministic per chunker version.
-
-Operational meaning:
-
-- same input produces the same chunk sequence for the same chunker version.
-- different chunker versions may produce different chunk boundaries for the same input.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the full deterministic and cross-version behavior contract.
-
-## Guarantee 6: Forward Compatibility
-
-Contract statement:
-
-- unknown future chunker versions do not prevent restore.
-
-Operational meaning:
-
-- restore uses stored bytes and persisted mappings, not runtime chunker logic.
-- unknown version metadata is informational provenance metadata, not a blocking runtime dependency.
-
-Implementation boundary:
-
-- metadata must still be well-formed; malformed/empty version metadata is treated as integrity error.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed forward-compatibility scope.
-
-## Chunking Model
-
-coldkeep uses content-defined chunking (CDC):
-
-- chunk boundaries depend on input data patterns, not fixed byte windows,
-- each chunker version defines its own boundary strategy,
-- repository persistence stores chunked reconstruction recipes (`file_chunk -> chunk -> blocks`), not raw whole-file blobs.
+- chunk boundaries depend on data patterns (not fixed-size windows),
+- different chunker versions can choose different boundary strategies,
+- stored state is a chunked reconstruction recipe (`file_chunk -> chunk -> blocks`), not a raw whole-file blob.
 
 Example:
 
@@ -273,65 +140,34 @@ File B (v2):
   [chunk4][chunk5]
 ```
 
-Even when content overlaps, chunk structure can differ across chunker versions.
+Even with overlapping content, layout can differ across chunker versions.
 
-## Chunker Versioning
+## Chunker Versions
 
-Chunker version metadata is persisted as part of the storage recipe contract.
+- each committed logical file stores `chunker_version` metadata,
+- one repository can contain multiple chunker versions,
+- chunker version is selected at store time,
+- restore is recipe-driven and does not depend on the active write chunker.
 
-- each committed logical file stores `chunker_version` provenance metadata,
-- one repository may contain logical files from multiple chunker versions,
-- chunker version is chosen at store time from active repository write configuration,
-- restore behavior does not depend on active chunker selection and replays stored recipe bytes/mappings.
-
-## Configuration Behavior
-
-Set repository write default:
+Configure repository write default:
 
 ```bash
 coldkeep config set default-chunker <version>
 ```
 
-Behavior:
+This affects new writes only and does not rewrite existing data.
 
-- affects only new writes after the configuration change,
-- does not modify or rewrite existing stored data,
-- does not change restore behavior for already stored logical files.
+## Safety Guarantees (High-Level)
 
-## Upgrading Coldkeep
+- restore correctness: stored files restore byte-identically,
+- snapshot stability: snapshots remain valid across upgrades,
+- non-destructive evolution: no automatic background re-chunking or silent rewrite,
+- forward-compatible metadata: unknown but well-formed future chunker labels do not block restore.
 
-Upgrade behavior is intentionally conservative and metadata-driven.
+For full guarantees, non-guarantees, and upgrade behavior details:
 
-Migration philosophy:
-
-- coldkeep prefers non-destructive evolution over automatic optimization.
-
-Existing repositories:
-
-- keep current stored chunker-version history,
-- no automatic data rewrite or re-chunking is performed,
-- new data uses the repository's configured/default chunker at store time.
-
-New repositories:
-
-- initialize with the current product default chunker policy,
-- current expected default may differ from legacy repositories (for example `v2-fastcdc`).
-
-## Observability (Phase 7)
-
-Use `coldkeep stats` to inspect repository composition and chunker-era health.
-
-The stats report includes:
-
-- chunk distribution by chunker version (`Chunker Distribution`),
-- logical file distribution by chunker version (`Logical Files by Chunker`),
-- mixed-version repository visibility with an explicit operator warning when multiple versions are present.
-
-Interpretation:
-
-- mixed-version repositories are expected after upgrades or `default-chunker` changes,
-- these distributions are observability signals for repository evolution, not integrity errors,
-- restore correctness remains recipe-driven and independent of active write chunker.
+- [COMPATIBILITY.md](COMPATIBILITY.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## When to use coldkeep
 
