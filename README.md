@@ -201,6 +201,18 @@ Clarifications:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
 
+## Explicit Non-Guarantee 2: Stable Chunk Boundaries Across Versions
+
+Contract statement:
+
+- coldkeep does not guarantee stable chunk boundaries across chunker versions.
+
+Clarification:
+
+- different chunkers may produce different chunk layouts for the same input.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
+
 ## Guarantee 5: Deterministic Behavior
 
 Contract statement:

@@ -280,6 +280,10 @@ Contract:
 - deterministic behavior is evaluated per version because algorithms intentionally differ across versions.
 - boundary differences between versions are expected and do not violate restore correctness or compatibility guarantees.
 
+Non-guarantee note:
+
+- stable chunk boundaries across different chunker versions are not part of the compatibility contract.
+
 ### Guarantee 6: Forward-Compatible Chunker Metadata Handling
 
 Forward compatibility is achieved by recipe-driven restore and metadata-sanity gates.

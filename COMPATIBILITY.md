@@ -128,6 +128,16 @@ Clarifications:
 - but cross-version reuse efficiency is not guaranteed,
 - and chunker upgrades may reduce dedup temporarily until new write populations stabilize.
 
+### Non-Guarantee 2: Stable Chunk Boundaries Across Versions
+
+coldkeep does not guarantee stable chunk boundaries across chunker versions.
+
+Clarifications:
+
+- different chunker versions may produce different chunk layouts for the same input,
+- boundary drift across versions is expected,
+- and this does not violate restore correctness or compatibility guarantees.
+
 coldkeep does not guarantee:
 
 - identical chunk boundaries across chunker versions
