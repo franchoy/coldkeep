@@ -174,6 +174,10 @@ Users should not assume:
 
 ## Upgrade Behavior
 
+Configuration command:
+
+- `coldkeep config set default-chunker <version>` updates repository write-default policy.
+
 Existing repositories:
 
 - retain their persisted chunker-version history,

@@ -284,6 +284,20 @@ Chunker version metadata is persisted as part of the storage recipe contract.
 - chunker version is chosen at store time from active repository write configuration,
 - restore behavior does not depend on active chunker selection and replays stored recipe bytes/mappings.
 
+## Configuration Behavior
+
+Set repository write default:
+
+```bash
+coldkeep config set default-chunker <version>
+```
+
+Behavior:
+
+- affects only new writes after the configuration change,
+- does not modify or rewrite existing stored data,
+- does not change restore behavior for already stored logical files.
+
 ## Upgrading Coldkeep
 
 Upgrade behavior is intentionally conservative and metadata-driven.
