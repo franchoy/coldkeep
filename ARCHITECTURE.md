@@ -230,6 +230,17 @@ Non-guarantees:
 - cross-version chunk boundary identity is not guaranteed.
 - cross-version dedup ratio identity is not guaranteed.
 
+### Guarantee 2: Snapshot Stability Under Chunker Evolution
+
+Snapshot stability is based on metadata-level logical-file references, not on the active chunker algorithm.
+
+Contract:
+
+- snapshot membership is persisted via `snapshot_file` links to logical files.
+- committed logical files are immutable reconstruction recipes.
+- restore of snapshot content replays persisted logical-file chunk graphs and does not re-chunk data with the current default chunker.
+- therefore, chunker evolution for new writes does not invalidate previously created snapshots.
+
 Restore path behavior:
 
 - reconstruct into a temporary file

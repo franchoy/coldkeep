@@ -141,6 +141,20 @@ What this guarantee does not imply:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the full chunker evolution and cross-version expectations contract.
 
+## Guarantee 2: Snapshot Stability
+
+Contract statement:
+
+- Snapshots remain valid across future versions under the v1.x compatibility policy.
+
+Operational meaning:
+
+- snapshots reference logical files via persisted snapshot metadata.
+- logical files are immutable reconstruction recipes once committed.
+- chunker evolution changes future write behavior, but does not invalidate existing snapshots.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed compatibility scope and non-guarantees.
+
 ## When to use coldkeep
 
 Good fit:

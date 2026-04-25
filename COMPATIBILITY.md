@@ -29,6 +29,20 @@ Practical consequence:
 
 - Changing repository default chunker affects future writes, not the ability to restore historical data.
 
+## Guarantee 2: Snapshot Stability Across Future Versions
+
+Contract:
+
+- Snapshots remain valid across future coldkeep versions within the v1.x compatibility policy.
+- Snapshot membership references logical files through persisted snapshot metadata (`snapshot`, `snapshot_file`).
+- Logical files are immutable reconstruction recipes (`file_chunk` -> `chunk` -> `blocks`) once committed.
+- Chunker evolution for future writes does not invalidate previously captured snapshots.
+
+Practical consequence:
+
+- A snapshot created before a chunker change remains restorable after the chunker change.
+- Snapshot restore remains metadata replay from the selected snapshot scope; it does not require re-chunking with the current default chunker.
+
 ## Chunker Evolution Model
 
 Current chunker versions include:
