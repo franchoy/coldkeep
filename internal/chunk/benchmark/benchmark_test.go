@@ -7,6 +7,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
+	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 )
 
 func TestGenerateBaseDeterministic(t *testing.T) {
@@ -180,6 +181,62 @@ func TestCompareBoundaryStabilityUsesReuseAfterShiftNotOffsets(t *testing.T) {
 	}
 }
 
+func TestExpectedBehaviorV2ReuseAtLeastV1OnSmallEdits(t *testing.T) {
+	base := GenerateStructuredLogData(9001, 18000)
+	modified := ModifyAtOffsets(base, []int{32 * 1024, 192 * 1024, 512 * 1024})
+
+	v1Base := RunChunker(simplecdc.New(), base)
+	v1Modified := RunChunker(simplecdc.New(), modified)
+	v2Base := RunChunker(fastcdc.Chunker{}, base)
+	v2Modified := RunChunker(fastcdc.Chunker{}, modified)
+
+	assertCoverageInvariant(t, base, v1Base)
+	assertCoverageInvariant(t, modified, v1Modified)
+	assertCoverageInvariant(t, base, v2Base)
+	assertCoverageInvariant(t, modified, v2Modified)
+
+	v1Reuse, err := CompareReuse(v1Base, v1Modified)
+	if err != nil {
+		t.Fatalf("CompareReuse v1: %v", err)
+	}
+	v2Reuse, err := CompareReuse(v2Base, v2Modified)
+	if err != nil {
+		t.Fatalf("CompareReuse v2: %v", err)
+	}
+
+	if v2Reuse.ReuseRatioPct < v1Reuse.ReuseRatioPct {
+		t.Fatalf("expected v2 reuse >= v1 reuse on small edits: v1=%.2f v2=%.2f", v1Reuse.ReuseRatioPct, v2Reuse.ReuseRatioPct)
+	}
+}
+
+func TestExpectedBehaviorV2ReuseAfterShiftAtLeastV1(t *testing.T) {
+	base := GenerateBase(4444, 2*1024*1024)
+	shifted := ShiftData(base, bytes.Repeat([]byte("shift-prefix|"), 512))
+
+	v1Base := RunChunker(simplecdc.New(), base)
+	v1Shifted := RunChunker(simplecdc.New(), shifted)
+	v2Base := RunChunker(fastcdc.Chunker{}, base)
+	v2Shifted := RunChunker(fastcdc.Chunker{}, shifted)
+
+	assertCoverageInvariant(t, base, v1Base)
+	assertCoverageInvariant(t, shifted, v1Shifted)
+	assertCoverageInvariant(t, base, v2Base)
+	assertCoverageInvariant(t, shifted, v2Shifted)
+
+	v1Stability, err := CompareBoundaryStability(v1Base, v1Shifted)
+	if err != nil {
+		t.Fatalf("CompareBoundaryStability v1: %v", err)
+	}
+	v2Stability, err := CompareBoundaryStability(v2Base, v2Shifted)
+	if err != nil {
+		t.Fatalf("CompareBoundaryStability v2: %v", err)
+	}
+
+	if v2Stability.ReuseAfterShiftPct < v1Stability.ReuseAfterShiftPct {
+		t.Fatalf("expected v2 reuse_after_shift >= v1 reuse_after_shift: v1=%.2f v2=%.2f", v1Stability.ReuseAfterShiftPct, v2Stability.ReuseAfterShiftPct)
+	}
+}
+
 func BenchmarkDefaultDatasets(b *testing.B) {
 	registry, err := chunk.NewDefaultRegistry()
 	if err != nil {
@@ -249,4 +306,26 @@ func joinHashes(hashes []string) string {
 		joined += "," + hash
 	}
 	return joined
+}
+
+func assertCoverageInvariant(t *testing.T, data []byte, result Result) {
+	t.Helper()
+
+	if result.TotalSize != int64(len(data)) {
+		t.Fatalf("total size mismatch: got=%d want=%d", result.TotalSize, len(data))
+	}
+
+	var cursor int64
+	for index, chunk := range result.Chunks {
+		if chunk.Size <= 0 {
+			t.Fatalf("chunk %d has non-positive size: %+v", index, chunk)
+		}
+		if chunk.Offset != cursor {
+			t.Fatalf("chunk %d offset mismatch: got=%d want=%d", index, chunk.Offset, cursor)
+		}
+		cursor += chunk.Size
+	}
+	if cursor != int64(len(data)) {
+		t.Fatalf("coverage mismatch: got=%d want=%d", cursor, len(data))
+	}
 }

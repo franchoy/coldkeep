@@ -1,9 +1,12 @@
 package benchmark
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 )
@@ -100,10 +103,11 @@ func runChunkerWithError(c chunk.Chunker, data []byte) (Result, error) {
 		Chunks:      make([]ChunkRecord, 0, len(results)),
 	}
 	for _, item := range results {
+		hash := normalizedChunkHash(item)
 		run.TotalSize += item.Info.Size
-		run.ChunkHashes = append(run.ChunkHashes, item.Info.Hash)
+		run.ChunkHashes = append(run.ChunkHashes, hash)
 		run.Chunks = append(run.Chunks, ChunkRecord{
-			Hash:   item.Info.Hash,
+			Hash:   hash,
 			Offset: item.Info.Offset,
 			Size:   item.Info.Size,
 		})
@@ -135,9 +139,10 @@ func runDatasetVariant(workDir string, chunker chunk.Chunker, datasetName string
 		Chunks:      make([]ChunkRecord, 0, len(raw)),
 	}
 	for _, item := range raw {
+		hash := normalizedChunkHash(item)
 		run.TotalSize += item.Info.Size
 		run.Chunks = append(run.Chunks, ChunkRecord{
-			Hash:   item.Info.Hash,
+			Hash:   hash,
 			Offset: item.Info.Offset,
 			Size:   item.Info.Size,
 		})
@@ -147,4 +152,12 @@ func runDatasetVariant(workDir string, chunker chunk.Chunker, datasetName string
 	}
 
 	return run, nil
+}
+
+func normalizedChunkHash(item chunk.Result) string {
+	if trimmed := strings.TrimSpace(item.Info.Hash); trimmed != "" {
+		return trimmed
+	}
+	sum := sha256.Sum256(item.Data)
+	return hex.EncodeToString(sum[:])
 }
