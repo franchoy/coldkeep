@@ -9983,6 +9983,10 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("create container trigger: %v", err)
 	}
+	defer func() {
+		_, _ = dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_container_mark_sealing_trg ON container`)
+		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_container_mark_sealing()`)
+	}()
 
 	ctx := storage.StorageContext{
 		DB:           dbconn,
