@@ -58,6 +58,20 @@ Practical consequence:
 - changing default chunker affects only future writes.
 - historical data remains as-written until an explicit, user-invoked workflow rewrites it.
 
+## Guarantee 4: Chunker Evolution Safety
+
+Contract:
+
+- multiple chunker versions can coexist safely in the same repository.
+- each committed logical file has one chunker-version label for provenance.
+- chunks may be reused across versions when content identity is identical.
+- deduplication semantics are content-based, not version-label-based.
+
+Practical consequence:
+
+- mixed-version repositories are expected steady-state, not an exceptional mode.
+- changing default chunker does not require repository split or compatibility migration.
+
 ## Chunker Evolution Model
 
 Current chunker versions include:
@@ -70,6 +84,7 @@ Evolution expectations:
 - New chunker versions may change boundaries and dedup behavior for new writes.
 - Existing logical files remain restorable because restore is metadata replay, not re-chunking.
 - Mixed-version repositories are expected and supported.
+- Dedup decisions are keyed by content identity and repository integrity rules, not by preferring one chunker label over another.
 
 ## Explicit Non-Guarantees
 

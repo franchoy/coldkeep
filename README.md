@@ -173,6 +173,20 @@ Practical consequence:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for migration-boundary details.
 
+## Guarantee 4: Chunker Evolution Safety
+
+Contract statement:
+
+- multiple chunker versions can coexist safely in one repository.
+
+Operational meaning:
+
+- each logical file carries one chunker-version label.
+- identical content can be deduplicated across version eras.
+- dedup behavior is content-based, not version-label-based.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for cross-version coexistence details.
+
 ## When to use coldkeep
 
 Good fit:

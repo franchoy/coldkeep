@@ -253,6 +253,19 @@ Contract:
 
 This preserves auditability and avoids implicit state drift caused by unattended migrations.
 
+### Guarantee 4: Chunker Evolution Safety in Mixed-Version Repositories
+
+Chunker evolution is designed for coexistence rather than repository bifurcation.
+
+Contract:
+
+- each committed logical file has one chunker-version provenance label.
+- repository history may contain logical files written under multiple chunker versions.
+- content-identical chunks can be reused across version eras.
+- deduplication safety is defined by content identity and integrity checks, not by chunker label alone.
+
+This supports long-lived repositories where chunker defaults change over time without breaking compatibility expectations.
+
 Restore path behavior:
 
 - reconstruct into a temporary file
