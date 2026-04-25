@@ -1991,6 +1991,28 @@ func bytesToGB(bytes int64) float64 {
 	return float64(bytes) / (1024 * 1024 * 1024)
 }
 
+func hasMixedRepositoryChunkerVersions(r *maintenance.StatsResult) bool {
+	if r == nil {
+		return false
+	}
+
+	versions := make(map[string]struct{})
+	collect := func(input map[string]int64) {
+		for version := range input {
+			trimmed := strings.TrimSpace(version)
+			if trimmed == "" || trimmed == "unknown" {
+				continue
+			}
+			versions[trimmed] = struct{}{}
+		}
+	}
+
+	collect(r.ChunkCountsByVersion)
+	collect(r.LogicalFileCountsByVersion)
+
+	return len(versions) > 1
+}
+
 func printStatsReport(r *maintenance.StatsResult) {
 	fmt.Println("\n====== coldkeep Stats ======")
 	if strings.TrimSpace(r.ActiveWriteChunker) != "" {
@@ -2059,6 +2081,10 @@ func printStatsReport(r *maintenance.StatsResult) {
 		for _, version := range versions {
 			fmt.Printf("  %-22s %d files\n", version+":", r.LogicalFileCountsByVersion[version])
 		}
+	}
+	if hasMixedRepositoryChunkerVersions(r) {
+		fmt.Println("⚠ Repository contains multiple chunker versions.")
+		fmt.Println("  This is expected after upgrades or configuration changes.")
 	}
 	fmt.Printf("Dedup Signal:\n")
 	fmt.Printf("  Total chunk references:  %d\n", r.TotalChunkReferences)

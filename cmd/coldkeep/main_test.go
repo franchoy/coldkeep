@@ -5051,6 +5051,8 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 		"v1-simple-rolling:     6 files",
 		"v2-fastcdc:            1 files",
 		"unknown:               2 files",
+		"⚠ Repository contains multiple chunker versions.",
+		"This is expected after upgrades or configuration changes.",
 		"Dedup Signal:",
 		"Total chunk references:  10000",
 		"Unique referenced chunks:7500",
@@ -5063,6 +5065,26 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected stats report to contain %q, got output:\n%s", want, output)
 		}
+	}
+}
+
+func TestPrintStatsReportOmitsMixedChunkerWarningWhenSingleKnownVersion(t *testing.T) {
+	output := captureStdout(t, func() {
+		printStatsReport(&maintenance.StatsResult{
+			ActiveWriteChunker: "v2-fastcdc",
+			ChunkCountsByVersion: map[string]int64{
+				"v2-fastcdc": 10,
+				"unknown":    2,
+			},
+			LogicalFileCountsByVersion: map[string]int64{
+				"v2-fastcdc": 4,
+				"unknown":    1,
+			},
+		})
+	})
+
+	if strings.Contains(output, "Repository contains multiple chunker versions") {
+		t.Fatalf("expected no mixed-chunker warning for single known version, got output:\n%s", output)
 	}
 }
 
