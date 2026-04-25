@@ -109,6 +109,28 @@ Storage pipeline:
 logical_file -> file_chunk -> chunk -> blocks -> container
 ```
 
+## Chunking Model
+
+coldkeep uses content-defined chunking (CDC).
+
+Key properties:
+
+- boundaries depend on input data characteristics,
+- chunker versions implement boundary-strategy differences,
+- persisted state is a chunked reconstruction recipe (`file_chunk -> chunk -> blocks`), not raw file-blob storage.
+
+Example:
+
+```text
+File A (v1):
+    [chunk1][chunk2][chunk3]
+
+File B (v2):
+    [chunk4][chunk5]
+```
+
+Even if content overlaps, chunk layout may differ across versions because boundary strategy differs.
+
 ## Container and Append Model
 
 Containers are stored under:

@@ -255,6 +255,26 @@ Implementation boundary:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed forward-compatibility scope.
 
+## Chunking Model
+
+coldkeep uses content-defined chunking (CDC):
+
+- chunk boundaries depend on input data patterns, not fixed byte windows,
+- each chunker version defines its own boundary strategy,
+- repository persistence stores chunked reconstruction recipes (`file_chunk -> chunk -> blocks`), not raw whole-file blobs.
+
+Example:
+
+```text
+File A (v1):
+  [chunk1][chunk2][chunk3]
+
+File B (v2):
+  [chunk4][chunk5]
+```
+
+Even when content overlaps, chunk structure can differ across chunker versions.
+
 ## When to use coldkeep
 
 Good fit:
