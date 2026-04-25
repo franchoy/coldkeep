@@ -68,8 +68,8 @@ Contract:
 
 - multiple chunker versions can coexist safely in the same repository.
 - each committed logical file has one chunker-version label for provenance.
-- coexistence safety is independent of cross-version reuse outcomes.
-- deduplication behavior for version transitions is explicitly non-guaranteed.
+- chunks may be reused across chunker versions if their content is identical.
+- chunk.chunker_version is origin metadata for the chunk row, not a reuse constraint.
 
 Practical consequence:
 
@@ -120,7 +120,7 @@ Evolution expectations:
 - New chunker versions may change boundaries and dedup behavior for new writes.
 - Existing logical files remain restorable because restore is metadata replay, not re-chunking.
 - Mixed-version repositories are expected and supported.
-- Dedup decisions are implementation behavior under integrity/safety constraints, not part of the stable compatibility guarantee.
+- Dedup identity remains content-based under repository integrity/safety constraints, even when logical-file recipe versions differ.
 
 ## Explicit Non-Guarantees
 
@@ -130,7 +130,7 @@ coldkeep does not guarantee dedup efficiency between different chunker versions.
 
 Clarifications:
 
-- dedup may occur when chunk identities align under repository integrity policy,
+- chunks may be reused across versions when identical content produces the same chunk identity under repository integrity policy,
 - but cross-version reuse efficiency is not guaranteed,
 - and chunker upgrades may reduce dedup temporarily until new write populations stabilize.
 

@@ -147,6 +147,8 @@ Even with overlapping content, layout can differ across chunker versions.
 - each committed logical file stores `chunker_version` metadata,
 - one repository can contain multiple chunker versions,
 - chunker version is selected at store time,
+- chunks may be reused across chunker versions if their content is identical,
+- `chunker_version` on chunk rows is origin metadata, not a reuse constraint,
 - restore is recipe-driven and does not depend on the active write chunker.
 
 Configure repository write default:
