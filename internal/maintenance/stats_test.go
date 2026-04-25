@@ -211,6 +211,47 @@ func TestRunStatsResultBucketsUnknownChunkerMetadata(t *testing.T) {
 	}
 }
 
+func TestRunStatsResultEmptyRepository(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	if stats.TotalFiles != 0 {
+		t.Fatalf("expected total files=0, got %d", stats.TotalFiles)
+	}
+	if stats.TotalChunks != 0 {
+		t.Fatalf("expected total chunks=0, got %d", stats.TotalChunks)
+	}
+	if stats.ChunkCountsByVersion == nil {
+		t.Fatal("expected chunk_counts_by_version map to be initialized")
+	}
+	if len(stats.ChunkCountsByVersion) != 0 {
+		t.Fatalf("expected no chunk count buckets, got %v", stats.ChunkCountsByVersion)
+	}
+	if stats.ChunkBytesByVersion == nil {
+		t.Fatal("expected chunk_bytes_by_version map to be initialized")
+	}
+	if len(stats.ChunkBytesByVersion) != 0 {
+		t.Fatalf("expected no chunk byte buckets, got %v", stats.ChunkBytesByVersion)
+	}
+	if stats.LogicalFileCountsByVersion == nil {
+		t.Fatal("expected logical_file_counts_by_version map to be initialized")
+	}
+	if len(stats.LogicalFileCountsByVersion) != 0 {
+		t.Fatalf("expected no logical file buckets, got %v", stats.LogicalFileCountsByVersion)
+	}
+	if got := stats.ActiveWriteChunker; got != "v2-fastcdc" {
+		t.Fatalf("expected fresh repo active write chunker=v2-fastcdc, got %q", got)
+	}
+	if stats.TotalChunkReferences != 0 || stats.UniqueReferencedChunks != 0 || stats.EstimatedDedupRatioPct != 0 {
+		t.Fatalf("expected zero dedup signal for empty repo, got refs=%d unique=%d ratio=%.2f", stats.TotalChunkReferences, stats.UniqueReferencedChunks, stats.EstimatedDedupRatioPct)
+	}
+}
+
 func TestRunStatsResultPureV1RepositoryReportsOnlyV1(t *testing.T) {
 	dbconn := openStatsTestDB(t)
 	ctx := context.Background()
