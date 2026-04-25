@@ -311,6 +311,51 @@ func TestChunkerDeterminism(t *testing.T) {
 	}
 }
 
+func TestChunkerDeterminism_RunDatasetTwice(t *testing.T) {
+	dataset := Dataset{
+		Name: "determinism-check",
+		Base: Variant{Name: "base", Data: GenerateBase(1111, 2*1024*1024)},
+		Mutations: []Variant{
+			{Name: "modified", Data: ModifyAtOffsets(GenerateBase(1111, 2*1024*1024), []int{64 * 1024, 512 * 1024})},
+			{Name: "shifted", Data: ShiftData(GenerateBase(1111, 2*1024*1024), bytes.Repeat([]byte("prefix|"), 128))},
+		},
+	}
+
+	chunkers := []chunk.Chunker{simplecdc.New(), fastcdc.Chunker{}}
+	for _, c := range chunkers {
+		firstRuns, err := RunDataset(t.TempDir(), c, dataset)
+		if err != nil {
+			t.Fatalf("RunDataset first pass for %q: %v", c.Version(), err)
+		}
+		secondRuns, err := RunDataset(t.TempDir(), c, dataset)
+		if err != nil {
+			t.Fatalf("RunDataset second pass for %q: %v", c.Version(), err)
+		}
+		if len(firstRuns) != len(secondRuns) {
+			t.Fatalf("run count drift for %q: first=%d second=%d", c.Version(), len(firstRuns), len(secondRuns))
+		}
+
+		for i := range firstRuns {
+			first := firstRuns[i]
+			second := secondRuns[i]
+			if first.Version != second.Version || first.DatasetName != second.DatasetName || first.VariantName != second.VariantName {
+				t.Fatalf("metadata drift for %q run[%d]: first=%+v second=%+v", c.Version(), i, first, second)
+			}
+			if first.ChunkCount != second.ChunkCount || first.TotalSize != second.TotalSize {
+				t.Fatalf("summary drift for %q run[%d]: first_count=%d second_count=%d first_size=%d second_size=%d", c.Version(), i, first.ChunkCount, second.ChunkCount, first.TotalSize, second.TotalSize)
+			}
+			if len(first.Chunks) != len(second.Chunks) {
+				t.Fatalf("chunk list length drift for %q run[%d]: first=%d second=%d", c.Version(), i, len(first.Chunks), len(second.Chunks))
+			}
+			for j := range first.Chunks {
+				if first.Chunks[j] != second.Chunks[j] {
+					t.Fatalf("chunk drift for %q run[%d] chunk[%d]: first=%+v second=%+v", c.Version(), i, j, first.Chunks[j], second.Chunks[j])
+				}
+			}
+		}
+	}
+}
+
 func TestChunkCoverage(t *testing.T) {
 	chunkers := []chunk.Chunker{simplecdc.New(), fastcdc.Chunker{}}
 
