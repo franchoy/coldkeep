@@ -24,6 +24,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -132,6 +133,10 @@ var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
+var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
+	// Future-proof policy hook: no deprecated chunkers currently.
+	return false, ""
+}
 
 type cliError struct {
 	code int
@@ -221,6 +226,8 @@ func runCLI(args []string) int {
 	switch parsed.method {
 	case "init":
 		err = initCommand()
+	case "config":
+		err = runConfigCommand(parsed, outputMode)
 	case "doctor":
 		err = runDoctorCommand(parsed, outputMode)
 	case "store":
@@ -413,7 +420,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
 		return
 	}
 
@@ -453,6 +460,110 @@ func runVersionCommand(mode cliOutputMode) error {
 	return nil
 }
 
+func validateConfigDefaultChunkerVersion(raw string) (chunk.Version, error) {
+	v := chunk.Version(strings.TrimSpace(raw))
+	if !chunk.IsWellFormedVersion(v) {
+		return "", usageErrorf("invalid default-chunker value %q: malformed version", raw)
+	}
+	if _, ok := chunk.DefaultRegistry().Get(v); !ok {
+		return "", usageErrorf("invalid default-chunker value %q: unknown chunker version", raw)
+	}
+	if deprecated, reason := isDeprecatedChunkerVersionPhase(v); deprecated {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return "", usageErrorf("invalid default-chunker value %q: deprecated chunker version", raw)
+		}
+		return "", usageErrorf("invalid default-chunker value %q: deprecated chunker version (%s)", raw, reason)
+	}
+	return v, nil
+}
+
+func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 2 {
+		return usageErrorf("Usage: coldkeep config <get|set> default-chunker [value]")
+	}
+
+	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
+	key := strings.TrimSpace(strings.ToLower(parsed.positionals[1]))
+	if key != "default-chunker" {
+		return usageErrorf("unknown config key: %s", parsed.positionals[1])
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	repo := storage.NewRepository(sgctx.DB)
+
+	switch subcommand {
+	case "get":
+		if len(parsed.positionals) != 2 {
+			return usageErrorf("Usage: coldkeep config get default-chunker")
+		}
+
+		v, err := repo.GetDefaultChunkerVersion()
+		if err != nil {
+			return err
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "config get",
+				"data": map[string]any{
+					"key":   "default-chunker",
+					"value": string(v),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintln(os.Stdout, string(v))
+		return nil
+
+	case "set":
+		if len(parsed.positionals) != 3 {
+			return usageErrorf("Usage: coldkeep config set default-chunker <value>")
+		}
+
+		v, err := validateConfigDefaultChunkerVersion(parsed.positionals[2])
+		if err != nil {
+			return err
+		}
+
+		if err := repo.SetDefaultChunkerVersion(v); err != nil {
+			return err
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "config set",
+				"data": map[string]any{
+					"key":   "default-chunker",
+					"value": string(v),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "default-chunker set to %s\n", v)
+		return nil
+
+	default:
+		return usageErrorf("unknown config subcommand: %s", parsed.positionals[0])
+	}
+}
+
 func verifyLevelToString(level verify.VerifyLevel) string {
 	switch level {
 	case verify.VerifyStandard:
@@ -483,6 +594,7 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 }
 
 var outputSupportedCommands = map[string]bool{
+	"config":       true,
 	"doctor":       true,
 	"verify":       true,
 	"list":         true,
@@ -3626,6 +3738,8 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
+		{"  config get default-chunker [--output <text|json>]", "Get repository default chunker for new writes"},
+		{"  config set default-chunker <value> [--output <text|json>]", "Set repository default chunker for new writes"},
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
@@ -3729,6 +3843,8 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")
+	fmt.Println("  coldkeep config get default-chunker")
+	fmt.Println("  coldkeep config set default-chunker v2-fastcdc")
 	fmt.Println("  coldkeep doctor --full")
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep store --codec aes-gcm myfile.bin")

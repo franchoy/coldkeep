@@ -10,11 +10,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	"github.com/franchoy/coldkeep/internal/chunk"
+	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -1282,7 +1285,7 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 }
 
 func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
-	commands := []string{"help", "version", "init", "simulate", "doctor", "-h", "--help", "-v", "--version", "unknown"}
+	commands := []string{"help", "version", "init", "simulate", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
 
 	for _, command := range commands {
 		if shouldRunStartupRecovery(command) {
@@ -1344,7 +1347,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -1372,6 +1375,171 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		if got, ok := payload["command"].(string); !ok || got != command {
 			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
 		}
+	}
+}
+
+func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_set_get.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	setOut := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand set returned error: %v", err)
+		}
+	})
+	if !strings.Contains(setOut, "default-chunker set to v2-fastcdc") {
+		t.Fatalf("expected confirmation output, got: %q", setOut)
+	}
+
+	getOut := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"get", "default-chunker"},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand get returned error: %v", err)
+		}
+	})
+	if strings.TrimSpace(getOut) != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("expected get output %q, got %q", chunk.VersionV2FastCDC, strings.TrimSpace(getOut))
+	}
+}
+
+func TestRunConfigCommandSetRejectsUnknownVersion(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_unknown.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"set", "default-chunker", "v9-future-cdc"},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown chunker version") {
+		t.Fatalf("expected unknown-version error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunConfigCommandSetRejectsDeprecatedVersion(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDeprecation := isDeprecatedChunkerVersionPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		isDeprecatedChunkerVersionPhase = originalDeprecation
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_deprecated.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
+		if v == chunk.VersionV2FastCDC {
+			return true, "scheduled removal"
+		}
+		return false, ""
+	}
+
+	err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "deprecated chunker version") {
+		t.Fatalf("expected deprecated-version error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "scheduled removal") {
+		t.Fatalf("expected deprecated-version reason in error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunConfigCommandGetJSON(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_get_json.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"get", "default-chunker"},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runConfigCommand get json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse json payload: %v; output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "config get" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+	data, _ := payload["data"].(map[string]any)
+	if got, _ := data["key"].(string); got != "default-chunker" {
+		t.Fatalf("key mismatch: payload=%v", payload)
+	}
+	if got, _ := data["value"].(string); got != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("value mismatch: payload=%v", payload)
 	}
 }
 
