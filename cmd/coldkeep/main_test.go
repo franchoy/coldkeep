@@ -4800,6 +4800,19 @@ func TestPrintHelpSnapshotFlagDocs(t *testing.T) {
 	}
 }
 
+func TestPrintHelpConfigDefaultChunkerSafetyNote(t *testing.T) {
+	output := captureStdout(t, func() {
+		printHelp()
+	})
+
+	if !strings.Contains(output, "config set default-chunker") {
+		t.Fatalf("expected help output to include config set default-chunker row, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Affects only new stored data. Existing data is not modified.") {
+		t.Fatalf("expected help output to include default-chunker safety note, got:\n%s", output)
+	}
+}
+
 func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
 	// CRITICAL BEHAVIOR LOCK (v1 contract):
 	// --force must execute deletion immediately without confirmation or blocking.

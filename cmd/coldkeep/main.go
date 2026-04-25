@@ -4062,7 +4062,7 @@ func printHelp() {
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
 		{"  config get default-chunker [--output <text|json>]", "Get repository default chunker for new writes"},
-		{"  config set default-chunker <value> [--output <text|json>]", "Set repository default chunker for new writes"},
+		{"  config set default-chunker <value> [--output <text|json>]", "Set repository default chunker for new writes. Affects only new stored data. Existing data is not modified."},
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
