@@ -104,9 +104,9 @@ func seedStatsBenchmarkDataset(b *testing.B, dbconn *sql.DB, logicalFileCount, c
 	}
 }
 
-func BenchmarkRunStatsResultWithDB_MixedRepo(b *testing.B) {
+func benchmarkRunStatsResultWithDBMixedRepo(b *testing.B, logicalFileCount, chunkCount, refsPerFile int) {
 	dbconn := openStatsBenchmarkDB(b)
-	seedStatsBenchmarkDataset(b, dbconn, 3000, 12000, 4)
+	seedStatsBenchmarkDataset(b, dbconn, logicalFileCount, chunkCount, refsPerFile)
 
 	ctx := context.Background()
 
@@ -121,8 +121,20 @@ func BenchmarkRunStatsResultWithDB_MixedRepo(b *testing.B) {
 		if err != nil {
 			b.Fatalf("runStatsResultWithDB: %v", err)
 		}
-		if result.TotalChunks != 12000 {
-			b.Fatalf("unexpected total chunks: got=%d want=12000", result.TotalChunks)
+		if result.TotalChunks != int64(chunkCount) {
+			b.Fatalf("unexpected total chunks: got=%d want=%d", result.TotalChunks, chunkCount)
 		}
 	}
+}
+
+func BenchmarkRunStatsResultWithDB_MixedRepoSmall(b *testing.B) {
+	benchmarkRunStatsResultWithDBMixedRepo(b, 250, 1000, 4)
+}
+
+func BenchmarkRunStatsResultWithDB_MixedRepo(b *testing.B) {
+	benchmarkRunStatsResultWithDBMixedRepo(b, 3000, 12000, 4)
+}
+
+func BenchmarkRunStatsResultWithDB_MixedRepoLarge(b *testing.B) {
+	benchmarkRunStatsResultWithDBMixedRepo(b, 12000, 48000, 4)
 }
