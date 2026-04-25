@@ -131,6 +131,18 @@ File B (v2):
 
 Even if content overlaps, chunk layout may differ across versions because boundary strategy differs.
 
+## Chunker Versioning
+
+Versioning model:
+
+- each committed logical file records one `chunker_version` provenance label,
+- repositories may contain mixed-version logical-file history,
+- the effective chunker version is selected at store/write time,
+- restore is recipe replay and does not require executing the active runtime chunker.
+
+This separation is intentional: write-time chunker evolution changes future layout
+behavior while restore compatibility remains metadata-driven.
+
 ## Container and Append Model
 
 Containers are stored under:

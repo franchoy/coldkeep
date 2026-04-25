@@ -275,6 +275,15 @@ File B (v2):
 
 Even when content overlaps, chunk structure can differ across chunker versions.
 
+## Chunker Versioning
+
+Chunker version metadata is persisted as part of the storage recipe contract.
+
+- each committed logical file stores `chunker_version` provenance metadata,
+- one repository may contain logical files from multiple chunker versions,
+- chunker version is chosen at store time from active repository write configuration,
+- restore behavior does not depend on active chunker selection and replays stored recipe bytes/mappings.
+
 ## When to use coldkeep
 
 Good fit:
