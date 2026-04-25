@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -521,7 +520,7 @@ func TestCrossVersionDedupCompatibility(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsCrossVersionChunkReuseWithoutMixingOneFile(t *testing.T) {
+func TestStoreAllowsCrossVersionChunkReuseWithoutOverwritingOriginMetadata(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "plain")
 	containersDir := t.TempDir()
 	dbconn := setupV2StoreDB(t)
@@ -555,30 +554,25 @@ func TestStoreRejectsCrossVersionChunkReuseWithoutMixingOneFile(t *testing.T) {
 		Chunker:      singleChunkV2TestChunker{},
 	}
 
-	_, err := StoreFileWithStorageContextResult(sgctx, inPath)
-	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
-		t.Fatalf("expected cross-version chunk reuse rejection, got: %v", err)
+	result, err := StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("expected cross-version chunk reuse to succeed, got: %v", err)
 	}
 
-	var logicalID int64
 	var status string
-	if err := dbconn.QueryRow(
-		`SELECT id, status FROM logical_file WHERE file_hash = $1 AND total_size = $2`,
-		chunkHash,
-		int64(len(payload)),
-	).Scan(&logicalID, &status); err != nil {
-		t.Fatalf("read claimed logical_file row: %v", err)
+	if err := dbconn.QueryRow(`SELECT status FROM logical_file WHERE id = $1`, result.FileID).Scan(&status); err != nil {
+		t.Fatalf("read stored logical_file status: %v", err)
 	}
-	if status != "ABORTED" {
-		t.Fatalf("expected failed store logical_file status ABORTED, got %q", status)
+	if status != "COMPLETED" {
+		t.Fatalf("expected successful store logical_file status COMPLETED, got %q", status)
 	}
 
 	var linkedRows int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&linkedRows); err != nil {
-		t.Fatalf("count file_chunk rows for failed logical file: %v", err)
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&linkedRows); err != nil {
+		t.Fatalf("count file_chunk rows for successful logical file: %v", err)
 	}
-	if linkedRows != 0 {
-		t.Fatalf("expected no file_chunk rows for failed logical file, got %d", linkedRows)
+	if linkedRows != 1 {
+		t.Fatalf("expected one linked reused chunk for stored logical file, got %d", linkedRows)
 	}
 
 	var chunkRows int
@@ -587,6 +581,28 @@ func TestStoreRejectsCrossVersionChunkReuseWithoutMixingOneFile(t *testing.T) {
 	}
 	if chunkRows != 1 {
 		t.Fatalf("expected dedup identity hash+size to remain one row, got %d", chunkRows)
+	}
+
+	var linkedChunkVersion string
+	if err := dbconn.QueryRow(
+		`SELECT c.chunker_version
+		 FROM chunk c
+		 JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1`,
+		result.FileID,
+	).Scan(&linkedChunkVersion); err != nil {
+		t.Fatalf("read linked chunker_version: %v", err)
+	}
+	if linkedChunkVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("expected reused chunk to preserve origin chunker_version %q, got %q", chunk.VersionV1SimpleRolling, linkedChunkVersion)
+	}
+
+	var logicalVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, result.FileID).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalVersion != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("expected logical_file recipe version %q, got %q", chunk.VersionV2FastCDC, logicalVersion)
 	}
 
 	var persistedVersion string

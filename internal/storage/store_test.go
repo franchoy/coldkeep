@@ -507,9 +507,18 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, _, _, err = claimChunkWithContext(ctx, dbconn, "shared-chunk-hash", 777, "v1-simple-rolling-test-override", container.ContainersDir)
-	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
-		t.Fatalf("expected cross-version reuse rejection, got: %v", err)
+	chunkID3, chunkStatus3, isNew3, err := claimChunkWithContext(ctx, dbconn, "shared-chunk-hash", 777, "v1-simple-rolling-test-override", container.ContainersDir)
+	if err != nil {
+		t.Fatalf("claim reused chunk across versions: %v", err)
+	}
+	if chunkID3 != chunkID {
+		t.Fatalf("expected same chunk id across versions, got %d vs %d", chunkID3, chunkID)
+	}
+	if isNew3 {
+		t.Fatal("expected cross-version reused claim to remain non-new")
+	}
+	if chunkStatus3 != filestate.ChunkCompleted {
+		t.Fatalf("unexpected cross-version reused chunk status: %s", chunkStatus3)
 	}
 
 	var sameIdentityRows int
@@ -978,7 +987,7 @@ func TestStoreFileDefaultChunkerPersistsChunkVersion(t *testing.T) {
 	}
 }
 
-func TestStoreFileReusedChunkRejectsCrossVersionReuse(t *testing.T) {
+func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -1036,9 +1045,9 @@ func TestStoreFileReusedChunkRejectsCrossVersionReuse(t *testing.T) {
 	}
 
 	sgctxB := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: overrideChunker}
-	_, err = StoreFileWithStorageContextAndCodecResult(sgctxB, pathB, codec)
-	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
-		t.Fatalf("expected cross-version reuse rejection, got: %v", err)
+	resultB, err := StoreFileWithStorageContextAndCodecResult(sgctxB, pathB, codec)
+	if err != nil {
+		t.Fatalf("store second file with cross-version reuse: %v", err)
 	}
 
 	var sharedIdentityRows int
@@ -1053,8 +1062,16 @@ func TestStoreFileReusedChunkRejectsCrossVersionReuse(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
 		t.Fatalf("count shared chunk file references: %v", err)
 	}
-	if sharedChunkRefCount != 1 {
-		t.Fatalf("expected shared chunk to remain referenced only by first file after rejection, got %d references", sharedChunkRefCount)
+	if sharedChunkRefCount != 2 {
+		t.Fatalf("expected shared chunk to be referenced by both files after reuse, got %d references", sharedChunkRefCount)
+	}
+
+	var logicalVersionB string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, resultB.FileID).Scan(&logicalVersionB); err != nil {
+		t.Fatalf("read second logical_file.chunker_version: %v", err)
+	}
+	if logicalVersionB != string(overrideChunker.version) {
+		t.Fatalf("expected second logical file to retain active recipe version %q, got %q", overrideChunker.version, logicalVersionB)
 	}
 }
 

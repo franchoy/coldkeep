@@ -1117,22 +1117,15 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 		isNew = true
 	case sql.ErrNoRows:
 		// Someone else inserted a content-identical chunk first.
-		// Keep dedup identity keyed only by hash+size, then enforce per-file
-		// chunker-version homogeneity by rejecting cross-version reuse.
+		// Keep dedup identity keyed only by hash+size.
+		// chunk.chunker_version is origin metadata for the existing chunk row,
+		// not a compatibility gate for reuse by a later logical file recipe.
 		var existingChunkerVersion string
 		if err := tx.QueryRowContext(ctx, `SELECT id, status, chunker_version FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus, &existingChunkerVersion); err != nil {
 			return 0, "", false, err
 		}
 		if strings.TrimSpace(existingChunkerVersion) == "" {
 			return 0, "", false, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", chunkID)
-		}
-		if strings.TrimSpace(existingChunkerVersion) != strings.TrimSpace(activeVersion) {
-			return 0, "", false, fmt.Errorf(
-				"cross-version chunk reuse rejected: chunk_id=%d chunker_version=%q active_version=%q",
-				chunkID,
-				existingChunkerVersion,
-				activeVersion,
-			)
 		}
 		switch chunkstatus {
 		case filestate.ChunkCompleted:

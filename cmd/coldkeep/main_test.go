@@ -387,7 +387,7 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	}
 }
 
-func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseError(t *testing.T) {
+func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseSuccess(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "plain")
 	originalLoad := loadDefaultStorageContextPhase
 	originalStartupRecovery := startupRecoveryPhase
@@ -441,16 +441,19 @@ func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseError(t *testing
 		t.Fatalf("write input file: %v", err)
 	}
 
+	var stdout string
 	stderr := captureStderr(t, func() {
-		code := runCLI([]string{"store", "--output", "json", inPath})
-		if code != exitGeneral {
-			t.Fatalf("expected exit code %d, got %d", exitGeneral, code)
-		}
+		stdout = captureStdout(t, func() {
+			code := runCLI([]string{"store", "--output", "json", inPath})
+			if code != exitSuccess {
+				t.Fatalf("expected exit code %d, got %d", exitSuccess, code)
+			}
+		})
 	})
 
 	lines := strings.Split(strings.TrimSpace(stderr), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected two stderr JSON lines (startup event + command error), got %d output=%q", len(lines), stderr)
+	if len(lines) != 1 {
+		t.Fatalf("expected one stderr JSON line (startup event only), got %d output=%q", len(lines), stderr)
 	}
 
 	var startupPayload map[string]any
@@ -464,19 +467,22 @@ func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseError(t *testing
 		t.Fatalf("startup status mismatch: payload=%v", startupPayload)
 	}
 
-	var errorPayload map[string]any
-	if err := json.Unmarshal([]byte(lines[1]), &errorPayload); err != nil {
-		t.Fatalf("parse command error JSON payload: %v line=%q", err, lines[1])
+	var successPayload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &successPayload); err != nil {
+		t.Fatalf("parse command success JSON payload: %v output=%q", err, stdout)
 	}
-	if got, _ := errorPayload["status"].(string); got != "error" {
-		t.Fatalf("error payload status mismatch: payload=%v", errorPayload)
+	if got, _ := successPayload["status"].(string); got != "ok" {
+		t.Fatalf("success payload status mismatch: payload=%v", successPayload)
 	}
-	if got, _ := errorPayload["error_class"].(string); got != "GENERAL" {
-		t.Fatalf("error_class mismatch: payload=%v", errorPayload)
+	if got, _ := successPayload["command"].(string); got != "store" {
+		t.Fatalf("command mismatch: payload=%v", successPayload)
 	}
-	msg, _ := errorPayload["message"].(string)
-	if !strings.Contains(msg, "cross-version chunk reuse rejected") {
-		t.Fatalf("expected cross-version rejection in message, payload=%v", errorPayload)
+	data, _ := successPayload["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("expected data object in success payload, got=%v", successPayload)
+	}
+	if got, _ := data["file_id"].(float64); int(got) == 0 {
+		t.Fatalf("expected non-zero file_id in success payload, got=%v payload=%v", data["file_id"], successPayload)
 	}
 }
 
@@ -2043,7 +2049,7 @@ func TestRunConfigCommandSetDoesNotModifyExistingData(t *testing.T) {
 	}
 }
 
-func TestRunStoreCommandReportsCrossVersionReuseRejectionText(t *testing.T) {
+func TestRunStoreCommandAllowsCrossVersionReuseText(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "plain")
 	originalLoad := loadDefaultStorageContextPhase
 	t.Cleanup(func() {
@@ -2092,12 +2098,12 @@ func TestRunStoreCommandReportsCrossVersionReuseRejectionText(t *testing.T) {
 	}
 
 	err = runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
-		t.Fatalf("expected cross-version reuse rejection error, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected cross-version reuse store to succeed, got: %v", err)
 	}
 }
 
-func TestRunStoreCommandReportsCrossVersionReuseRejectionJSON(t *testing.T) {
+func TestRunStoreCommandAllowsCrossVersionReuseJSON(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "plain")
 	originalLoad := loadDefaultStorageContextPhase
 	t.Cleanup(func() {
@@ -2145,31 +2151,29 @@ func TestRunStoreCommandReportsCrossVersionReuseRejectionJSON(t *testing.T) {
 		t.Fatalf("write input file: %v", err)
 	}
 
-	storeErr := runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeJSON)
-	if storeErr == nil {
-		t.Fatal("expected store command to fail")
-	}
-
-	stderr := captureStderr(t, func() {
-		code := printCLIError(storeErr, outputModeJSON)
-		if code != exitGeneral {
-			t.Fatalf("expected exit code %d, got %d", exitGeneral, code)
+	stdout := captureStdout(t, func() {
+		storeErr := runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeJSON)
+		if storeErr != nil {
+			t.Fatalf("expected store command to succeed, got: %v", storeErr)
 		}
 	})
 
 	var payloadJSON map[string]any
-	if err := json.Unmarshal([]byte(stderr), &payloadJSON); err != nil {
-		t.Fatalf("parse JSON payload: %v output=%q", err, stderr)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payloadJSON); err != nil {
+		t.Fatalf("parse JSON payload: %v output=%q", err, stdout)
 	}
-	if got, _ := payloadJSON["status"].(string); got != "error" {
+	if got, _ := payloadJSON["status"].(string); got != "ok" {
 		t.Fatalf("status mismatch: got=%v payload=%v", payloadJSON["status"], payloadJSON)
 	}
-	if got, _ := payloadJSON["error_class"].(string); got != "GENERAL" {
-		t.Fatalf("error_class mismatch: got=%v payload=%v", payloadJSON["error_class"], payloadJSON)
+	if got, _ := payloadJSON["command"].(string); got != "store" {
+		t.Fatalf("command mismatch: got=%v payload=%v", payloadJSON["command"], payloadJSON)
 	}
-	msg, _ := payloadJSON["message"].(string)
-	if !strings.Contains(msg, "cross-version chunk reuse rejected") {
-		t.Fatalf("expected message to contain guard text, got: %v", payloadJSON)
+	data, _ := payloadJSON["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("expected data object in JSON payload, got=%v", payloadJSON)
+	}
+	if got, _ := data["file_id"].(float64); int(got) == 0 {
+		t.Fatalf("expected non-zero file_id in JSON payload, got=%v payload=%v", data["file_id"], payloadJSON)
 	}
 }
 
