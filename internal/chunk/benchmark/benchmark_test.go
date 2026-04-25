@@ -10,6 +10,11 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 )
 
+// CI contract for this package:
+// - Tests are deterministic and do not depend on wall-clock randomness.
+// - Any pseudo-random data generation must be seed-driven.
+// - Runtime is intentionally kept short so these tests stay in default CI gates.
+
 func TestGenerateBaseDeterministic(t *testing.T) {
 	first := GenerateBase(1234, 1024)
 	second := GenerateBase(1234, 1024)
@@ -72,6 +77,38 @@ func TestDefaultDatasetsExposeRequestedCorpus(t *testing.T) {
 	for index, want := range wantNames {
 		if gotNames[index] != want {
 			t.Fatalf("dataset[%d] mismatch: got=%q want=%q names=%v", index, gotNames[index], want, gotNames)
+		}
+	}
+}
+
+func TestDefaultDatasetsDeterministicAcrossCalls(t *testing.T) {
+	first := DefaultDatasets()
+	second := DefaultDatasets()
+
+	if len(first) != len(second) {
+		t.Fatalf("dataset count drift across calls: first=%d second=%d", len(first), len(second))
+	}
+
+	for i := range first {
+		if first[i].Name != second[i].Name {
+			t.Fatalf("dataset name drift at index %d: first=%q second=%q", i, first[i].Name, second[i].Name)
+		}
+		if first[i].Base.Name != second[i].Base.Name {
+			t.Fatalf("base variant name drift for dataset %q: first=%q second=%q", first[i].Name, first[i].Base.Name, second[i].Base.Name)
+		}
+		if !bytes.Equal(first[i].Base.Data, second[i].Base.Data) {
+			t.Fatalf("base bytes drift for dataset %q", first[i].Name)
+		}
+		if len(first[i].Mutations) != len(second[i].Mutations) {
+			t.Fatalf("mutation count drift for dataset %q: first=%d second=%d", first[i].Name, len(first[i].Mutations), len(second[i].Mutations))
+		}
+		for j := range first[i].Mutations {
+			if first[i].Mutations[j].Name != second[i].Mutations[j].Name {
+				t.Fatalf("mutation name drift for dataset %q mutation[%d]: first=%q second=%q", first[i].Name, j, first[i].Mutations[j].Name, second[i].Mutations[j].Name)
+			}
+			if !bytes.Equal(first[i].Mutations[j].Data, second[i].Mutations[j].Data) {
+				t.Fatalf("mutation bytes drift for dataset %q mutation[%d]", first[i].Name, j)
+			}
 		}
 	}
 }

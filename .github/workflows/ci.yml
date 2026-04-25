@@ -87,6 +87,11 @@ jobs:
           COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: go test -race -count=1 ./cmd/... ./internal/...
 
+      - name: Validate deterministic chunker benchmark tests (CI-fast)
+        run: >-
+          go test -race -count=1 ./internal/chunk/benchmark
+          -run 'TestFastCDCBetterThanV1_SmallModifications|TestFastCDCBetterThanV1_ShiftedData|TestChunkerDeterminism|TestChunkerDeterminism_RunDatasetTwice|TestChunkCoverage|TestDefaultDatasetsDeterministicAcrossCalls'
+
       - name: Build packages
         run: go build ./...
 
