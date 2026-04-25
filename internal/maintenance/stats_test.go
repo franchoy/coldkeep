@@ -145,3 +145,39 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 		t.Fatalf("expected logical file count for v2-fastcdc=1, got %d", got)
 	}
 }
+
+func TestRunStatsResultBucketsUnknownChunkerMetadata(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
+		 ('lf-unknown-a', 201, 'lf-unknown-a-hash', 'COMPLETED', ''),
+		 ('lf-unknown-b', 202, 'lf-unknown-b-hash', 'COMPLETED', '   ')`,
+	); err != nil {
+		t.Fatalf("insert logical_file unknown rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
+		 ('stats-unknown-a', 13, 'COMPLETED', 0, ''),
+		 ('stats-unknown-b', 17, 'PROCESSING', 0, '   ')`,
+	); err != nil {
+		t.Fatalf("insert chunk unknown rows: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	if got := stats.ChunkCountsByVersion["unknown"]; got != 2 {
+		t.Fatalf("expected unknown chunk count=2, got %d", got)
+	}
+	if got := stats.ChunkBytesByVersion["unknown"]; got != 30 {
+		t.Fatalf("expected unknown chunk bytes=30, got %d", got)
+	}
+	if got := stats.LogicalFileCountsByVersion["unknown"]; got != 2 {
+		t.Fatalf("expected unknown logical file count=2, got %d", got)
+	}
+}

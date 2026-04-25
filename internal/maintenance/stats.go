@@ -4,11 +4,23 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/retention"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
+
+const unknownChunkerBucket = "unknown"
+
+func normalizeChunkerVersionBucket(raw string) string {
+	version := chunk.Version(strings.TrimSpace(raw))
+	if !chunk.IsWellFormedVersion(version) {
+		return unknownChunkerBucket
+	}
+	return string(version)
+}
 
 // SnapshotRetentionStats explains how retained logical content is distributed
 // across current-state references and snapshot history.
@@ -232,8 +244,9 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 		if err := versionRows.Scan(&version, &count, &bytes); err != nil {
 			return nil, err
 		}
-		r.ChunkCountsByVersion[version] = count
-		r.ChunkBytesByVersion[version] = bytes
+		bucket := normalizeChunkerVersionBucket(version)
+		r.ChunkCountsByVersion[bucket] += count
+		r.ChunkBytesByVersion[bucket] += bytes
 	}
 	if err := versionRows.Err(); err != nil {
 		return nil, err
@@ -256,7 +269,8 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 		if err := logicalVersionRows.Scan(&version, &count); err != nil {
 			return nil, err
 		}
-		r.LogicalFileCountsByVersion[version] = count
+		bucket := normalizeChunkerVersionBucket(version)
+		r.LogicalFileCountsByVersion[bucket] += count
 	}
 	if err := logicalVersionRows.Err(); err != nil {
 		return nil, err

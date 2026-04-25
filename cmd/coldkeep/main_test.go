@@ -4798,14 +4798,17 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 			LogicalFileCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 5,
 				"v2-fastcdc":        2,
+				"unknown":           1,
 			},
 			ChunkCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 3,
 				"v2-fastcdc":        2,
+				"unknown":           1,
 			},
 			ChunkBytesByVersion: map[string]int64{
 				"v1-simple-rolling": 30,
 				"v2-fastcdc":        20,
+				"unknown":           9,
 			},
 			SnapshotRetention: maintenance.SnapshotRetentionStats{
 				CurrentOnlyLogicalFiles:        2,
@@ -4852,10 +4855,13 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	}
 	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
 	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
+	assertJSONNumber(t, logicalFileCounts, "unknown", 1)
 	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
 	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
+	assertJSONNumber(t, chunkCounts, "unknown", 1)
 	assertJSONNumber(t, chunkBytes, "v1-simple-rolling", 30)
 	assertJSONNumber(t, chunkBytes, "v2-fastcdc", 20)
+	assertJSONNumber(t, chunkBytes, "unknown", 9)
 	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
 	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
 	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
@@ -4872,14 +4878,17 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 			LogicalFileCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 6,
 				"v2-fastcdc":        1,
+				"unknown":           2,
 			},
 			ChunkCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 4,
 				"v2-fastcdc":        1,
+				"unknown":           2,
 			},
 			ChunkBytesByVersion: map[string]int64{
 				"v1-simple-rolling": 2 * 1024 * 1024,
 				"v2-fastcdc":        1 * 1024 * 1024,
+				"unknown":           512,
 			},
 			SnapshotRetention: maintenance.SnapshotRetentionStats{
 				CurrentOnlyLogicalFiles:        4,
@@ -4899,12 +4908,15 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 		"Chunker Distribution:",
 		"v1-simple-rolling:     4 chunks",
 		"v2-fastcdc:            1 chunks",
+		"unknown:               2 chunks",
 		"Stored Data by Chunker:",
 		"v1-simple-rolling:     0.00 GB",
 		"v2-fastcdc:            0.00 GB",
+		"unknown:               0.00 GB",
 		"Logical Files by Chunker:",
 		"v1-simple-rolling:     6 files",
 		"v2-fastcdc:            1 files",
+		"unknown:               2 files",
 		"Current-only logical files:    4 (2.00 MB)",
 		"Snapshot-referenced files:     3 (5.00 MB)",
 		"Snapshot-only logical files:   1 (1.00 MB)",
