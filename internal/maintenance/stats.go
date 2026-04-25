@@ -25,39 +25,40 @@ type SnapshotRetentionStats struct {
 
 // StatsResult holds the snapshot emitted by RunStatsResult.
 type StatsResult struct {
-	TotalFiles               int64                  `json:"total_files"`
-	TotalLogicalSizeBytes    int64                  `json:"total_logical_size_bytes"`
-	CompletedFiles           int64                  `json:"completed_files"`
-	CompletedSizeBytes       int64                  `json:"completed_size_bytes"`
-	ProcessingFiles          int64                  `json:"processing_files"`
-	ProcessingSizeBytes      int64                  `json:"processing_size_bytes"`
-	AbortedFiles             int64                  `json:"aborted_files"`
-	AbortedSizeBytes         int64                  `json:"aborted_size_bytes"`
-	HealthyContainers        int64                  `json:"healthy_containers"`
-	HealthyContainerBytes    int64                  `json:"healthy_container_bytes"`
-	QuarantineContainers     int64                  `json:"quarantine_containers"`
-	QuarantineContainerBytes int64                  `json:"quarantine_container_bytes"`
-	TotalContainers          int64                  `json:"total_containers"`
-	TotalContainerBytes      int64                  `json:"total_container_bytes"`
-	LiveBlockBytes           int64                  `json:"live_block_bytes"`
-	DeadBlockBytes           int64                  `json:"dead_block_bytes"`
-	GlobalDedupRatioPct      float64                `json:"global_dedup_ratio_pct"`
-	FragmentationRatioPct    float64                `json:"fragmentation_ratio_pct"`
-	TotalChunks              int64                  `json:"total_chunks"`
-	CompletedChunks          int64                  `json:"completed_chunks"`
-	CompletedChunkBytes      int64                  `json:"completed_chunk_bytes"`
-	ProcessingChunks         int64                  `json:"processing_chunks"`
-	AbortedChunks            int64                  `json:"aborted_chunks"`
-	ChunkCountsByVersion     map[string]int64       `json:"chunk_counts_by_version"`
-	ChunkBytesByVersion      map[string]int64       `json:"chunk_bytes_by_version"`
-	TotalFileRetries         int64                  `json:"total_file_retries"`
-	AvgFileRetries           float64                `json:"avg_file_retries"`
-	MaxFileRetries           int64                  `json:"max_file_retries"`
-	TotalChunkRetries        int64                  `json:"total_chunk_retries"`
-	AvgChunkRetries          float64                `json:"avg_chunk_retries"`
-	MaxChunkRetries          int64                  `json:"max_chunk_retries"`
-	SnapshotRetention        SnapshotRetentionStats `json:"snapshot_retention"`
-	Containers               []ContainerStatRecord  `json:"containers"`
+	TotalFiles                 int64                  `json:"total_files"`
+	TotalLogicalSizeBytes      int64                  `json:"total_logical_size_bytes"`
+	CompletedFiles             int64                  `json:"completed_files"`
+	CompletedSizeBytes         int64                  `json:"completed_size_bytes"`
+	ProcessingFiles            int64                  `json:"processing_files"`
+	ProcessingSizeBytes        int64                  `json:"processing_size_bytes"`
+	AbortedFiles               int64                  `json:"aborted_files"`
+	AbortedSizeBytes           int64                  `json:"aborted_size_bytes"`
+	HealthyContainers          int64                  `json:"healthy_containers"`
+	HealthyContainerBytes      int64                  `json:"healthy_container_bytes"`
+	QuarantineContainers       int64                  `json:"quarantine_containers"`
+	QuarantineContainerBytes   int64                  `json:"quarantine_container_bytes"`
+	TotalContainers            int64                  `json:"total_containers"`
+	TotalContainerBytes        int64                  `json:"total_container_bytes"`
+	LiveBlockBytes             int64                  `json:"live_block_bytes"`
+	DeadBlockBytes             int64                  `json:"dead_block_bytes"`
+	GlobalDedupRatioPct        float64                `json:"global_dedup_ratio_pct"`
+	FragmentationRatioPct      float64                `json:"fragmentation_ratio_pct"`
+	TotalChunks                int64                  `json:"total_chunks"`
+	CompletedChunks            int64                  `json:"completed_chunks"`
+	CompletedChunkBytes        int64                  `json:"completed_chunk_bytes"`
+	ProcessingChunks           int64                  `json:"processing_chunks"`
+	AbortedChunks              int64                  `json:"aborted_chunks"`
+	ChunkCountsByVersion       map[string]int64       `json:"chunk_counts_by_version"`
+	ChunkBytesByVersion        map[string]int64       `json:"chunk_bytes_by_version"`
+	LogicalFileCountsByVersion map[string]int64       `json:"logical_file_counts_by_version"`
+	TotalFileRetries           int64                  `json:"total_file_retries"`
+	AvgFileRetries             float64                `json:"avg_file_retries"`
+	MaxFileRetries             int64                  `json:"max_file_retries"`
+	TotalChunkRetries          int64                  `json:"total_chunk_retries"`
+	AvgChunkRetries            float64                `json:"avg_chunk_retries"`
+	MaxChunkRetries            int64                  `json:"max_chunk_retries"`
+	SnapshotRetention          SnapshotRetentionStats `json:"snapshot_retention"`
+	Containers                 []ContainerStatRecord  `json:"containers"`
 }
 
 // ContainerStatRecord holds per-container data.
@@ -235,6 +236,29 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 		r.ChunkBytesByVersion[version] = bytes
 	}
 	if err := versionRows.Err(); err != nil {
+		return nil, err
+	}
+
+	logicalVersionRows, err := dbconn.QueryContext(ctx, `
+		SELECT chunker_version, COUNT(*)
+		FROM logical_file
+		GROUP BY chunker_version
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query logical file counts by version: %w", err)
+	}
+	defer func() { _ = logicalVersionRows.Close() }()
+
+	r.LogicalFileCountsByVersion = make(map[string]int64)
+	for logicalVersionRows.Next() {
+		var version string
+		var count int64
+		if err := logicalVersionRows.Scan(&version, &count); err != nil {
+			return nil, err
+		}
+		r.LogicalFileCountsByVersion[version] = count
+	}
+	if err := logicalVersionRows.Err(); err != nil {
 		return nil, err
 	}
 

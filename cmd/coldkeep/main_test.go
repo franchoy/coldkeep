@@ -4795,6 +4795,10 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	runStatsPhase = func() (*maintenance.StatsResult, error) {
 		return &maintenance.StatsResult{
 			TotalFiles: 7,
+			LogicalFileCountsByVersion: map[string]int64{
+				"v1-simple-rolling": 5,
+				"v2-fastcdc":        2,
+			},
 			ChunkCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 3,
 				"v2-fastcdc":        2,
@@ -4838,10 +4842,16 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing chunk_counts_by_version object in payload: %v", data)
 	}
+	logicalFileCounts, ok := data["logical_file_counts_by_version"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing logical_file_counts_by_version object in payload: %v", data)
+	}
 	chunkBytes, ok := data["chunk_bytes_by_version"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing chunk_bytes_by_version object in payload: %v", data)
 	}
+	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
+	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
 	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
 	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
 	assertJSONNumber(t, chunkBytes, "v1-simple-rolling", 30)
@@ -4859,6 +4869,10 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	output := captureStdout(t, func() {
 		printStatsReport(&maintenance.StatsResult{
+			LogicalFileCountsByVersion: map[string]int64{
+				"v1-simple-rolling": 6,
+				"v2-fastcdc":        1,
+			},
 			ChunkCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 4,
 				"v2-fastcdc":        1,
@@ -4885,6 +4899,9 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 		"Chunker Distribution:",
 		"v1-simple-rolling:     4 chunks (2.00 MB)",
 		"v2-fastcdc:            1 chunks (1.00 MB)",
+		"Logical Files by Chunker:",
+		"v1-simple-rolling:     6 files",
+		"v2-fastcdc:            1 files",
 		"Current-only logical files:    4 (2.00 MB)",
 		"Snapshot-referenced files:     3 (5.00 MB)",
 		"Snapshot-only logical files:   1 (1.00 MB)",

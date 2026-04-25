@@ -95,6 +95,15 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
+		 ('lf-v1-a', 101, 'lf-v1-a-hash', 'COMPLETED', 'v1-simple-rolling'),
+		 ('lf-v1-b', 102, 'lf-v1-b-hash', 'COMPLETED', 'v1-simple-rolling'),
+		 ('lf-v2-a', 103, 'lf-v2-a-hash', 'COMPLETED', 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert logical_file rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
 		 ('stats-v1-a', 10, 'COMPLETED', 0, 'v1-simple-rolling'),
 		 ('stats-v1-b', 11, 'PROCESSING', 0, 'v1-simple-rolling'),
@@ -125,5 +134,14 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 	}
 	if got := stats.ChunkBytesByVersion["v2-fastcdc"]; got != 12 {
 		t.Fatalf("expected v2-fastcdc bytes=12, got %d", got)
+	}
+	if stats.LogicalFileCountsByVersion == nil {
+		t.Fatal("expected logical_file_counts_by_version map to be initialized")
+	}
+	if got := stats.LogicalFileCountsByVersion["v1-simple-rolling"]; got != 2 {
+		t.Fatalf("expected logical file count for v1-simple-rolling=2, got %d", got)
+	}
+	if got := stats.LogicalFileCountsByVersion["v2-fastcdc"]; got != 1 {
+		t.Fatalf("expected logical file count for v2-fastcdc=1, got %d", got)
 	}
 }

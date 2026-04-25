@@ -1972,6 +1972,17 @@ func printStatsReport(r *maintenance.StatsResult) {
 			fmt.Printf("  %-22s %d chunks (%.2f MB)\n", version+":", r.ChunkCountsByVersion[version], bytesToMB(r.ChunkBytesByVersion[version]))
 		}
 	}
+	if len(r.LogicalFileCountsByVersion) > 0 {
+		fmt.Printf("Logical Files by Chunker:\n")
+		versions := make([]string, 0, len(r.LogicalFileCountsByVersion))
+		for version := range r.LogicalFileCountsByVersion {
+			versions = append(versions, version)
+		}
+		sort.Strings(versions)
+		for _, version := range versions {
+			fmt.Printf("  %-22s %d files\n", version+":", r.LogicalFileCountsByVersion[version])
+		}
+	}
 	fmt.Println("============================")
 	fmt.Println("\nPer-container breakdown:")
 	for _, c := range r.Containers {
