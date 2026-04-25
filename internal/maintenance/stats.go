@@ -48,6 +48,7 @@ type StatsResult struct {
 	CompletedChunkBytes      int64                  `json:"completed_chunk_bytes"`
 	ProcessingChunks         int64                  `json:"processing_chunks"`
 	AbortedChunks            int64                  `json:"aborted_chunks"`
+	ChunkCountsByVersion     map[string]int64       `json:"chunk_counts_by_version"`
 	TotalFileRetries         int64                  `json:"total_file_retries"`
 	AvgFileRetries           float64                `json:"avg_file_retries"`
 	MaxFileRetries           int64                  `json:"max_file_retries"`
@@ -209,6 +210,29 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 		return nil, err
 	}
 	r.TotalChunks = r.CompletedChunks + r.ProcessingChunks + r.AbortedChunks
+
+	versionRows, err := dbconn.QueryContext(ctx, `
+		SELECT chunker_version, COUNT(*)
+		FROM chunk
+		GROUP BY chunker_version
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chunk counts by version: %w", err)
+	}
+	defer func() { _ = versionRows.Close() }()
+
+	r.ChunkCountsByVersion = make(map[string]int64)
+	for versionRows.Next() {
+		var version string
+		var count int64
+		if err := versionRows.Scan(&version, &count); err != nil {
+			return nil, err
+		}
+		r.ChunkCountsByVersion[version] = count
+	}
+	if err := versionRows.Err(); err != nil {
+		return nil, err
+	}
 
 	// Per-container breakdown
 	ctrRows, err := dbconn.QueryContext(ctx, `

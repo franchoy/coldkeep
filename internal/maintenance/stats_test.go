@@ -89,3 +89,32 @@ func TestRunStatsResultIncludesSnapshotRetentionVisibility(t *testing.T) {
 		t.Fatalf("unexpected retained logical file total=%d stats=%+v", got, stats.SnapshotRetention)
 	}
 }
+
+func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
+		 ('stats-v1-a', 10, 'COMPLETED', 0, 'v1-simple-rolling'),
+		 ('stats-v1-b', 11, 'PROCESSING', 0, 'v1-simple-rolling'),
+		 ('stats-v2-a', 12, 'ABORTED', 0, 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert chunk rows: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	if stats.ChunkCountsByVersion == nil {
+		t.Fatal("expected chunk_counts_by_version map to be initialized")
+	}
+	if got := stats.ChunkCountsByVersion["v1-simple-rolling"]; got != 2 {
+		t.Fatalf("expected v1-simple-rolling count=2, got %d", got)
+	}
+	if got := stats.ChunkCountsByVersion["v2-fastcdc"]; got != 1 {
+		t.Fatalf("expected v2-fastcdc count=1, got %d", got)
+	}
+}
