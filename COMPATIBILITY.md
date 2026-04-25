@@ -72,6 +72,10 @@ Practical consequence:
 - mixed-version repositories are expected steady-state, not an exceptional mode.
 - changing default chunker does not require repository split or compatibility migration.
 
+Non-implication:
+
+- coexistence safety does not imply guaranteed cross-version dedup efficiency.
+
 ## Guarantee 5: Deterministic Chunking Per Version
 
 Contract:
@@ -110,9 +114,19 @@ Evolution expectations:
 - New chunker versions may change boundaries and dedup behavior for new writes.
 - Existing logical files remain restorable because restore is metadata replay, not re-chunking.
 - Mixed-version repositories are expected and supported.
-- Dedup decisions are keyed by content identity and repository integrity rules, not by preferring one chunker label over another.
+- Dedup decisions are keyed by content identity with repository integrity/version-safety constraints.
 
 ## Explicit Non-Guarantees
+
+### Non-Guarantee 1: Cross-Version Dedup Efficiency
+
+coldkeep does not guarantee dedup efficiency between different chunker versions.
+
+Clarifications:
+
+- dedup may occur when chunk identities align under repository integrity policy,
+- but cross-version reuse efficiency is not guaranteed,
+- and chunker upgrades may reduce dedup temporarily until new write populations stabilize.
 
 coldkeep does not guarantee:
 

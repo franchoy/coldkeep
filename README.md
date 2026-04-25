@@ -182,10 +182,24 @@ Contract statement:
 Operational meaning:
 
 - each logical file carries one chunker-version label.
-- identical content can be deduplicated across version eras.
-- dedup behavior is content-based, not version-label-based.
+- identical content may be deduplicated across version eras.
+- dedup behavior is content-identity driven with repository safety constraints.
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for cross-version coexistence details.
+
+## Explicit Non-Guarantee 1: Cross-Version Dedup Efficiency
+
+Contract statement:
+
+- coldkeep does not guarantee dedup efficiency between different chunker versions.
+
+Clarifications:
+
+- dedup may occur when chunk identities align,
+- but it is not guaranteed,
+- and chunker upgrades may reduce dedup temporarily.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
 
 ## Guarantee 5: Deterministic Behavior
 

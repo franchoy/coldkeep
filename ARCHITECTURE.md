@@ -261,10 +261,14 @@ Contract:
 
 - each committed logical file has one chunker-version provenance label.
 - repository history may contain logical files written under multiple chunker versions.
-- content-identical chunks can be reused across version eras.
+- content-identical chunks may be reused across version eras under repository safety rules.
 - deduplication safety is defined by content identity and integrity checks, not by chunker label alone.
 
 This supports long-lived repositories where chunker defaults change over time without breaking compatibility expectations.
+
+Non-guarantee note:
+
+- coexistence safety does not imply guaranteed cross-version dedup efficiency; version transitions may temporarily reduce observed reuse.
 
 ### Guarantee 5: Deterministic Chunking Per Version
 
