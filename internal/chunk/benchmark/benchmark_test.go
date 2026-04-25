@@ -2,6 +2,7 @@ package benchmark
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -98,6 +99,84 @@ func TestRunChunkerReturnsDeterministicGenericResult(t *testing.T) {
 	}
 	if !bytes.Equal([]byte(joinHashes(first.ChunkHashes)), []byte(joinHashes(second.ChunkHashes))) {
 		t.Fatal("expected deterministic chunk hashes for repeated runs")
+	}
+}
+
+func TestCompareChunkCountsReportsV1VsV2(t *testing.T) {
+	comparison, err := CompareChunkCounts(
+		Result{Version: chunk.VersionV1SimpleRolling, ChunkCount: 12, TotalSize: 4096},
+		Result{Version: chunk.VersionV2FastCDC, ChunkCount: 8, TotalSize: 4096},
+	)
+	if err != nil {
+		t.Fatalf("CompareChunkCounts: %v", err)
+	}
+	if comparison.LeftChunkCount != 12 || comparison.RightChunkCount != 8 {
+		t.Fatalf("unexpected chunk counts: %+v", comparison)
+	}
+	if comparison.ChunkCountDelta != -4 {
+		t.Fatalf("unexpected chunk count delta: %+v", comparison)
+	}
+}
+
+func TestCompareReuseComputesSharedChunksOverBaseTotal(t *testing.T) {
+	comparison, err := CompareReuse(
+		Result{
+			Version:    chunk.VersionV2FastCDC,
+			ChunkCount: 3,
+			Chunks: []ChunkRecord{
+				{Hash: "a", Size: 10},
+				{Hash: "b", Size: 10},
+				{Hash: "c", Size: 10},
+			},
+		},
+		Result{
+			Version:    chunk.VersionV2FastCDC,
+			ChunkCount: 3,
+			Chunks: []ChunkRecord{
+				{Hash: "a", Size: 10},
+				{Hash: "x", Size: 10},
+				{Hash: "c", Size: 10},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("CompareReuse: %v", err)
+	}
+	if comparison.SharedChunks != 2 {
+		t.Fatalf("expected 2 shared chunks, got %+v", comparison)
+	}
+	if math.Abs(comparison.ReuseRatioPct-((2.0/3.0)*100)) > 0.0001 {
+		t.Fatalf("unexpected reuse ratio: %+v", comparison)
+	}
+}
+
+func TestCompareBoundaryStabilityUsesReuseAfterShiftNotOffsets(t *testing.T) {
+	comparison, err := CompareBoundaryStability(
+		Result{
+			Version:    chunk.VersionV2FastCDC,
+			ChunkCount: 2,
+			Chunks: []ChunkRecord{
+				{Hash: "same-a", Offset: 0, Size: 10},
+				{Hash: "same-b", Offset: 10, Size: 10},
+			},
+		},
+		Result{
+			Version:    chunk.VersionV2FastCDC,
+			ChunkCount: 2,
+			Chunks: []ChunkRecord{
+				{Hash: "same-a", Offset: 5, Size: 10},
+				{Hash: "same-b", Offset: 15, Size: 10},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("CompareBoundaryStability: %v", err)
+	}
+	if comparison.SharedChunks != 2 {
+		t.Fatalf("expected shifted data to preserve 2 shared chunks, got %+v", comparison)
+	}
+	if comparison.ReuseAfterShiftPct != 100 {
+		t.Fatalf("expected reuse_after_shift=100%%, got %+v", comparison)
 	}
 }
 
