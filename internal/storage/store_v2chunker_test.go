@@ -199,3 +199,45 @@ func TestV2ChunkerVerifyPasses(t *testing.T) {
 		t.Fatalf("verify failed for v2-fastcdc stored file: %v", err)
 	}
 }
+
+// TestStoreUsesRepositoryConfiguredDefaultChunker verifies that when no explicit
+// StorageContext chunker override is provided, store resolves the write chunker
+// from repository_config.default_chunker.
+func TestStoreUsesRepositoryConfiguredDefaultChunker(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	containersDir := t.TempDir()
+	dbconn := setupV2StoreDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(
+		`UPDATE repository_config SET value = $1 WHERE key = 'default_chunker'`,
+		string(chunk.VersionV2FastCDC),
+	); err != nil {
+		t.Fatalf("set repository default chunker to v2: %v", err)
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+		Chunker:      nil,
+	}
+
+	inPath, _ := makeV2TestFile(t, "repo-default-v2.bin", fastcdc.AvgChunkSize*4+512)
+	result, err := StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("store with repository-configured default chunker: %v", err)
+	}
+
+	var logicalVersion string
+	if err := dbconn.QueryRow(
+		`SELECT chunker_version FROM logical_file WHERE id = $1`,
+		result.FileID,
+	).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+
+	if logicalVersion != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("logical_file.chunker_version: got %q want %q", logicalVersion, chunk.VersionV2FastCDC)
+	}
+}

@@ -167,6 +167,54 @@ func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	}
 }
 
+func TestResolveConfiguredChunkerUsesRepositoryDefault(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = $1 WHERE key = $2`, string(chunk.VersionV2FastCDC), repositoryDefaultChunkerKey); err != nil {
+		t.Fatalf("set repository default chunker to v2: %v", err)
+	}
+
+	resolved, err := resolveConfiguredChunker(dbconn)
+	if err != nil {
+		t.Fatalf("resolve configured chunker: %v", err)
+	}
+	if got, want := resolved.Version(), chunk.VersionV2FastCDC; got != want {
+		t.Fatalf("resolved version mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestResolveConfiguredChunkerFallsBackWhenConfigRowMissing(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM repository_config WHERE key = $1`, repositoryDefaultChunkerKey); err != nil {
+		t.Fatalf("delete repository default row: %v", err)
+	}
+
+	resolved, err := resolveConfiguredChunker(dbconn)
+	if err != nil {
+		t.Fatalf("resolve configured chunker fallback: %v", err)
+	}
+	if got, want := resolved.Version(), chunk.DefaultChunkerVersion; got != want {
+		t.Fatalf("fallback version mismatch: got %q want %q", got, want)
+	}
+}
+
 func TestAssertLogicalFileVersionMatchesActiveDetectsDrift(t *testing.T) {
 	err := assertLogicalFileVersionMatchesActive("v1-simple-rolling", "v1-simple-rolling-test-override")
 	if err == nil {

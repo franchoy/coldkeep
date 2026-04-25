@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 10
+const requiredPostgresSchemaVersion = 11
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -485,6 +485,38 @@ func runSQLiteChunkChunkerVersionMigration(dbconn sqliteContextExecutor, ctx con
 	return nil
 }
 
+func runSQLiteRepositoryConfigMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS repository_config (
+			key TEXT PRIMARY KEY CHECK (key != ''),
+			value TEXT NOT NULL CHECK (value != '')
+		)
+	`); err != nil {
+		return fmt.Errorf("create repository_config table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO repository_config(key, value)
+		VALUES ('default_chunker', 'v1-simple-rolling')
+	`); err != nil {
+		return fmt.Errorf("seed repository_config.default_chunker: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 11
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 11: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (11)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 11: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -625,6 +657,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteChunkChunkerVersionMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteRepositoryConfigMigration(tx, ctx); err != nil {
 		return err
 	}
 

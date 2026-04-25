@@ -156,8 +156,16 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 10 {
-		t.Fatalf("expected schema version 10 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected schema version 11 after first migration pass, got %d", schemaVersion)
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker: %v", err)
+	}
+	if configuredDefaultChunker != "v1-simple-rolling" {
+		t.Fatalf("expected repository default chunker=v1-simple-rolling, got %q", configuredDefaultChunker)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -191,8 +199,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 10 {
-		t.Fatalf("expected schema version to stay 10 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 11 {
+		t.Fatalf("expected schema version to stay 11 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -228,7 +236,9 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 	checks := []string{
 		"UPDATE schema_version SET version = 9 WHERE version < 9",
 		"UPDATE schema_version SET version = 10 WHERE version < 10",
+		"UPDATE schema_version SET version = 11 WHERE version < 11",
 		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
+		"CREATE TABLE IF NOT EXISTS repository_config",
 		"ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id",
 		"ON DELETE SET NULL",
 		"CREATE TABLE IF NOT EXISTS snapshot_path",
@@ -269,8 +279,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 10 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 10, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 11, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -406,8 +416,16 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 10 {
-		t.Fatalf("expected schema version 10 after migration, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected schema version 11 after migration, got %d", schemaVersion)
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker after migration: %v", err)
+	}
+	if configuredDefaultChunker != "v1-simple-rolling" {
+		t.Fatalf("expected repository default chunker=v1-simple-rolling after migration, got %q", configuredDefaultChunker)
 	}
 
 	if !sqliteTestTableHasColumn(t, dbconn, "snapshot", "parent_id") {
@@ -820,8 +838,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
-	if schemaVersion != 10 {
-		t.Fatalf("expected schema_version=10 after fresh postgres bootstrap, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected schema_version=11 after fresh postgres bootstrap, got %d", schemaVersion)
 	}
 
 	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {

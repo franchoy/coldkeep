@@ -422,4 +422,17 @@ ALTER TABLE chunk ALTER COLUMN chunker_version SET NOT NULL;
 
 UPDATE schema_version SET version = 10 WHERE version < 10;
 
+-- Schema version 11: repository-level defaults for write-time behavior.
+-- Initial policy remains conservative: default_chunker=v1-simple-rolling.
+CREATE TABLE IF NOT EXISTS repository_config (
+  key TEXT PRIMARY KEY CHECK (key <> ''),
+  value TEXT NOT NULL CHECK (value <> '')
+);
+
+INSERT INTO repository_config(key, value)
+VALUES ('default_chunker', 'v1-simple-rolling')
+ON CONFLICT (key) DO NOTHING;
+
+UPDATE schema_version SET version = 11 WHERE version < 11;
+
 COMMIT;
