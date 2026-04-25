@@ -97,7 +97,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'name:\s*Enforce versioned row writer scope' 'versioned row writer scope guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_versioned_row_writers\.sh' 'versioned row writer scope guard command' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_SMOKE_RESET_DB:\s*1' 'isolated smoke reset toggle' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short ./tests/integration/\.\.\.' 'integration correctness race run (integration only)' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 -short( -json)? ./tests/integration/\.\.\.' 'integration correctness race run (integration only)' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/integration/... -run 'TestPhase7SnapshotRetentionLifecycleCLIIntegration'" 'explicit Phase 7 snapshot retention lifecycle gate' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  integration-stress:$' 'integration stress job' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  integration-long-run:$' 'integration long-run job' || check_status=1
