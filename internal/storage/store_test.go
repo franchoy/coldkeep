@@ -987,12 +987,25 @@ func TestStoreFileDefaultChunkerPersistsChunkVersion(t *testing.T) {
 	}
 }
 
-func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
+type crossVersionSharedChunkScenario struct {
+	dbconn            *sql.DB
+	fileAID           int64
+	fileBID           int64
+	sharedChunkID     int64
+	sharedChunkHash   string
+	sharedChunkSize   int64
+	originalVersion   chunk.Version
+	secondFileVersion chunk.Version
+}
+
+func setupCrossVersionSharedChunkScenario(t *testing.T) crossVersionSharedChunkScenario {
+	t.Helper()
+
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
-	defer func() { _ = dbconn.Close() }()
+	t.Cleanup(func() { _ = dbconn.Close() })
 
 	if err := db.RunMigrations(dbconn); err != nil {
 		t.Fatalf("run migrations: %v", err)
@@ -1023,16 +1036,16 @@ func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
 	}
 
 	writer := &commitAckWriter{}
-	defaultChunker := fixedBoundaryChunker{version: chunk.VersionV1SimpleRolling, boundary: 32}
-	overrideChunker := fixedBoundaryChunker{version: "v1-simple-rolling-test-override", boundary: 32}
+	firstChunker := fixedBoundaryChunker{version: chunk.VersionV1SimpleRolling, boundary: 32}
+	secondChunker := fixedBoundaryChunker{version: chunk.VersionV2FastCDC, boundary: 32}
 
 	codec, err := blocks.ParseCodec("plain")
 	if err != nil {
 		t.Fatalf("parse plain codec: %v", err)
 	}
 
-	sgctxA := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: defaultChunker}
-	if _, err := StoreFileWithStorageContextAndCodecResult(sgctxA, pathA, codec); err != nil {
+	resultA, err := StoreFileWithStorageContextAndCodecResult(StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: firstChunker}, pathA, codec)
+	if err != nil {
 		t.Fatalf("store first file: %v", err)
 	}
 
@@ -1044,14 +1057,28 @@ func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
 		t.Fatalf("locate shared chunk after first store: %v", err)
 	}
 
-	sgctxB := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: overrideChunker}
-	resultB, err := StoreFileWithStorageContextAndCodecResult(sgctxB, pathB, codec)
+	resultB, err := StoreFileWithStorageContextAndCodecResult(StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: secondChunker}, pathB, codec)
 	if err != nil {
 		t.Fatalf("store second file with cross-version reuse: %v", err)
 	}
 
+	return crossVersionSharedChunkScenario{
+		dbconn:            dbconn,
+		fileAID:           resultA.FileID,
+		fileBID:           resultB.FileID,
+		sharedChunkID:     sharedChunkID,
+		sharedChunkHash:   sharedHash,
+		sharedChunkSize:   32,
+		originalVersion:   chunk.VersionV1SimpleRolling,
+		secondFileVersion: chunk.VersionV2FastCDC,
+	}
+}
+
+func TestCrossVersionChunkReuseIsAllowed(t *testing.T) {
+	scenario := setupCrossVersionSharedChunkScenario(t)
+
 	var sharedIdentityRows int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, sharedHash, 32).Scan(&sharedIdentityRows); err != nil {
+	if err := scenario.dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, scenario.sharedChunkHash, scenario.sharedChunkSize).Scan(&sharedIdentityRows); err != nil {
 		t.Fatalf("count shared identity rows: %v", err)
 	}
 	if sharedIdentityRows != 1 {
@@ -1059,20 +1086,56 @@ func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
 	}
 
 	var sharedChunkRefCount int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
+	if err := scenario.dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, scenario.sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
 		t.Fatalf("count shared chunk file references: %v", err)
 	}
 	if sharedChunkRefCount != 2 {
 		t.Fatalf("expected shared chunk to be referenced by both files after reuse, got %d references", sharedChunkRefCount)
 	}
+}
+
+func TestCrossVersionChunkVersionRemainsOriginal(t *testing.T) {
+	scenario := setupCrossVersionSharedChunkScenario(t)
+
+	var persistedChunkerVersion string
+	if err := scenario.dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, scenario.sharedChunkID).Scan(&persistedChunkerVersion); err != nil {
+		t.Fatalf("read chunk.chunker_version: %v", err)
+	}
+	if persistedChunkerVersion != string(scenario.originalVersion) {
+		t.Fatalf("expected shared chunk origin version to remain %q, got %q", scenario.originalVersion, persistedChunkerVersion)
+	}
+}
+
+func TestCrossVersionLogicalFileVersionIsCorrect(t *testing.T) {
+	scenario := setupCrossVersionSharedChunkScenario(t)
+
+	var logicalVersionA string
+	if err := scenario.dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, scenario.fileAID).Scan(&logicalVersionA); err != nil {
+		t.Fatalf("read first logical_file.chunker_version: %v", err)
+	}
+	if logicalVersionA != string(scenario.originalVersion) {
+		t.Fatalf("expected first logical file version %q, got %q", scenario.originalVersion, logicalVersionA)
+	}
 
 	var logicalVersionB string
-	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, resultB.FileID).Scan(&logicalVersionB); err != nil {
+	if err := scenario.dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, scenario.fileBID).Scan(&logicalVersionB); err != nil {
 		t.Fatalf("read second logical_file.chunker_version: %v", err)
 	}
-	if logicalVersionB != string(overrideChunker.version) {
-		t.Fatalf("expected second logical file to retain active recipe version %q, got %q", overrideChunker.version, logicalVersionB)
+	if logicalVersionB != string(scenario.secondFileVersion) {
+		t.Fatalf("expected second logical file version %q, got %q", scenario.secondFileVersion, logicalVersionB)
 	}
+
+	var sharedChunkRefCount int
+	if err := scenario.dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, scenario.sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
+		t.Fatalf("count shared chunk file references: %v", err)
+	}
+	if sharedChunkRefCount != 2 {
+		t.Fatalf("expected shared chunk to be reused by both logical files, got %d references", sharedChunkRefCount)
+	}
+}
+
+func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
+	TestCrossVersionChunkReuseIsAllowed(t)
 }
 
 func TestStoreFileLogicalRecipeSingleVersionInvariance(t *testing.T) {
