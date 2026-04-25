@@ -19,6 +19,52 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## [1.5.0] - 2026-04-25
+
+Compatibility-contract and chunker-evolution clarity milestone.
+
+v1.5 keeps existing storage behavior and formalizes the operator contract for
+chunker evolution, restore semantics, and upgrade/config boundaries.
+
+### Added (1.5.0)
+
+- **Compatibility contract document** — added [COMPATIBILITY.md](COMPATIBILITY.md) as the
+  canonical source for guarantees, non-guarantees, versioning rules, and
+  upgrade behavior.
+- **Explicit guarantee set (G1-G6)** — restore correctness across chunker
+  versions, snapshot stability, no automatic data migration, mixed-version
+  coexistence safety, deterministic chunking per version, and forward-compatible
+  restore metadata handling.
+- **Explicit non-guarantee set** — cross-version dedup efficiency, stable
+  cross-version boundaries, and automatic optimization/re-chunking are
+  intentionally not contractual guarantees.
+- **Common mistakes guidance** — added contract-authoring guardrails to avoid
+  overpromising implementation outcomes and to keep guarantees separate from
+  implementation details.
+
+### Changed (1.5.0)
+
+- **README high-level contract summary** — updated [README.md](README.md) with
+  concise operator-facing sections for chunking model, chunker versions,
+  config behavior, and high-level safety guarantees.
+- **Architecture deep contract model** — updated [ARCHITECTURE.md](ARCHITECTURE.md)
+  with detailed chunking/versioning model, guarantee deep-dive, and explicit
+  boundary guidance between stable guarantees and evolving implementation
+  behavior.
+- **CLI help safety wording** — `config set default-chunker` help now states:
+  "Affects only new stored data. Existing data is not modified."
+
+### Scope alignment (v1.5)
+
+- Restore remains recipe-driven; runtime chunker selection is not used to
+  reconstruct already persisted files.
+- Chunker default changes affect only future writes.
+- Mixed-version repositories are first-class and expected.
+- Documentation contract language is aligned with implementation behavior and
+  test coverage.
+
+------------------------------------------------------------------------
+
 ## [1.4.0] - 2026-04-19
 
 Snapshot clarity and release hardening milestone.
