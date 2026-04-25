@@ -1934,6 +1934,9 @@ func bytesToGB(bytes int64) float64 {
 
 func printStatsReport(r *maintenance.StatsResult) {
 	fmt.Println("\n====== coldkeep Stats ======")
+	if strings.TrimSpace(r.ActiveWriteChunker) != "" {
+		fmt.Printf("Active chunker (new writes):     %s\n", r.ActiveWriteChunker)
+	}
 	fmt.Printf("Logical files (total):           %d\n", r.TotalFiles)
 	fmt.Printf("Logical stored size (total):     %.2f MB\n", bytesToMB(r.TotalLogicalSizeBytes))
 	fmt.Printf("  Completed files:               %d (%.2f MB)\n", r.CompletedFiles, bytesToMB(r.CompletedSizeBytes))

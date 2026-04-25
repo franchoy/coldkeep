@@ -4795,6 +4795,7 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	runStatsPhase = func() (*maintenance.StatsResult, error) {
 		return &maintenance.StatsResult{
 			TotalFiles:             7,
+			ActiveWriteChunker:     "v2-fastcdc",
 			TotalChunkReferences:   10000,
 			UniqueReferencedChunks: 7500,
 			EstimatedDedupRatioPct: 25,
@@ -4859,6 +4860,9 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
 	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
 	assertJSONNumber(t, logicalFileCounts, "unknown", 1)
+	if raw, ok := data["active_write_chunker"].(string); !ok || raw != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%v payload=%v", data["active_write_chunker"], data)
+	}
 	assertJSONNumber(t, data, "total_chunk_references", 10000)
 	assertJSONNumber(t, data, "unique_referenced_chunks", 7500)
 	if raw, ok := data["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
@@ -4883,6 +4887,7 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	output := captureStdout(t, func() {
 		printStatsReport(&maintenance.StatsResult{
+			ActiveWriteChunker:     "v2-fastcdc",
 			TotalChunkReferences:   10000,
 			UniqueReferencedChunks: 7500,
 			EstimatedDedupRatioPct: 25,
@@ -4915,6 +4920,7 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	})
 
 	for _, want := range []string{
+		"Active chunker (new writes):     v2-fastcdc",
 		"Snapshot retention:",
 		"Chunker Distribution:",
 		"v1-simple-rolling:     4 chunks",

@@ -3,6 +3,7 @@ package maintenance
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -63,6 +64,7 @@ type StatsResult struct {
 	ChunkCountsByVersion       map[string]int64       `json:"chunk_counts_by_version"`
 	ChunkBytesByVersion        map[string]int64       `json:"chunk_bytes_by_version"`
 	LogicalFileCountsByVersion map[string]int64       `json:"logical_file_counts_by_version"`
+	ActiveWriteChunker         string                 `json:"active_write_chunker"`
 	TotalChunkReferences       int64                  `json:"total_chunk_references"`
 	UniqueReferencedChunks     int64                  `json:"unique_referenced_chunks"`
 	EstimatedDedupRatioPct     float64                `json:"estimated_dedup_ratio_pct"`
@@ -109,6 +111,11 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 
 	r := &StatsResult{}
+	activeWriteChunker, err := resolveActiveWriteChunker(ctx, dbconn)
+	if err != nil {
+		return nil, err
+	}
+	r.ActiveWriteChunker = activeWriteChunker
 
 	var totalLogical, completedLogical, processingLogical, abortedLogical sql.NullInt64
 	var healthySize, quarantineSize, totalContainerSize, liveBytes, deadBytes sql.NullInt64
@@ -326,6 +333,36 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 
 	return r, nil
+}
+
+func isRegisteredChunkerVersion(version chunk.Version) bool {
+	defer func() {
+		_ = recover()
+	}()
+	_ = chunk.DefaultRegistry().MustGet(version)
+	return true
+}
+
+func resolveActiveWriteChunker(ctx context.Context, dbconn *sql.DB) (string, error) {
+	var raw string
+	err := dbconn.QueryRowContext(
+		ctx,
+		`SELECT value FROM repository_config WHERE key = $1`,
+		"default_chunker",
+	).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return string(chunk.DefaultChunkerVersion), nil
+		}
+		return "", fmt.Errorf("failed to query active write chunker: %w", err)
+	}
+
+	version := chunk.Version(strings.TrimSpace(raw))
+	if !chunk.IsWellFormedVersion(version) || !isRegisteredChunkerVersion(version) {
+		return unknownChunkerBucket, nil
+	}
+
+	return string(version), nil
 }
 
 func computeSnapshotRetentionStats(ctx context.Context, dbconn *sql.DB) (SnapshotRetentionStats, error) {

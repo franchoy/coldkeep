@@ -148,6 +148,9 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 	if stats.LogicalFileCountsByVersion == nil {
 		t.Fatal("expected logical_file_counts_by_version map to be initialized")
 	}
+	if got := stats.ActiveWriteChunker; got != "v2-fastcdc" {
+		t.Fatalf("expected active write chunker=v2-fastcdc, got %q", got)
+	}
 	if got := stats.LogicalFileCountsByVersion["v1-simple-rolling"]; got != 2 {
 		t.Fatalf("expected logical file count for v1-simple-rolling=2, got %d", got)
 	}
@@ -168,6 +171,10 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 func TestRunStatsResultBucketsUnknownChunkerMetadata(t *testing.T) {
 	dbconn := openStatsTestDB(t)
 	ctx := context.Background()
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = ? WHERE key = ?`, " v9-future ", "default_chunker"); err != nil {
+		t.Fatalf("update repository default chunker: %v", err)
+	}
 
 	if _, err := dbconn.Exec(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
@@ -198,5 +205,8 @@ func TestRunStatsResultBucketsUnknownChunkerMetadata(t *testing.T) {
 	}
 	if got := stats.LogicalFileCountsByVersion["unknown"]; got != 2 {
 		t.Fatalf("expected unknown logical file count=2, got %d", got)
+	}
+	if got := stats.ActiveWriteChunker; got != "unknown" {
+		t.Fatalf("expected active write chunker=unknown, got %q", got)
 	}
 }
