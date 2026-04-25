@@ -959,7 +959,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		target := strings.TrimSpace(targetArgs[0])
 		id, parseErr := strconv.ParseInt(target, 10, 64)
 		if parseErr != nil || id <= 0 {
-			return usageErrorf("Invalid fileID: %s", targetArgs[0])
+			return usageErrorf("Invalid fileID: %s (restore expects numeric logical file IDs; for path-based restore use --stored-path)", targetArgs[0])
 		}
 	}
 
@@ -2118,7 +2118,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 	if len(parsed.positionals) == 0 {
-		return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--standard|--full|--deep]")
 	}
 
 	verifyLevel, err := parseVerifyLevel(parsed)
@@ -2159,7 +2159,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		return nil
 	default:
-		return usageErrorf("Unknown target for verify: %s", target)
+		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
 }
 
