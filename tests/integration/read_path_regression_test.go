@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -140,18 +140,23 @@ func TestReadPathRestoreNewlyStoredFileAfterPhase3Integration(t *testing.T) {
 		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
 		ContainerDir: container.ContainersDir,
 	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file for phase3 restore regression: %v", err)
 	}
 
 	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
 
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default_chunker: %v", err)
+	}
+
 	var logicalFileChunkerVersion string
 	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, fileID).Scan(&logicalFileChunkerVersion); err != nil {
 		t.Fatalf("read logical_file.chunker_version: %v", err)
 	}
-	if logicalFileChunkerVersion != string(chunk.DefaultChunkerVersion) {
-		t.Fatalf("logical_file.chunker_version mismatch: got=%q want=%q", logicalFileChunkerVersion, chunk.DefaultChunkerVersion)
+	if logicalFileChunkerVersion != configuredDefaultChunker {
+		t.Fatalf("logical_file.chunker_version mismatch: got=%q want=%q", logicalFileChunkerVersion, configuredDefaultChunker)
 	}
 
 	var mismatchedChunkVersions int
@@ -160,11 +165,11 @@ func TestReadPathRestoreNewlyStoredFileAfterPhase3Integration(t *testing.T) {
 		FROM chunk c
 		JOIN file_chunk fc ON fc.chunk_id = c.id
 		WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2
-	`, fileID, string(chunk.DefaultChunkerVersion)).Scan(&mismatchedChunkVersions); err != nil {
+	`, fileID, configuredDefaultChunker).Scan(&mismatchedChunkVersions); err != nil {
 		t.Fatalf("count mismatched chunk versions: %v", err)
 	}
 	if mismatchedChunkVersions != 0 {
-		t.Fatalf("expected all chunk rows to persist chunker_version=%q, mismatches=%d", chunk.DefaultChunkerVersion, mismatchedChunkVersions)
+		t.Fatalf("expected all chunk rows to persist chunker_version=%q, mismatches=%d", configuredDefaultChunker, mismatchedChunkVersions)
 	}
 
 	outPath := filepath.Join(tmp, "out", "phase3-store-restore.bin")
