@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -26,6 +29,20 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type singleChunkV2CLITestChunker struct{}
+
+func (singleChunkV2CLITestChunker) Version() chunk.Version {
+	return chunk.VersionV2FastCDC
+}
+
+func (singleChunkV2CLITestChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return []chunk.Result{{Data: data}}, nil
+}
 
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
@@ -1674,6 +1691,136 @@ func TestRunConfigCommandSetDoesNotModifyExistingData(t *testing.T) {
 	}
 	if configVersion != string(chunk.VersionV2FastCDC) {
 		t.Fatalf("expected repository default to be updated to %q, got %q", chunk.VersionV2FastCDC, configVersion)
+	}
+}
+
+func TestRunStoreCommandReportsCrossVersionReuseRejectionText(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	payload := []byte("cli-cross-version-collision")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+			Chunker:      singleChunkV2CLITestChunker{},
+		}, nil
+	}
+
+	inPath := filepath.Join(t.TempDir(), "cli-cross-version.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	err = runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
+		t.Fatalf("expected cross-version reuse rejection error, got: %v", err)
+	}
+}
+
+func TestRunStoreCommandReportsCrossVersionReuseRejectionJSON(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	payload := []byte("cli-cross-version-collision-json")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+			Chunker:      singleChunkV2CLITestChunker{},
+		}, nil
+	}
+
+	inPath := filepath.Join(t.TempDir(), "cli-cross-version-json.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	storeErr := runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeJSON)
+	if storeErr == nil {
+		t.Fatal("expected store command to fail")
+	}
+
+	stderr := captureStderr(t, func() {
+		code := printCLIError(storeErr, outputModeJSON)
+		if code != exitGeneral {
+			t.Fatalf("expected exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	var payloadJSON map[string]any
+	if err := json.Unmarshal([]byte(stderr), &payloadJSON); err != nil {
+		t.Fatalf("parse JSON payload: %v output=%q", err, stderr)
+	}
+	if got, _ := payloadJSON["status"].(string); got != "error" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payloadJSON["status"], payloadJSON)
+	}
+	if got, _ := payloadJSON["error_class"].(string); got != "GENERAL" {
+		t.Fatalf("error_class mismatch: got=%v payload=%v", payloadJSON["error_class"], payloadJSON)
+	}
+	msg, _ := payloadJSON["message"].(string)
+	if !strings.Contains(msg, "cross-version chunk reuse rejected") {
+		t.Fatalf("expected message to contain guard text, got: %v", payloadJSON)
 	}
 }
 

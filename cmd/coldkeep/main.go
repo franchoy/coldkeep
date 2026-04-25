@@ -740,7 +740,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	path := parsed.positionals[0]
 	codecName, _ := parsed.lastFlagValue("codec")
 
-	sgctx, err := storage.LoadDefaultStorageContext()
+	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
