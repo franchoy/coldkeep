@@ -1,8 +1,7 @@
 // Package fastcdc provides the isolated v2-fastcdc chunker implementation.
 //
-// Phase 5 scope rule: this package is registered for explicit injection and
-// testing, but remains inactive by default. Adding this package must not
-// change production defaults.
+// v2-fastcdc is the default for fresh v1.5+ repositories, while upgraded
+// repositories preserve their existing write-default policy unless changed.
 package fastcdc
 
 import (
