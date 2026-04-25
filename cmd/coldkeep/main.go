@@ -396,6 +396,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 	code := classifyExitCode(err)
 	invariantCode, hasInvariantCode := invariants.Code(err)
 	recommendedAction := invariants.RecommendedActionForError(err)
+	dbHint := localDBSetupHint(err)
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"status":      "error",
@@ -421,7 +422,52 @@ func printCLIError(err error, mode cliOutputMode) int {
 	if strings.TrimSpace(recommendedAction) != "" {
 		fmt.Fprintf(os.Stderr, "Recommended action: %s\n", recommendedAction)
 	}
+	if strings.TrimSpace(dbHint) != "" {
+		fmt.Fprintln(os.Stderr, dbHint)
+	}
 	return code
+}
+
+func localDBSetupHint(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if !strings.Contains(msg, "failed to connect to local db") {
+		return ""
+	}
+
+	missing := make([]string, 0, 6)
+	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSLMODE"} {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			missing = append(missing, key)
+		}
+	}
+
+	b := &strings.Builder{}
+	b.WriteString("DB setup hint: local mode requires PostgreSQL connection env vars.")
+	if len(missing) > 0 {
+		b.WriteString("\nMissing/empty: ")
+		b.WriteString(strings.Join(missing, ", "))
+		b.WriteString("\nExample:")
+		b.WriteString("\n  export DB_HOST=127.0.0.1")
+		b.WriteString("\n  export DB_PORT=5432")
+		b.WriteString("\n  export DB_USER=coldkeep")
+		b.WriteString("\n  export DB_PASSWORD=coldkeep")
+		b.WriteString("\n  export DB_NAME=coldkeep")
+		b.WriteString("\n  export DB_SSLMODE=disable")
+		b.WriteString("\n  export COLDKEEP_DB_AUTO_BOOTSTRAP=true")
+		return b.String()
+	}
+
+	if strings.Contains(msg, "ssl is not enabled on the server") {
+		b.WriteString("\nYour database rejected SSL negotiation; for local Docker PostgreSQL use DB_SSLMODE=disable.")
+		return b.String()
+	}
+
+	b.WriteString("\nCheck DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE values and PostgreSQL availability.")
+	return b.String()
 }
 
 func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {

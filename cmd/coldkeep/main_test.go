@@ -282,6 +282,57 @@ func TestDoctorTextFailureIncludesInvariantCodeAndActionWhenAvailable(t *testing
 	}
 }
 
+func TestPrintCLIErrorTextIncludesLocalDBSetupHintWhenEnvMissing(t *testing.T) {
+	t.Setenv("DB_HOST", "")
+	t.Setenv("DB_PORT", "")
+	t.Setenv("DB_USER", "")
+	t.Setenv("DB_PASSWORD", "")
+	t.Setenv("DB_NAME", "")
+	t.Setenv("DB_SSLMODE", "")
+
+	err := errors.New("load storage context: failed to connect to local DB: dial tcp: lookup port=: no such host")
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeText)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	if !strings.Contains(output, "DB setup hint: local mode requires PostgreSQL connection env vars") {
+		t.Fatalf("expected DB setup hint header in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "Missing/empty: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE") {
+		t.Fatalf("expected missing env list in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "export DB_HOST=127.0.0.1") {
+		t.Fatalf("expected export snippet in text output, got: %q", output)
+	}
+}
+
+func TestPrintCLIErrorJSONDoesNotAddDBHintFields(t *testing.T) {
+	err := errors.New("load storage context: failed to connect to local DB: dial tcp: lookup port=: no such host")
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, ok := payload["message"].(string); !ok || got != err.Error() {
+		t.Fatalf("message mismatch: got=%v", payload["message"])
+	}
+	if _, exists := payload["hint"]; exists {
+		t.Fatalf("unexpected hint field in JSON payload: %v", payload)
+	}
+}
+
 func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
 	originalRepairPhase := repairLogicalRefCountsPhase
 	t.Cleanup(func() { repairLogicalRefCountsPhase = originalRepairPhase })
