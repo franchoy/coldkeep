@@ -213,6 +213,18 @@ Clarification:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
 
+## Explicit Non-Guarantee 3: Automatic Optimization
+
+Contract statement:
+
+- coldkeep does not automatically optimize or re-chunk existing data.
+
+Clarification:
+
+- optimization/re-chunk behavior requires explicit operator instruction.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for full non-guarantee scope.
+
 ## Guarantee 5: Deterministic Behavior
 
 Contract statement:

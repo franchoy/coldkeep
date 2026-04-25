@@ -138,6 +138,16 @@ Clarifications:
 - boundary drift across versions is expected,
 - and this does not violate restore correctness or compatibility guarantees.
 
+### Non-Guarantee 3: Automatic Optimization
+
+coldkeep does not automatically optimize or re-chunk existing data.
+
+Clarifications:
+
+- existing stored data is not background-rewritten for optimization,
+- no automatic re-chunk pass is performed after chunker changes,
+- and optimization/rewrite behavior requires explicit operator-invoked commands.
+
 coldkeep does not guarantee:
 
 - identical chunk boundaries across chunker versions

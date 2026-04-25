@@ -253,6 +253,10 @@ Contract:
 
 This preserves auditability and avoids implicit state drift caused by unattended migrations.
 
+Non-guarantee note:
+
+- coldkeep does not provide automatic background optimization or re-chunking of existing committed data.
+
 ### Guarantee 4: Chunker Evolution Safety in Mixed-Version Repositories
 
 Chunker evolution is designed for coexistence rather than repository bifurcation.
