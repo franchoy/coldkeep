@@ -63,6 +63,9 @@ type StatsResult struct {
 	ChunkCountsByVersion       map[string]int64       `json:"chunk_counts_by_version"`
 	ChunkBytesByVersion        map[string]int64       `json:"chunk_bytes_by_version"`
 	LogicalFileCountsByVersion map[string]int64       `json:"logical_file_counts_by_version"`
+	TotalChunkReferences       int64                  `json:"total_chunk_references"`
+	UniqueReferencedChunks     int64                  `json:"unique_referenced_chunks"`
+	EstimatedDedupRatioPct     float64                `json:"estimated_dedup_ratio_pct"`
 	TotalFileRetries           int64                  `json:"total_file_retries"`
 	AvgFileRetries             float64                `json:"avg_file_retries"`
 	MaxFileRetries             int64                  `json:"max_file_retries"`
@@ -224,6 +227,18 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 		return nil, err
 	}
 	r.TotalChunks = r.CompletedChunks + r.ProcessingChunks + r.AbortedChunks
+
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) AS total_chunk_references,
+			COALESCE(COUNT(DISTINCT chunk_id), 0) AS unique_referenced_chunks
+		FROM file_chunk
+	`).Scan(&r.TotalChunkReferences, &r.UniqueReferencedChunks); err != nil {
+		return nil, fmt.Errorf("failed to query dedup signal stats: %w", err)
+	}
+	if r.TotalChunkReferences > 0 {
+		r.EstimatedDedupRatioPct = (1.0 - float64(r.UniqueReferencedChunks)/float64(r.TotalChunkReferences)) * 100
+	}
 
 	versionRows, err := dbconn.QueryContext(ctx, `
 		SELECT chunker_version, COUNT(*), COALESCE(SUM(size),0)

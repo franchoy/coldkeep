@@ -4794,7 +4794,10 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 
 	runStatsPhase = func() (*maintenance.StatsResult, error) {
 		return &maintenance.StatsResult{
-			TotalFiles: 7,
+			TotalFiles:             7,
+			TotalChunkReferences:   10000,
+			UniqueReferencedChunks: 7500,
+			EstimatedDedupRatioPct: 25,
 			LogicalFileCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 5,
 				"v2-fastcdc":        2,
@@ -4856,6 +4859,11 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
 	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
 	assertJSONNumber(t, logicalFileCounts, "unknown", 1)
+	assertJSONNumber(t, data, "total_chunk_references", 10000)
+	assertJSONNumber(t, data, "unique_referenced_chunks", 7500)
+	if raw, ok := data["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
+		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", data["estimated_dedup_ratio_pct"], data)
+	}
 	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
 	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
 	assertJSONNumber(t, chunkCounts, "unknown", 1)
@@ -4875,6 +4883,9 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	output := captureStdout(t, func() {
 		printStatsReport(&maintenance.StatsResult{
+			TotalChunkReferences:   10000,
+			UniqueReferencedChunks: 7500,
+			EstimatedDedupRatioPct: 25,
 			LogicalFileCountsByVersion: map[string]int64{
 				"v1-simple-rolling": 6,
 				"v2-fastcdc":        1,
@@ -4917,6 +4928,10 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 		"v1-simple-rolling:     6 files",
 		"v2-fastcdc:            1 files",
 		"unknown:               2 files",
+		"Dedup Signal:",
+		"Total chunk references:  10000",
+		"Unique referenced chunks:7500",
+		"Estimated dedup ratio:   25.00%",
 		"Current-only logical files:    4 (2.00 MB)",
 		"Snapshot-referenced files:     3 (5.00 MB)",
 		"Snapshot-only logical files:   1 (1.00 MB)",

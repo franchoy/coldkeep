@@ -112,6 +112,16 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 		t.Fatalf("insert chunk rows: %v", err)
 	}
 
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES
+		 (1, 1, 0),
+		 (1, 2, 1),
+		 (2, 1, 0),
+		 (3, 3, 0)`,
+	); err != nil {
+		t.Fatalf("insert file_chunk rows: %v", err)
+	}
+
 	stats, err := runStatsResultWithDB(ctx, dbconn)
 	if err != nil {
 		t.Fatalf("runStatsResultWithDB: %v", err)
@@ -143,6 +153,15 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 	}
 	if got := stats.LogicalFileCountsByVersion["v2-fastcdc"]; got != 1 {
 		t.Fatalf("expected logical file count for v2-fastcdc=1, got %d", got)
+	}
+	if stats.TotalChunkReferences != 4 {
+		t.Fatalf("expected total_chunk_references=4, got %d", stats.TotalChunkReferences)
+	}
+	if stats.UniqueReferencedChunks != 3 {
+		t.Fatalf("expected unique_referenced_chunks=3, got %d", stats.UniqueReferencedChunks)
+	}
+	if stats.EstimatedDedupRatioPct != 25 {
+		t.Fatalf("expected estimated_dedup_ratio_pct=25, got %.2f", stats.EstimatedDedupRatioPct)
 	}
 }
 

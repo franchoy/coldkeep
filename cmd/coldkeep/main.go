@@ -1998,6 +1998,10 @@ func printStatsReport(r *maintenance.StatsResult) {
 			fmt.Printf("  %-22s %d files\n", version+":", r.LogicalFileCountsByVersion[version])
 		}
 	}
+	fmt.Printf("Dedup Signal:\n")
+	fmt.Printf("  Total chunk references:  %d\n", r.TotalChunkReferences)
+	fmt.Printf("  Unique referenced chunks:%d\n", r.UniqueReferencedChunks)
+	fmt.Printf("  Estimated dedup ratio:   %.2f%%\n", r.EstimatedDedupRatioPct)
 	fmt.Println("============================")
 	fmt.Println("\nPer-container breakdown:")
 	for _, c := range r.Containers {
