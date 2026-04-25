@@ -178,6 +178,9 @@ jobs:
               echo "no explicit fail event found in JSON output; printing tail for context"
             fi
 
+            echo "package-level failure markers (first 20):"
+            grep -E '"Output":".*(WARNING: DATA RACE|race detected during execution of test|panic:|fatal error:|signal:|FAIL\\t|FAIL\\n)' "$json_file" | head -n 20 || true
+
             echo "last 120 JSON lines:"
             tail -n 120 "$json_file" || true
           fi
