@@ -213,6 +213,31 @@ func TestStoreServiceResolveActiveChunkerFallsBackWhenConfigRowMissing(t *testin
 	}
 }
 
+func TestStoreServiceResolveActiveChunkerFailsFastOnUnregisteredConfiguredVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = $1 WHERE key = $2`, "v9-future-cdc", repositoryDefaultChunkerKey); err != nil {
+		t.Fatalf("set unregistered repository default chunker: %v", err)
+	}
+
+	service := NewStoreService(NewRepository(dbconn), nil)
+	_, err = service.ResolveActiveChunker()
+	if err == nil {
+		t.Fatal("expected ResolveActiveChunker to fail on unregistered configured chunker, got nil")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("expected not-registered error, got: %v", err)
+	}
+}
+
 func TestAssertLogicalFileVersionMatchesActiveDetectsDrift(t *testing.T) {
 	err := assertLogicalFileVersionMatchesActive("v1-simple-rolling", "v1-simple-rolling-test-override")
 	if err == nil {

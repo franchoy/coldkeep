@@ -11,6 +11,17 @@ import (
 
 const repositoryDefaultChunkerKey = "default_chunker"
 
+func ensureRegisteredChunkerVersion(version chunk.Version) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("chunker version %q is not registered in this binary", version)
+		}
+	}()
+
+	_ = chunk.DefaultRegistry().MustGet(version)
+	return nil
+}
+
 // GetDefaultChunkerVersion returns the repository-level default chunker version
 // used for new writes.
 //
@@ -38,8 +49,8 @@ func GetDefaultChunkerVersion(tx *sql.Tx) (chunk.Version, error) {
 	if !chunk.IsWellFormedVersion(version) {
 		return "", fmt.Errorf("repository default chunker version %q is malformed", version)
 	}
-	if _, ok := chunk.DefaultRegistry().Get(version); !ok {
-		return "", fmt.Errorf("repository default chunker version %q is not registered in this binary", version)
+	if err := ensureRegisteredChunkerVersion(version); err != nil {
+		return "", fmt.Errorf("repository default chunker version validation failed: %w", err)
 	}
 
 	return version, nil
@@ -56,8 +67,8 @@ func SetDefaultChunkerVersion(tx *sql.Tx, v chunk.Version) error {
 	if !chunk.IsWellFormedVersion(version) {
 		return fmt.Errorf("default chunker version %q is malformed", version)
 	}
-	if _, ok := chunk.DefaultRegistry().Get(version); !ok {
-		return fmt.Errorf("default chunker version %q is not registered in this binary", version)
+	if err := ensureRegisteredChunkerVersion(version); err != nil {
+		return fmt.Errorf("default chunker version validation failed: %w", err)
 	}
 
 	if _, err := tx.Exec(
