@@ -23,8 +23,27 @@ project, do not start here; start with [README.md](README.md).
 
 Compatibility-contract and chunker-evolution clarity milestone.
 
-v1.5 keeps existing storage behavior and formalizes the operator contract for
-chunker evolution, restore semantics, and upgrade/config boundaries.
+v1.5 introduces CDC evolution through chunker versioning, FastCDC support,
+explicit chunker configuration, observability, and benchmark validation while
+preserving compatibility with existing repositories.
+
+### Release highlights (1.5.0)
+
+- **CDC evolution with compatibility preserved** — repositories can safely
+  contain mixed `v1-simple-rolling` and `v2-fastcdc` write history, while
+  restore remains metadata-replay and byte-identical for persisted data.
+- **FastCDC as the new-repo default write policy** — fresh v1.5+ repositories
+  initialize with `v2-fastcdc`; upgraded repositories preserve their prior
+  default unless explicitly changed by the operator.
+- **Explicit chunker policy controls** — `coldkeep config set default-chunker`
+  is now clearly documented and CLI-described as affecting only future writes,
+  with no automatic re-chunking of historical data.
+- **Observability for mixed-version operation** — docs and contracts now make
+  chunker provenance and version-distribution visibility explicit through
+  existing stats/verify/doctor surfaces.
+- **Benchmark validation guidance for chunker decisions** — chunker benchmark
+  commands and interpretation notes are documented so boundary/reuse behavior
+  can be evaluated with deterministic inputs before policy changes.
 
 ### Added (1.5.0)
 
