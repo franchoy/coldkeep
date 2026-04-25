@@ -68,8 +68,8 @@ Contract:
 
 - multiple chunker versions can coexist safely in the same repository.
 - each committed logical file has one chunker-version label for provenance.
-- chunks may be reused across versions when content identity is identical.
-- deduplication semantics are content-based, not version-label-based.
+- coexistence safety is independent of cross-version reuse outcomes.
+- deduplication behavior for version transitions is explicitly non-guaranteed.
 
 Practical consequence:
 
@@ -120,7 +120,7 @@ Evolution expectations:
 - New chunker versions may change boundaries and dedup behavior for new writes.
 - Existing logical files remain restorable because restore is metadata replay, not re-chunking.
 - Mixed-version repositories are expected and supported.
-- Dedup decisions are keyed by content identity with repository integrity/version-safety constraints.
+- Dedup decisions are implementation behavior under integrity/safety constraints, not part of the stable compatibility guarantee.
 
 ## Explicit Non-Guarantees
 
@@ -203,6 +203,18 @@ New repositories:
 - Guarantees are intended to be additive across minor releases; new behavior should not weaken existing restore/snapshot safety guarantees.
 - If a behavior changes from guarantee to non-guarantee (or the reverse), this file is the source of truth and must be updated in the same change.
 - Mixed-version repositories are a first-class operating mode, not a migration edge case.
+
+## Common Mistakes to Avoid
+
+- Overpromising cross-version deduplication outcomes.
+- Underexplaining chunker versioning semantics between write-time policy and restore-time replay.
+- Mixing stable compatibility guarantees with implementation details that can evolve.
+
+Authoring rules:
+
+- Guarantees must describe stable externally observable behavior.
+- Implementation notes must be marked as non-guarantees unless they are contractually frozen.
+- Cross-version dedup metrics, chunk counts, and boundary alignment must never be presented as guaranteed outcomes.
 
 ## Operational Guidance
 
