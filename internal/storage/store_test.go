@@ -508,8 +508,8 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 
 	ctx := context.Background()
 	_, _, _, err = claimChunkWithContext(ctx, dbconn, "shared-chunk-hash", 777, "v1-simple-rolling-test-override", container.ContainersDir)
-	if err != nil {
-		t.Fatalf("claim reused chunk with override version: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
+		t.Fatalf("expected cross-version reuse rejection, got: %v", err)
 	}
 
 	var sameIdentityRows int
