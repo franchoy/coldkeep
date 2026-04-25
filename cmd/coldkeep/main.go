@@ -538,6 +538,11 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 			return err
 		}
 
+		previous, err := repo.GetDefaultChunkerVersion()
+		if err != nil {
+			return err
+		}
+
 		if err := repo.SetDefaultChunkerVersion(v); err != nil {
 			return err
 		}
@@ -557,6 +562,10 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 
 		_, _ = fmt.Fprintf(os.Stdout, "default-chunker set to %s\n", v)
+		if previous != v {
+			_, _ = fmt.Fprintln(os.Stdout, "Warning: This affects only new stored data.")
+			_, _ = fmt.Fprintln(os.Stdout, "Existing data remains unchanged.")
+		}
 		return nil
 
 	default:

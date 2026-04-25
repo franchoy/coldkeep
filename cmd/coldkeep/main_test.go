@@ -1543,6 +1543,140 @@ func TestRunConfigCommandGetJSON(t *testing.T) {
 	}
 }
 
+func TestRunConfigCommandSetWarnsOnlyOnActualSwitch(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_set_warn_switch.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	switchOutput := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand set returned error: %v", err)
+		}
+	})
+	if !strings.Contains(switchOutput, "Warning: This affects only new stored data.") {
+		t.Fatalf("expected switch warning in output, got: %q", switchOutput)
+	}
+	if !strings.Contains(switchOutput, "Existing data remains unchanged.") {
+		t.Fatalf("expected unchanged-data warning in output, got: %q", switchOutput)
+	}
+
+	noSwitchOutput := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand set same value returned error: %v", err)
+		}
+	})
+	if strings.Contains(noSwitchOutput, "Warning: This affects only new stored data.") {
+		t.Fatalf("did not expect warning when value does not change, got: %q", noSwitchOutput)
+	}
+}
+
+func TestRunConfigCommandSetDoesNotModifyExistingData(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_set_safety_guard.sqlite")
+
+	seedDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = seedDB.Close() }()
+	if err := dbpkg.RunMigrations(seedDB); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var logicalID int64
+	if err := seedDB.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES (?, ?, ?, ?, ?) RETURNING id`,
+		"safety.bin", int64(11), "safety-logical-hash", "COMPLETED", string(chunk.VersionV1SimpleRolling),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	var chunkID int64
+	if err := seedDB.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?) RETURNING id`,
+		"safety-chunk-hash", int64(11), "COMPLETED", int64(1), string(chunk.VersionV1SimpleRolling),
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	if err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+	}, outputModeText); err != nil {
+		t.Fatalf("runConfigCommand set returned error: %v", err)
+	}
+
+	verifyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open verify db: %v", err)
+	}
+	defer func() { _ = verifyDB.Close() }()
+
+	var logicalVersion string
+	if err := verifyDB.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = ?`, logicalID).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file chunker_version: %v", err)
+	}
+	if logicalVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("existing logical_file chunker_version changed: got %q want %q", logicalVersion, chunk.VersionV1SimpleRolling)
+	}
+
+	var persistedChunkVersion string
+	if err := verifyDB.QueryRow(`SELECT chunker_version FROM chunk WHERE id = ?`, chunkID).Scan(&persistedChunkVersion); err != nil {
+		t.Fatalf("read chunk chunker_version: %v", err)
+	}
+	if persistedChunkVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("existing chunk chunker_version changed: got %q want %q", persistedChunkVersion, chunk.VersionV1SimpleRolling)
+	}
+
+	var configVersion string
+	if err := verifyDB.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configVersion); err != nil {
+		t.Fatalf("read repository_config.default_chunker: %v", err)
+	}
+	if configVersion != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("expected repository default to be updated to %q, got %q", chunk.VersionV2FastCDC, configVersion)
+	}
+}
+
 func TestRunSnapshotCommandCreateForwardsPartialInputs(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	originalCreate := createSnapshotPhase
