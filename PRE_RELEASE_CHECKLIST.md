@@ -18,7 +18,7 @@ Execution model (step-by-step):
 - Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.
 - Capture evidence as you go (command output snippets, failing/success states, and any remediation notes).
 - If a step fails, fix the issue and re-run that step before moving forward.
-- For releases that include snapshot/retention scope, treat sections 13-16 as required release gates after sections 1-12.
+- For releases that include snapshot/retention scope, treat sections 14-17 as required release gates after sections 1-13.
 
 ## Release Freeze Policy (Phase 10 gate)
 
@@ -350,7 +350,140 @@ Confirm:
 - `repair ref-counts` unblocks subsequent GC and verify
 - Dry-run for `remove --stored-path` correctly returns usage exit code `2` (deferred per design)
 
-## 12) Sign-off
+## 12) Verify v1.5 CDC / chunker-evolution contract
+
+Use this section for releases that include chunker-evolution behavior, default
+chunker policy changes, or compatibility-contract updates.
+
+### A. Schema / migration
+
+- [ ] v1.4.1 -> v1.5 migration succeeds
+- [ ] Historical `logical_file` rows are backfilled with `v1-simple-rolling`
+- [ ] Historical `chunk` rows are backfilled with `v1-simple-rolling`
+- [ ] Upgraded repositories preserve prior default chunker (`v1-simple-rolling` unless explicitly changed)
+- [ ] Fresh v1.5 repositories initialize default chunker to `v2-fastcdc`
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/db -run 'TestRunMigrationsSucceedsOnSQLiteInMemory|TestRunMigrationsPreservesExistingRepositoryDefaultChunker|TestRunMigrationsBackfillsChunkerVersionForLegacyLogicalFileAndChunkRows|TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss' -count=1
+```
+
+### B. Store / restore compatibility
+
+- [ ] v1 store works
+- [ ] v2 store works
+- [ ] Mixed-version repository store works
+- [ ] Restore is byte-identical for v1-written files
+- [ ] Restore is byte-identical for v2-written files
+- [ ] Restore behavior does not depend on active write chunker
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/storage -run 'TestV2ChunkerStoreSucceeds|TestV2ChunkerRestoreByteIdentical|TestStoreWithFreshDefaultV2PersistsLogicalVersion|TestStoreAfterSwitchToV2PersistsLogicalVersion|TestRestoreIgnoresConfiguredRuntimeChunker' -count=1
+go test ./tests/integration -run 'TestReadPathRestoreAfterMigrationIntegration|TestReadPathSnapshotRestoreAfterMigrationIntegration' -count=1
+```
+
+### C. Snapshot behavior across versions
+
+- [ ] Snapshot create works
+- [ ] Snapshot restore works
+- [ ] Snapshot diff works
+- [ ] Snapshot delete works
+- [ ] GC after snapshot delete remains safe
+- [ ] Snapshot lifecycle behaves correctly in mixed-version repositories
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/snapshot -run 'TestCreateSnapshotFullCopiesAllPhysicalFiles|TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata|TestDiffSnapshotsSummarySQLCountsAddedRemovedModified|TestDeleteSnapshotRemovesSnapshotRowsOnly' -count=1
+go test ./tests/integration -run 'TestSnapshotCreateLifecycleIntegration|TestSnapshotCrossFeatureInteractionIntegration|TestPhase7SnapshotRetentionLifecycleCLIIntegration' -count=1
+```
+
+### D. Dedup / chunk identity semantics
+
+- [ ] Chunk lookup remains content-based
+- [ ] `chunker_version` is not part of dedup identity
+- [ ] Reused chunks are not overwritten during cross-version reuse
+- [ ] No duplicate chunks are created solely because chunker versions differ
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/storage -run 'TestCrossVersionChunkReuseIsAllowed|TestCrossVersionDedupCompatibility|TestStoreFileReusedChunkAllowsCrossVersionReuse|TestStoreAllowsCrossVersionChunkReuseWithoutOverwritingOriginMetadata' -count=1
+```
+
+### E. Config behavior
+
+- [ ] `config get default-chunker` works
+- [ ] `config set default-chunker v1-simple-rolling` works
+- [ ] `config set default-chunker v2-fastcdc` works
+- [ ] Invalid chunker values are rejected with usage-class error
+- [ ] Default chunker config changes affect only new writes
+
+Suggested evidence commands:
+
+```bash
+go test ./cmd/coldkeep -run 'TestRunConfigCommandSetAndGetDefaultChunker|TestRunConfigCommandSetRejectsUnknownVersion|TestRunConfigCommandSetDoesNotModifyExistingData|TestPrintHelpConfigDefaultChunkerSafetyNote' -count=1
+go test ./internal/storage -run 'TestGetDefaultChunkerVersionFallsBackToV1WhenUnset|TestSetDefaultChunkerVersionRoundTrip|TestSetDefaultChunkerVersionRejectsUnregisteredVersion' -count=1
+```
+
+### F. Observability
+
+- [ ] `stats` reports active write chunker
+- [ ] `stats` reports chunk counts by chunker version
+- [ ] `stats` reports chunk bytes by chunker version
+- [ ] `stats` reports logical file counts by chunker version
+- [ ] Mixed-version repositories are clearly represented in stats output
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/maintenance -run 'TestRunStatsResultIncludesChunkCountsByVersion|TestRunStatsResultPureV1RepositoryReportsOnlyV1|TestRunStatsResultPureV2RepositoryReportsOnlyV2|TestRunStatsResultMixedRepositoryReportsBothVersions|TestRunStatsResultVersionTotalsMatchDatabaseReality' -count=1
+go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONIncludesSnapshotRetention|TestPrintStatsReportIncludesSnapshotRetention|TestPrintStatsReportOmitsMixedChunkerWarningWhenSingleKnownVersion' -count=1
+```
+
+### G. Benchmark and determinism validation
+
+- [ ] v1 chunker baseline behavior remains stable
+- [ ] v2 deterministic behavior tests pass
+- [ ] Chunk coverage tests pass
+- [ ] Shifted-data benchmark assertions pass
+- [ ] Benchmark validations pass repeatedly (non-flaky)
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/chunk/benchmark -run 'TestFastCDCBetterThanV1_SmallModifications|TestFastCDCBetterThanV1_ShiftedData|TestChunkerDeterminism|TestChunkerDeterminism_RunDatasetTwice|TestChunkCoverage' -count=3
+go test ./internal/chunk -run 'TestBothChunkersDeterministic|TestBothChunkersReconstructFullCoverage|TestV1OutputUnchanged' -count=1
+go test ./internal/chunk/fastcdc -run 'TestDeterministicChunkBoundariesAndData' -count=1
+```
+
+### H. Documentation and release artifacts
+
+- [ ] `README.md` reflects v1.5 chunker-evolution behavior
+- [ ] `ARCHITECTURE.md` reflects v1.5 chunker model and cross-version reuse semantics
+- [ ] `COMPATIBILITY.md` exists and matches implementation behavior
+- [ ] CLI help for `config set default-chunker` includes new-writes-only safety wording
+- [ ] Release notes are drafted and aligned with behavior
+
+Suggested quick checks:
+
+```bash
+rg -n 'v2-fastcdc|v1-simple-rolling|chunks may be reused across chunker versions|cross-version reuse is opportunistic' README.md ARCHITECTURE.md COMPATIBILITY.md
+rg -n 'config set default-chunker <value>|Affects only new stored data\. Existing data is not modified\.' cmd/coldkeep/main.go
+rg -n 'v1\.5 introduces CDC evolution through chunker versioning|Release highlights \(1\.5\.0\)' CHANGELOG.md
+```
+
+### I. Final CI commands (explicit rerun)
+
+- [ ] `go test ./...` passes
+- [ ] `go test -race ./...` passes
+- [ ] `go vet ./...` passes
+- [ ] Integration suite passes (`go test ./tests/integration/...`)
+
+## 13) Sign-off
 
 - [ ] Quality parity checks passed
 - [ ] Full local CI matrix simulation passed (both codecs)
@@ -358,7 +491,7 @@ Confirm:
 - [ ] Integration suite passed
 - Note: Step 4 integration umbrella suite is optional (non-gating) and was triaged separately.
 
-## 13) Snapshot sign-off checklist (Phases 1-7)
+## 14) Snapshot sign-off checklist (Phases 1-7)
 
 Use this as the final snapshot gate before tagging a release.
 
@@ -520,7 +653,7 @@ done
 echo "G14-G17 evidence names: OK"
 ```
 
-## 14) Snapshot CLI/contract checklist
+## 15) Snapshot CLI/contract checklist
 
 Commands in scope:
 
@@ -547,7 +680,7 @@ Additional CLI validation and policy checks:
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
 - [ ] `snapshot delete` requires `--force`
 
-## 15) Verify snapshot / retention contract (manual gate)
+## 16) Verify snapshot / retention contract (manual gate)
 
 Run this manual lifecycle gate after core CI/test gates pass.
 
@@ -590,7 +723,7 @@ Confirm:
 - [ ] Snapshot delete succeeds only with `--force`
 - [ ] GC eligibility changes only after all retaining snapshots are deleted
 
-## 16) Final global sign-off
+## 17) Final global sign-off
 
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
