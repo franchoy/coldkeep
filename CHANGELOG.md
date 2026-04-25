@@ -58,8 +58,13 @@ chunker evolution, restore semantics, and upgrade/config boundaries.
 
 - Restore remains recipe-driven; runtime chunker selection is not used to
   reconstruct already persisted files.
+- Fresh v1.5+ repositories default new writes to `v2-fastcdc`; upgraded
+  repositories preserve prior write default (`v1-simple-rolling` unless
+  explicitly changed).
 - Chunker default changes affect only future writes.
 - Mixed-version repositories are first-class and expected.
+- Cross-version chunk reuse is opportunistic under content identity and
+  integrity constraints; reuse efficiency is intentionally non-guaranteed.
 - Documentation contract language is aligned with implementation behavior and
   test coverage.
 

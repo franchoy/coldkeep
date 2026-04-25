@@ -79,6 +79,7 @@ Practical consequence:
 Non-implication:
 
 - coexistence safety does not imply guaranteed cross-version dedup efficiency.
+- cross-version reuse is opportunistic under content identity and integrity checks, not a guaranteed efficiency ratio.
 
 ## Guarantee 5: Deterministic Chunking Per Version
 
@@ -189,12 +190,13 @@ Existing repositories:
 
 - retain their persisted chunker-version history,
 - are not automatically rewritten or re-chunked by upgrade,
+- preserve prior repository write default on upgrade (`v1-simple-rolling` for legacy repositories unless explicitly changed),
 - and use configured/default chunker policy only for new writes.
 
 New repositories:
 
-- follow the current default chunker policy at initialization time,
-- which may differ from older repositories (for example `v2-fastcdc`).
+- initialize with the current default chunker policy (`v2-fastcdc` in v1.5+),
+- while older upgraded repositories keep their existing write-default policy.
 
 ## Future-Proofing Notes
 

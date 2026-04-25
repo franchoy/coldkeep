@@ -383,6 +383,7 @@ Contract:
 
 - each committed logical file has one chunker-version provenance label.
 - repository history may contain logical files written under multiple chunker versions.
+- fresh v1.5+ repositories initialize write default to `v2-fastcdc`; upgrade paths preserve prior write default (`v1-simple-rolling` unless explicitly changed).
 - chunks may be reused across chunker versions if their content is identical.
 - chunk.chunker_version is origin metadata for the chunk row, not a reuse constraint for later logical files.
 
