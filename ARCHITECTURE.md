@@ -39,6 +39,16 @@ Migration philosophy:
 
 - coldkeep prefers non-destructive evolution over automatic optimization.
 
+## Deep Design View
+
+This deep version of the architecture captures five linked aspects:
+
+- chunking system design (CDC + content-addressed recipes),
+- chunker versioning model,
+- explicit store and restore execution flow,
+- invariant families that must remain true across lifecycle phases,
+- supporting diagrams for system and flow understanding.
+
 ### Correctness Layers
 
 This diagram is a mental anchor for how guarantees compose across layers.
@@ -146,6 +156,76 @@ Versioning model:
 
 This separation is intentional: write-time chunker evolution changes future layout
 behavior while restore compatibility remains metadata-driven.
+
+## Store Flow (Write Path)
+
+The store path is deterministic, transactional, and append-oriented.
+
+High-level flow:
+
+1. Select active write chunker version from repository configuration.
+2. Chunk input bytes according to that version's CDC boundary strategy.
+3. Resolve/reuse-or-create chunk identities under repository integrity rules.
+4. Append physical block payloads to active container files as needed.
+5. Persist logical recipe mapping (`logical_file`, `file_chunk`, `chunk`, `blocks`) transactionally.
+6. Commit only when metadata and durable bytes satisfy completion invariants.
+
+Store flow diagram:
+
+```text
+input bytes
+    |
+    v
+select active chunker version
+    |
+    v
+chunking (CDC)
+    |
+    v
+chunk identity resolve (reuse/new)
+    |
+    +--> append block bytes to container (if new payload)
+    |
+    v
+persist recipe metadata (logical_file/file_chunk/chunk/blocks)
+    |
+    v
+transaction commit -> COMPLETED state visibility
+```
+
+## Restore Flow (Read Path)
+
+Restore is recipe-driven replay, not re-chunking.
+
+High-level flow:
+
+1. Load completed logical-file recipe metadata.
+2. Validate metadata sanity (including chunker-version field shape/sanity policy).
+3. Resolve ordered `file_chunk -> chunk -> blocks` graph.
+4. Stream/decode referenced block bytes into a temporary output.
+5. Verify reconstructed content hash against stored logical-file hash.
+6. Atomically publish destination file.
+
+Restore flow diagram:
+
+```text
+logical file id/path
+    |
+    v
+load persisted recipe metadata
+    |
+    v
+ordered chunk/block replay
+    |
+    v
+reconstruct temp file
+    |
+    v
+final hash verification
+    |
+    v
+atomic rename to destination
+```
 
 ## Container and Append Model
 
