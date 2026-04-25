@@ -106,7 +106,9 @@ Practical consequence:
 - repositories containing newer chunker-version labels remain restorable by recipe replay semantics.
 - malformed or empty chunker-version metadata remains a hard error because metadata sanity is part of integrity checks.
 
-## Chunker Evolution Model
+## Versioning Rules
+
+Chunker evolution model:
 
 Current chunker versions include:
 
@@ -193,6 +195,14 @@ New repositories:
 
 - follow the current default chunker policy at initialization time,
 - which may differ from older repositories (for example `v2-fastcdc`).
+
+## Future-Proofing Notes
+
+- Unknown future chunker-version labels are intentionally tolerated for restore when metadata is well-formed.
+- Compatibility is recipe-driven: persisted reconstruction metadata is the long-term replay contract.
+- Guarantees are intended to be additive across minor releases; new behavior should not weaken existing restore/snapshot safety guarantees.
+- If a behavior changes from guarantee to non-guarantee (or the reverse), this file is the source of truth and must be updated in the same change.
+- Mixed-version repositories are a first-class operating mode, not a migration edge case.
 
 ## Operational Guidance
 
