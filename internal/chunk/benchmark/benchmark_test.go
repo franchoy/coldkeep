@@ -369,6 +369,47 @@ func TestChunkCoverage(t *testing.T) {
 	}
 }
 
+func TestValidateCoverageInvariantsRejectsGapOverlapAndOutOfOrder(t *testing.T) {
+	t.Run("gap", func(t *testing.T) {
+		err := ValidateCoverageInvariants(20, Result{
+			TotalSize: 20,
+			Chunks: []ChunkRecord{
+				{Offset: 0, Size: 10},
+				{Offset: 12, Size: 8},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected gap error")
+		}
+	})
+
+	t.Run("overlap", func(t *testing.T) {
+		err := ValidateCoverageInvariants(20, Result{
+			TotalSize: 20,
+			Chunks: []ChunkRecord{
+				{Offset: 0, Size: 10},
+				{Offset: 8, Size: 12},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected overlap error")
+		}
+	})
+
+	t.Run("out_of_order", func(t *testing.T) {
+		err := ValidateCoverageInvariants(20, Result{
+			TotalSize: 20,
+			Chunks: []ChunkRecord{
+				{Offset: 10, Size: 10},
+				{Offset: 0, Size: 10},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected out-of-order error")
+		}
+	})
+}
+
 func BenchmarkDefaultDatasets(b *testing.B) {
 	registry, err := chunk.NewDefaultRegistry()
 	if err != nil {
@@ -442,22 +483,7 @@ func joinHashes(hashes []string) string {
 
 func assertCoverageInvariant(t *testing.T, data []byte, result Result) {
 	t.Helper()
-
-	if result.TotalSize != int64(len(data)) {
-		t.Fatalf("total size mismatch: got=%d want=%d", result.TotalSize, len(data))
-	}
-
-	var cursor int64
-	for index, chunk := range result.Chunks {
-		if chunk.Size <= 0 {
-			t.Fatalf("chunk %d has non-positive size: %+v", index, chunk)
-		}
-		if chunk.Offset != cursor {
-			t.Fatalf("chunk %d offset mismatch: got=%d want=%d", index, chunk.Offset, cursor)
-		}
-		cursor += chunk.Size
-	}
-	if cursor != int64(len(data)) {
-		t.Fatalf("coverage mismatch: got=%d want=%d", cursor, len(data))
+	if err := ValidateCoverageInvariants(int64(len(data)), result); err != nil {
+		t.Fatalf("coverage invariant failed: %v", err)
 	}
 }

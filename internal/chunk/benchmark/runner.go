@@ -154,6 +154,39 @@ func runDatasetVariant(workDir string, chunker chunk.Chunker, datasetName string
 	return run, nil
 }
 
+// ValidateCoverageInvariants enforces chunk coverage invariants for one run:
+// total chunk sizes equal file size, no overlaps, no gaps, and strict ordering.
+func ValidateCoverageInvariants(fileSize int64, result Result) error {
+	if fileSize < 0 {
+		return fmt.Errorf("file size must be non-negative: %d", fileSize)
+	}
+	if result.TotalSize != fileSize {
+		return fmt.Errorf("total size mismatch: chunks=%d file=%d", result.TotalSize, fileSize)
+	}
+
+	var cursor int64
+	for i, c := range result.Chunks {
+		if c.Size <= 0 {
+			return fmt.Errorf("chunk %d has non-positive size: %d", i, c.Size)
+		}
+		if c.Offset < 0 {
+			return fmt.Errorf("chunk %d has negative offset: %d", i, c.Offset)
+		}
+		if c.Offset != cursor {
+			if c.Offset > cursor {
+				return fmt.Errorf("gap before chunk %d: got offset=%d want=%d", i, c.Offset, cursor)
+			}
+			return fmt.Errorf("overlap or out-of-order chunk %d: got offset=%d want=%d", i, c.Offset, cursor)
+		}
+		cursor += c.Size
+	}
+	if cursor != fileSize {
+		return fmt.Errorf("coverage mismatch: covered=%d file=%d", cursor, fileSize)
+	}
+
+	return nil
+}
+
 func normalizedChunkHash(item chunk.Result) string {
 	if trimmed := strings.TrimSpace(item.Info.Hash); trimmed != "" {
 		return trimmed
