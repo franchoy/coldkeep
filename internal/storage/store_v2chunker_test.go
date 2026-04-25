@@ -200,10 +200,44 @@ func TestV2ChunkerVerifyPasses(t *testing.T) {
 	}
 }
 
+// TestStoreWithDefaultV1PersistsLogicalVersion verifies that with no chunker
+// override and no config switch, store uses the repository default v1 chunker.
+func TestStoreWithDefaultV1PersistsLogicalVersion(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	containersDir := t.TempDir()
+	dbconn := setupV2StoreDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+		Chunker:      nil,
+	}
+
+	inPath, _ := makeV2TestFile(t, "repo-default-v1-explicit.bin", fastcdc.AvgChunkSize*4+701)
+	result, err := StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("store with default v1 chunker: %v", err)
+	}
+
+	var logicalVersion string
+	if err := dbconn.QueryRow(
+		`SELECT chunker_version FROM logical_file WHERE id = $1`,
+		result.FileID,
+	).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+
+	if logicalVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("logical_file.chunker_version: got %q want %q", logicalVersion, chunk.VersionV1SimpleRolling)
+	}
+}
+
 // TestStoreUsesRepositoryConfiguredDefaultChunker verifies that when no explicit
 // StorageContext chunker override is provided, store resolves the write chunker
 // from repository_config.default_chunker.
-func TestStoreUsesRepositoryConfiguredDefaultChunker(t *testing.T) {
+func TestStoreAfterSwitchToV2PersistsLogicalVersion(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "plain")
 	containersDir := t.TempDir()
 	dbconn := setupV2StoreDB(t)
@@ -265,7 +299,7 @@ func TestStoreResolvesChunkerOncePerOperation(t *testing.T) {
 		t.Fatalf("set repository default chunker to v1: %v", err)
 	}
 
-	v1Path, _ := makeV2TestFile(t, "repo-default-v1.bin", fastcdc.AvgChunkSize*4+512)
+	v1Path, v1Want := makeV2TestFile(t, "repo-default-v1.bin", fastcdc.AvgChunkSize*4+512)
 	v1Result, err := StoreFileWithStorageContextResult(sgctx, v1Path)
 	if err != nil {
 		t.Fatalf("store using repository default v1: %v", err)
@@ -278,7 +312,7 @@ func TestStoreResolvesChunkerOncePerOperation(t *testing.T) {
 		t.Fatalf("set repository default chunker to v2: %v", err)
 	}
 
-	v2Path, _ := makeV2TestFile(t, "repo-default-v2-after-switch.bin", fastcdc.AvgChunkSize*4+513)
+	v2Path, v2Want := makeV2TestFile(t, "repo-default-v2-after-switch.bin", fastcdc.AvgChunkSize*4+513)
 	v2Result, err := StoreFileWithStorageContextResult(sgctx, v2Path)
 	if err != nil {
 		t.Fatalf("store using repository default v2: %v", err)
@@ -334,5 +368,29 @@ func TestStoreResolvesChunkerOncePerOperation(t *testing.T) {
 	}
 	if v2ChunkMismatch != 0 {
 		t.Fatalf("expected all chunks for second store op to remain %q, mismatches=%d", chunk.VersionV2FastCDC, v2ChunkMismatch)
+	}
+
+	v1OutPath := filepath.Join(t.TempDir(), "mixed-v1-restored.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, v1Result.FileID, v1OutPath, containersDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore first file: %v", err)
+	}
+	v1Got, err := os.ReadFile(v1OutPath)
+	if err != nil {
+		t.Fatalf("read first restored file: %v", err)
+	}
+	if !bytes.Equal(v1Want, v1Got) {
+		t.Fatalf("first restored content mismatch: original=%d bytes restored=%d bytes", len(v1Want), len(v1Got))
+	}
+
+	v2OutPath := filepath.Join(t.TempDir(), "mixed-v2-restored.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, v2Result.FileID, v2OutPath, containersDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore second file: %v", err)
+	}
+	v2Got, err := os.ReadFile(v2OutPath)
+	if err != nil {
+		t.Fatalf("read second restored file: %v", err)
+	}
+	if !bytes.Equal(v2Want, v2Got) {
+		t.Fatalf("second restored content mismatch: original=%d bytes restored=%d bytes", len(v2Want), len(v2Got))
 	}
 }
