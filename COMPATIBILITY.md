@@ -172,6 +172,19 @@ Users should not assume:
 - that switching chunkers preserves dedup metrics for future writes
 - that benchmark percentages are exact constants across machines
 
+## Upgrade Behavior
+
+Existing repositories:
+
+- retain their persisted chunker-version history,
+- are not automatically rewritten or re-chunked by upgrade,
+- and use configured/default chunker policy only for new writes.
+
+New repositories:
+
+- follow the current default chunker policy at initialization time,
+- which may differ from older repositories (for example `v2-fastcdc`).
+
 ## Operational Guidance
 
 When evaluating chunker evolution:

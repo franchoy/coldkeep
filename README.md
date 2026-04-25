@@ -284,6 +284,21 @@ Chunker version metadata is persisted as part of the storage recipe contract.
 - chunker version is chosen at store time from active repository write configuration,
 - restore behavior does not depend on active chunker selection and replays stored recipe bytes/mappings.
 
+## Upgrading Coldkeep
+
+Upgrade behavior is intentionally conservative and metadata-driven.
+
+Existing repositories:
+
+- keep current stored chunker-version history,
+- no automatic data rewrite or re-chunking is performed,
+- new data uses the repository's configured/default chunker at store time.
+
+New repositories:
+
+- initialize with the current product default chunker policy,
+- current expected default may differ from legacy repositories (for example `v2-fastcdc`).
+
 ## When to use coldkeep
 
 Good fit:
