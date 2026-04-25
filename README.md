@@ -302,6 +302,10 @@ Behavior:
 
 Upgrade behavior is intentionally conservative and metadata-driven.
 
+Migration philosophy:
+
+- coldkeep prefers non-destructive evolution over automatic optimization.
+
 Existing repositories:
 
 - keep current stored chunker-version history,

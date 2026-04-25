@@ -35,6 +35,10 @@ Correctness has five explicit layers:
 - v1.3 snapshot-based retention: immutable point-in-time captures, snapshot-protected GC, reachability audits
 - v1.4 snapshot clarity hardening: lineage metadata is explicit and non-dependency by contract
 
+Migration philosophy:
+
+- coldkeep prefers non-destructive evolution over automatic optimization.
+
 ### Correctness Layers
 
 This diagram is a mental anchor for how guarantees compose across layers.

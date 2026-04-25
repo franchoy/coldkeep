@@ -18,6 +18,10 @@ This contract is about:
 - explicit migration behavior boundaries
 - explicit non-guarantees to reduce ambiguity
 
+Migration philosophy:
+
+- coldkeep prefers non-destructive evolution over automatic optimization.
+
 ## Guarantee 1: Restore Correctness Across Chunker Versions
 
 Contract:
