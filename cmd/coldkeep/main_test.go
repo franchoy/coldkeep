@@ -1290,6 +1290,130 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkCommandMissingArgsClassifiesAsUsage(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method: "benchmark",
+		flags:  map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep benchmark") {
+		t.Fatalf("expected benchmark usage error, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunBenchmarkCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"noop"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "unknown benchmark subcommand") {
+		t.Fatalf("expected unknown benchmark subcommand error, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunBenchmarkCommandJSONOutputSchema(t *testing.T) {
+	originalPhase := runChunkerBenchmarkPhase
+	t.Cleanup(func() { runChunkerBenchmarkPhase = originalPhase })
+
+	runChunkerBenchmarkPhase = func() (BenchmarkChunkersReport, error) {
+		return BenchmarkChunkersReport{
+			GeneratedAtUTC: "2026-04-25T00:00:00Z",
+			Rows: []BenchmarkChunkersReportRecord{
+				{
+					Dataset:       "slight-modifications",
+					Metric:        "reuse-after-small-edit",
+					V1SimplePct:   10,
+					V2FastCDCPct:  20,
+					DeltaPct:      10,
+					WinnerVersion: string(chunk.VersionV2FastCDC),
+				},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"chunkers"},
+			flags:       map[string][]string{"output": {"json"}},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse benchmark JSON payload: %v output=%q", err, output)
+	}
+	if got, _ := payload["status"].(string); got != "ok" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "benchmark" {
+		t.Fatalf("command mismatch: got=%v payload=%v", payload["command"], payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in benchmark payload, got=%v", payload)
+	}
+	rows, ok := data["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("expected one row in benchmark payload, got=%v", data["rows"])
+	}
+}
+
+func TestRunBenchmarkCommandTextOutputIncludesRows(t *testing.T) {
+	originalPhase := runChunkerBenchmarkPhase
+	t.Cleanup(func() { runChunkerBenchmarkPhase = originalPhase })
+
+	runChunkerBenchmarkPhase = func() (BenchmarkChunkersReport, error) {
+		return BenchmarkChunkersReport{
+			GeneratedAtUTC: "2026-04-25T00:00:00Z",
+			Rows: []BenchmarkChunkersReportRecord{
+				{
+					Dataset:       "slight-modifications",
+					Metric:        "reuse-after-small-edit",
+					V1SimplePct:   12.34,
+					V2FastCDCPct:  56.78,
+					DeltaPct:      44.44,
+					WinnerVersion: string(chunk.VersionV2FastCDC),
+				},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"chunkers"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Chunker benchmark") {
+		t.Fatalf("expected benchmark heading in text output, got=%q", output)
+	}
+	if !strings.Contains(output, "slight-modifications") {
+		t.Fatalf("expected dataset row in text output, got=%q", output)
+	}
+	if !strings.Contains(output, "reuse-after-small-edit") {
+		t.Fatalf("expected metric in text output, got=%q", output)
+	}
+}
+
 func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 	err := runListCommand(parsedCommandLine{
 		method: "list",
@@ -1395,7 +1519,7 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 }
 
 func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
-	commands := []string{"help", "version", "init", "simulate", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
+	commands := []string{"help", "version", "init", "simulate", "benchmark", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
 
 	for _, command := range commands {
 		if shouldRunStartupRecovery(command) {
@@ -1428,6 +1552,18 @@ func TestInferOutputModeFromArgsSupportsSnapshotJSON(t *testing.T) {
 	}
 }
 
+func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected benchmark --output json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
+	}
+}
+
 func TestParseDoctorVerifyLevelDefaultsToStandard(t *testing.T) {
 	level, err := parseDoctorVerifyLevel(parsedCommandLine{
 		method: "doctor",
@@ -1457,7 +1593,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {

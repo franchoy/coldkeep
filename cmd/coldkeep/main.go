@@ -26,6 +26,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/chunk/benchmark"
+	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
+	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -136,6 +139,7 @@ var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
 var inspectLogicalFilePhase = storage.GetLogicalFileInspectInfoWithDB
+var runChunkerBenchmarkPhase = runChunkerBenchmark
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
 	return false, ""
@@ -247,6 +251,8 @@ func runCLI(args []string) int {
 		err = runGCCommand(parsed, outputMode)
 	case "simulate":
 		err = runSimulateCommand(parsed, outputMode)
+	case "benchmark":
+		err = runBenchmarkCommand(parsed, outputMode)
 	case "stats":
 		err = runStatsCommand(parsed, outputMode)
 	case "inspect":
@@ -425,7 +431,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version":
 		return
 	}
 
@@ -621,6 +627,7 @@ var outputSupportedCommands = map[string]bool{
 	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
+	"benchmark":    true,
 	"snapshot":     true,
 }
 
@@ -2332,6 +2339,176 @@ type SimulateReport struct {
 	DedupRatioPct     float64 `json:"dedup_ratio_pct"`
 }
 
+// BenchmarkChunkersReport is the deterministic output payload for
+// `coldkeep benchmark chunkers`.
+type BenchmarkChunkersReport struct {
+	GeneratedAtUTC string                          `json:"generated_at_utc"`
+	Rows           []BenchmarkChunkersReportRecord `json:"rows"`
+}
+
+// BenchmarkChunkersReportRecord is one dataset-level comparison row.
+type BenchmarkChunkersReportRecord struct {
+	Dataset       string  `json:"dataset"`
+	Metric        string  `json:"metric"`
+	V1SimplePct   float64 `json:"v1_simple_pct"`
+	V2FastCDCPct  float64 `json:"v2_fastcdc_pct"`
+	DeltaPct      float64 `json:"delta_pct"`
+	WinnerVersion string  `json:"winner_version"`
+}
+
+func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep benchmark <chunkers> [--output <text|json>]")
+	}
+	if len(parsed.positionals) > 1 {
+		return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+	}
+
+	subcommand := parsed.positionals[0]
+	if subcommand != "chunkers" {
+		return usageErrorf("unknown benchmark subcommand %q (expected: chunkers)", subcommand)
+	}
+
+	report, err := runChunkerBenchmarkPhase()
+	if err != nil {
+		return fmt.Errorf("benchmark chunkers: %w", err)
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "benchmark",
+			"data":    report,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Println("Chunker benchmark (deterministic synthetic datasets)")
+	fmt.Println()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "DATASET\tMETRIC\tV1 SIMPLE (%)\tV2 FASTCDC (%)\tDELTA (%)\tWINNER")
+	for _, row := range report.Rows {
+		_, _ = fmt.Fprintf(
+			tw,
+			"%s\t%s\t%.2f\t%.2f\t%.2f\t%s\n",
+			row.Dataset,
+			row.Metric,
+			row.V1SimplePct,
+			row.V2FastCDCPct,
+			row.DeltaPct,
+			row.WinnerVersion,
+		)
+	}
+	_ = tw.Flush()
+
+	return nil
+}
+
+func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
+	type metricSpec struct {
+		datasetName string
+		metricName  string
+		compute     func(base, candidate benchmark.Result) (float64, error)
+	}
+
+	metrics := []metricSpec{
+		{
+			datasetName: "slight-modifications",
+			metricName:  "reuse-after-small-edit",
+			compute: func(base, candidate benchmark.Result) (float64, error) {
+				reuse, err := benchmark.CompareReuse(base, candidate)
+				if err != nil {
+					return 0, err
+				}
+				return reuse.ReuseRatioPct, nil
+			},
+		},
+		{
+			datasetName: "shifted-data",
+			metricName:  "reuse-after-shift",
+			compute: func(base, candidate benchmark.Result) (float64, error) {
+				stability, err := benchmark.CompareBoundaryStability(base, candidate)
+				if err != nil {
+					return 0, err
+				}
+				return stability.ReuseAfterShiftPct, nil
+			},
+		},
+	}
+
+	index := make(map[string]benchmark.Dataset)
+	for _, dataset := range benchmark.DefaultDatasets() {
+		index[dataset.Name] = dataset
+	}
+
+	v1 := simplecdc.New()
+	v2 := fastcdc.New()
+
+	rows := make([]BenchmarkChunkersReportRecord, 0, len(metrics))
+	for _, spec := range metrics {
+		dataset, ok := index[spec.datasetName]
+		if !ok {
+			return BenchmarkChunkersReport{}, fmt.Errorf("missing benchmark dataset %q", spec.datasetName)
+		}
+		if len(dataset.Mutations) == 0 {
+			return BenchmarkChunkersReport{}, fmt.Errorf("benchmark dataset %q has no mutation variants", spec.datasetName)
+		}
+
+		baseV1 := benchmark.RunChunker(v1, dataset.Base.Data)
+		candidateV1 := benchmark.RunChunker(v1, dataset.Mutations[0].Data)
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV1); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v1: %w", spec.datasetName, err)
+		}
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV1); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v1: %w", spec.datasetName, err)
+		}
+		v1Pct, err := spec.compute(baseV1, candidateV1)
+		if err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("compute %s for %q v1: %w", spec.metricName, spec.datasetName, err)
+		}
+
+		baseV2 := benchmark.RunChunker(v2, dataset.Base.Data)
+		candidateV2 := benchmark.RunChunker(v2, dataset.Mutations[0].Data)
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV2); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v2: %w", spec.datasetName, err)
+		}
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV2); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v2: %w", spec.datasetName, err)
+		}
+		v2Pct, err := spec.compute(baseV2, candidateV2)
+		if err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("compute %s for %q v2: %w", spec.metricName, spec.datasetName, err)
+		}
+
+		winner := string(chunk.VersionV2FastCDC)
+		if v1Pct > v2Pct {
+			winner = string(chunk.VersionV1SimpleRolling)
+		}
+		if math.Abs(v2Pct-v1Pct) < 0.0001 {
+			winner = "tie"
+		}
+
+		rows = append(rows, BenchmarkChunkersReportRecord{
+			Dataset:       spec.datasetName,
+			Metric:        spec.metricName,
+			V1SimplePct:   v1Pct,
+			V2FastCDCPct:  v2Pct,
+			DeltaPct:      v2Pct - v1Pct,
+			WinnerVersion: winner,
+		})
+	}
+
+	return BenchmarkChunkersReport{
+		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339),
+		Rows:           rows,
+	}, nil
+}
+
 func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
 		return err
@@ -3890,6 +4067,7 @@ func printHelp() {
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
+		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
 		{"  stats", "Show storage statistics"},
 		{"  inspect file <fileID> [--output <text|json>]", "Inspect one logical file with chunker and chunking summary"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
