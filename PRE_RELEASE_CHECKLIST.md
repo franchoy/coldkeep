@@ -20,6 +20,28 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 13-16 as required release gates after sections 1-12.
 
+## Release Freeze Policy (Phase 10 gate)
+
+Before running the technical release checks below, enforce feature freeze.
+
+Allowed change categories during this gate:
+
+- test fixes
+- bug fixes
+- documentation corrections
+- release metadata updates
+
+Disallowed during this gate:
+
+- new CDC behavior
+- new CLI features
+- schema expansion
+
+Expected:
+
+- every PR/change in the release window is classifiable as one of the allowed categories above,
+- and no release-gate step introduces net new product surface.
+
 Suggested preflight before Step 1:
 
 - `docker compose` available locally
