@@ -166,6 +166,7 @@ Users can expect:
 - stable restore correctness for previously stored logical files
 - stable CLI/JSON contracts within v1.x compatibility policy
 - observable chunker metadata for diagnostics
+- stats visibility for chunk and logical-file version distributions in mixed-version repositories
 
 Users should not assume:
 

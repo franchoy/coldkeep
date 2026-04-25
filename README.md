@@ -313,6 +313,22 @@ New repositories:
 - initialize with the current product default chunker policy,
 - current expected default may differ from legacy repositories (for example `v2-fastcdc`).
 
+## Observability (Phase 7)
+
+Use `coldkeep stats` to inspect repository composition and chunker-era health.
+
+The stats report includes:
+
+- chunk distribution by chunker version (`Chunker Distribution`),
+- logical file distribution by chunker version (`Logical Files by Chunker`),
+- mixed-version repository visibility with an explicit operator warning when multiple versions are present.
+
+Interpretation:
+
+- mixed-version repositories are expected after upgrades or `default-chunker` changes,
+- these distributions are observability signals for repository evolution, not integrity errors,
+- restore correctness remains recipe-driven and independent of active write chunker.
+
 ## When to use coldkeep
 
 Good fit:
