@@ -203,15 +203,31 @@ coldkeep init
 # 2) Load environment
 export $(cat .env | xargs)
 
-# 3) Store and inspect
+# 3) Configure local PostgreSQL connection (required for local mode)
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+
+# 4) Store and inspect
 coldkeep store samples/hello.txt
 coldkeep stats
 
-# 4) Restore
+# 5) Restore + verify
+# restore expects file ID(s), not source filename
 coldkeep restore 1 ./restored
+coldkeep verify system --standard
 ```
 
 Security note: if the encryption key is lost, encrypted data cannot be recovered.
+
+Command form tips:
+
+- `restore` expects logical file IDs (`coldkeep restore <fileID> <outputDir>`); use `--stored-path` if you want path-based restore.
+- `verify` expects a target: `coldkeep verify system ...` or `coldkeep verify file <fileID> ...`.
 
 ### Docker
 
@@ -302,6 +318,7 @@ Typical flows:
 coldkeep store file.txt
 coldkeep store-folder ./data
 coldkeep restore 12 ./out
+coldkeep restore --stored-path docs/report.txt --destination ./out/report.txt --mode override
 coldkeep remove 12
 coldkeep gc
 coldkeep stats
