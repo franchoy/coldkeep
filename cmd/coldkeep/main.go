@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -134,6 +135,7 @@ var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
+var inspectLogicalFilePhase = storage.GetLogicalFileInspectInfoWithDB
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
 	return false, ""
@@ -247,6 +249,8 @@ func runCLI(args []string) int {
 		err = runSimulateCommand(parsed, outputMode)
 	case "stats":
 		err = runStatsCommand(parsed, outputMode)
+	case "inspect":
+		err = runInspectCommand(parsed, outputMode)
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
@@ -421,7 +425,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
 		return
 	}
 
@@ -646,7 +650,7 @@ func shouldRunStartupRecovery(command string) bool {
 	switch command {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot":
 		return true
 	default:
 		return false
@@ -1657,6 +1661,61 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return err
 	}
 	printStatsReport(r)
+	return nil
+}
+
+func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+
+	if len(parsed.positionals) != 2 || parsed.positionals[0] != "file" {
+		return usageErrorf("Usage: coldkeep inspect file <fileID>")
+	}
+
+	fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
+	if err != nil || fileID <= 0 {
+		return usageErrorf("Invalid fileID: %s", parsed.positionals[1])
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	info, err := inspectLogicalFilePhase(sgctx.DB, fileID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("file ID %d not found", fileID)
+		}
+		return err
+	}
+
+	avgChunkSizeKB := int64(math.Round(info.AvgChunkSizeBytes / 1024.0))
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "inspect",
+			"data": map[string]any{
+				"target":               "file",
+				"file_id":              info.FileID,
+				"chunker":              string(info.ChunkerVersion),
+				"chunks":               info.ChunkCount,
+				"avg_chunk_size_bytes": info.AvgChunkSizeBytes,
+				"avg_chunk_size_kb":    avgChunkSizeKB,
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Printf("Chunker: %s\n", info.ChunkerVersion)
+	fmt.Printf("Chunks: %d\n", info.ChunkCount)
+	fmt.Printf("Avg chunk size: %dKB\n", avgChunkSizeKB)
+
 	return nil
 }
 
@@ -3806,6 +3865,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  stats", "Show storage statistics"},
+		{"  inspect file <fileID> [--output <text|json>]", "Inspect one logical file with chunker and chunking summary"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},

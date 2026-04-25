@@ -1385,7 +1385,7 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 }
 
 func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
-	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot"}
+	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot"}
 
 	for _, command := range commands {
 		if !shouldRunStartupRecovery(command) {
@@ -1457,7 +1457,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -1531,6 +1531,123 @@ func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
 	})
 	if strings.TrimSpace(getOut) != string(chunk.VersionV2FastCDC) {
 		t.Fatalf("expected get output %q, got %q", chunk.VersionV2FastCDC, strings.TrimSpace(getOut))
+	}
+}
+
+func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalInspect := inspectLogicalFilePhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		inspectLogicalFilePhase = originalInspect
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
+		return storage.LogicalFileInspectInfo{
+			FileID:            fileID,
+			ChunkerVersion:    chunk.VersionV2FastCDC,
+			ChunkCount:        142,
+			AvgChunkSizeBytes: 58 * 1024,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"file", "42"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand text returned error: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"Chunker: v2-fastcdc",
+		"Chunks: 142",
+		"Avg chunk size: 58KB",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected inspect text output to contain %q, got output:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalInspect := inspectLogicalFilePhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		inspectLogicalFilePhase = originalInspect
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
+		return storage.LogicalFileInspectInfo{
+			FileID:            fileID,
+			ChunkerVersion:    chunk.VersionV2FastCDC,
+			ChunkCount:        142,
+			AvgChunkSizeBytes: 58 * 1024,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"file", "42"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runInspectCommand json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["chunker"].(string); got != "v2-fastcdc" {
+		t.Fatalf("expected chunker=v2-fastcdc, got %v", data["chunker"])
+	}
+	assertJSONNumber(t, data, "chunks", 142)
+	assertJSONNumber(t, data, "avg_chunk_size_kb", 58)
+}
+
+func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
+	err := runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"chunk", "1"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect file <fileID>") {
+		t.Fatalf("expected inspect usage error, got: %v", err)
+	}
+
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "invalid"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Invalid fileID") {
+		t.Fatalf("expected invalid fileID error, got: %v", err)
 	}
 }
 

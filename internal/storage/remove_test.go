@@ -263,6 +263,99 @@ func TestGetLogicalFileInfoWithDBFailsOnEmptyChunkerVersion(t *testing.T) {
 	}
 }
 
+func TestGetLogicalFileInspectInfoWithDBFound(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkAID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 'v2-fastcdc') RETURNING id`,
+		strings.Repeat("a", 64), int64(65536), filestate.ChunkCompleted,
+	).Scan(&chunkAID); err != nil {
+		t.Fatalf("insert chunk A: %v", err)
+	}
+
+	var chunkBID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 'v2-fastcdc') RETURNING id`,
+		strings.Repeat("b", 64), int64(53248), filestate.ChunkCompleted,
+	).Scan(&chunkBID); err != nil {
+		t.Fatalf("insert chunk B: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v2-fastcdc') RETURNING id`,
+		"inspect-file.bin", int64(118784), strings.Repeat("f", 64), filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0), ($1, $3, 1)`,
+		fileID, chunkAID, chunkBID,
+	); err != nil {
+		t.Fatalf("insert file_chunk rows: %v", err)
+	}
+
+	info, err := GetLogicalFileInspectInfoWithDB(dbconn, fileID)
+	if err != nil {
+		t.Fatalf("GetLogicalFileInspectInfoWithDB: %v", err)
+	}
+	if info.FileID != fileID {
+		t.Fatalf("unexpected file id: got=%d want=%d", info.FileID, fileID)
+	}
+	if info.ChunkerVersion != chunk.VersionV2FastCDC {
+		t.Fatalf("unexpected chunker version: got=%q want=%q", info.ChunkerVersion, chunk.VersionV2FastCDC)
+	}
+	if info.ChunkCount != 2 {
+		t.Fatalf("unexpected chunk count: got=%d want=2", info.ChunkCount)
+	}
+	if info.AvgChunkSizeBytes != 59392 {
+		t.Fatalf("unexpected avg chunk size: got=%.0f want=59392", info.AvgChunkSizeBytes)
+	}
+}
+
+func TestGetLogicalFileInspectInfoWithDBNoChunksReturnsZeroAverage(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v2-fastcdc') RETURNING id`,
+		"inspect-zero.bin", int64(0), strings.Repeat("z", 64), filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	info, err := GetLogicalFileInspectInfoWithDB(dbconn, fileID)
+	if err != nil {
+		t.Fatalf("GetLogicalFileInspectInfoWithDB: %v", err)
+	}
+	if info.ChunkCount != 0 {
+		t.Fatalf("expected chunk count 0, got %d", info.ChunkCount)
+	}
+	if info.AvgChunkSizeBytes != 0 {
+		t.Fatalf("expected avg chunk size 0, got %.2f", info.AvgChunkSizeBytes)
+	}
+}
+
 func TestRemoveByStoredPathUnlinksSingleMappingAndKeepsSharedLogicalAlive(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
