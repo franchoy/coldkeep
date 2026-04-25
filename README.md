@@ -112,6 +112,7 @@ Documentation is split into:
 
 - [README.md](README.md) for overview, quickstart, and CLI usage
 - [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model, invariants, lifecycle, and trust boundary
+- [COMPATIBILITY.md](COMPATIBILITY.md) for version-compatibility, chunker-evolution contract, and explicit non-guarantees
 - [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, local CI guidance, and stats benchmark commands for observability-sensitive changes
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
@@ -120,6 +121,25 @@ Documentation is split into:
 - [CHANGELOG.md](CHANGELOG.md) for milestone history
 
 For the deeper model (invariants, lifecycle, validity, recovery, trust boundary), see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Guarantee 1: Restore Correctness
+
+Contract statement:
+
+- Any stored logical file can be restored byte-identically regardless of chunker version.
+
+Operational meaning:
+
+- restore does not depend on the current default chunker.
+- restore replays persisted `file_chunk -> chunk -> blocks` references.
+- chunker version is persisted metadata for provenance and observability, not a runtime dependency for restore execution.
+
+What this guarantee does not imply:
+
+- it does not guarantee identical chunk boundaries across chunker versions.
+- it does not guarantee identical dedup ratio across chunker versions.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the full chunker evolution and cross-version expectations contract.
 
 ## When to use coldkeep
 

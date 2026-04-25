@@ -9,6 +9,7 @@ Read [README.md](README.md) first if you need installation, quickstart, CLI exam
 Companion documents:
 
 - [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
+- [COMPATIBILITY.md](COMPATIBILITY.md) for version-compatibility and chunker-evolution contract
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow and local CI guidance
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
@@ -213,6 +214,21 @@ Loss-minimizing behavior:
 No partially written or inconsistent state is exposed as valid user-visible data.
 
 ## Restore Model (Atomic and Hash-Gated)
+
+### Guarantee 1: Chunker-Version-Independent Restore
+
+Restore correctness is intentionally decoupled from write-time chunker evolution.
+
+Contract:
+
+- restore reconstructs bytes from persisted metadata references (`file_chunk`, `chunk`, `blocks`), not from re-chunking input with the current chunker.
+- write-time chunker selection affects future storage shape and dedup behavior, but not replayability of already persisted logical files.
+- chunker version is retained as metadata for auditability and observability.
+
+Non-guarantees:
+
+- cross-version chunk boundary identity is not guaranteed.
+- cross-version dedup ratio identity is not guaranteed.
 
 Restore path behavior:
 
