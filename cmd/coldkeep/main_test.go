@@ -1684,6 +1684,29 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 	}
 }
 
+func TestRunVerifyCommandNoTargetIncludesDidYouMeanHint(t *testing.T) {
+	err := runVerifyCommand(parsedCommandLine{
+		method:      "verify",
+		positionals: []string{},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected usage error for verify without target")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "Usage: coldkeep verify <system|file <fileID>>") {
+		t.Fatalf("expected verify usage in error message, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Did you mean: coldkeep verify system --standard") {
+		t.Fatalf("expected did-you-mean hint in error message, got: %q", msg)
+	}
+}
+
 func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
 	originalLoad := loadDefaultStorageContextPhase
 	t.Cleanup(func() {

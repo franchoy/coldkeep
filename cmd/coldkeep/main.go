@@ -2164,7 +2164,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 	if len(parsed.positionals) == 0 {
-		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--standard|--full|--deep]")
+		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--standard|--full|--deep]\nDid you mean: coldkeep verify system --standard")
 	}
 
 	verifyLevel, err := parseVerifyLevel(parsed)
