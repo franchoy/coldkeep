@@ -1041,6 +1041,13 @@ func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion
 }
 
 func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	// Reuse acceptance is intentionally two-phase:
+	//  1) claim by content identity (file_hash + size), then
+	//  2) validate graph/semantic replay safety for COMPLETED candidates.
+	// If validation fails, we mark the candidate ABORTED, clean stale mappings,
+	// and claim again so the caller rebuilds a fresh canonical recipe.
+	//
+	// This is deliberate safety behavior, not opportunistic best-effort reuse.
 	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
 	if err != nil {
 		return 0, "", err
