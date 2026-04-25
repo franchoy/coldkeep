@@ -155,6 +155,24 @@ Operational meaning:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed compatibility scope and non-guarantees.
 
+## Guarantee 3: No Automatic Data Migration
+
+Contract statement:
+
+- coldkeep never rewrites stored data unless explicitly instructed.
+
+Operational meaning:
+
+- no automatic re-chunking.
+- no background migration.
+- no silent data transformation.
+
+Practical consequence:
+
+- chunker-default changes affect future writes, not previously stored payload layout.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for migration-boundary details.
+
 ## When to use coldkeep
 
 Good fit:

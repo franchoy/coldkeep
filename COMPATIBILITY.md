@@ -15,6 +15,7 @@ This contract is about:
 
 - restore correctness across chunker versions
 - chunker evolution expectations
+- explicit migration behavior boundaries
 - explicit non-guarantees to reduce ambiguity
 
 ## Guarantee 1: Restore Correctness Across Chunker Versions
@@ -43,6 +44,20 @@ Practical consequence:
 - A snapshot created before a chunker change remains restorable after the chunker change.
 - Snapshot restore remains metadata replay from the selected snapshot scope; it does not require re-chunking with the current default chunker.
 
+## Guarantee 3: No Automatic Data Migration
+
+Contract:
+
+- coldkeep does not automatically rewrite already stored logical-file payload mappings.
+- no automatic re-chunking is performed in the background when chunker defaults evolve.
+- no background migration process silently transforms persisted data layouts.
+- no silent data transformation is applied to stored content without explicit operator command intent.
+
+Practical consequence:
+
+- changing default chunker affects only future writes.
+- historical data remains as-written until an explicit, user-invoked workflow rewrites it.
+
 ## Chunker Evolution Model
 
 Current chunker versions include:
@@ -64,6 +79,7 @@ coldkeep does not guarantee:
 - identical dedup ratios across chunker versions
 - identical chunk counts across implementations
 - write-path performance parity across chunker versions
+- automatic in-place migration of historical data after chunker changes
 
 These are intentionally not compatibility requirements.
 

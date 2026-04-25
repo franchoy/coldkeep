@@ -241,6 +241,18 @@ Contract:
 - restore of snapshot content replays persisted logical-file chunk graphs and does not re-chunk data with the current default chunker.
 - therefore, chunker evolution for new writes does not invalidate previously created snapshots.
 
+### Guarantee 3: No Automatic Data Migration
+
+Write-path evolution is explicit and command-driven, not background-mutating.
+
+Contract:
+
+- coldkeep does not perform automatic re-chunking of committed logical files.
+- coldkeep does not run background migration that rewrites persisted chunk/block mappings.
+- stored payload representation is changed only by explicit operator-initiated commands that write new data.
+
+This preserves auditability and avoids implicit state drift caused by unattended migrations.
+
 Restore path behavior:
 
 - reconstruct into a temporary file
