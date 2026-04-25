@@ -148,7 +148,49 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: go test -race -count=1 -short ./tests/integration/...
+        run: |
+          set +e
+          diag_dir="${RUNNER_TEMP}/integration-diag"
+          mkdir -p "$diag_dir"
+          json_file="$diag_dir/integration-correctness-${{ matrix.codec }}.json"
+
+          go test -race -count=1 -short -json ./tests/integration/... | tee "$json_file"
+          status=${PIPESTATUS[0]}
+
+          if [ "$status" -ne 0 ]; then
+            echo "integration-correctness failed for codec=${{ matrix.codec }}"
+            first_test_fail=$(grep '"Action":"fail"' "$json_file" | grep '"Test":' | head -n 1 || true)
+            first_package_fail=$(grep '"Action":"fail"' "$json_file" | head -n 1 || true)
+
+            if [ -n "$first_test_fail" ]; then
+              echo "first failing test event: $first_test_fail"
+              fail_test_name=$(printf "%s\n" "$first_test_fail" | sed -n 's/.*"Test":"\([^"]*\)".*/\1/p')
+              if [ -n "$fail_test_name" ]; then
+                echo "first failing test name: $fail_test_name"
+                preceding_run=$(awk -v test_field="\"Test\":\"$fail_test_name\"" 'index($0, "\"Action\":\"run\"") && index($0, test_field) {line=$0} END {print line}' "$json_file")
+                if [ -n "$preceding_run" ]; then
+                  echo "preceding run event: $preceding_run"
+                fi
+              fi
+            elif [ -n "$first_package_fail" ]; then
+              echo "first package-level fail event: $first_package_fail"
+            else
+              echo "no explicit fail event found in JSON output; printing tail for context"
+            fi
+
+            echo "last 120 JSON lines:"
+            tail -n 120 "$json_file" || true
+          fi
+
+          exit "$status"
+
+      - name: Upload integration-correctness diagnostic JSON
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-correctness-diag-${{ matrix.codec }}
+          path: ${{ runner.temp }}/integration-diag/*.json
+          if-no-files-found: ignore
 
       - name: Run Phase 7 snapshot retention lifecycle gate
         env:
