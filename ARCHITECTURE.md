@@ -266,6 +266,16 @@ Contract:
 
 This supports long-lived repositories where chunker defaults change over time without breaking compatibility expectations.
 
+### Guarantee 5: Deterministic Chunking Per Version
+
+Determinism is defined within each chunker version contract, not across versions.
+
+Contract:
+
+- for the same chunker version and identical input bytes, chunk boundaries and chunk sequence are deterministic.
+- deterministic behavior is evaluated per version because algorithms intentionally differ across versions.
+- boundary differences between versions are expected and do not violate restore correctness or compatibility guarantees.
+
 Restore path behavior:
 
 - reconstruct into a temporary file

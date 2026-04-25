@@ -187,6 +187,19 @@ Operational meaning:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for cross-version coexistence details.
 
+## Guarantee 5: Deterministic Behavior
+
+Contract statement:
+
+- chunking is deterministic per chunker version.
+
+Operational meaning:
+
+- same input produces the same chunk sequence for the same chunker version.
+- different chunker versions may produce different chunk boundaries for the same input.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the full deterministic and cross-version behavior contract.
+
 ## When to use coldkeep
 
 Good fit:

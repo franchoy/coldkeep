@@ -72,6 +72,19 @@ Practical consequence:
 - mixed-version repositories are expected steady-state, not an exceptional mode.
 - changing default chunker does not require repository split or compatibility migration.
 
+## Guarantee 5: Deterministic Chunking Per Version
+
+Contract:
+
+- for a given chunker version and identical input bytes, chunking is deterministic.
+- same input yields the same chunk sequence for that version.
+- different chunker versions may produce different chunk boundaries for the same input.
+
+Practical consequence:
+
+- determinism guarantees reproducible behavior within a version.
+- cross-version boundary drift is expected and is not a compatibility failure.
+
 ## Chunker Evolution Model
 
 Current chunker versions include:
