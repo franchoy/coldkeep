@@ -1962,14 +1962,14 @@ func printStatsReport(r *maintenance.StatsResult) {
 	fmt.Printf("  Processing chunks:      %d\n", r.ProcessingChunks)
 	fmt.Printf("  Aborted chunks:         %d\n", r.AbortedChunks)
 	if len(r.ChunkCountsByVersion) > 0 {
-		fmt.Printf("  Chunks by version:\n")
+		fmt.Printf("Chunker Distribution:\n")
 		versions := make([]string, 0, len(r.ChunkCountsByVersion))
 		for version := range r.ChunkCountsByVersion {
 			versions = append(versions, version)
 		}
 		sort.Strings(versions)
 		for _, version := range versions {
-			fmt.Printf("    %s: %d\n", version, r.ChunkCountsByVersion[version])
+			fmt.Printf("  %-22s %d chunks (%.2f MB)\n", version+":", r.ChunkCountsByVersion[version], bytesToMB(r.ChunkBytesByVersion[version]))
 		}
 	}
 	fmt.Println("============================")

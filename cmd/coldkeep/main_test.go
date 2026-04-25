@@ -4799,6 +4799,10 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 				"v1-simple-rolling": 3,
 				"v2-fastcdc":        2,
 			},
+			ChunkBytesByVersion: map[string]int64{
+				"v1-simple-rolling": 30,
+				"v2-fastcdc":        20,
+			},
 			SnapshotRetention: maintenance.SnapshotRetentionStats{
 				CurrentOnlyLogicalFiles:        2,
 				CurrentOnlyBytes:               256,
@@ -4834,8 +4838,14 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing chunk_counts_by_version object in payload: %v", data)
 	}
+	chunkBytes, ok := data["chunk_bytes_by_version"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing chunk_bytes_by_version object in payload: %v", data)
+	}
 	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
 	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
+	assertJSONNumber(t, chunkBytes, "v1-simple-rolling", 30)
+	assertJSONNumber(t, chunkBytes, "v2-fastcdc", 20)
 	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
 	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
 	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
@@ -4853,6 +4863,10 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 				"v1-simple-rolling": 4,
 				"v2-fastcdc":        1,
 			},
+			ChunkBytesByVersion: map[string]int64{
+				"v1-simple-rolling": 2 * 1024 * 1024,
+				"v2-fastcdc":        1 * 1024 * 1024,
+			},
 			SnapshotRetention: maintenance.SnapshotRetentionStats{
 				CurrentOnlyLogicalFiles:        4,
 				CurrentOnlyBytes:               2 * 1024 * 1024,
@@ -4868,9 +4882,9 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 
 	for _, want := range []string{
 		"Snapshot retention:",
-		"Chunks by version:",
-		"v1-simple-rolling: 4",
-		"v2-fastcdc: 1",
+		"Chunker Distribution:",
+		"v1-simple-rolling:     4 chunks (2.00 MB)",
+		"v2-fastcdc:            1 chunks (1.00 MB)",
 		"Current-only logical files:    4 (2.00 MB)",
 		"Snapshot-referenced files:     3 (5.00 MB)",
 		"Snapshot-only logical files:   1 (1.00 MB)",

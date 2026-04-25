@@ -49,6 +49,7 @@ type StatsResult struct {
 	ProcessingChunks         int64                  `json:"processing_chunks"`
 	AbortedChunks            int64                  `json:"aborted_chunks"`
 	ChunkCountsByVersion     map[string]int64       `json:"chunk_counts_by_version"`
+	ChunkBytesByVersion      map[string]int64       `json:"chunk_bytes_by_version"`
 	TotalFileRetries         int64                  `json:"total_file_retries"`
 	AvgFileRetries           float64                `json:"avg_file_retries"`
 	MaxFileRetries           int64                  `json:"max_file_retries"`
@@ -212,7 +213,7 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	r.TotalChunks = r.CompletedChunks + r.ProcessingChunks + r.AbortedChunks
 
 	versionRows, err := dbconn.QueryContext(ctx, `
-		SELECT chunker_version, COUNT(*)
+		SELECT chunker_version, COUNT(*), COALESCE(SUM(size),0)
 		FROM chunk
 		GROUP BY chunker_version
 	`)
@@ -222,13 +223,16 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	defer func() { _ = versionRows.Close() }()
 
 	r.ChunkCountsByVersion = make(map[string]int64)
+	r.ChunkBytesByVersion = make(map[string]int64)
 	for versionRows.Next() {
 		var version string
 		var count int64
-		if err := versionRows.Scan(&version, &count); err != nil {
+		var bytes int64
+		if err := versionRows.Scan(&version, &count, &bytes); err != nil {
 			return nil, err
 		}
 		r.ChunkCountsByVersion[version] = count
+		r.ChunkBytesByVersion[version] = bytes
 	}
 	if err := versionRows.Err(); err != nil {
 		return nil, err

@@ -111,10 +111,19 @@ func TestRunStatsResultIncludesChunkCountsByVersion(t *testing.T) {
 	if stats.ChunkCountsByVersion == nil {
 		t.Fatal("expected chunk_counts_by_version map to be initialized")
 	}
+	if stats.ChunkBytesByVersion == nil {
+		t.Fatal("expected chunk_bytes_by_version map to be initialized")
+	}
 	if got := stats.ChunkCountsByVersion["v1-simple-rolling"]; got != 2 {
 		t.Fatalf("expected v1-simple-rolling count=2, got %d", got)
 	}
 	if got := stats.ChunkCountsByVersion["v2-fastcdc"]; got != 1 {
 		t.Fatalf("expected v2-fastcdc count=1, got %d", got)
+	}
+	if got := stats.ChunkBytesByVersion["v1-simple-rolling"]; got != 21 {
+		t.Fatalf("expected v1-simple-rolling bytes=21, got %d", got)
+	}
+	if got := stats.ChunkBytesByVersion["v2-fastcdc"]; got != 12 {
+		t.Fatalf("expected v2-fastcdc bytes=12, got %d", got)
 	}
 }
