@@ -310,6 +310,17 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		return GCResult{}, err
 	}
 
+	// Final cleanup pass: reclaim dead chunks from active (unsealed) containers.
+	// This ensures that accumulated dead chunks (live_ref_count = 0) from delete/restore
+	// loops don't linger indefinitely in the reusable active container.
+	// Dry-run skips this to avoid side effects.
+	if !dryRun {
+		err := cleanupDeadChunksFromActiveContainers(ctx, dbconn)
+		if err != nil {
+			return GCResult{}, fmt.Errorf("cleanup dead chunks from active containers: %w", err)
+		}
+	}
+
 	result.AffectedContainers = affectedContainers
 	return result, nil
 }
@@ -349,4 +360,63 @@ func containerHasRetainedChunks(ctx context.Context, q gcChunkQuerier, container
 		}
 	}
 	return false, rows.Err()
+}
+
+// cleanupDeadChunksFromActiveContainers removes chunk and blocks rows
+// where live_ref_count = 0 and pin_count = 0 from unsealed, non-quarantined containers.
+// This is the final cleanup pass to reclaim dead chunks that accumulated during
+// delete/restore cycles but couldn't be removed from sealed containers (since GC
+// only processes sealed containers). This ensures the reusable active container
+// doesn't accumulate unbounded dead metadata.
+func cleanupDeadChunksFromActiveContainers(ctx context.Context, dbconn *sql.DB) error {
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Find all unsealed, non-quarantined active containers
+	containerRows, err := tx.QueryContext(ctx, `
+		SELECT id FROM container
+		WHERE sealed = FALSE AND quarantine = FALSE
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = containerRows.Close() }()
+
+	var containerIDs []int64
+	for containerRows.Next() {
+		var id int64
+		if err := containerRows.Scan(&id); err != nil {
+			return err
+		}
+		containerIDs = append(containerIDs, id)
+	}
+	if err := containerRows.Err(); err != nil {
+		return err
+	}
+
+	// For each active container, clean up dead chunks
+	for _, containerID := range containerIDs {
+		// Delete blocks rows for dead chunks in this container
+		_, err := tx.ExecContext(ctx, `
+			WITH dead_blocks AS (
+				DELETE FROM blocks
+				WHERE container_id = $1
+				AND chunk_id IN (
+					SELECT id FROM chunk
+					WHERE live_ref_count = 0 AND pin_count = 0
+				)
+				RETURNING chunk_id
+			)
+			DELETE FROM chunk
+			WHERE id IN (SELECT chunk_id FROM dead_blocks)
+		`, containerID)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
