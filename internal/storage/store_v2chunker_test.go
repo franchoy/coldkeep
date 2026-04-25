@@ -394,3 +394,112 @@ func TestStoreResolvesChunkerOncePerOperation(t *testing.T) {
 		t.Fatalf("second restored content mismatch: original=%d bytes restored=%d bytes", len(v2Want), len(v2Got))
 	}
 }
+
+// TestCrossVersionDedupCompatibility stores a file with v1, switches to v2,
+// stores a similar file, and verifies the repository remains operational.
+//
+// This intentionally does not assert a strict dedup outcome because
+// cross-version chunk boundaries may differ by design.
+func TestCrossVersionDedupCompatibility(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	containersDir := t.TempDir()
+	dbconn := setupV2StoreDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+		Chunker:      nil,
+	}
+
+	if _, err := dbconn.Exec(
+		`UPDATE repository_config SET value = $1 WHERE key = 'default_chunker'`,
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("set repository default chunker to v1: %v", err)
+	}
+
+	basePattern := []byte("cross-version-dedup-compatibility-pattern-")
+	aData := make([]byte, fastcdc.AvgChunkSize*4+1500)
+	for i := range aData {
+		aData[i] = basePattern[i%len(basePattern)]
+	}
+	aPath := filepath.Join(t.TempDir(), "cross-version-a.bin")
+	if err := os.WriteFile(aPath, aData, 0o600); err != nil {
+		t.Fatalf("write file A: %v", err)
+	}
+	aResult, err := StoreFileWithStorageContextResult(sgctx, aPath)
+	if err != nil {
+		t.Fatalf("store file A with v1: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`UPDATE repository_config SET value = $1 WHERE key = 'default_chunker'`,
+		string(chunk.VersionV2FastCDC),
+	); err != nil {
+		t.Fatalf("set repository default chunker to v2: %v", err)
+	}
+
+	bData := append([]byte(nil), aData...)
+	// Introduce sparse deterministic perturbations so files are similar but not identical.
+	for i := 97; i < len(bData); i += 4096 {
+		bData[i] ^= 0x1
+	}
+	bPath := filepath.Join(t.TempDir(), "cross-version-b.bin")
+	if err := os.WriteFile(bPath, bData, 0o600); err != nil {
+		t.Fatalf("write file B: %v", err)
+	}
+	bResult, err := StoreFileWithStorageContextResult(sgctx, bPath)
+	if err != nil {
+		t.Fatalf("store file B with v2: %v", err)
+	}
+
+	aOut := filepath.Join(t.TempDir(), "cross-version-a-restored.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, aResult.FileID, aOut, containersDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore file A: %v", err)
+	}
+	aRestored, err := os.ReadFile(aOut)
+	if err != nil {
+		t.Fatalf("read restored file A: %v", err)
+	}
+	if !bytes.Equal(aData, aRestored) {
+		t.Fatalf("file A restore mismatch: original=%d bytes restored=%d bytes", len(aData), len(aRestored))
+	}
+
+	bOut := filepath.Join(t.TempDir(), "cross-version-b-restored.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, bResult.FileID, bOut, containersDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore file B: %v", err)
+	}
+	bRestored, err := os.ReadFile(bOut)
+	if err != nil {
+		t.Fatalf("read restored file B: %v", err)
+	}
+	if !bytes.Equal(bData, bRestored) {
+		t.Fatalf("file B restore mismatch: original=%d bytes restored=%d bytes", len(bData), len(bRestored))
+	}
+
+	if err := verify.VerifyFileStandardWithContainersDir(dbconn, int(aResult.FileID), containersDir); err != nil {
+		t.Fatalf("verify file A failed: %v", err)
+	}
+	if err := verify.VerifyFileStandardWithContainersDir(dbconn, int(bResult.FileID), containersDir); err != nil {
+		t.Fatalf("verify file B failed: %v", err)
+	}
+
+	// Compatibility-only observability: query shared chunks across A/B to prove
+	// the code path is exercised without constraining dedup outcomes.
+	var sharedChunkRows int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM file_chunk fa
+		JOIN file_chunk fb ON fb.chunk_id = fa.chunk_id
+		WHERE fa.logical_file_id = $1 AND fb.logical_file_id = $2`,
+		aResult.FileID,
+		bResult.FileID,
+	).Scan(&sharedChunkRows); err != nil {
+		t.Fatalf("count shared chunk rows across versions: %v", err)
+	}
+	if sharedChunkRows < 0 {
+		t.Fatalf("shared chunk row count must be non-negative, got %d", sharedChunkRows)
+	}
+}
