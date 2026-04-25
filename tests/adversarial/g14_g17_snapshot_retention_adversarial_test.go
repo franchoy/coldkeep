@@ -218,7 +218,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	var invalidLifecycleID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		VALUES ('g15-invalid-lifecycle.bin', 1, repeat('a', 64, 'v1-simple-rolling'), 'ABORTED', 0)
+		VALUES ('g15-invalid-lifecycle.bin', 1, repeat('a', 64), 'ABORTED', 0, 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&invalidLifecycleID); err != nil {
 		t.Fatalf("insert invalid lifecycle logical_file: %v", err)
@@ -234,7 +234,7 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	var missingGraphID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		VALUES ('g15-missing-graph.bin', 128, repeat('b', 64, 'v1-simple-rolling'), 'COMPLETED', 0)
+		VALUES ('g15-missing-graph.bin', 128, repeat('b', 64), 'COMPLETED', 0, 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&missingGraphID); err != nil {
 		t.Fatalf("insert missing graph logical_file: %v", err)
