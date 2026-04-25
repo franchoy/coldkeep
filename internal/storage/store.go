@@ -843,6 +843,15 @@ func assertLogicalFileVersionMatchesActive(insertedLogicalFileVersion string, ac
 	return nil
 }
 
+func assertChunkVersionMatchesActive(insertedChunkVersion string, activeVersion string) error {
+	insertedTrimmed := strings.TrimSpace(insertedChunkVersion)
+	activeTrimmed := strings.TrimSpace(activeVersion)
+	if insertedTrimmed != activeTrimmed {
+		return fmt.Errorf("chunk chunker_version mismatch: inserted=%q active=%q", insertedChunkVersion, activeVersion)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
@@ -1085,21 +1094,25 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 
 	// Insert chunk (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
+	var insertedChunkVersion string
 	insErr := tx.QueryRowContext(
 		ctx,
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
 				VALUES ($1, $2, $3, 0, $4)
 				ON CONFLICT (chunk_hash, size) DO NOTHING
-				RETURNING id`,
+				RETURNING id, chunker_version`,
 		chunkHash,
 		chunksize,
 		filestate.ChunkProcessing,
 		activeVersion,
-	).Scan(&chunkID)
+	).Scan(&chunkID, &insertedChunkVersion)
 
 	switch insErr {
 	case nil:
 		// We won: this chunk is new
+		if err := assertChunkVersionMatchesActive(insertedChunkVersion, activeVersion); err != nil {
+			return 0, "", false, err
+		}
 		chunkstatus = filestate.ChunkProcessing
 		isNew = true
 	case sql.ErrNoRows:

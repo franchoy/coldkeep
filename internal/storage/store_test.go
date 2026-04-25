@@ -230,6 +230,23 @@ func TestAssertLogicalFileVersionMatchesActiveAllowsMatch(t *testing.T) {
 	}
 }
 
+func TestAssertChunkVersionMatchesActiveDetectsDrift(t *testing.T) {
+	err := assertChunkVersionMatchesActive("v1-simple-rolling", "v2-fastcdc")
+	if err == nil {
+		t.Fatal("expected chunk version drift mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chunk chunker_version mismatch") {
+		t.Fatalf("expected mismatch error message, got: %v", err)
+	}
+}
+
+func TestAssertChunkVersionMatchesActiveAllowsMatch(t *testing.T) {
+	err := assertChunkVersionMatchesActive("v2-fastcdc", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("expected matching chunk versions to pass invariant, got: %v", err)
+	}
+}
+
 func (w *commitAckWriter) FinalizeContainer() error {
 	return nil
 }
