@@ -1648,7 +1648,7 @@ func TestRunConfigCommandGetJSON(t *testing.T) {
 	if got, _ := data["key"].(string); got != "default-chunker" {
 		t.Fatalf("key mismatch: payload=%v", payload)
 	}
-	if got, _ := data["value"].(string); got != string(chunk.DefaultChunkerVersion) {
+	if got, _ := data["value"].(string); got != string(chunk.VersionV2FastCDC) {
 		t.Fatalf("value mismatch: payload=%v", payload)
 	}
 }

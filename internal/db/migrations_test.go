@@ -164,8 +164,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
 		t.Fatalf("read repository default chunker: %v", err)
 	}
-	if configuredDefaultChunker != "v1-simple-rolling" {
-		t.Fatalf("expected repository default chunker=v1-simple-rolling, got %q", configuredDefaultChunker)
+	if configuredDefaultChunker != "v2-fastcdc" {
+		t.Fatalf("expected repository default chunker=v2-fastcdc on fresh install, got %q", configuredDefaultChunker)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -304,6 +304,14 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	}
 	if sqliteTestTableHasColumn(t, dbconn, "file_chunk", "chunker_version") {
 		t.Fatal("did not expect file_chunk.chunker_version in direct sqlite bootstrap")
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker in direct sqlite bootstrap: %v", err)
+	}
+	if configuredDefaultChunker != "v2-fastcdc" {
+		t.Fatalf("expected direct sqlite bootstrap default_chunker=v2-fastcdc, got %q", configuredDefaultChunker)
 	}
 }
 
@@ -578,6 +586,34 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	}
 	if postRerunRowCount != postRowCount {
 		t.Fatalf("snapshot_file rows changed after idempotent rerun: before=%d after=%d", postRowCount, postRerunRowCount)
+	}
+}
+
+func TestRunMigrationsPreservesExistingRepositoryDefaultChunker(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations first pass: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = 'v1-simple-rolling' WHERE key = 'default_chunker'`); err != nil {
+		t.Fatalf("set repository default chunker before rerun: %v", err)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations second pass: %v", err)
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker after rerun: %v", err)
+	}
+	if configuredDefaultChunker != "v1-simple-rolling" {
+		t.Fatalf("expected existing repository default chunker to remain unchanged, got %q", configuredDefaultChunker)
 	}
 }
 

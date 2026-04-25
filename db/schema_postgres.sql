@@ -1,5 +1,14 @@
 BEGIN;
 
+DO $$
+BEGIN
+  PERFORM set_config(
+    'coldkeep.migration_had_schema_version',
+    CASE WHEN to_regclass('public.schema_version') IS NULL THEN '0' ELSE '1' END,
+    true
+  );
+END $$;
+
 -- =========================
 -- Schema versioning
 -- =========================
@@ -423,14 +432,20 @@ ALTER TABLE chunk ALTER COLUMN chunker_version SET NOT NULL;
 UPDATE schema_version SET version = 10 WHERE version < 10;
 
 -- Schema version 11: repository-level defaults for write-time behavior.
--- Initial policy remains conservative: default_chunker=v1-simple-rolling.
+-- Fresh installs default to v2-fastcdc. Upgrades keep v1-simple-rolling.
 CREATE TABLE IF NOT EXISTS repository_config (
   key TEXT PRIMARY KEY CHECK (key <> ''),
   value TEXT NOT NULL CHECK (value <> '')
 );
 
 INSERT INTO repository_config(key, value)
-VALUES ('default_chunker', 'v1-simple-rolling')
+VALUES (
+  'default_chunker',
+  CASE
+    WHEN current_setting('coldkeep.migration_had_schema_version', true) = '0' THEN 'v2-fastcdc'
+    ELSE 'v1-simple-rolling'
+  END
+)
 ON CONFLICT (key) DO NOTHING;
 
 UPDATE schema_version SET version = 11 WHERE version < 11;

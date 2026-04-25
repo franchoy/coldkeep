@@ -217,9 +217,9 @@ func TestV2ChunkerVerifyPasses(t *testing.T) {
 	}
 }
 
-// TestStoreWithDefaultV1PersistsLogicalVersion verifies that with no chunker
-// override and no config switch, store uses the repository default v1 chunker.
-func TestStoreWithDefaultV1PersistsLogicalVersion(t *testing.T) {
+// TestStoreWithFreshDefaultV2PersistsLogicalVersion verifies that with no
+// chunker override and no config switch, a fresh repository defaults to v2.
+func TestStoreWithFreshDefaultV2PersistsLogicalVersion(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "plain")
 	containersDir := t.TempDir()
 	dbconn := setupV2StoreDB(t)
@@ -232,10 +232,10 @@ func TestStoreWithDefaultV1PersistsLogicalVersion(t *testing.T) {
 		Chunker:      nil,
 	}
 
-	inPath, _ := makeV2TestFile(t, "repo-default-v1-explicit.bin", fastcdc.AvgChunkSize*4+701)
+	inPath, _ := makeV2TestFile(t, "repo-default-v2-fresh-explicit.bin", fastcdc.AvgChunkSize*4+701)
 	result, err := StoreFileWithStorageContextResult(sgctx, inPath)
 	if err != nil {
-		t.Fatalf("store with default v1 chunker: %v", err)
+		t.Fatalf("store with fresh default v2 chunker: %v", err)
 	}
 
 	var logicalVersion string
@@ -246,8 +246,8 @@ func TestStoreWithDefaultV1PersistsLogicalVersion(t *testing.T) {
 		t.Fatalf("read logical_file.chunker_version: %v", err)
 	}
 
-	if logicalVersion != string(chunk.VersionV1SimpleRolling) {
-		t.Fatalf("logical_file.chunker_version: got %q want %q", logicalVersion, chunk.VersionV1SimpleRolling)
+	if logicalVersion != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("logical_file.chunker_version: got %q want %q", logicalVersion, chunk.VersionV2FastCDC)
 	}
 }
 

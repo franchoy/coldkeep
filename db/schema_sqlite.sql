@@ -91,8 +91,10 @@ CREATE TABLE IF NOT EXISTS repository_config (
   value TEXT NOT NULL CHECK (value != '')
 );
 
+-- Fresh v1.5+ installs default to v2-fastcdc. Upgrade paths are handled in
+-- internal/db/migrations.go to keep legacy repositories on v1 unless changed manually.
 INSERT OR IGNORE INTO repository_config(key, value)
-VALUES ('default_chunker', 'v1-simple-rolling');
+VALUES ('default_chunker', 'v2-fastcdc');
 
 CREATE TABLE IF NOT EXISTS blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
