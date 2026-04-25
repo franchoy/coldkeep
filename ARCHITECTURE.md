@@ -170,6 +170,15 @@ High-level flow:
 5. Persist logical recipe mapping (`logical_file`, `file_chunk`, `chunk`, `blocks`) transactionally.
 6. Commit only when metadata and durable bytes satisfy completion invariants.
 
+Non-obvious safety gate (important for future maintenance):
+
+- completed-file/chunk reuse is never accepted on content hash alone;
+- store runs structural and (mode-dependent) semantic replay validation before returning `AlreadyStored=true`;
+- if a claimed completed candidate fails validation, store marks it aborted, cleans stale recipe links, and reclaims to rebuild a fresh canonical recipe;
+- semantic reuse mode is controlled by `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off`, `suspicious`, `always`; default `suspicious`).
+
+This avoids hidden "magic reuse" behavior: reuse is explicit, gated, and fail-closed when integrity signals disagree.
+
 Store flow diagram:
 
 ```text
