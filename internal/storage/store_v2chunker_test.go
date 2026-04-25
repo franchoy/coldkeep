@@ -241,3 +241,98 @@ func TestStoreUsesRepositoryConfiguredDefaultChunker(t *testing.T) {
 		t.Fatalf("logical_file.chunker_version: got %q want %q", logicalVersion, chunk.VersionV2FastCDC)
 	}
 }
+
+// TestStoreResolvesChunkerOncePerOperation verifies that repository default
+// changes are picked up between store operations, while each operation keeps a
+// single resolved version for all rows it writes.
+func TestStoreResolvesChunkerOncePerOperation(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	containersDir := t.TempDir()
+	dbconn := setupV2StoreDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+		Chunker:      nil,
+	}
+
+	if _, err := dbconn.Exec(
+		`UPDATE repository_config SET value = $1 WHERE key = 'default_chunker'`,
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("set repository default chunker to v1: %v", err)
+	}
+
+	v1Path, _ := makeV2TestFile(t, "repo-default-v1.bin", fastcdc.AvgChunkSize*4+512)
+	v1Result, err := StoreFileWithStorageContextResult(sgctx, v1Path)
+	if err != nil {
+		t.Fatalf("store using repository default v1: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`UPDATE repository_config SET value = $1 WHERE key = 'default_chunker'`,
+		string(chunk.VersionV2FastCDC),
+	); err != nil {
+		t.Fatalf("set repository default chunker to v2: %v", err)
+	}
+
+	v2Path, _ := makeV2TestFile(t, "repo-default-v2-after-switch.bin", fastcdc.AvgChunkSize*4+513)
+	v2Result, err := StoreFileWithStorageContextResult(sgctx, v2Path)
+	if err != nil {
+		t.Fatalf("store using repository default v2: %v", err)
+	}
+
+	var logicalV1 string
+	if err := dbconn.QueryRow(
+		`SELECT chunker_version FROM logical_file WHERE id = $1`,
+		v1Result.FileID,
+	).Scan(&logicalV1); err != nil {
+		t.Fatalf("read first logical_file.chunker_version: %v", err)
+	}
+	if logicalV1 != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("first logical_file.chunker_version: got %q want %q", logicalV1, chunk.VersionV1SimpleRolling)
+	}
+
+	var logicalV2 string
+	if err := dbconn.QueryRow(
+		`SELECT chunker_version FROM logical_file WHERE id = $1`,
+		v2Result.FileID,
+	).Scan(&logicalV2); err != nil {
+		t.Fatalf("read second logical_file.chunker_version: %v", err)
+	}
+	if logicalV2 != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("second logical_file.chunker_version: got %q want %q", logicalV2, chunk.VersionV2FastCDC)
+	}
+
+	var v1ChunkMismatch int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2`,
+		v1Result.FileID,
+		string(chunk.VersionV1SimpleRolling),
+	).Scan(&v1ChunkMismatch); err != nil {
+		t.Fatalf("count v1 chunker_version mismatches: %v", err)
+	}
+	if v1ChunkMismatch != 0 {
+		t.Fatalf("expected all chunks for first store op to remain %q, mismatches=%d", chunk.VersionV1SimpleRolling, v1ChunkMismatch)
+	}
+
+	var v2ChunkMismatch int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2`,
+		v2Result.FileID,
+		string(chunk.VersionV2FastCDC),
+	).Scan(&v2ChunkMismatch); err != nil {
+		t.Fatalf("count v2 chunker_version mismatches: %v", err)
+	}
+	if v2ChunkMismatch != 0 {
+		t.Fatalf("expected all chunks for second store op to remain %q, mismatches=%d", chunk.VersionV2FastCDC, v2ChunkMismatch)
+	}
+}
