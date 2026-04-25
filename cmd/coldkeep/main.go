@@ -2411,6 +2411,7 @@ func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) err
 	fmt.Println("  Small modifications: v1 ~92-96% reuse, v2 ~94-98% reuse")
 	fmt.Println("  Shifted data:        v1 ~5-20% reuse,  v2 ~25-50% reuse")
 	fmt.Println("  The shifted-data gap is the key justification signal.")
+	fmt.Println("  FastCDC improves both dedup ratio and dedup stability over time.")
 
 	return nil
 }

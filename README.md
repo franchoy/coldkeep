@@ -281,6 +281,7 @@ Typical outcomes to expect (informational ranges):
   v2: ~25-50% reuse
 
 Interpretation note: the shifted-data reuse gap is the main justification signal for v2 FastCDC boundary stability improvements.
+Critical insight: this indicates FastCDC improves not only dedup ratio, but dedup stability over time under boundary-shifting changes.
 
 ## Batch Operations (v1.2)
 
