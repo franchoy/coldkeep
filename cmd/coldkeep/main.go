@@ -1928,6 +1928,10 @@ func bytesToMB(bytes int64) float64 {
 	return float64(bytes) / (1024 * 1024)
 }
 
+func bytesToGB(bytes int64) float64 {
+	return float64(bytes) / (1024 * 1024 * 1024)
+}
+
 func printStatsReport(r *maintenance.StatsResult) {
 	fmt.Println("\n====== coldkeep Stats ======")
 	fmt.Printf("Logical files (total):           %d\n", r.TotalFiles)
@@ -1969,7 +1973,18 @@ func printStatsReport(r *maintenance.StatsResult) {
 		}
 		sort.Strings(versions)
 		for _, version := range versions {
-			fmt.Printf("  %-22s %d chunks (%.2f MB)\n", version+":", r.ChunkCountsByVersion[version], bytesToMB(r.ChunkBytesByVersion[version]))
+			fmt.Printf("  %-22s %d chunks\n", version+":", r.ChunkCountsByVersion[version])
+		}
+	}
+	if len(r.ChunkBytesByVersion) > 0 {
+		fmt.Printf("Stored Data by Chunker:\n")
+		versions := make([]string, 0, len(r.ChunkBytesByVersion))
+		for version := range r.ChunkBytesByVersion {
+			versions = append(versions, version)
+		}
+		sort.Strings(versions)
+		for _, version := range versions {
+			fmt.Printf("  %-22s %.2f GB\n", version+":", bytesToGB(r.ChunkBytesByVersion[version]))
 		}
 	}
 	if len(r.LogicalFileCountsByVersion) > 0 {

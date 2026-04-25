@@ -4897,8 +4897,11 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	for _, want := range []string{
 		"Snapshot retention:",
 		"Chunker Distribution:",
-		"v1-simple-rolling:     4 chunks (2.00 MB)",
-		"v2-fastcdc:            1 chunks (1.00 MB)",
+		"v1-simple-rolling:     4 chunks",
+		"v2-fastcdc:            1 chunks",
+		"Stored Data by Chunker:",
+		"v1-simple-rolling:     0.00 GB",
+		"v2-fastcdc:            0.00 GB",
 		"Logical Files by Chunker:",
 		"v1-simple-rolling:     6 files",
 		"v2-fastcdc:            1 files",
