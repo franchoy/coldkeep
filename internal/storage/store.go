@@ -11,7 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1946,8 +1946,14 @@ func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
 }
 
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
-
-	workerCount := runtime.NumCPU()
+	// Default to a single worker for deterministic append ordering and safer
+	// container mutation semantics under mixed file sizes.
+	workerCount := 1
+	if configuredWorkers := strings.TrimSpace(os.Getenv("COLDKEEP_STORE_FOLDER_WORKERS")); configuredWorkers != "" {
+		if parsed, parseErr := strconv.Atoi(configuredWorkers); parseErr == nil && parsed > 0 {
+			workerCount = parsed
+		}
+	}
 	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
 		workerCount = 1
 	}
