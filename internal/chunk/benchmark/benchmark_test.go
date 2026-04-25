@@ -237,6 +237,93 @@ func TestExpectedBehaviorV2ReuseAfterShiftAtLeastV1(t *testing.T) {
 	}
 }
 
+func TestFastCDCBetterThanV1_SmallModifications(t *testing.T) {
+	base := GenerateStructuredLogData(9001, 18000)
+	modified := ModifyAtOffsets(base, []int{32 * 1024, 192 * 1024, 512 * 1024})
+
+	v1Base := RunChunker(simplecdc.New(), base)
+	v1Modified := RunChunker(simplecdc.New(), modified)
+	v2Base := RunChunker(fastcdc.Chunker{}, base)
+	v2Modified := RunChunker(fastcdc.Chunker{}, modified)
+
+	v1Reuse, err := CompareReuse(v1Base, v1Modified)
+	if err != nil {
+		t.Fatalf("CompareReuse v1: %v", err)
+	}
+	v2Reuse, err := CompareReuse(v2Base, v2Modified)
+	if err != nil {
+		t.Fatalf("CompareReuse v2: %v", err)
+	}
+
+	if v2Reuse.ReuseRatioPct < v1Reuse.ReuseRatioPct {
+		t.Fatalf("expected fastcdc reuse >= v1 reuse on small modifications: v1=%.2f v2=%.2f", v1Reuse.ReuseRatioPct, v2Reuse.ReuseRatioPct)
+	}
+}
+
+func TestFastCDCBetterThanV1_ShiftedData(t *testing.T) {
+	base := GenerateBase(4444, 2*1024*1024)
+	shifted := ShiftData(base, bytes.Repeat([]byte("shift-prefix|"), 512))
+
+	v1Base := RunChunker(simplecdc.New(), base)
+	v1Shifted := RunChunker(simplecdc.New(), shifted)
+	v2Base := RunChunker(fastcdc.Chunker{}, base)
+	v2Shifted := RunChunker(fastcdc.Chunker{}, shifted)
+
+	v1Stability, err := CompareBoundaryStability(v1Base, v1Shifted)
+	if err != nil {
+		t.Fatalf("CompareBoundaryStability v1: %v", err)
+	}
+	v2Stability, err := CompareBoundaryStability(v2Base, v2Shifted)
+	if err != nil {
+		t.Fatalf("CompareBoundaryStability v2: %v", err)
+	}
+
+	if v2Stability.ReuseAfterShiftPct < v1Stability.ReuseAfterShiftPct {
+		t.Fatalf("expected fastcdc reuse_after_shift >= v1 reuse_after_shift: v1=%.2f v2=%.2f", v1Stability.ReuseAfterShiftPct, v2Stability.ReuseAfterShiftPct)
+	}
+}
+
+func TestChunkerDeterminism(t *testing.T) {
+	data := GenerateBase(777, 3*1024*1024)
+	chunkers := []chunk.Chunker{simplecdc.New(), fastcdc.Chunker{}}
+
+	for _, c := range chunkers {
+		first := RunChunker(c, data)
+		second := RunChunker(c, data)
+
+		if first.Version != second.Version {
+			t.Fatalf("version mismatch for %q: first=%q second=%q", c.Version(), first.Version, second.Version)
+		}
+		if first.ChunkCount != second.ChunkCount {
+			t.Fatalf("chunk count drift for %q: first=%d second=%d", c.Version(), first.ChunkCount, second.ChunkCount)
+		}
+		if first.TotalSize != second.TotalSize {
+			t.Fatalf("total size drift for %q: first=%d second=%d", c.Version(), first.TotalSize, second.TotalSize)
+		}
+		if len(first.ChunkHashes) != len(second.ChunkHashes) {
+			t.Fatalf("hash count drift for %q: first=%d second=%d", c.Version(), len(first.ChunkHashes), len(second.ChunkHashes))
+		}
+		for i := range first.ChunkHashes {
+			if first.ChunkHashes[i] != second.ChunkHashes[i] {
+				t.Fatalf("chunk hash drift for %q at index %d: first=%q second=%q", c.Version(), i, first.ChunkHashes[i], second.ChunkHashes[i])
+			}
+		}
+	}
+}
+
+func TestChunkCoverage(t *testing.T) {
+	chunkers := []chunk.Chunker{simplecdc.New(), fastcdc.Chunker{}}
+
+	for _, dataset := range DefaultDatasets() {
+		for _, variant := range dataset.Variants() {
+			for _, c := range chunkers {
+				result := RunChunker(c, variant.Data)
+				assertCoverageInvariant(t, variant.Data, result)
+			}
+		}
+	}
+}
+
 func BenchmarkDefaultDatasets(b *testing.B) {
 	registry, err := chunk.NewDefaultRegistry()
 	if err != nil {
