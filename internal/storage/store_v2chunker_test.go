@@ -9,9 +9,12 @@ package storage
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
@@ -21,6 +24,20 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type singleChunkV2TestChunker struct{}
+
+func (singleChunkV2TestChunker) Version() chunk.Version {
+	return chunk.VersionV2FastCDC
+}
+
+func (singleChunkV2TestChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return []chunk.Result{{Data: data}}, nil
+}
 
 // setupV2StoreDB creates an in-memory SQLite DB with all migrations applied.
 func setupV2StoreDB(t *testing.T) *sql.DB {
@@ -501,5 +518,82 @@ func TestCrossVersionDedupCompatibility(t *testing.T) {
 	}
 	if sharedChunkRows < 0 {
 		t.Fatalf("shared chunk row count must be non-negative, got %d", sharedChunkRows)
+	}
+}
+
+func TestStoreRejectsCrossVersionChunkReuseWithoutMixingOneFile(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	containersDir := t.TempDir()
+	dbconn := setupV2StoreDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	payload := []byte("no-mixed-chunkers-within-one-file")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	inPath := filepath.Join(t.TempDir(), "cross-version-collision.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: containersDir,
+		Chunker:      singleChunkV2TestChunker{},
+	}
+
+	_, err := StoreFileWithStorageContextResult(sgctx, inPath)
+	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
+		t.Fatalf("expected cross-version chunk reuse rejection, got: %v", err)
+	}
+
+	var logicalID int64
+	var status string
+	if err := dbconn.QueryRow(
+		`SELECT id, status FROM logical_file WHERE file_hash = $1 AND total_size = $2`,
+		chunkHash,
+		int64(len(payload)),
+	).Scan(&logicalID, &status); err != nil {
+		t.Fatalf("read claimed logical_file row: %v", err)
+	}
+	if status != "ABORTED" {
+		t.Fatalf("expected failed store logical_file status ABORTED, got %q", status)
+	}
+
+	var linkedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, logicalID).Scan(&linkedRows); err != nil {
+		t.Fatalf("count file_chunk rows for failed logical file: %v", err)
+	}
+	if linkedRows != 0 {
+		t.Fatalf("expected no file_chunk rows for failed logical file, got %d", linkedRows)
+	}
+
+	var chunkRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, int64(len(payload))).Scan(&chunkRows); err != nil {
+		t.Fatalf("count chunk rows by dedup identity: %v", err)
+	}
+	if chunkRows != 1 {
+		t.Fatalf("expected dedup identity hash+size to remain one row, got %d", chunkRows)
+	}
+
+	var persistedVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, int64(len(payload))).Scan(&persistedVersion); err != nil {
+		t.Fatalf("read persisted chunk version: %v", err)
+	}
+	if persistedVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("expected existing chunk row version to remain %q, got %q", chunk.VersionV1SimpleRolling, persistedVersion)
 	}
 }
