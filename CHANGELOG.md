@@ -65,6 +65,76 @@ chunker evolution, restore semantics, and upgrade/config boundaries.
 
 ------------------------------------------------------------------------
 
+## [1.4.1] - 2026-04-21
+
+Recovery and release-readiness hardening patch.
+
+v1.4.1 does not change the v1.4 snapshot model. It hardens recovery behavior,
+snapshot capture safety under churn, and release-validation ergonomics.
+
+### Recovery hardening
+
+- Strict recovery now converges safely on a known edge case: preexisting
+  quarantined orphan container rows with stale size metadata are resynchronized
+  instead of forcing strict-recovery abort.
+- Quarantine metadata synchronization now aligns with physical file size when
+  containers are quarantined directly.
+- Strict recovery remains conservative and correctness-first, while reducing
+  unnecessary blocking for unrelated healthy data during restart.
+
+### Snapshot safety under churn
+
+- Snapshot source enumeration on PostgreSQL now uses stronger locking during
+  snapshot capture.
+- This reduces metadata-race risk during heavy create/remove churn.
+- The v1.4 contract is preserved: snapshots remain self-contained and
+  restore-safe.
+
+### Validation and adversarial coverage
+
+- Added adversarial coverage for preexisting quarantined-orphan
+  size-drift resynchronization behavior.
+- Updated validation-matrix evidence mapping so release evidence is tied more
+  explicitly to behavior contracts.
+
+### Documentation and release-readiness guidance
+
+- Pre-release guidance was clarified around prerequisites, storage cleanup, and
+  DB/storage alignment.
+- Contributor guidance now better separates first-contribution workflow from
+  full release-validation workflow.
+- Validation docs/scripts were aligned with clearer matrix title/wording.
+- Changelog, architecture, and overview docs were cross-linked more
+  consistently.
+
+### Local validation scope (v1.4.1)
+
+- quality-equivalent checks
+- validation-matrix audit
+- CI-enforcement local audit
+- package tests across plain and `aes-gcm`
+- smoke validation across both codecs
+- adversarial coverage reruns during hardening work
+
+### Correctness impact and non-changes
+
+Preserved from v1.4:
+
+- snapshots remain self-contained
+- restore remains deterministic and byte-identical
+- snapshot deletion remains metadata-only
+- GC safety model remains conservative
+- recovery remains corrective and correctness-first
+
+Not changed in v1.4.1:
+
+- no feature-surface expansion
+- no snapshot-lineage semantic change
+- no restore dependency model change
+- no retention/GC contract relaxation
+
+------------------------------------------------------------------------
+
 ## [1.4.0] - 2026-04-19
 
 Snapshot clarity and release hardening milestone.
