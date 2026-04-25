@@ -1675,7 +1675,7 @@ func TestRunConfigCommandSetWarnsOnlyOnActualSwitch(t *testing.T) {
 	switchOutput := captureStdout(t, func() {
 		err := runConfigCommand(parsedCommandLine{
 			method:      "config",
-			positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV1SimpleRolling)},
 		}, outputModeText)
 		if err != nil {
 			t.Fatalf("runConfigCommand set returned error: %v", err)
@@ -1691,7 +1691,7 @@ func TestRunConfigCommandSetWarnsOnlyOnActualSwitch(t *testing.T) {
 	noSwitchOutput := captureStdout(t, func() {
 		err := runConfigCommand(parsedCommandLine{
 			method:      "config",
-			positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV1SimpleRolling)},
 		}, outputModeText)
 		if err != nil {
 			t.Fatalf("runConfigCommand set same value returned error: %v", err)

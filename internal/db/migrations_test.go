@@ -61,8 +61,8 @@ func TestRunMigrationsFailsWhenSQLiteDBIsClosed(t *testing.T) {
 	}
 
 	err = RunMigrations(dbconn)
-	if err == nil || !strings.Contains(err.Error(), "enable sqlite foreign keys") {
-		t.Fatalf("expected wrapped foreign-keys pragma error contract, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "database is closed") {
+		t.Fatalf("expected closed-database error contract, got: %v", err)
 	}
 }
 

@@ -910,8 +910,8 @@ func TestStoreFileDefaultChunkerPersistsLogicalFileVersion(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, result.FileID).Scan(&logicalFileVersion); err != nil {
 		t.Fatalf("read logical_file.chunker_version: %v", err)
 	}
-	if logicalFileVersion != "v1-simple-rolling" {
-		t.Fatalf("expected logical_file.chunker_version=v1-simple-rolling, got %q", logicalFileVersion)
+	if logicalFileVersion != "v2-fastcdc" {
+		t.Fatalf("expected logical_file.chunker_version=v2-fastcdc, got %q", logicalFileVersion)
 	}
 }
 
@@ -968,17 +968,17 @@ func TestStoreFileDefaultChunkerPersistsChunkVersion(t *testing.T) {
 		`SELECT COUNT(*)
 		 FROM chunk c
 		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
-		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> 'v1-simple-rolling'`,
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> 'v2-fastcdc'`,
 		result.FileID,
 	).Scan(&nonDefaultCount); err != nil {
 		t.Fatalf("count non-default chunk versions: %v", err)
 	}
 	if nonDefaultCount != 0 {
-		t.Fatalf("expected all new linked chunk rows to persist chunker_version=v1-simple-rolling, mismatches=%d", nonDefaultCount)
+		t.Fatalf("expected all new linked chunk rows to persist chunker_version=v2-fastcdc, mismatches=%d", nonDefaultCount)
 	}
 }
 
-func TestStoreFileReusedChunkDoesNotRequireVersionMatchInLookup(t *testing.T) {
+func TestStoreFileReusedChunkRejectsCrossVersionReuse(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -1036,8 +1036,9 @@ func TestStoreFileReusedChunkDoesNotRequireVersionMatchInLookup(t *testing.T) {
 	}
 
 	sgctxB := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: overrideChunker}
-	if _, err := StoreFileWithStorageContextAndCodecResult(sgctxB, pathB, codec); err != nil {
-		t.Fatalf("store second file with override version: %v", err)
+	_, err = StoreFileWithStorageContextAndCodecResult(sgctxB, pathB, codec)
+	if err == nil || !strings.Contains(err.Error(), "cross-version chunk reuse rejected") {
+		t.Fatalf("expected cross-version reuse rejection, got: %v", err)
 	}
 
 	var sharedIdentityRows int
@@ -1052,8 +1053,8 @@ func TestStoreFileReusedChunkDoesNotRequireVersionMatchInLookup(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
 		t.Fatalf("count shared chunk file references: %v", err)
 	}
-	if sharedChunkRefCount < 2 {
-		t.Fatalf("expected reused shared chunk to be referenced by both files, got %d references", sharedChunkRefCount)
+	if sharedChunkRefCount != 1 {
+		t.Fatalf("expected shared chunk to remain referenced only by first file after rejection, got %d references", sharedChunkRefCount)
 	}
 }
 
