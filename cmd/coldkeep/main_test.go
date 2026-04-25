@@ -1412,6 +1412,9 @@ func TestRunBenchmarkCommandTextOutputIncludesRows(t *testing.T) {
 	if !strings.Contains(output, "reuse-after-small-edit") {
 		t.Fatalf("expected metric in text output, got=%q", output)
 	}
+	if !strings.Contains(output, "Typical outcomes") {
+		t.Fatalf("expected interpretation guidance in text output, got=%q", output)
+	}
 }
 
 func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {

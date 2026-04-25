@@ -265,6 +265,23 @@ coldkeep simulate store-folder ./data
 coldkeep simulate store file.txt --output json
 ```
 
+Chunker benchmark and interpretation:
+
+```bash
+coldkeep benchmark chunkers
+```
+
+Typical outcomes to expect (informational ranges):
+
+- Small modifications:
+  v1: ~92-96% reuse
+  v2: ~94-98% reuse
+- Shifted data:
+  v1: ~5-20% reuse
+  v2: ~25-50% reuse
+
+Interpretation note: the shifted-data reuse gap is the main justification signal for v2 FastCDC boundary stability improvements.
+
 ## Batch Operations (v1.2)
 
 Batch restore/remove/repair extends the automation contract with deterministic orchestration and invariant-aware reporting.
