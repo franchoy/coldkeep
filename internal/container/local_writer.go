@@ -151,7 +151,22 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	// reuse an old block_offset and overlap payloads.
 	var dbCurrentSize int64
 	if err := tx.QueryRow(`SELECT current_size FROM container WHERE id = $1`, w.activeID).Scan(&dbCurrentSize); err != nil {
-		return LocalPlacement{}, fmt.Errorf("query current size for active container %d: %w", w.activeID, err)
+		if err != sql.ErrNoRows {
+			return LocalPlacement{}, fmt.Errorf("query current size for active container %d: %w", w.activeID, err)
+		}
+		// Container was externally removed (e.g. fully-dead GC cleanup while this writer
+		// held a stale reference). Reset active state and recycle to a new container.
+		// Do NOT set rotated=true: there is no previous container to seal.
+		w.clearActive()
+		if err := w.ensureActive(tx); err != nil {
+			return LocalPlacement{}, fmt.Errorf("ensure active container after external removal: %w", err)
+		}
+		if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
+			return LocalPlacement{}, err
+		}
+		if err := tx.QueryRow(`SELECT current_size FROM container WHERE id = $1`, w.activeID).Scan(&dbCurrentSize); err != nil {
+			return LocalPlacement{}, fmt.Errorf("query current size for recycled active container %d: %w", w.activeID, err)
+		}
 	}
 	if dbCurrentSize < ContainerHdrLen {
 		dbCurrentSize = ContainerHdrLen
