@@ -210,3 +210,175 @@ func TestRunStatsResultBucketsUnknownChunkerMetadata(t *testing.T) {
 		t.Fatalf("expected active write chunker=unknown, got %q", got)
 	}
 }
+
+func TestRunStatsResultPureV1RepositoryReportsOnlyV1(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
+		 ('lf-v1-a', 101, 'lf-v1-a-hash', 'COMPLETED', 'v1-simple-rolling'),
+		 ('lf-v1-b', 102, 'lf-v1-b-hash', 'COMPLETED', 'v1-simple-rolling')`,
+	); err != nil {
+		t.Fatalf("insert logical_file rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
+		 ('v1-only-a', 10, 'COMPLETED', 0, 'v1-simple-rolling'),
+		 ('v1-only-b', 11, 'PROCESSING', 0, 'v1-simple-rolling')`,
+	); err != nil {
+		t.Fatalf("insert chunk rows: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	if got := stats.ChunkCountsByVersion["v1-simple-rolling"]; got != 2 {
+		t.Fatalf("expected v1-only chunk count=2, got %d", got)
+	}
+	if got := stats.LogicalFileCountsByVersion["v1-simple-rolling"]; got != 2 {
+		t.Fatalf("expected v1-only logical file count=2, got %d", got)
+	}
+	if _, exists := stats.ChunkCountsByVersion["v2-fastcdc"]; exists {
+		t.Fatalf("expected v2-fastcdc chunk bucket to be absent in pure v1 repo, got map=%v", stats.ChunkCountsByVersion)
+	}
+	if _, exists := stats.LogicalFileCountsByVersion["v2-fastcdc"]; exists {
+		t.Fatalf("expected v2-fastcdc logical file bucket to be absent in pure v1 repo, got map=%v", stats.LogicalFileCountsByVersion)
+	}
+}
+
+func TestRunStatsResultPureV2RepositoryReportsOnlyV2(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
+		 ('lf-v2-a', 201, 'lf-v2-a-hash', 'COMPLETED', 'v2-fastcdc'),
+		 ('lf-v2-b', 202, 'lf-v2-b-hash', 'COMPLETED', 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert logical_file rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
+		 ('v2-only-a', 20, 'COMPLETED', 0, 'v2-fastcdc'),
+		 ('v2-only-b', 21, 'PROCESSING', 0, 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert chunk rows: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	if got := stats.ChunkCountsByVersion["v2-fastcdc"]; got != 2 {
+		t.Fatalf("expected v2-only chunk count=2, got %d", got)
+	}
+	if got := stats.LogicalFileCountsByVersion["v2-fastcdc"]; got != 2 {
+		t.Fatalf("expected v2-only logical file count=2, got %d", got)
+	}
+	if _, exists := stats.ChunkCountsByVersion["v1-simple-rolling"]; exists {
+		t.Fatalf("expected v1-simple-rolling chunk bucket to be absent in pure v2 repo, got map=%v", stats.ChunkCountsByVersion)
+	}
+	if _, exists := stats.LogicalFileCountsByVersion["v1-simple-rolling"]; exists {
+		t.Fatalf("expected v1-simple-rolling logical file bucket to be absent in pure v2 repo, got map=%v", stats.LogicalFileCountsByVersion)
+	}
+}
+
+func TestRunStatsResultMixedRepositoryReportsBothVersions(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
+		 ('lf-v1-a', 101, 'lf-v1-a-hash', 'COMPLETED', 'v1-simple-rolling'),
+		 ('lf-v2-a', 201, 'lf-v2-a-hash', 'COMPLETED', 'v2-fastcdc'),
+		 ('lf-v2-b', 202, 'lf-v2-b-hash', 'COMPLETED', 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert logical_file rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
+		 ('mixed-v1-a', 10, 'COMPLETED', 0, 'v1-simple-rolling'),
+		 ('mixed-v1-b', 11, 'PROCESSING', 0, 'v1-simple-rolling'),
+		 ('mixed-v2-a', 20, 'COMPLETED', 0, 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert chunk rows: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	if got := stats.ChunkCountsByVersion["v1-simple-rolling"]; got != 2 {
+		t.Fatalf("expected mixed v1 chunk count=2, got %d", got)
+	}
+	if got := stats.ChunkCountsByVersion["v2-fastcdc"]; got != 1 {
+		t.Fatalf("expected mixed v2 chunk count=1, got %d", got)
+	}
+	if got := stats.LogicalFileCountsByVersion["v1-simple-rolling"]; got != 1 {
+		t.Fatalf("expected mixed v1 logical file count=1, got %d", got)
+	}
+	if got := stats.LogicalFileCountsByVersion["v2-fastcdc"]; got != 2 {
+		t.Fatalf("expected mixed v2 logical file count=2, got %d", got)
+	}
+}
+
+func TestRunStatsResultVersionTotalsMatchDatabaseReality(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES
+		 ('lf-v1-a', 101, 'lf-v1-a-hash', 'COMPLETED', 'v1-simple-rolling'),
+		 ('lf-v1-b', 102, 'lf-v1-b-hash', 'COMPLETED', 'v1-simple-rolling'),
+		 ('lf-v2-a', 201, 'lf-v2-a-hash', 'COMPLETED', 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert logical_file rows: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES
+		 ('totals-v1-a', 10, 'COMPLETED', 0, 'v1-simple-rolling'),
+		 ('totals-v1-b', 11, 'PROCESSING', 0, 'v1-simple-rolling'),
+		 ('totals-v2-a', 20, 'ABORTED', 0, 'v2-fastcdc')`,
+	); err != nil {
+		t.Fatalf("insert chunk rows: %v", err)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+
+	var dbChunkCount int64
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunk`).Scan(&dbChunkCount); err != nil {
+		t.Fatalf("query total chunk count: %v", err)
+	}
+	var dbChunkBytes int64
+	if err := dbconn.QueryRowContext(ctx, `SELECT COALESCE(SUM(size),0) FROM chunk`).Scan(&dbChunkBytes); err != nil {
+		t.Fatalf("query total chunk bytes: %v", err)
+	}
+
+	var statsChunkCount int64
+	for _, c := range stats.ChunkCountsByVersion {
+		statsChunkCount += c
+	}
+	if statsChunkCount != dbChunkCount {
+		t.Fatalf("chunk count totals mismatch: stats=%d db=%d map=%v", statsChunkCount, dbChunkCount, stats.ChunkCountsByVersion)
+	}
+
+	var statsChunkBytes int64
+	for _, b := range stats.ChunkBytesByVersion {
+		statsChunkBytes += b
+	}
+	if statsChunkBytes != dbChunkBytes {
+		t.Fatalf("chunk byte totals mismatch: stats=%d db=%d map=%v", statsChunkBytes, dbChunkBytes, stats.ChunkBytesByVersion)
+	}
+}
