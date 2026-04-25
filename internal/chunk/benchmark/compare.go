@@ -25,19 +25,19 @@ func CompareRuns(base, candidate RunResult) (Comparison, error) {
 	if base.DatasetName != candidate.DatasetName {
 		return Comparison{}, fmt.Errorf("cannot compare different datasets: %q vs %q", base.DatasetName, candidate.DatasetName)
 	}
-	if base.Chunker != candidate.Chunker {
-		return Comparison{}, fmt.Errorf("cannot compare different chunkers: %q vs %q", base.Chunker, candidate.Chunker)
+	if base.Version != candidate.Version {
+		return Comparison{}, fmt.Errorf("cannot compare different chunkers: %q vs %q", base.Version, candidate.Version)
 	}
 
 	comparison := Comparison{
 		DatasetName:           base.DatasetName,
-		Chunker:               string(base.Chunker),
+		Chunker:               string(base.Version),
 		BaseVariant:           base.VariantName,
 		CandidateVariant:      candidate.VariantName,
 		BaseChunkCount:        base.ChunkCount,
 		CandidateChunkCount:   candidate.ChunkCount,
-		BaseTotalBytes:        base.TotalBytes,
-		CandidateTotalBytes:   candidate.TotalBytes,
+		BaseTotalBytes:        base.TotalSize,
+		CandidateTotalBytes:   candidate.TotalSize,
 		BaseAvgChunkSize:      base.AvgChunkSize,
 		CandidateAvgChunkSize: candidate.AvgChunkSize,
 	}

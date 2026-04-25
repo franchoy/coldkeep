@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 )
 
 func TestGenerateBaseDeterministic(t *testing.T) {
@@ -73,6 +74,33 @@ func TestDefaultDatasetsExposeRequestedCorpus(t *testing.T) {
 	}
 }
 
+func TestRunChunkerReturnsDeterministicGenericResult(t *testing.T) {
+	data := GenerateBase(1234, 256*1024)
+	chunker := fastcdc.Chunker{}
+
+	first := RunChunker(chunker, data)
+	second := RunChunker(chunker, data)
+
+	if first.Version != chunk.VersionV2FastCDC {
+		t.Fatalf("unexpected version: got=%q want=%q", first.Version, chunk.VersionV2FastCDC)
+	}
+	if first.ChunkCount == 0 {
+		t.Fatal("expected non-zero chunk count")
+	}
+	if first.TotalSize != int64(len(data)) {
+		t.Fatalf("unexpected total size: got=%d want=%d", first.TotalSize, len(data))
+	}
+	if len(first.ChunkHashes) != first.ChunkCount {
+		t.Fatalf("chunk hash count mismatch: got=%d want=%d", len(first.ChunkHashes), first.ChunkCount)
+	}
+	if len(first.Chunks) != first.ChunkCount {
+		t.Fatalf("chunk record count mismatch: got=%d want=%d", len(first.Chunks), first.ChunkCount)
+	}
+	if !bytes.Equal([]byte(joinHashes(first.ChunkHashes)), []byte(joinHashes(second.ChunkHashes))) {
+		t.Fatal("expected deterministic chunk hashes for repeated runs")
+	}
+}
+
 func BenchmarkDefaultDatasets(b *testing.B) {
 	registry, err := chunk.NewDefaultRegistry()
 	if err != nil {
@@ -105,7 +133,7 @@ func BenchmarkDefaultDatasets(b *testing.B) {
 						b.Fatalf("unexpected run count: got=%d want=%d", len(runs), 1+len(dataset.Mutations))
 					}
 					for _, run := range runs {
-						if run.TotalBytes == 0 {
+						if run.TotalSize == 0 {
 							b.Fatalf("unexpected zero-byte run for %s/%s", run.DatasetName, run.VariantName)
 						}
 					}
@@ -117,18 +145,29 @@ func BenchmarkDefaultDatasets(b *testing.B) {
 
 func TestCompareRunsRejectsMismatchedInputs(t *testing.T) {
 	_, err := CompareRuns(
-		RunResult{DatasetName: "a", Chunker: chunk.VersionV1SimpleRolling},
-		RunResult{DatasetName: "b", Chunker: chunk.VersionV1SimpleRolling},
+		RunResult{DatasetName: "a", Version: chunk.VersionV1SimpleRolling},
+		RunResult{DatasetName: "b", Version: chunk.VersionV1SimpleRolling},
 	)
 	if err == nil {
 		t.Fatal("expected dataset mismatch error")
 	}
 
 	_, err = CompareRuns(
-		RunResult{DatasetName: "same", Chunker: chunk.VersionV1SimpleRolling},
-		RunResult{DatasetName: "same", Chunker: chunk.VersionV2FastCDC},
+		RunResult{DatasetName: "same", Version: chunk.VersionV1SimpleRolling},
+		RunResult{DatasetName: "same", Version: chunk.VersionV2FastCDC},
 	)
 	if err == nil {
 		t.Fatal("expected chunker mismatch error")
 	}
+}
+
+func joinHashes(hashes []string) string {
+	if len(hashes) == 0 {
+		return ""
+	}
+	joined := hashes[0]
+	for _, hash := range hashes[1:] {
+		joined += "," + hash
+	}
+	return joined
 }
