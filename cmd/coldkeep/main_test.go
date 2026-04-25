@@ -983,6 +983,26 @@ func TestRunRestoreCommandStoredPathRejectsInvalidModeClassifiesAsUsage(t *testi
 	}
 }
 
+func TestRunRestoreCommandInvalidFileIDIncludesDidYouMeanHint(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: []string{"hello.txt", "./out"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected usage error for non-numeric restore target")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if !strings.Contains(err.Error(), "Invalid fileID: hello.txt") {
+		t.Fatalf("expected invalid fileID in error message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Did you mean: coldkeep restore --stored-path <path>") {
+		t.Fatalf("expected did-you-mean restore hint in error message, got: %v", err)
+	}
+}
+
 func TestRunRestoreCommandStoredPathRequiresDestinationForPrefixMode(t *testing.T) {
 	err := runRestoreCommand(parsedCommandLine{
 		method:      "restore",

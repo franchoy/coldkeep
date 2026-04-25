@@ -1005,7 +1005,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		target := strings.TrimSpace(targetArgs[0])
 		id, parseErr := strconv.ParseInt(target, 10, 64)
 		if parseErr != nil || id <= 0 {
-			return usageErrorf("Invalid fileID: %s (restore expects numeric logical file IDs; for path-based restore use --stored-path)", targetArgs[0])
+			return usageErrorf("Invalid fileID: %s (restore expects numeric logical file IDs; for path-based restore use --stored-path)\nDid you mean: coldkeep restore --stored-path <path> --destination <outputPath> --mode override", targetArgs[0])
 		}
 	}
 
