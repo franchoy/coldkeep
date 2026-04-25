@@ -1550,17 +1550,12 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// The logical_file claim happens before ChunkFile() so the store path preserves
 	// its existing concurrency and recovery semantics, but the version source is the
 	// same resolved chunker used to produce the chunk list.
-	resolvedChunker := sgctx.Chunker
-	if resolvedChunker == nil {
-		resolvedChunker, err = resolveConfiguredChunker(sgctx.DB)
-		if err != nil {
-			return StoreFileResult{}, err
-		}
-	}
-
-	storeService := NewStoreService(NewRepository(sgctx.DB), resolvedChunker)
+	storeService := NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker)
 	dbconn := storeService.Repository().DB()
-	activeChunker := storeService.ResolveActiveChunker()
+	activeChunker, err := storeService.ResolveActiveChunker()
+	if err != nil {
+		return StoreFileResult{}, err
+	}
 	effectiveChunker := activeChunker.Chunker
 	activeVersion := activeChunker.Version
 	if strings.TrimSpace(string(activeVersion)) == "" {

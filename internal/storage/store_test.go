@@ -125,18 +125,15 @@ func (c fixedBoundaryChunker) ChunkFile(path string) ([]chunk.Result, error) {
 
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	service := NewStoreService(nil, nil)
-	if service.ActiveChunker() == nil {
-		t.Fatal("expected non-nil active chunker")
+	resolved, err := service.ResolveActiveChunker()
+	if err != nil {
+		t.Fatalf("ResolveActiveChunker: %v", err)
 	}
-	resolved := service.ResolveActiveChunker()
 	if resolved.Chunker == nil {
 		t.Fatal("expected resolved chunker to be non-nil")
 	}
 
 	defaultVersion := chunk.DefaultRegistry().DefaultVersion()
-	if service.ActiveChunkerVersion() != defaultVersion {
-		t.Fatalf("unexpected default active chunker version: got=%q want=%q", service.ActiveChunkerVersion(), defaultVersion)
-	}
 	if resolved.Version != defaultVersion {
 		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, defaultVersion)
 	}
@@ -154,11 +151,10 @@ func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 		version:  customChunkerVersion,
 	})
 
-	if service.ActiveChunkerVersion() != customChunkerVersion {
-		t.Fatalf("unexpected active chunker version: got=%q want=%q", service.ActiveChunkerVersion(), customChunkerVersion)
+	resolved, err := service.ResolveActiveChunker()
+	if err != nil {
+		t.Fatalf("ResolveActiveChunker: %v", err)
 	}
-
-	resolved := service.ResolveActiveChunker()
 	if resolved.Version != customChunkerVersion {
 		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, customChunkerVersion)
 	}
@@ -167,7 +163,7 @@ func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	}
 }
 
-func TestResolveConfiguredChunkerUsesRepositoryDefault(t *testing.T) {
+func TestStoreServiceResolveActiveChunkerUsesRepositoryDefault(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -182,16 +178,17 @@ func TestResolveConfiguredChunkerUsesRepositoryDefault(t *testing.T) {
 		t.Fatalf("set repository default chunker to v2: %v", err)
 	}
 
-	resolved, err := resolveConfiguredChunker(dbconn)
+	service := NewStoreService(NewRepository(dbconn), nil)
+	resolved, err := service.ResolveActiveChunker()
 	if err != nil {
-		t.Fatalf("resolve configured chunker: %v", err)
+		t.Fatalf("ResolveActiveChunker: %v", err)
 	}
-	if got, want := resolved.Version(), chunk.VersionV2FastCDC; got != want {
+	if got, want := resolved.Version, chunk.VersionV2FastCDC; got != want {
 		t.Fatalf("resolved version mismatch: got %q want %q", got, want)
 	}
 }
 
-func TestResolveConfiguredChunkerFallsBackWhenConfigRowMissing(t *testing.T) {
+func TestStoreServiceResolveActiveChunkerFallsBackWhenConfigRowMissing(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -206,11 +203,12 @@ func TestResolveConfiguredChunkerFallsBackWhenConfigRowMissing(t *testing.T) {
 		t.Fatalf("delete repository default row: %v", err)
 	}
 
-	resolved, err := resolveConfiguredChunker(dbconn)
+	service := NewStoreService(NewRepository(dbconn), nil)
+	resolved, err := service.ResolveActiveChunker()
 	if err != nil {
-		t.Fatalf("resolve configured chunker fallback: %v", err)
+		t.Fatalf("ResolveActiveChunker: %v", err)
 	}
-	if got, want := resolved.Version(), chunk.DefaultChunkerVersion; got != want {
+	if got, want := resolved.Version, chunk.DefaultChunkerVersion; got != want {
 		t.Fatalf("fallback version mismatch: got %q want %q", got, want)
 	}
 }

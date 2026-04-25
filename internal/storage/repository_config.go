@@ -9,6 +9,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 )
 
+const repositoryDefaultChunkerKey = "default_chunker"
+
 // GetDefaultChunkerVersion returns the repository-level default chunker version
 // used for new writes.
 //
