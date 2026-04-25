@@ -113,7 +113,7 @@ Documentation is split into:
 - [README.md](README.md) for overview, quickstart, and CLI usage
 - [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model, invariants, lifecycle, and trust boundary
 - [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
-- [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow and local CI guidance
+- [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, local CI guidance, and stats benchmark commands for observability-sensitive changes
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
@@ -184,6 +184,7 @@ workflow below. Both are valid and both are used by contributors.
 PR author tip: use the PR template at [`.github/pull_request_template.md`](.github/pull_request_template.md)
 to summarize invariants and lifecycle-semantics impact for reviewers.
 For a contributor-oriented local CI path before that, see [CONTRIBUTING.md](CONTRIBUTING.md).
+If your change touches `coldkeep stats` or stats query shape, the same guide also includes a short stats benchmarking section with small/medium/large benchmark commands.
 
 ### Approach A: Docker runner
 
