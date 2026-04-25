@@ -200,6 +200,23 @@ Operational meaning:
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the full deterministic and cross-version behavior contract.
 
+## Guarantee 6: Forward Compatibility
+
+Contract statement:
+
+- unknown future chunker versions do not prevent restore.
+
+Operational meaning:
+
+- restore uses stored bytes and persisted mappings, not runtime chunker logic.
+- unknown version metadata is informational provenance metadata, not a blocking runtime dependency.
+
+Implementation boundary:
+
+- metadata must still be well-formed; malformed/empty version metadata is treated as integrity error.
+
+See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed forward-compatibility scope.
+
 ## When to use coldkeep
 
 Good fit:

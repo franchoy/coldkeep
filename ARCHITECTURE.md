@@ -276,6 +276,18 @@ Contract:
 - deterministic behavior is evaluated per version because algorithms intentionally differ across versions.
 - boundary differences between versions are expected and do not violate restore correctness or compatibility guarantees.
 
+### Guarantee 6: Forward-Compatible Chunker Metadata Handling
+
+Forward compatibility is achieved by recipe-driven restore and metadata-sanity gates.
+
+Contract:
+
+- restore does not execute chunker algorithms to reconstruct stored data; it replays persisted chunk bytes and mappings.
+- well-formed but unknown chunker-version labels are tolerated as informational metadata.
+- malformed or empty chunker-version metadata is rejected as repository integrity failure.
+
+This allows future chunker-version labels to coexist with restore correctness while preserving strict metadata sanity checks.
+
 Restore path behavior:
 
 - reconstruct into a temporary file

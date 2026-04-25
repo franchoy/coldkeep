@@ -85,6 +85,19 @@ Practical consequence:
 - determinism guarantees reproducible behavior within a version.
 - cross-version boundary drift is expected and is not a compatibility failure.
 
+## Guarantee 6: Forward-Compatible Restore Metadata
+
+Contract:
+
+- unknown future chunker-version metadata does not block restore, as long as metadata is well-formed.
+- restore replays persisted chunk bytes and mappings; it does not invoke chunker logic to reconstruct stored files.
+- unknown chunker-version values are treated as informational provenance metadata, not as a restore precondition.
+
+Practical consequence:
+
+- repositories containing newer chunker-version labels remain restorable by recipe replay semantics.
+- malformed or empty chunker-version metadata remains a hard error because metadata sanity is part of integrity checks.
+
 ## Chunker Evolution Model
 
 Current chunker versions include:
@@ -108,6 +121,7 @@ coldkeep does not guarantee:
 - identical chunk counts across implementations
 - write-path performance parity across chunker versions
 - automatic in-place migration of historical data after chunker changes
+- acceptance of malformed chunker-version metadata
 
 These are intentionally not compatibility requirements.
 
