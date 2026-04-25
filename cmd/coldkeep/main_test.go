@@ -3,18 +3,24 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/container"
+	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
@@ -23,6 +29,20 @@ import (
 	"github.com/franchoy/coldkeep/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type singleChunkV2CLITestChunker struct{}
+
+func (singleChunkV2CLITestChunker) Version() chunk.Version {
+	return chunk.VersionV2FastCDC
+}
+
+func (singleChunkV2CLITestChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return []chunk.Result{{Data: data}}, nil
+}
 
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
@@ -262,6 +282,57 @@ func TestDoctorTextFailureIncludesInvariantCodeAndActionWhenAvailable(t *testing
 	}
 }
 
+func TestPrintCLIErrorTextIncludesLocalDBSetupHintWhenEnvMissing(t *testing.T) {
+	t.Setenv("DB_HOST", "")
+	t.Setenv("DB_PORT", "")
+	t.Setenv("DB_USER", "")
+	t.Setenv("DB_PASSWORD", "")
+	t.Setenv("DB_NAME", "")
+	t.Setenv("DB_SSLMODE", "")
+
+	err := errors.New("load storage context: failed to connect to local DB: dial tcp: lookup port=: no such host")
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeText)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	if !strings.Contains(output, "DB setup hint: local mode requires PostgreSQL connection env vars") {
+		t.Fatalf("expected DB setup hint header in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "Missing/empty: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE") {
+		t.Fatalf("expected missing env list in text output, got: %q", output)
+	}
+	if !strings.Contains(output, "export DB_HOST=127.0.0.1") {
+		t.Fatalf("expected export snippet in text output, got: %q", output)
+	}
+}
+
+func TestPrintCLIErrorJSONDoesNotAddDBHintFields(t *testing.T) {
+	err := errors.New("load storage context: failed to connect to local DB: dial tcp: lookup port=: no such host")
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, ok := payload["message"].(string); !ok || got != err.Error() {
+		t.Fatalf("message mismatch: got=%v", payload["message"])
+	}
+	if _, exists := payload["hint"]; exists {
+		t.Fatalf("unexpected hint field in JSON payload: %v", payload)
+	}
+}
+
 func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
 	originalRepairPhase := repairLogicalRefCountsPhase
 	t.Cleanup(func() { repairLogicalRefCountsPhase = originalRepairPhase })
@@ -364,6 +435,105 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 	}
 	if message, _ := payload["message"].(string); !strings.Contains(message, "missing value for --limit") {
 		t.Fatalf("message mismatch: payload=%v", payload)
+	}
+}
+
+func TestRunCLIStoreJSONEmitsStartupRecoveryAndCrossVersionReuseSuccess(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	originalLoad := loadDefaultStorageContextPhase
+	originalStartupRecovery := startupRecoveryPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		startupRecoveryPhase = originalStartupRecovery
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	payload := []byte("runcli-store-cross-version-collision")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+			Chunker:      singleChunkV2CLITestChunker{},
+		}, nil
+	}
+
+	inPath := filepath.Join(t.TempDir(), "runcli-cross-version.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			code := runCLI([]string{"store", "--output", "json", inPath})
+			if code != exitSuccess {
+				t.Fatalf("expected exit code %d, got %d", exitSuccess, code)
+			}
+		})
+	})
+
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected one stderr JSON line (startup event only), got %d output=%q", len(lines), stderr)
+	}
+
+	var startupPayload map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &startupPayload); err != nil {
+		t.Fatalf("parse startup JSON payload: %v line=%q", err, lines[0])
+	}
+	if got, _ := startupPayload["event"].(string); got != "startup_recovery" {
+		t.Fatalf("startup event mismatch: payload=%v", startupPayload)
+	}
+	if got, _ := startupPayload["status"].(string); got != "ok" {
+		t.Fatalf("startup status mismatch: payload=%v", startupPayload)
+	}
+
+	var successPayload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &successPayload); err != nil {
+		t.Fatalf("parse command success JSON payload: %v output=%q", err, stdout)
+	}
+	if got, _ := successPayload["status"].(string); got != "ok" {
+		t.Fatalf("success payload status mismatch: payload=%v", successPayload)
+	}
+	if got, _ := successPayload["command"].(string); got != "store" {
+		t.Fatalf("command mismatch: payload=%v", successPayload)
+	}
+	data, _ := successPayload["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("expected data object in success payload, got=%v", successPayload)
+	}
+	if got, _ := data["file_id"].(float64); int(got) == 0 {
+		t.Fatalf("expected non-zero file_id in success payload, got=%v payload=%v", data["file_id"], successPayload)
 	}
 }
 
@@ -813,6 +983,26 @@ func TestRunRestoreCommandStoredPathRejectsInvalidModeClassifiesAsUsage(t *testi
 	}
 }
 
+func TestRunRestoreCommandInvalidFileIDIncludesDidYouMeanHint(t *testing.T) {
+	err := runRestoreCommand(parsedCommandLine{
+		method:      "restore",
+		positionals: []string{"hello.txt", "./out"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected usage error for non-numeric restore target")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if !strings.Contains(err.Error(), "Invalid fileID: hello.txt") {
+		t.Fatalf("expected invalid fileID in error message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Did you mean: coldkeep restore --stored-path <path>") {
+		t.Fatalf("expected did-you-mean restore hint in error message, got: %v", err)
+	}
+}
+
 func TestRunRestoreCommandStoredPathRequiresDestinationForPrefixMode(t *testing.T) {
 	err := runRestoreCommand(parsedCommandLine{
 		method:      "restore",
@@ -1177,6 +1367,133 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkCommandMissingArgsClassifiesAsUsage(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method: "benchmark",
+		flags:  map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep benchmark") {
+		t.Fatalf("expected benchmark usage error, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunBenchmarkCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"noop"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "unknown benchmark subcommand") {
+		t.Fatalf("expected unknown benchmark subcommand error, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunBenchmarkCommandJSONOutputSchema(t *testing.T) {
+	originalPhase := runChunkerBenchmarkPhase
+	t.Cleanup(func() { runChunkerBenchmarkPhase = originalPhase })
+
+	runChunkerBenchmarkPhase = func() (BenchmarkChunkersReport, error) {
+		return BenchmarkChunkersReport{
+			GeneratedAtUTC: "2026-04-25T00:00:00Z",
+			Rows: []BenchmarkChunkersReportRecord{
+				{
+					Dataset:       "slight-modifications",
+					Metric:        "reuse-after-small-edit",
+					V1SimplePct:   10,
+					V2FastCDCPct:  20,
+					DeltaPct:      10,
+					WinnerVersion: string(chunk.VersionV2FastCDC),
+				},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"chunkers"},
+			flags:       map[string][]string{"output": {"json"}},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse benchmark JSON payload: %v output=%q", err, output)
+	}
+	if got, _ := payload["status"].(string); got != "ok" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "benchmark" {
+		t.Fatalf("command mismatch: got=%v payload=%v", payload["command"], payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in benchmark payload, got=%v", payload)
+	}
+	rows, ok := data["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("expected one row in benchmark payload, got=%v", data["rows"])
+	}
+}
+
+func TestRunBenchmarkCommandTextOutputIncludesRows(t *testing.T) {
+	originalPhase := runChunkerBenchmarkPhase
+	t.Cleanup(func() { runChunkerBenchmarkPhase = originalPhase })
+
+	runChunkerBenchmarkPhase = func() (BenchmarkChunkersReport, error) {
+		return BenchmarkChunkersReport{
+			GeneratedAtUTC: "2026-04-25T00:00:00Z",
+			Rows: []BenchmarkChunkersReportRecord{
+				{
+					Dataset:       "slight-modifications",
+					Metric:        "reuse-after-small-edit",
+					V1SimplePct:   12.34,
+					V2FastCDCPct:  56.78,
+					DeltaPct:      44.44,
+					WinnerVersion: string(chunk.VersionV2FastCDC),
+				},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"chunkers"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Chunker benchmark") {
+		t.Fatalf("expected benchmark heading in text output, got=%q", output)
+	}
+	if !strings.Contains(output, "slight-modifications") {
+		t.Fatalf("expected dataset row in text output, got=%q", output)
+	}
+	if !strings.Contains(output, "reuse-after-small-edit") {
+		t.Fatalf("expected metric in text output, got=%q", output)
+	}
+	if !strings.Contains(output, "Typical outcomes") {
+		t.Fatalf("expected interpretation guidance in text output, got=%q", output)
+	}
+}
+
 func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 	err := runListCommand(parsedCommandLine{
 		method: "list",
@@ -1272,7 +1589,7 @@ func TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum(t *testing.T) {
 }
 
 func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
-	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot"}
+	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot"}
 
 	for _, command := range commands {
 		if !shouldRunStartupRecovery(command) {
@@ -1282,7 +1599,7 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 }
 
 func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
-	commands := []string{"help", "version", "init", "simulate", "doctor", "-h", "--help", "-v", "--version", "unknown"}
+	commands := []string{"help", "version", "init", "simulate", "benchmark", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
 
 	for _, command := range commands {
 		if shouldRunStartupRecovery(command) {
@@ -1315,6 +1632,18 @@ func TestInferOutputModeFromArgsSupportsSnapshotJSON(t *testing.T) {
 	}
 }
 
+func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected benchmark --output json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
+	}
+}
+
 func TestParseDoctorVerifyLevelDefaultsToStandard(t *testing.T) {
 	level, err := parseDoctorVerifyLevel(parsedCommandLine{
 		method: "doctor",
@@ -1344,7 +1673,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -1372,6 +1701,573 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		if got, ok := payload["command"].(string); !ok || got != command {
 			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
 		}
+	}
+}
+
+func TestRunVerifyCommandNoTargetIncludesDidYouMeanHint(t *testing.T) {
+	err := runVerifyCommand(parsedCommandLine{
+		method:      "verify",
+		positionals: []string{},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected usage error for verify without target")
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "Usage: coldkeep verify <system|file <fileID>>") {
+		t.Fatalf("expected verify usage in error message, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Did you mean: coldkeep verify system --standard") {
+		t.Fatalf("expected did-you-mean hint in error message, got: %q", msg)
+	}
+}
+
+func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_set_get.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	setOut := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand set returned error: %v", err)
+		}
+	})
+	if !strings.Contains(setOut, "default-chunker set to v2-fastcdc") {
+		t.Fatalf("expected confirmation output, got: %q", setOut)
+	}
+
+	getOut := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"get", "default-chunker"},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand get returned error: %v", err)
+		}
+	})
+	if strings.TrimSpace(getOut) != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("expected get output %q, got %q", chunk.VersionV2FastCDC, strings.TrimSpace(getOut))
+	}
+}
+
+func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalInspect := inspectLogicalFilePhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		inspectLogicalFilePhase = originalInspect
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
+		return storage.LogicalFileInspectInfo{
+			FileID:            fileID,
+			ChunkerVersion:    chunk.VersionV2FastCDC,
+			ChunkCount:        142,
+			AvgChunkSizeBytes: 58 * 1024,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"file", "42"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand text returned error: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"Chunker: v2-fastcdc",
+		"Chunks: 142",
+		"Avg chunk size: 58KB",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected inspect text output to contain %q, got output:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalInspect := inspectLogicalFilePhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		inspectLogicalFilePhase = originalInspect
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
+		return storage.LogicalFileInspectInfo{
+			FileID:            fileID,
+			ChunkerVersion:    chunk.VersionV2FastCDC,
+			ChunkCount:        142,
+			AvgChunkSizeBytes: 58 * 1024,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"file", "42"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runInspectCommand json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["chunker"].(string); got != "v2-fastcdc" {
+		t.Fatalf("expected chunker=v2-fastcdc, got %v", data["chunker"])
+	}
+	assertJSONNumber(t, data, "chunks", 142)
+	assertJSONNumber(t, data, "avg_chunk_size_kb", 58)
+}
+
+func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
+	err := runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"chunk", "1"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect file <fileID>") {
+		t.Fatalf("expected inspect usage error, got: %v", err)
+	}
+
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "invalid"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Invalid fileID") {
+		t.Fatalf("expected invalid fileID error, got: %v", err)
+	}
+}
+
+func TestRunConfigCommandSetRejectsUnknownVersion(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_unknown.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"set", "default-chunker", "v9-future-cdc"},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown chunker version") {
+		t.Fatalf("expected unknown-version error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunConfigCommandSetRejectsDeprecatedVersion(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDeprecation := isDeprecatedChunkerVersionPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		isDeprecatedChunkerVersionPhase = originalDeprecation
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_deprecated.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
+		if v == chunk.VersionV2FastCDC {
+			return true, "scheduled removal"
+		}
+		return false, ""
+	}
+
+	err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "deprecated chunker version") {
+		t.Fatalf("expected deprecated-version error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "scheduled removal") {
+		t.Fatalf("expected deprecated-version reason in error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunConfigCommandGetJSON(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_get_json.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"get", "default-chunker"},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runConfigCommand get json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse json payload: %v; output=%q", err, output)
+	}
+	if got, _ := payload["command"].(string); got != "config get" {
+		t.Fatalf("command mismatch: payload=%v", payload)
+	}
+	data, _ := payload["data"].(map[string]any)
+	if got, _ := data["key"].(string); got != "default-chunker" {
+		t.Fatalf("key mismatch: payload=%v", payload)
+	}
+	if got, _ := data["value"].(string); got != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("value mismatch: payload=%v", payload)
+	}
+}
+
+func TestRunConfigCommandSetWarnsOnlyOnActualSwitch(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_set_warn_switch.sqlite")
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	switchOutput := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV1SimpleRolling)},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand set returned error: %v", err)
+		}
+	})
+	if !strings.Contains(switchOutput, "Warning: This affects only new stored data.") {
+		t.Fatalf("expected switch warning in output, got: %q", switchOutput)
+	}
+	if !strings.Contains(switchOutput, "Existing data remains unchanged.") {
+		t.Fatalf("expected unchanged-data warning in output, got: %q", switchOutput)
+	}
+
+	noSwitchOutput := captureStdout(t, func() {
+		err := runConfigCommand(parsedCommandLine{
+			method:      "config",
+			positionals: []string{"set", "default-chunker", string(chunk.VersionV1SimpleRolling)},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runConfigCommand set same value returned error: %v", err)
+		}
+	})
+	if strings.Contains(noSwitchOutput, "Warning: This affects only new stored data.") {
+		t.Fatalf("did not expect warning when value does not change, got: %q", noSwitchOutput)
+	}
+}
+
+func TestRunConfigCommandSetDoesNotModifyExistingData(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "config_set_safety_guard.sqlite")
+
+	seedDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = seedDB.Close() }()
+	if err := dbpkg.RunMigrations(seedDB); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var logicalID int64
+	if err := seedDB.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES (?, ?, ?, ?, ?) RETURNING id`,
+		"safety.bin", int64(11), "safety-logical-hash", "COMPLETED", string(chunk.VersionV1SimpleRolling),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	var chunkID int64
+	if err := seedDB.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?) RETURNING id`,
+		"safety-chunk-hash", int64(11), "COMPLETED", int64(1), string(chunk.VersionV1SimpleRolling),
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		if err := dbpkg.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	if err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"set", "default-chunker", string(chunk.VersionV2FastCDC)},
+	}, outputModeText); err != nil {
+		t.Fatalf("runConfigCommand set returned error: %v", err)
+	}
+
+	verifyDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open verify db: %v", err)
+	}
+	defer func() { _ = verifyDB.Close() }()
+
+	var logicalVersion string
+	if err := verifyDB.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = ?`, logicalID).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file chunker_version: %v", err)
+	}
+	if logicalVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("existing logical_file chunker_version changed: got %q want %q", logicalVersion, chunk.VersionV1SimpleRolling)
+	}
+
+	var persistedChunkVersion string
+	if err := verifyDB.QueryRow(`SELECT chunker_version FROM chunk WHERE id = ?`, chunkID).Scan(&persistedChunkVersion); err != nil {
+		t.Fatalf("read chunk chunker_version: %v", err)
+	}
+	if persistedChunkVersion != string(chunk.VersionV1SimpleRolling) {
+		t.Fatalf("existing chunk chunker_version changed: got %q want %q", persistedChunkVersion, chunk.VersionV1SimpleRolling)
+	}
+
+	var configVersion string
+	if err := verifyDB.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configVersion); err != nil {
+		t.Fatalf("read repository_config.default_chunker: %v", err)
+	}
+	if configVersion != string(chunk.VersionV2FastCDC) {
+		t.Fatalf("expected repository default to be updated to %q, got %q", chunk.VersionV2FastCDC, configVersion)
+	}
+}
+
+func TestRunStoreCommandAllowsCrossVersionReuseText(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	payload := []byte("cli-cross-version-collision")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+			Chunker:      singleChunkV2CLITestChunker{},
+		}, nil
+	}
+
+	inPath := filepath.Join(t.TempDir(), "cli-cross-version.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	err = runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeText)
+	if err != nil {
+		t.Fatalf("expected cross-version reuse store to succeed, got: %v", err)
+	}
+}
+
+func TestRunStoreCommandAllowsCrossVersionReuseJSON(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	payload := []byte("cli-cross-version-collision-json")
+	hash := sha256.Sum256(payload)
+	chunkHash := hex.EncodeToString(hash[:])
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES (?, ?, ?, ?, ?)`,
+		chunkHash,
+		int64(len(payload)),
+		"COMPLETED",
+		int64(0),
+		string(chunk.VersionV1SimpleRolling),
+	); err != nil {
+		t.Fatalf("insert existing v1 chunk row: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: containersDir,
+			Chunker:      singleChunkV2CLITestChunker{},
+		}, nil
+	}
+
+	inPath := filepath.Join(t.TempDir(), "cli-cross-version-json.bin")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	stdout := captureStdout(t, func() {
+		storeErr := runStoreCommand(parsedCommandLine{method: "store", positionals: []string{inPath}}, outputModeJSON)
+		if storeErr != nil {
+			t.Fatalf("expected store command to succeed, got: %v", storeErr)
+		}
+	})
+
+	var payloadJSON map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payloadJSON); err != nil {
+		t.Fatalf("parse JSON payload: %v output=%q", err, stdout)
+	}
+	if got, _ := payloadJSON["status"].(string); got != "ok" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payloadJSON["status"], payloadJSON)
+	}
+	if got, _ := payloadJSON["command"].(string); got != "store" {
+		t.Fatalf("command mismatch: got=%v payload=%v", payloadJSON["command"], payloadJSON)
+	}
+	data, _ := payloadJSON["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("expected data object in JSON payload, got=%v", payloadJSON)
+	}
+	if got, _ := data["file_id"].(float64); int(got) == 0 {
+		t.Fatalf("expected non-zero file_id in JSON payload, got=%v payload=%v", data["file_id"], payloadJSON)
 	}
 }
 
@@ -4002,6 +4898,19 @@ func TestPrintHelpSnapshotFlagDocs(t *testing.T) {
 	}
 }
 
+func TestPrintHelpConfigDefaultChunkerSafetyNote(t *testing.T) {
+	output := captureStdout(t, func() {
+		printHelp()
+	})
+
+	if !strings.Contains(output, "config set default-chunker") {
+		t.Fatalf("expected help output to include config set default-chunker row, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Affects only new stored data. Existing data is not modified.") {
+		t.Fatalf("expected help output to include default-chunker safety note, got:\n%s", output)
+	}
+}
+
 func TestRunSnapshotCommandDeleteWithForceExecutesImmediately(t *testing.T) {
 	// CRITICAL BEHAVIOR LOCK (v1 contract):
 	// --force must execute deletion immediately without confirmation or blocking.
@@ -4252,7 +5161,26 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 
 	runStatsPhase = func() (*maintenance.StatsResult, error) {
 		return &maintenance.StatsResult{
-			TotalFiles: 7,
+			TotalFiles:             7,
+			ActiveWriteChunker:     "v2-fastcdc",
+			TotalChunkReferences:   10000,
+			UniqueReferencedChunks: 7500,
+			EstimatedDedupRatioPct: 25,
+			LogicalFileCountsByVersion: map[string]int64{
+				"v1-simple-rolling": 5,
+				"v2-fastcdc":        2,
+				"unknown":           1,
+			},
+			ChunkCountsByVersion: map[string]int64{
+				"v1-simple-rolling": 3,
+				"v2-fastcdc":        2,
+				"unknown":           1,
+			},
+			ChunkBytesByVersion: map[string]int64{
+				"v1-simple-rolling": 30,
+				"v2-fastcdc":        20,
+				"unknown":           9,
+			},
 			SnapshotRetention: maintenance.SnapshotRetentionStats{
 				CurrentOnlyLogicalFiles:        2,
 				CurrentOnlyBytes:               256,
@@ -4284,6 +5212,35 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing snapshot_retention object in payload: %v", data)
 	}
+	chunkCounts, ok := data["chunk_counts_by_version"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing chunk_counts_by_version object in payload: %v", data)
+	}
+	logicalFileCounts, ok := data["logical_file_counts_by_version"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing logical_file_counts_by_version object in payload: %v", data)
+	}
+	chunkBytes, ok := data["chunk_bytes_by_version"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing chunk_bytes_by_version object in payload: %v", data)
+	}
+	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
+	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
+	assertJSONNumber(t, logicalFileCounts, "unknown", 1)
+	if raw, ok := data["active_write_chunker"].(string); !ok || raw != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%v payload=%v", data["active_write_chunker"], data)
+	}
+	assertJSONNumber(t, data, "total_chunk_references", 10000)
+	assertJSONNumber(t, data, "unique_referenced_chunks", 7500)
+	if raw, ok := data["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
+		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", data["estimated_dedup_ratio_pct"], data)
+	}
+	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
+	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
+	assertJSONNumber(t, chunkCounts, "unknown", 1)
+	assertJSONNumber(t, chunkBytes, "v1-simple-rolling", 30)
+	assertJSONNumber(t, chunkBytes, "v2-fastcdc", 20)
+	assertJSONNumber(t, chunkBytes, "unknown", 9)
 	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
 	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
 	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
@@ -4297,6 +5254,25 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	output := captureStdout(t, func() {
 		printStatsReport(&maintenance.StatsResult{
+			ActiveWriteChunker:     "v2-fastcdc",
+			TotalChunkReferences:   10000,
+			UniqueReferencedChunks: 7500,
+			EstimatedDedupRatioPct: 25,
+			LogicalFileCountsByVersion: map[string]int64{
+				"v1-simple-rolling": 6,
+				"v2-fastcdc":        1,
+				"unknown":           2,
+			},
+			ChunkCountsByVersion: map[string]int64{
+				"v1-simple-rolling": 4,
+				"v2-fastcdc":        1,
+				"unknown":           2,
+			},
+			ChunkBytesByVersion: map[string]int64{
+				"v1-simple-rolling": 2 * 1024 * 1024,
+				"v2-fastcdc":        1 * 1024 * 1024,
+				"unknown":           512,
+			},
 			SnapshotRetention: maintenance.SnapshotRetentionStats{
 				CurrentOnlyLogicalFiles:        4,
 				CurrentOnlyBytes:               2 * 1024 * 1024,
@@ -4311,7 +5287,26 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	})
 
 	for _, want := range []string{
+		"Active chunker (new writes):     v2-fastcdc",
 		"Snapshot retention:",
+		"Chunker Distribution:",
+		"v1-simple-rolling:     4 chunks",
+		"v2-fastcdc:            1 chunks",
+		"unknown:               2 chunks",
+		"Stored Data by Chunker:",
+		"v1-simple-rolling:     0.00 GB",
+		"v2-fastcdc:            0.00 GB",
+		"unknown:               0.00 GB",
+		"Logical Files by Chunker:",
+		"v1-simple-rolling:     6 files",
+		"v2-fastcdc:            1 files",
+		"unknown:               2 files",
+		"⚠ Repository contains multiple chunker versions.",
+		"This is expected after upgrades or configuration changes.",
+		"Dedup Signal:",
+		"Total chunk references:  10000",
+		"Unique referenced chunks:7500",
+		"Estimated dedup ratio:   25.00%",
 		"Current-only logical files:    4 (2.00 MB)",
 		"Snapshot-referenced files:     3 (5.00 MB)",
 		"Snapshot-only logical files:   1 (1.00 MB)",
@@ -4320,6 +5315,26 @@ func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected stats report to contain %q, got output:\n%s", want, output)
 		}
+	}
+}
+
+func TestPrintStatsReportOmitsMixedChunkerWarningWhenSingleKnownVersion(t *testing.T) {
+	output := captureStdout(t, func() {
+		printStatsReport(&maintenance.StatsResult{
+			ActiveWriteChunker: "v2-fastcdc",
+			ChunkCountsByVersion: map[string]int64{
+				"v2-fastcdc": 10,
+				"unknown":    2,
+			},
+			LogicalFileCountsByVersion: map[string]int64{
+				"v2-fastcdc": 4,
+				"unknown":    1,
+			},
+		})
+	})
+
+	if strings.Contains(output, "Repository contains multiple chunker versions") {
+		t.Fatalf("expected no mixed-chunker warning for single known version, got output:\n%s", output)
 	}
 }
 

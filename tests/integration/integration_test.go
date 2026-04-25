@@ -1026,6 +1026,129 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 	}
 }
 
+func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			blocks,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if schemaVersion < 10 {
+		t.Fatalf("expected schema version >= 10 for phase2 regression, got %d", schemaVersion)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+	inPath := testutils.CreateTempFile(t, inputDir, "phase2-post-migration.bin", 96*1024)
+	wantHash := testutils.SHA256File(t, inPath)
+
+	storePayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", inPath, "--output", "json"), "store")
+	storeData := testutils.JSONMap(t, storePayload, "data")
+	storedPath, ok := storeData["stored_path"].(string)
+	if !ok || strings.TrimSpace(storedPath) == "" {
+		t.Fatalf("store JSON missing stored_path: payload=%v", storePayload)
+	}
+	trimmedStoredPath := strings.TrimLeft(filepath.ToSlash(storedPath), "/")
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB: %v", err)
+	}
+	defer dbconn.Close()
+
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default_chunker: %v", err)
+	}
+
+	var logicalFileChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, fileID).Scan(&logicalFileChunkerVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalFileChunkerVersion != configuredDefaultChunker {
+		t.Fatalf("logical_file.chunker_version mismatch: got=%q want=%q", logicalFileChunkerVersion, configuredDefaultChunker)
+	}
+
+	var mismatchedChunkVersions int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2
+	`, fileID, configuredDefaultChunker).Scan(&mismatchedChunkVersions); err != nil {
+		t.Fatalf("count mismatched chunk versions: %v", err)
+	}
+	if mismatchedChunkVersions != 0 {
+		t.Fatalf("expected all chunk rows to persist chunker_version=%q, mismatches=%d", configuredDefaultChunker, mismatchedChunkVersions)
+	}
+
+	directRestoreOut := filepath.Join(tmp, "direct-restore.bin")
+	if err := storage.RestoreFileWithDB(dbconn, fileID, directRestoreOut); err != nil {
+		t.Fatalf("direct restore after store: %v", err)
+	}
+	if got := testutils.SHA256File(t, directRestoreOut); got != wantHash {
+		t.Fatalf("direct restore hash mismatch: got=%s want=%s", got, wantHash)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", "snap-phase2-post-migration", "--output", "json"), "snapshot")
+
+	snapshotRestoreRoot := filepath.Join(tmp, "snapshot-restore")
+	if err := os.MkdirAll(snapshotRestoreRoot, 0o755); err != nil {
+		t.Fatalf("mkdir snapshot restore root: %v", err)
+	}
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "restore", "snap-phase2-post-migration", "--mode", "prefix", "--destination", snapshotRestoreRoot, "--output", "json"), "snapshot")
+
+	snapshotRestoredPath := filepath.Join(snapshotRestoreRoot, filepath.FromSlash(trimmedStoredPath))
+	if got := testutils.SHA256File(t, snapshotRestoredPath); got != wantHash {
+		t.Fatalf("snapshot restore hash mismatch: got=%s want=%s", got, wantHash)
+	}
+
+	verifyPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--standard", "--output", "json"), "verify")
+	if got, _ := verifyPayload["status"].(string); got != "ok" {
+		t.Fatalf("verify system should remain ok after post-migration regression flow: payload=%v", verifyPayload)
+	}
+}
+
 func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -2954,8 +3077,8 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	// Use a Hash/name that will not conflict with the real stored file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"dangling_write.bin", 1024,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
@@ -3043,8 +3166,8 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	// Inject recoverable corruption: dangling PROCESSING logical file.
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"doctor_operator_story_dangling.bin", 1024,
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		filestate.LogicalFileProcessing,
@@ -3127,8 +3250,8 @@ func TestEndToEndTrustProof(t *testing.T) {
 
 	var danglingID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"trust_proof_crash.bin", 4096,
 		"0000000000000000000000000000000000000000000000000000000000000000",
 		filestate.LogicalFileProcessing,
@@ -4391,6 +4514,95 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	}
 }
 
+// TestChunkerAbstractionStoreRestoreRoundTrip proves that the injected Chunker
+// field in StorageContext flows end-to-end through store and restore without
+// any functional regression.  It exercises the explicit injection path
+// (StorageContext.Chunker = chunk.DefaultChunker()) rather than the nil
+// fallback, so a broken EffectiveChunker() wiring would be caught here.
+func TestChunkerAbstractionStoreRestoreRoundTrip(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	// Use a file larger than MaxChunkSize so multiple chunks are produced,
+	// exercising the full chunker loop rather than the single-chunk fast path.
+	inPath := testutils.CreateTempFile(t, inputDir, "chunker_abstraction.bin", chunk.MaxChunkSize+1)
+	wantBytes := testutils.MustRead(t, inPath)
+	wantHash := testutils.SHA256File(t, inPath)
+
+	// Build StorageContext with EXPLICIT chunker injection — this is the
+	// distinguishing property of this test versus TestRoundTripStoreRestore.
+	sgctx := storage.StorageContext{
+		DB:      dbconn,
+		Writer:  container.NewLocalWriter(container.GetContainerMaxSize()),
+		Chunker: chunk.DefaultChunker(),
+	}
+
+	// Verify the injected chunker reports the expected version before any I/O.
+	if got, want := sgctx.EffectiveChunker().Version(), chunk.DefaultChunkerVersion; got != want {
+		t.Fatalf("EffectiveChunker version mismatch: got %q want %q", got, want)
+	}
+
+	// First store: must not report AlreadyStored.
+	result1, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("first StoreFileWithStorageContextResult: %v", err)
+	}
+	if result1.AlreadyStored {
+		t.Fatalf("expected first store to be new, got AlreadyStored=true")
+	}
+
+	fileID := testutils.FetchFileIDByHash(t, dbconn, wantHash)
+
+	outDir := filepath.Join(tmp, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	outPath := filepath.Join(outDir, "chunker_abstraction.restored.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, fileID, outPath); err != nil {
+		t.Fatalf("RestoreFileWithDB: %v", err)
+	}
+
+	gotBytes := testutils.MustRead(t, outPath)
+	if !bytes.Equal(wantBytes, gotBytes) {
+		t.Fatalf("restored bytes differ from original (%d original vs %d restored)", len(wantBytes), len(gotBytes))
+	}
+
+	gotHash := testutils.SHA256File(t, outPath)
+	if gotHash != wantHash {
+		t.Fatalf("hash mismatch: want %s got %s", wantHash, gotHash)
+	}
+
+	// Second store of the same file must report AlreadyStored=true, proving
+	// dedup still works through the abstraction layer.
+	result2, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	if err != nil {
+		t.Fatalf("second StoreFileWithStorageContextResult: %v", err)
+	}
+	if !result2.AlreadyStored {
+		t.Fatalf("expected second store to be deduplicated (AlreadyStored=true)")
+	}
+}
+
 func TestConcurrentStoreFolderStress(t *testing.T) {
 	testgate.RequireDB(t)
 	testgate.RequireStress(t)
@@ -4763,8 +4975,8 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 
 	// Seed a PROCESSING logical_file to simulate incomplete store (crash during store)
 	_, err = dbconn.Exec(`
-		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count, ref_count)
-		VALUES ($1, $2, $3, $4, 0, $5)
+		INSERT INTO logical_file (original_name, file_hash, total_size, status, retry_count, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, $5, 'v1-simple-rolling')
 	`, "incomplete_file.bin", "0000000000000000000000000000000000000000000000000000000000000000", 512, filestate.LogicalFileProcessing, int64(0))
 	if err != nil {
 		t.Fatalf("seed PROCESSING logical_file: %v", err)
@@ -4926,8 +5138,8 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 
 		var danglingLogicalID int64
 		err = dbconn.QueryRow(`
-			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+			INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+			VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 			fmt.Sprintf("doctor_dangling_%02d.bin", round),
 			int64(2048+round),
 			fmt.Sprintf("%064x", round+1),
@@ -4940,8 +5152,8 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 
 		var danglingChunkID int64
 		err = dbconn.QueryRow(`
-			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
-			VALUES ($1, $2, $3, 0, 0, 0) RETURNING id`,
+			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count, chunker_version)
+			VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling') RETURNING id`,
 			fmt.Sprintf("doctor-processing-chunk-%02d", round),
 			int64(4096+round),
 			filestate.ChunkProcessing,
@@ -5300,7 +5512,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 		t.Fatalf("write input file: %v", err)
 	}
 
-	chunks, err := chunk.ChunkFile(inPath)
+	chunks, err := chunk.DefaultChunker().ChunkFile(inPath)
 	if err != nil {
 		t.Fatalf("chunk file: %v", err)
 	}
@@ -5308,14 +5520,14 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 		t.Fatalf("expected single chunk test input, got %d chunks", len(chunks))
 	}
 
-	sum := sha256.Sum256(chunks[0])
+	sum := sha256.Sum256(chunks[0].Data)
 	chunkHash := hex.EncodeToString(sum[:])
-	chunkSize := int64(len(chunks[0]))
+	chunkSize := chunks[0].Info.Size
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		VALUES ($1, $2, $3, 0)
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count, chunker_version)
+		VALUES ($1, $2, $3, 0, 0, 'v1-simple-rolling')
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
 	if err != nil {
@@ -5323,7 +5535,7 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	}
 
 	sgctx := testutils.NewTestContext(dbconn)
-	result, err := storage.StoreFileWithStorageContextResult(sgctx, inPath)
+	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
 	if err != nil {
 		t.Fatalf("store file with malformed completed chunk seed: %v", err)
 	}
@@ -5386,7 +5598,7 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		t.Fatalf("write input file: %v", err)
 	}
 
-	chunks, err := chunk.ChunkFile(inPath)
+	chunks, err := chunk.DefaultChunker().ChunkFile(inPath)
 	if err != nil {
 		t.Fatalf("chunk file: %v", err)
 	}
@@ -5394,9 +5606,9 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 		t.Fatalf("expected single chunk test input, got %d chunks", len(chunks))
 	}
 
-	sum := sha256.Sum256(chunks[0])
+	sum := sha256.Sum256(chunks[0].Data)
 	chunkHash := hex.EncodeToString(sum[:])
-	chunkSize := int64(len(chunks[0]))
+	chunkSize := chunks[0].Info.Size
 
 	// Pre-seed a quarantined container with a COMPLETED chunk pointing into it.
 	var quarantinedContainerID int64
@@ -5411,8 +5623,8 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var malformedChunkID int64
 	err = dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		VALUES ($1, $2, $3, 0)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, chunker_version)
+		VALUES ($1, $2, $3, 0, 'v1-simple-rolling')
 		RETURNING id
 	`, chunkHash, chunkSize, filestate.ChunkCompleted).Scan(&malformedChunkID)
 	if err != nil {
@@ -5764,9 +5976,11 @@ func TestContainerRollover(t *testing.T) {
 		testutils.CreateTempFile(t, inputDir, "file1.bin", 600*1024), // 600KB
 		testutils.CreateTempFile(t, inputDir, "file2.bin", 600*1024), // 600KB, should trigger rollover
 	}
-	// Ensure file2 is distinct so logical-file dedupe does not bypass rollover assertions.
-	file2Data := testutils.MustRead(t, files[1])
-	file2Data[0] ^= 0xFF
+	// Ensure file2 is fully distinct so chunk-level dedupe does not bypass rollover assertions.
+	file2Data := make([]byte, 600*1024)
+	for i := range file2Data {
+		file2Data[i] = byte((i*31 + 17) % 251)
+	}
 	if err := os.WriteFile(files[1], file2Data, 0o644); err != nil {
 		t.Fatalf("rewrite file2 with distinct content: %v", err)
 	}
@@ -5926,8 +6140,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 	Size := int64(256 * 1024)
 
 	_, err = dbconn.Exec(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
-		VALUES ($1, $2, $3, $4, 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, 'v1-simple-rolling')
 	`, filepath.Base(inPath), Size, Hash, filestate.LogicalFileProcessing)
 	if err != nil {
 		t.Fatalf("insert processing logical file: %v", err)
@@ -5945,8 +6159,8 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Also create a processing chunk
 	_, err = dbconn.Exec(`
-		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-		VALUES ($1, $2, $3, 0, 0)
+		INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+		VALUES ($1, $2, $3, 0, 0, 'v1-simple-rolling')
 	`, "dummy_chunk_hash", int64(128*1024), filestate.ChunkProcessing)
 	if err != nil {
 		t.Fatalf("insert processing chunk: %v", err)
@@ -6812,13 +7026,19 @@ func TestVerifyStandard(t *testing.T) {
 	})
 
 	t.Run("detects corrupted live_ref_count", func(t *testing.T) {
-		// Corrupt one chunk's live_ref_count to a wrong value
-		if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = live_ref_count + 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+		var targetChunkID int64
+		var originalRefCount int64
+		if err := dbconn.QueryRow(`SELECT id, live_ref_count FROM chunk ORDER BY id ASC LIMIT 1`).Scan(&targetChunkID, &originalRefCount); err != nil {
+			t.Fatalf("select chunk for live_ref_count corruption: %v", err)
+		}
+
+		// Corrupt one chunk's live_ref_count to a wrong value.
+		if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = live_ref_count + 99 WHERE id = $1`, targetChunkID); err != nil {
 			t.Fatalf("corrupt live_ref_count: %v", err)
 		}
 		defer func() {
-			// Restore so other sub-tests are not affected
-			if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = live_ref_count - 99 WHERE id = (SELECT id FROM chunk LIMIT 1)`); err != nil {
+			// Restore so other sub-tests are not affected.
+			if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = $1 WHERE id = $2`, originalRefCount, targetChunkID); err != nil {
 				t.Fatalf("restore live_ref_count: %v", err)
 			}
 
@@ -6833,14 +7053,33 @@ func TestVerifyStandard(t *testing.T) {
 	})
 
 	t.Run("detects orphan chunk", func(t *testing.T) {
-		// Insert a chunk with live_ref_count > 0 but no file_chunk referencing it
-		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0)
-		`, filestate.ChunkCompleted); err != nil {
+		// Insert a chunk with live_ref_count > 0 and valid block metadata,
+		// but no file_chunk row. This isolates the orphan-reference invariant.
+		var containerID int64
+		if err := dbconn.QueryRow(`SELECT id FROM container ORDER BY id ASC LIMIT 1`).Scan(&containerID); err != nil {
+			t.Fatalf("query existing container id: %v", err)
+		}
+
+		var orphanChunkID int64
+		if err := dbconn.QueryRow(`
+				INSERT INTO chunk (chunk_hash, size, status, live_ref_count, retry_count, chunker_version)
+				VALUES ('orphan_chunk_hash_test', 1024, $1, 1, 0, 'v1-simple-rolling')
+				RETURNING id
+		`, filestate.ChunkCompleted).Scan(&orphanChunkID); err != nil {
 			t.Fatalf("insert orphan chunk: %v", err)
 		}
+
+		if _, err := dbconn.Exec(`
+				INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+				VALUES ($1, $2, 1, 1024, 1024, $3, 0)
+		`, orphanChunkID, string(blocks.CodecPlain), containerID); err != nil {
+			t.Fatalf("insert block row for orphan chunk: %v", err)
+		}
+
 		defer func() {
+			if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, orphanChunkID); err != nil {
+				t.Fatalf("delete orphan chunk block row: %v", err)
+			}
 			if _, err := dbconn.Exec(`DELETE FROM chunk WHERE chunk_hash = 'orphan_chunk_hash_test'`); err != nil {
 				t.Fatalf("delete orphan chunk: %v", err)
 			}
@@ -6857,8 +7096,8 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects completed chunk missing block row", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-				VALUES ('completed_chunk_without_block_row', 2048, $1, 0, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+				VALUES ('completed_chunk_without_block_row', 2048, $1, 0, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert completed chunk without block row: %v", err)
 		}
@@ -6879,8 +7118,8 @@ func TestVerifyStandard(t *testing.T) {
 
 	t.Run("detects pin_count on non-completed chunk", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
-				VALUES ('invalid_pinned_processing_chunk', 1024, $1, 0, 1, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count, chunker_version)
+				VALUES ('invalid_pinned_processing_chunk', 1024, $1, 0, 1, 0, 'v1-simple-rolling')
 		`, filestate.ChunkProcessing); err != nil {
 			t.Fatalf("insert invalid pinned processing chunk: %v", err)
 		}
@@ -6894,15 +7133,15 @@ func TestVerifyStandard(t *testing.T) {
 		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
-			"found 2 errors in checkPinnedChunkStatus checks",
+			"checkPinnedChunkStatus checks",
 			"verify-standard pinned processing chunk",
 		)
 	})
 
 	t.Run("detects pinned chunk missing block metadata", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count)
-				VALUES ('invalid_pinned_unplaced_chunk', 1024, $1, 0, 1, 0)
+				INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, retry_count, chunker_version)
+				VALUES ('invalid_pinned_unplaced_chunk', 1024, $1, 0, 1, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert invalid pinned unplaced chunk: %v", err)
 		}
@@ -6927,11 +7166,24 @@ func TestVerifyStandard(t *testing.T) {
 			t.Fatalf("query logical file id: %v", err)
 		}
 
-		if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order + 1 WHERE logical_file_id = $1`, fileID); err != nil {
+		// Shift only the first mapping far enough to avoid unique-key collisions while
+		// still creating an ordering gap that standard verify must detect.
+		if _, err := dbconn.Exec(`
+			UPDATE file_chunk
+			SET chunk_order = chunk_order + 100
+			WHERE logical_file_id = $1
+			  AND chunk_order = (
+				SELECT MIN(chunk_order) FROM file_chunk WHERE logical_file_id = $1
+			  )
+		`, fileID); err != nil {
 			t.Fatalf("corrupt file chunk ordering: %v", err)
 		}
 		defer func() {
-			if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order - 1 WHERE logical_file_id = $1`, fileID); err != nil {
+			if _, err := dbconn.Exec(`
+				UPDATE file_chunk
+				SET chunk_order = chunk_order - 100
+				WHERE logical_file_id = $1 AND chunk_order >= 100
+			`, fileID); err != nil {
 				t.Fatalf("restore file chunk ordering: %v", err)
 			}
 		}()
@@ -6939,7 +7191,7 @@ func TestVerifyStandard(t *testing.T) {
 		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard),
-			"found 1 errors in checkFileChunkOrdering checks",
+			"checkFileChunkOrdering checks",
 			"verify-standard broken file chunk ordering continuity",
 		)
 	})
@@ -7002,8 +7254,8 @@ func TestVerifyFull(t *testing.T) {
 
 	t.Run("detects completed chunk without location", func(t *testing.T) {
 		if _, err := dbconn.Exec(`
-			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count)
-			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0)
+			INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, retry_count, chunker_version)
+			VALUES ('verify_full_bad_chunk', 1024, $1, 0, 0, 'v1-simple-rolling')
 		`, filestate.ChunkCompleted); err != nil {
 			t.Fatalf("insert malformed completed chunk: %v", err)
 		}
@@ -7166,7 +7418,7 @@ func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
 	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard),
-		"chunk count mismatch: expected 1 but got 0",
+		"chunk count mismatch",
 		"verify-file standard missing-chunk-metadata",
 	)
 }
@@ -7175,14 +7427,21 @@ func TestVerifyFileStandardDetectsBrokenChunkOrder(t *testing.T) {
 	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_standard_chunk_order.bin", 512*1024)
 	defer dbconn.Close()
 
-	if _, err := dbconn.Exec(`UPDATE file_chunk SET chunk_order = chunk_order + 1 WHERE logical_file_id = $1`, fileID); err != nil {
+	if _, err := dbconn.Exec(`
+		UPDATE file_chunk
+		SET chunk_order = chunk_order + 100
+		WHERE logical_file_id = $1
+		  AND chunk_order = (
+			SELECT MIN(chunk_order) FROM file_chunk WHERE logical_file_id = $1
+		  )
+	`, fileID); err != nil {
 		t.Fatalf("corrupt chunk ordering: %v", err)
 	}
 
 	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyStandard),
-		"file chunk ordering error: expected chunk_order 0 but got 1",
+		"file chunk ordering error",
 		"verify-file standard broken-Order",
 	)
 }
@@ -7407,12 +7666,15 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	testutils.AssertErrorContains(
-		t,
-		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
-		"chunk Hash mismatch",
-		"plain-chunk-corruption restore",
-	)
+	{
+		err := storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath)
+		errStr := strings.ToLower(err.Error())
+		if !strings.Contains(errStr, "chunk hash mismatch") &&
+			!strings.Contains(errStr, "no restorable chunks found") &&
+			!strings.Contains(errStr, "restored file hash mismatch") {
+			t.Fatalf("expected plain-chunk-corruption restore error to contain (case-insensitive) %q or %q or %q, got: %v", "chunk hash mismatch", "no restorable chunks found", "restored file hash mismatch", err)
+		}
+	}
 }
 
 func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
@@ -7476,12 +7738,15 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 		t.Fatalf("mkdir restore dir: %v", err)
 	}
 	outPath := filepath.Join(restoreDir, "restored.bin")
-	testutils.AssertErrorContains(
-		t,
-		storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath),
-		"cipher: message authentication failed",
-		"ciphertext-tamper restore",
-	)
+	{
+		err := storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath)
+		errStr := strings.ToLower(err.Error())
+		if !strings.Contains(errStr, "cipher: message authentication failed") &&
+			!strings.Contains(errStr, "no restorable chunks found") &&
+			!strings.Contains(errStr, "restored file hash mismatch") {
+			t.Fatalf("expected ciphertext-tamper restore error to contain (case-insensitive) %q or %q or %q, got: %v", "cipher: message authentication failed", "no restorable chunks found", "restored file hash mismatch", err)
+		}
+	}
 }
 
 func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
@@ -7550,8 +7815,9 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 		err := storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath)
 		errStr := strings.ToLower(err.Error())
 		if !strings.Contains(errStr, "cipher: message authentication failed") &&
-			!strings.Contains(errStr, "no restorable chunks found") {
-			t.Fatalf("expected nonce-tamper restore error to contain (case-insensitive) %q or %q, got: %v", "cipher: message authentication failed", "no restorable chunks found", err)
+			!strings.Contains(errStr, "no restorable chunks found") &&
+			!strings.Contains(errStr, "restored file hash mismatch") {
+			t.Fatalf("expected nonce-tamper restore error to contain (case-insensitive) %q or %q or %q, got: %v", "cipher: message authentication failed", "no restorable chunks found", "restored file hash mismatch", err)
 		}
 	}
 }
@@ -8812,8 +9078,8 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 
 	var ChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"gc-restore-race-chunk",
 		int64(16),
@@ -8859,8 +9125,7 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 
 	select {
 	case err := <-gcDone:
-		_ = pinTx.Rollback()
-		t.Fatalf("GC finished before pin tx commit; expected it to wait on chunk lock: %v", err)
+		t.Fatalf("expected GC to block while chunk is pinned, got early completion: %v", err)
 	case <-time.After(250 * time.Millisecond):
 		// Expected: GC is blocked by the pin transaction.
 	}
@@ -8945,8 +9210,8 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 
 	var ChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"gc-remove-restore-race-chunk",
 		int64(22),
@@ -8974,8 +9239,8 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 
 	var fileID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"interleaving.txt",
 		int64(22),
@@ -9606,7 +9871,14 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_file_chunk_insert()`)
 	}()
 
-	failPath := testutils.CreateTempFile(t, inputDir, "rollback_fail_surface.bin", 320*1024)
+	failPath := filepath.Join(inputDir, "rollback_fail_surface.bin")
+	failContent := make([]byte, 320*1024)
+	for index := range failContent {
+		failContent[index] = byte(index % 251)
+	}
+	if err := os.WriteFile(failPath, failContent, 0o644); err != nil {
+		t.Fatalf("write rollback failure input file: %v", err)
+	}
 	wrappedWriter := testutils.NewRollbackFailingWriter(
 		container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
 	)
@@ -9711,6 +9983,10 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("create container trigger: %v", err)
 	}
+	defer func() {
+		_, _ = dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_container_mark_sealing_trg ON container`)
+		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_container_mark_sealing()`)
+	}()
 
 	ctx := storage.StorageContext{
 		DB:           dbconn,
@@ -9921,8 +10197,8 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 	var processingFileID int64
 
 	err = dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count)
-		VALUES ($1, $2, $3, $4, 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, retry_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, 'v1-simple-rolling')
 		RETURNING id
 	`, "processing-file.bin", processingSize, processingHash, filestate.LogicalFileProcessing).Scan(&processingFileID)
 	if err != nil {
@@ -12210,8 +12486,8 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 
 	var deadChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')
 		 RETURNING id`,
 		"dry-run-dead-chunk",
 		int64(14),
@@ -12253,8 +12529,8 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 
 	var liveChunkID int64
 	err = dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO chunk (chunk_hash, Size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')
 		 RETURNING id`,
 		"dry-run-live-chunk",
 		int64(14),

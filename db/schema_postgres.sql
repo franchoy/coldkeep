@@ -1,5 +1,14 @@
 BEGIN;
 
+DO $$
+BEGIN
+  PERFORM set_config(
+    'coldkeep.migration_had_schema_version',
+    CASE WHEN to_regclass('public.schema_version') IS NULL THEN '0' ELSE '1' END,
+    true
+  );
+END $$;
+
 -- =========================
 -- Schema versioning
 -- =========================
@@ -48,7 +57,8 @@ CREATE TABLE IF NOT EXISTS chunk (
   pin_count BIGINT NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
@@ -66,6 +76,7 @@ CREATE TABLE IF NOT EXISTS logical_file (
   total_size BIGINT NOT NULL CHECK (total_size >= 0),
   file_hash TEXT NOT NULL,
   ref_count BIGINT NOT NULL DEFAULT 1 CHECK (ref_count >= 0),
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling',
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -394,5 +405,49 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_file_logical_file ON snapshot_file(logic
 CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id);
 
 UPDATE schema_version SET version = 8 WHERE version < 8;
+
+-- Schema version 9: explicit chunker metadata on logical files.
+-- Canonical persisted identifier for historical rows: 'v1-simple-rolling'
+-- (matches chunk.VersionV1SimpleRolling in Go code).
+ALTER TABLE logical_file ADD COLUMN IF NOT EXISTS chunker_version TEXT;
+ALTER TABLE logical_file ALTER COLUMN chunker_version SET DEFAULT 'v1-simple-rolling';
+UPDATE logical_file
+SET chunker_version = 'v1-simple-rolling'
+WHERE chunker_version IS NULL;
+ALTER TABLE logical_file ALTER COLUMN chunker_version SET NOT NULL;
+
+UPDATE schema_version SET version = 9 WHERE version < 9;
+
+
+-- Schema version 10: explicit chunker metadata on dedup chunks.
+-- Canonical persisted identifier for historical rows: 'v1-simple-rolling'
+-- (matches chunk.VersionV1SimpleRolling in Go code).
+ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT;
+ALTER TABLE chunk ALTER COLUMN chunker_version SET DEFAULT 'v1-simple-rolling';
+UPDATE chunk
+SET chunker_version = 'v1-simple-rolling'
+WHERE chunker_version IS NULL;
+ALTER TABLE chunk ALTER COLUMN chunker_version SET NOT NULL;
+
+UPDATE schema_version SET version = 10 WHERE version < 10;
+
+-- Schema version 11: repository-level defaults for write-time behavior.
+-- Fresh installs default to v2-fastcdc. Upgrades keep v1-simple-rolling.
+CREATE TABLE IF NOT EXISTS repository_config (
+  key TEXT PRIMARY KEY CHECK (key <> ''),
+  value TEXT NOT NULL CHECK (value <> '')
+);
+
+INSERT INTO repository_config(key, value)
+VALUES (
+  'default_chunker',
+  CASE
+    WHEN current_setting('coldkeep.migration_had_schema_version', true) = '0' THEN 'v2-fastcdc'
+    ELSE 'v1-simple-rolling'
+  END
+)
+ON CONFLICT (key) DO NOTHING;
+
+UPDATE schema_version SET version = 11 WHERE version < 11;
 
 COMMIT;

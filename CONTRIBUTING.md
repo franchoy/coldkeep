@@ -236,6 +236,41 @@ If your change touches snapshots, retention, recovery, quarantine behavior, or
 GC eligibility, include at least one test that proves the intended lifecycle
 behavior rather than only a happy-path CLI assertion.
 
+### Stats Benchmarking For New Contributors
+
+If your change touches `coldkeep stats`, chunk metadata aggregation, or the
+operator-facing observability output, run the stats benchmark profiles once
+before opening a PR. This is not required for every documentation-only change,
+but it is the fastest way to catch accidental query-shape regressions.
+
+Run:
+
+``` bash
+go test -run '^$' -bench '^BenchmarkRunStatsResultWithDB_MixedRepo(Small|Large)?$' -benchmem ./internal/maintenance
+```
+
+The benchmark suite covers three repository sizes:
+
+- `BenchmarkRunStatsResultWithDB_MixedRepoSmall`: fast-path baseline for small local repositories
+- `BenchmarkRunStatsResultWithDB_MixedRepo`: representative mixed-version repository baseline
+- `BenchmarkRunStatsResultWithDB_MixedRepoLarge`: scale-path baseline for larger repositories
+
+Interpretation guidance:
+
+- compare your branch against `main` on the same machine when possible
+
+### Chunker Benchmark Validation Pitfalls
+
+When touching `internal/chunk/benchmark` or `coldkeep benchmark chunkers`, keep this validation posture:
+
+- Avoid exact chunk-count assertions across versions; use relative expectations and coverage invariants instead.
+- Use deterministic, seed-driven input generation only.
+- Keep shifted-data scenarios in scope; this is the primary boundary-stability signal.
+- Keep metrics simple and stable for review: reuse percentage, chunk count, and coverage invariants.
+- treat large jumps in `ns/op`, `B/op`, or `allocs/op` as a review trigger
+- prefer preserving simple grouped queries over adding per-row or per-file loops
+- mixed-version repositories are expected; benchmark coverage intentionally exercises both v1 and v2 metadata in one run
+
 Maintainers preparing a release should also run the
 [`PRE_RELEASE_CHECKLIST.md`](PRE_RELEASE_CHECKLIST.md) flow.
 

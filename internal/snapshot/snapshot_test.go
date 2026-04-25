@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	idb "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -36,7 +38,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func insertLogicalFile(t *testing.T, db *sql.DB, hash string) int64 {
 	t.Helper()
 	res, err := db.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		"file.txt", int64(128), hash, "COMPLETED",
 	)
 	if err != nil {
@@ -52,7 +54,7 @@ func insertLogicalFile(t *testing.T, db *sql.DB, hash string) int64 {
 func insertLogicalFileWithSize(t *testing.T, db *sql.DB, hash string, totalSize int64) int64 {
 	t.Helper()
 	res, err := db.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, 'v1-simple-rolling')`,
 		fmt.Sprintf("%s.txt", hash), totalSize, hash, "COMPLETED",
 	)
 	if err != nil {
@@ -1637,6 +1639,78 @@ func TestRestoreSnapshotNilStorageContext(t *testing.T) {
 	_, err := RestoreSnapshot(ctx, db, s.ID, []string{}, opts)
 	if err == nil || !strings.Contains(err.Error(), "storage context") {
 		t.Fatalf("expected storage context error, got: %v", err)
+	}
+}
+
+func TestRestoreSnapshotCompatibleWithVersionedLogicalMetadata(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), db)
+	sgctx := storage.StorageContext{DB: db, Writer: writer, ContainerDir: containersDir}
+
+	sourceDir := t.TempDir()
+	sourcePath := filepath.Join(sourceDir, "docs", "snapshot-version-compat.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	content := []byte("snapshot restore compatibility across versioned metadata")
+	if err := os.WriteFile(sourcePath, content, 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, sourcePath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store source file: %v", err)
+	}
+
+	snapshotID := "snap-restore-version-compat"
+	if err := CreateSnapshotWithOptions(ctx, db, SnapshotCreateOptions{ID: snapshotID, Type: "full"}); err != nil {
+		t.Fatalf("CreateSnapshotWithOptions: %v", err)
+	}
+
+	// Phase 4 compatibility clarification: snapshot restore should not require
+	// logical_file.chunker_version to equal linked chunk.chunker_version.
+	if _, err := db.Exec(`UPDATE logical_file SET chunker_version = 'v2-fastcdc' WHERE id = ?`, storeResult.FileID); err != nil {
+		t.Fatalf("update logical_file.chunker_version: %v", err)
+	}
+	if _, err := db.Exec(`
+		UPDATE chunk
+		SET chunker_version = 'v1-simple-rolling'
+		WHERE id IN (SELECT chunk_id FROM file_chunk WHERE logical_file_id = ?)
+	`, storeResult.FileID); err != nil {
+		t.Fatalf("update chunk.chunker_version: %v", err)
+	}
+
+	files, err := ListSnapshotFiles(ctx, db, snapshotID, 0, nil)
+	if err != nil {
+		t.Fatalf("ListSnapshotFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 snapshot file row, got %d", len(files))
+	}
+
+	restoreDest := filepath.Join(t.TempDir(), "restored-from-snapshot.txt")
+	res, err := RestoreSnapshot(ctx, db, snapshotID, []string{files[0].Path}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOverride,
+		Destination:     restoreDest,
+		Overwrite:       true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("RestoreSnapshot with version-divergent metadata: %v", err)
+	}
+	if res.RestoredFiles != 1 {
+		t.Fatalf("expected 1 restored file, got %d", res.RestoredFiles)
+	}
+
+	restored, err := os.ReadFile(restoreDest)
+	if err != nil {
+		t.Fatalf("read restored snapshot file: %v", err)
+	}
+	if string(restored) != string(content) {
+		t.Fatalf("unexpected restored snapshot payload: got=%q want=%q", string(restored), string(content))
 	}
 }
 

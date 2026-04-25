@@ -3,12 +3,25 @@ package maintenance
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/retention"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
+
+const unknownChunkerBucket = "unknown"
+
+func normalizeChunkerVersionBucket(raw string) string {
+	version := chunk.Version(strings.TrimSpace(raw))
+	if !chunk.IsWellFormedVersion(version) {
+		return unknownChunkerBucket
+	}
+	return string(version)
+}
 
 // SnapshotRetentionStats explains how retained logical content is distributed
 // across current-state references and snapshot history.
@@ -25,37 +38,44 @@ type SnapshotRetentionStats struct {
 
 // StatsResult holds the snapshot emitted by RunStatsResult.
 type StatsResult struct {
-	TotalFiles               int64                  `json:"total_files"`
-	TotalLogicalSizeBytes    int64                  `json:"total_logical_size_bytes"`
-	CompletedFiles           int64                  `json:"completed_files"`
-	CompletedSizeBytes       int64                  `json:"completed_size_bytes"`
-	ProcessingFiles          int64                  `json:"processing_files"`
-	ProcessingSizeBytes      int64                  `json:"processing_size_bytes"`
-	AbortedFiles             int64                  `json:"aborted_files"`
-	AbortedSizeBytes         int64                  `json:"aborted_size_bytes"`
-	HealthyContainers        int64                  `json:"healthy_containers"`
-	HealthyContainerBytes    int64                  `json:"healthy_container_bytes"`
-	QuarantineContainers     int64                  `json:"quarantine_containers"`
-	QuarantineContainerBytes int64                  `json:"quarantine_container_bytes"`
-	TotalContainers          int64                  `json:"total_containers"`
-	TotalContainerBytes      int64                  `json:"total_container_bytes"`
-	LiveBlockBytes           int64                  `json:"live_block_bytes"`
-	DeadBlockBytes           int64                  `json:"dead_block_bytes"`
-	GlobalDedupRatioPct      float64                `json:"global_dedup_ratio_pct"`
-	FragmentationRatioPct    float64                `json:"fragmentation_ratio_pct"`
-	TotalChunks              int64                  `json:"total_chunks"`
-	CompletedChunks          int64                  `json:"completed_chunks"`
-	CompletedChunkBytes      int64                  `json:"completed_chunk_bytes"`
-	ProcessingChunks         int64                  `json:"processing_chunks"`
-	AbortedChunks            int64                  `json:"aborted_chunks"`
-	TotalFileRetries         int64                  `json:"total_file_retries"`
-	AvgFileRetries           float64                `json:"avg_file_retries"`
-	MaxFileRetries           int64                  `json:"max_file_retries"`
-	TotalChunkRetries        int64                  `json:"total_chunk_retries"`
-	AvgChunkRetries          float64                `json:"avg_chunk_retries"`
-	MaxChunkRetries          int64                  `json:"max_chunk_retries"`
-	SnapshotRetention        SnapshotRetentionStats `json:"snapshot_retention"`
-	Containers               []ContainerStatRecord  `json:"containers"`
+	TotalFiles                 int64                  `json:"total_files"`
+	TotalLogicalSizeBytes      int64                  `json:"total_logical_size_bytes"`
+	CompletedFiles             int64                  `json:"completed_files"`
+	CompletedSizeBytes         int64                  `json:"completed_size_bytes"`
+	ProcessingFiles            int64                  `json:"processing_files"`
+	ProcessingSizeBytes        int64                  `json:"processing_size_bytes"`
+	AbortedFiles               int64                  `json:"aborted_files"`
+	AbortedSizeBytes           int64                  `json:"aborted_size_bytes"`
+	HealthyContainers          int64                  `json:"healthy_containers"`
+	HealthyContainerBytes      int64                  `json:"healthy_container_bytes"`
+	QuarantineContainers       int64                  `json:"quarantine_containers"`
+	QuarantineContainerBytes   int64                  `json:"quarantine_container_bytes"`
+	TotalContainers            int64                  `json:"total_containers"`
+	TotalContainerBytes        int64                  `json:"total_container_bytes"`
+	LiveBlockBytes             int64                  `json:"live_block_bytes"`
+	DeadBlockBytes             int64                  `json:"dead_block_bytes"`
+	GlobalDedupRatioPct        float64                `json:"global_dedup_ratio_pct"`
+	FragmentationRatioPct      float64                `json:"fragmentation_ratio_pct"`
+	TotalChunks                int64                  `json:"total_chunks"`
+	CompletedChunks            int64                  `json:"completed_chunks"`
+	CompletedChunkBytes        int64                  `json:"completed_chunk_bytes"`
+	ProcessingChunks           int64                  `json:"processing_chunks"`
+	AbortedChunks              int64                  `json:"aborted_chunks"`
+	ChunkCountsByVersion       map[string]int64       `json:"chunk_counts_by_version"`
+	ChunkBytesByVersion        map[string]int64       `json:"chunk_bytes_by_version"`
+	LogicalFileCountsByVersion map[string]int64       `json:"logical_file_counts_by_version"`
+	ActiveWriteChunker         string                 `json:"active_write_chunker"`
+	TotalChunkReferences       int64                  `json:"total_chunk_references"`
+	UniqueReferencedChunks     int64                  `json:"unique_referenced_chunks"`
+	EstimatedDedupRatioPct     float64                `json:"estimated_dedup_ratio_pct"`
+	TotalFileRetries           int64                  `json:"total_file_retries"`
+	AvgFileRetries             float64                `json:"avg_file_retries"`
+	MaxFileRetries             int64                  `json:"max_file_retries"`
+	TotalChunkRetries          int64                  `json:"total_chunk_retries"`
+	AvgChunkRetries            float64                `json:"avg_chunk_retries"`
+	MaxChunkRetries            int64                  `json:"max_chunk_retries"`
+	SnapshotRetention          SnapshotRetentionStats `json:"snapshot_retention"`
+	Containers                 []ContainerStatRecord  `json:"containers"`
 }
 
 // ContainerStatRecord holds per-container data.
@@ -91,6 +111,11 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 
 	r := &StatsResult{}
+	activeWriteChunker, err := resolveActiveWriteChunker(ctx, dbconn)
+	if err != nil {
+		return nil, err
+	}
+	r.ActiveWriteChunker = activeWriteChunker
 
 	var totalLogical, completedLogical, processingLogical, abortedLogical sql.NullInt64
 	var healthySize, quarantineSize, totalContainerSize, liveBytes, deadBytes sql.NullInt64
@@ -210,6 +235,69 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 	r.TotalChunks = r.CompletedChunks + r.ProcessingChunks + r.AbortedChunks
 
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) AS total_chunk_references,
+			COALESCE(COUNT(DISTINCT chunk_id), 0) AS unique_referenced_chunks
+		FROM file_chunk
+	`).Scan(&r.TotalChunkReferences, &r.UniqueReferencedChunks); err != nil {
+		return nil, fmt.Errorf("failed to query dedup signal stats: %w", err)
+	}
+	if r.TotalChunkReferences > 0 {
+		r.EstimatedDedupRatioPct = (1.0 - float64(r.UniqueReferencedChunks)/float64(r.TotalChunkReferences)) * 100
+	}
+
+	versionRows, err := dbconn.QueryContext(ctx, `
+		SELECT chunker_version, COUNT(*), COALESCE(SUM(size),0)
+		FROM chunk
+		GROUP BY chunker_version
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chunk counts by version: %w", err)
+	}
+	defer func() { _ = versionRows.Close() }()
+
+	r.ChunkCountsByVersion = make(map[string]int64)
+	r.ChunkBytesByVersion = make(map[string]int64)
+	for versionRows.Next() {
+		var version string
+		var count int64
+		var bytes int64
+		if err := versionRows.Scan(&version, &count, &bytes); err != nil {
+			return nil, err
+		}
+		bucket := normalizeChunkerVersionBucket(version)
+		r.ChunkCountsByVersion[bucket] += count
+		r.ChunkBytesByVersion[bucket] += bytes
+	}
+	if err := versionRows.Err(); err != nil {
+		return nil, err
+	}
+
+	logicalVersionRows, err := dbconn.QueryContext(ctx, `
+		SELECT chunker_version, COUNT(*)
+		FROM logical_file
+		GROUP BY chunker_version
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query logical file counts by version: %w", err)
+	}
+	defer func() { _ = logicalVersionRows.Close() }()
+
+	r.LogicalFileCountsByVersion = make(map[string]int64)
+	for logicalVersionRows.Next() {
+		var version string
+		var count int64
+		if err := logicalVersionRows.Scan(&version, &count); err != nil {
+			return nil, err
+		}
+		bucket := normalizeChunkerVersionBucket(version)
+		r.LogicalFileCountsByVersion[bucket] += count
+	}
+	if err := logicalVersionRows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Per-container breakdown
 	ctrRows, err := dbconn.QueryContext(ctx, `
 		SELECT
@@ -245,6 +333,36 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 
 	return r, nil
+}
+
+func isRegisteredChunkerVersion(version chunk.Version) bool {
+	defer func() {
+		_ = recover()
+	}()
+	_ = chunk.DefaultRegistry().MustGet(version)
+	return true
+}
+
+func resolveActiveWriteChunker(ctx context.Context, dbconn *sql.DB) (string, error) {
+	var raw string
+	err := dbconn.QueryRowContext(
+		ctx,
+		`SELECT value FROM repository_config WHERE key = $1`,
+		"default_chunker",
+	).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return string(chunk.DefaultChunkerVersion), nil
+		}
+		return "", fmt.Errorf("failed to query active write chunker: %w", err)
+	}
+
+	version := chunk.Version(strings.TrimSpace(raw))
+	if !chunk.IsWellFormedVersion(version) || !isRegisteredChunkerVersion(version) {
+		return unknownChunkerBucket, nil
+	}
+
+	return string(version), nil
 }
 
 func computeSnapshotRetentionStats(ctx context.Context, dbconn *sql.DB) (SnapshotRetentionStats, error) {

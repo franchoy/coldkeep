@@ -31,8 +31,8 @@ func TestVerifySystemStandardPassesOnConsistentPhysicalGraph(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"healthy.bin", int64(0), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -76,8 +76,8 @@ func TestVerifySystemStandardDetectsLogicalRefCountMismatch(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"mismatch.bin", int64(0), strings.Repeat("b", 64), filestate.LogicalFileCompleted, int64(5),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -103,7 +103,7 @@ func TestVerifySystemStandardDetectsNegativeLogicalRefCount(t *testing.T) {
 		t.Fatalf("disable sqlite check constraints: %v", err)
 	}
 	if _, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count) VALUES ($1, $2, $3, $4, $5)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')`,
 		"negative.bin", int64(0), strings.Repeat("c", 64), filestate.LogicalFileCompleted, int64(-1),
 	); err != nil {
 		t.Fatalf("insert logical file with negative ref_count: %v", err)
@@ -112,6 +112,52 @@ func TestVerifySystemStandardDetectsNegativeLogicalRefCount(t *testing.T) {
 	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "negative logical ref_count rows=1") {
 		t.Fatalf("expected negative logical ref_count verification error, got: %v", err)
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphIntegrity, code, ok, err)
+	}
+}
+
+func TestVerifySystemStandardDetectsEmptyLogicalFileChunkerVersion(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable sqlite check constraints: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES ($1, $2, $3, $4, $5, $6)`,
+		"missing-version.bin", int64(0), strings.Repeat("d", 64), filestate.LogicalFileCompleted, int64(0), "   ",
+	); err != nil {
+		t.Fatalf("insert logical file with empty chunker_version: %v", err)
+	}
+
+	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "empty logical_file chunker_version rows=1") {
+		t.Fatalf("expected logical_file chunker_version verification error, got: %v", err)
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphIntegrity, code, ok, err)
+	}
+}
+
+func TestVerifySystemStandardDetectsEmptyChunkChunkerVersion(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable sqlite check constraints: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		strings.Repeat("e", 64), int64(11), filestate.ChunkAborted, int64(0), int64(0), int64(0), "",
+	); err != nil {
+		t.Fatalf("insert chunk with empty chunker_version: %v", err)
+	}
+
+	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "empty chunk chunker_version rows=1") {
+		t.Fatalf("expected chunk chunker_version verification error, got: %v", err)
 	}
 	if code, ok := invariants.Code(err); !ok || code != invariants.CodePhysicalGraphIntegrity {
 		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphIntegrity, code, ok, err)

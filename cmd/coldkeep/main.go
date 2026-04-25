@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,6 +25,10 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/batch"
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/chunk/benchmark"
+	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
+	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -120,6 +125,7 @@ var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
 var runGCPhase = maintenance.RunGCWithContainersDirResult
+var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
 var createSnapshotPhase = snapshot.CreateSnapshotWithOptions
 var restoreSnapshotPhase = snapshot.RestoreSnapshot
@@ -132,6 +138,12 @@ var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var runStatsPhase = maintenance.RunStatsResult
+var inspectLogicalFilePhase = storage.GetLogicalFileInspectInfoWithDB
+var runChunkerBenchmarkPhase = runChunkerBenchmark
+var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
+	// Future-proof policy hook: no deprecated chunkers currently.
+	return false, ""
+}
 
 type cliError struct {
 	code int
@@ -221,6 +233,8 @@ func runCLI(args []string) int {
 	switch parsed.method {
 	case "init":
 		err = initCommand()
+	case "config":
+		err = runConfigCommand(parsed, outputMode)
 	case "doctor":
 		err = runDoctorCommand(parsed, outputMode)
 	case "store":
@@ -237,8 +251,12 @@ func runCLI(args []string) int {
 		err = runGCCommand(parsed, outputMode)
 	case "simulate":
 		err = runSimulateCommand(parsed, outputMode)
+	case "benchmark":
+		err = runBenchmarkCommand(parsed, outputMode)
 	case "stats":
 		err = runStatsCommand(parsed, outputMode)
+	case "inspect":
+		err = runInspectCommand(parsed, outputMode)
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
@@ -266,7 +284,7 @@ func runCLI(args []string) int {
 
 func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Report, error) {
 	if mode != outputModeText || !isQuietHealthyStartupRecoveryEnabled() {
-		return recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+		return startupRecoveryPhase(container.ContainersDir)
 	}
 
 	prevOutput := log.Writer()
@@ -278,7 +296,7 @@ func runStartupRecoveryWithOptionalLogBuffering(mode cliOutputMode) (recovery.Re
 		log.SetFlags(prevFlags)
 	}()
 
-	recoveryReport, recoveryErr := recovery.SystemRecoveryReportWithContainersDir(container.ContainersDir)
+	recoveryReport, recoveryErr := startupRecoveryPhase(container.ContainersDir)
 	if shouldReplayBufferedRecoveryLogs(recoveryReport, recoveryErr) {
 		if _, err := io.Copy(prevOutput, &buf); err != nil {
 			log.Printf("failed to replay buffered startup recovery logs: %v", err)
@@ -378,6 +396,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 	code := classifyExitCode(err)
 	invariantCode, hasInvariantCode := invariants.Code(err)
 	recommendedAction := invariants.RecommendedActionForError(err)
+	dbHint := localDBSetupHint(err)
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"status":      "error",
@@ -403,7 +422,52 @@ func printCLIError(err error, mode cliOutputMode) int {
 	if strings.TrimSpace(recommendedAction) != "" {
 		fmt.Fprintf(os.Stderr, "Recommended action: %s\n", recommendedAction)
 	}
+	if strings.TrimSpace(dbHint) != "" {
+		fmt.Fprintln(os.Stderr, dbHint)
+	}
 	return code
+}
+
+func localDBSetupHint(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if !strings.Contains(msg, "failed to connect to local db") {
+		return ""
+	}
+
+	missing := make([]string, 0, 6)
+	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSLMODE"} {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			missing = append(missing, key)
+		}
+	}
+
+	b := &strings.Builder{}
+	b.WriteString("DB setup hint: local mode requires PostgreSQL connection env vars.")
+	if len(missing) > 0 {
+		b.WriteString("\nMissing/empty: ")
+		b.WriteString(strings.Join(missing, ", "))
+		b.WriteString("\nExample:")
+		b.WriteString("\n  export DB_HOST=127.0.0.1")
+		b.WriteString("\n  export DB_PORT=5432")
+		b.WriteString("\n  export DB_USER=coldkeep")
+		b.WriteString("\n  export DB_PASSWORD=coldkeep")
+		b.WriteString("\n  export DB_NAME=coldkeep")
+		b.WriteString("\n  export DB_SSLMODE=disable")
+		b.WriteString("\n  export COLDKEEP_DB_AUTO_BOOTSTRAP=true")
+		return b.String()
+	}
+
+	if strings.Contains(msg, "ssl is not enabled on the server") {
+		b.WriteString("\nYour database rejected SSL negotiation; for local Docker PostgreSQL use DB_SSLMODE=disable.")
+		return b.String()
+	}
+
+	b.WriteString("\nCheck DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE values and PostgreSQL availability.")
+	return b.String()
 }
 
 func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
@@ -413,7 +477,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "simulate", "doctor", "snapshot", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version":
 		return
 	}
 
@@ -453,6 +517,119 @@ func runVersionCommand(mode cliOutputMode) error {
 	return nil
 }
 
+func validateConfigDefaultChunkerVersion(raw string) (chunk.Version, error) {
+	v := chunk.Version(strings.TrimSpace(raw))
+	if !chunk.IsWellFormedVersion(v) {
+		return "", usageErrorf("invalid default-chunker value %q: malformed version", raw)
+	}
+	if _, ok := chunk.DefaultRegistry().Get(v); !ok {
+		return "", usageErrorf("invalid default-chunker value %q: unknown chunker version", raw)
+	}
+	if deprecated, reason := isDeprecatedChunkerVersionPhase(v); deprecated {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return "", usageErrorf("invalid default-chunker value %q: deprecated chunker version", raw)
+		}
+		return "", usageErrorf("invalid default-chunker value %q: deprecated chunker version (%s)", raw, reason)
+	}
+	return v, nil
+}
+
+func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 2 {
+		return usageErrorf("Usage: coldkeep config <get|set> default-chunker [value]")
+	}
+
+	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
+	key := strings.TrimSpace(strings.ToLower(parsed.positionals[1]))
+	if key != "default-chunker" {
+		return usageErrorf("unknown config key: %s", parsed.positionals[1])
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return fmt.Errorf("load storage context: %w", err)
+	}
+	defer func() { _ = sgctx.Close() }()
+
+	repo := storage.NewRepository(sgctx.DB)
+
+	switch subcommand {
+	case "get":
+		if len(parsed.positionals) != 2 {
+			return usageErrorf("Usage: coldkeep config get default-chunker")
+		}
+
+		v, err := repo.GetDefaultChunkerVersion()
+		if err != nil {
+			return err
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "config get",
+				"data": map[string]any{
+					"key":   "default-chunker",
+					"value": string(v),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintln(os.Stdout, string(v))
+		return nil
+
+	case "set":
+		if len(parsed.positionals) != 3 {
+			return usageErrorf("Usage: coldkeep config set default-chunker <value>")
+		}
+
+		v, err := validateConfigDefaultChunkerVersion(parsed.positionals[2])
+		if err != nil {
+			return err
+		}
+
+		previous, err := repo.GetDefaultChunkerVersion()
+		if err != nil {
+			return err
+		}
+
+		if err := repo.SetDefaultChunkerVersion(v); err != nil {
+			return err
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "config set",
+				"data": map[string]any{
+					"key":   "default-chunker",
+					"value": string(v),
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "default-chunker set to %s\n", v)
+		if previous != v {
+			_, _ = fmt.Fprintln(os.Stdout, "Warning: This affects only new stored data.")
+			_, _ = fmt.Fprintln(os.Stdout, "Existing data remains unchanged.")
+		}
+		return nil
+
+	default:
+		return usageErrorf("unknown config subcommand: %s", parsed.positionals[0])
+	}
+}
+
 func verifyLevelToString(level verify.VerifyLevel) string {
 	switch level {
 	case verify.VerifyStandard:
@@ -483,6 +660,7 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 }
 
 var outputSupportedCommands = map[string]bool{
+	"config":       true,
 	"doctor":       true,
 	"verify":       true,
 	"list":         true,
@@ -495,6 +673,7 @@ var outputSupportedCommands = map[string]bool{
 	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
+	"benchmark":    true,
 	"snapshot":     true,
 }
 
@@ -524,7 +703,7 @@ func shouldRunStartupRecovery(command string) bool {
 	switch command {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "list", "search", "verify", "snapshot":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot":
 		return true
 	default:
 		return false
@@ -619,7 +798,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	path := parsed.positionals[0]
 	codecName, _ := parsed.lastFlagValue("codec")
 
-	sgctx, err := storage.LoadDefaultStorageContext()
+	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
@@ -826,7 +1005,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		target := strings.TrimSpace(targetArgs[0])
 		id, parseErr := strconv.ParseInt(target, 10, 64)
 		if parseErr != nil || id <= 0 {
-			return usageErrorf("Invalid fileID: %s", targetArgs[0])
+			return usageErrorf("Invalid fileID: %s (restore expects numeric logical file IDs; for path-based restore use --stored-path)\nDid you mean: coldkeep restore --stored-path <path> --destination <outputPath> --mode override", targetArgs[0])
 		}
 	}
 
@@ -1538,6 +1717,61 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	return nil
 }
 
+func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+
+	if len(parsed.positionals) != 2 || parsed.positionals[0] != "file" {
+		return usageErrorf("Usage: coldkeep inspect file <fileID>")
+	}
+
+	fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
+	if err != nil || fileID <= 0 {
+		return usageErrorf("Invalid fileID: %s", parsed.positionals[1])
+	}
+
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	info, err := inspectLogicalFilePhase(sgctx.DB, fileID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("file ID %d not found", fileID)
+		}
+		return err
+	}
+
+	avgChunkSizeKB := int64(math.Round(info.AvgChunkSizeBytes / 1024.0))
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "inspect",
+			"data": map[string]any{
+				"target":               "file",
+				"file_id":              info.FileID,
+				"chunker":              string(info.ChunkerVersion),
+				"chunks":               info.ChunkCount,
+				"avg_chunk_size_bytes": info.AvgChunkSizeBytes,
+				"avg_chunk_size_kb":    avgChunkSizeKB,
+			},
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Printf("Chunker: %s\n", info.ChunkerVersion)
+	fmt.Printf("Chunks: %d\n", info.ChunkCount)
+	fmt.Printf("Avg chunk size: %dKB\n", avgChunkSizeKB)
+
+	return nil
+}
+
 func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if err := ensureAllowedFlags(parsed, "output", "batch", "input", "fail-fast", "failFast"); err != nil {
 		return err
@@ -1806,8 +2040,37 @@ func bytesToMB(bytes int64) float64 {
 	return float64(bytes) / (1024 * 1024)
 }
 
+func bytesToGB(bytes int64) float64 {
+	return float64(bytes) / (1024 * 1024 * 1024)
+}
+
+func hasMixedRepositoryChunkerVersions(r *maintenance.StatsResult) bool {
+	if r == nil {
+		return false
+	}
+
+	versions := make(map[string]struct{})
+	collect := func(input map[string]int64) {
+		for version := range input {
+			trimmed := strings.TrimSpace(version)
+			if trimmed == "" || trimmed == "unknown" {
+				continue
+			}
+			versions[trimmed] = struct{}{}
+		}
+	}
+
+	collect(r.ChunkCountsByVersion)
+	collect(r.LogicalFileCountsByVersion)
+
+	return len(versions) > 1
+}
+
 func printStatsReport(r *maintenance.StatsResult) {
 	fmt.Println("\n====== coldkeep Stats ======")
+	if strings.TrimSpace(r.ActiveWriteChunker) != "" {
+		fmt.Printf("Active chunker (new writes):     %s\n", r.ActiveWriteChunker)
+	}
 	fmt.Printf("Logical files (total):           %d\n", r.TotalFiles)
 	fmt.Printf("Logical stored size (total):     %.2f MB\n", bytesToMB(r.TotalLogicalSizeBytes))
 	fmt.Printf("  Completed files:               %d (%.2f MB)\n", r.CompletedFiles, bytesToMB(r.CompletedSizeBytes))
@@ -1839,6 +2102,47 @@ func printStatsReport(r *maintenance.StatsResult) {
 	fmt.Printf("  Completed chunks:       %d (%.2f MB)\n", r.CompletedChunks, bytesToMB(r.CompletedChunkBytes))
 	fmt.Printf("  Processing chunks:      %d\n", r.ProcessingChunks)
 	fmt.Printf("  Aborted chunks:         %d\n", r.AbortedChunks)
+	if len(r.ChunkCountsByVersion) > 0 {
+		fmt.Printf("Chunker Distribution:\n")
+		versions := make([]string, 0, len(r.ChunkCountsByVersion))
+		for version := range r.ChunkCountsByVersion {
+			versions = append(versions, version)
+		}
+		sort.Strings(versions)
+		for _, version := range versions {
+			fmt.Printf("  %-22s %d chunks\n", version+":", r.ChunkCountsByVersion[version])
+		}
+	}
+	if len(r.ChunkBytesByVersion) > 0 {
+		fmt.Printf("Stored Data by Chunker:\n")
+		versions := make([]string, 0, len(r.ChunkBytesByVersion))
+		for version := range r.ChunkBytesByVersion {
+			versions = append(versions, version)
+		}
+		sort.Strings(versions)
+		for _, version := range versions {
+			fmt.Printf("  %-22s %.2f GB\n", version+":", bytesToGB(r.ChunkBytesByVersion[version]))
+		}
+	}
+	if len(r.LogicalFileCountsByVersion) > 0 {
+		fmt.Printf("Logical Files by Chunker:\n")
+		versions := make([]string, 0, len(r.LogicalFileCountsByVersion))
+		for version := range r.LogicalFileCountsByVersion {
+			versions = append(versions, version)
+		}
+		sort.Strings(versions)
+		for _, version := range versions {
+			fmt.Printf("  %-22s %d files\n", version+":", r.LogicalFileCountsByVersion[version])
+		}
+	}
+	if hasMixedRepositoryChunkerVersions(r) {
+		fmt.Println("⚠ Repository contains multiple chunker versions.")
+		fmt.Println("  This is expected after upgrades or configuration changes.")
+	}
+	fmt.Printf("Dedup Signal:\n")
+	fmt.Printf("  Total chunk references:  %d\n", r.TotalChunkReferences)
+	fmt.Printf("  Unique referenced chunks:%d\n", r.UniqueReferencedChunks)
+	fmt.Printf("  Estimated dedup ratio:   %.2f%%\n", r.EstimatedDedupRatioPct)
 	fmt.Println("============================")
 	fmt.Println("\nPer-container breakdown:")
 	for _, c := range r.Containers {
@@ -1860,7 +2164,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 	if len(parsed.positionals) == 0 {
-		return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--standard|--full|--deep]\nDid you mean: coldkeep verify system --standard")
 	}
 
 	verifyLevel, err := parseVerifyLevel(parsed)
@@ -1901,7 +2205,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		}
 		return nil
 	default:
-		return usageErrorf("Unknown target for verify: %s", target)
+		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
 }
 
@@ -2079,6 +2383,183 @@ type SimulateReport struct {
 	LogicalSizeBytes  int64   `json:"logical_size_bytes"`
 	PhysicalSizeBytes int64   `json:"physical_size_bytes"`
 	DedupRatioPct     float64 `json:"dedup_ratio_pct"`
+}
+
+// BenchmarkChunkersReport is the deterministic output payload for
+// `coldkeep benchmark chunkers`.
+type BenchmarkChunkersReport struct {
+	GeneratedAtUTC string                          `json:"generated_at_utc"`
+	Rows           []BenchmarkChunkersReportRecord `json:"rows"`
+}
+
+// BenchmarkChunkersReportRecord is one dataset-level comparison row.
+type BenchmarkChunkersReportRecord struct {
+	Dataset       string  `json:"dataset"`
+	Metric        string  `json:"metric"`
+	V1SimplePct   float64 `json:"v1_simple_pct"`
+	V2FastCDCPct  float64 `json:"v2_fastcdc_pct"`
+	DeltaPct      float64 `json:"delta_pct"`
+	WinnerVersion string  `json:"winner_version"`
+}
+
+func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+		return err
+	}
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep benchmark <chunkers> [--output <text|json>]")
+	}
+	if len(parsed.positionals) > 1 {
+		return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+	}
+
+	subcommand := parsed.positionals[0]
+	if subcommand != "chunkers" {
+		return usageErrorf("unknown benchmark subcommand %q (expected: chunkers)", subcommand)
+	}
+
+	report, err := runChunkerBenchmarkPhase()
+	if err != nil {
+		return fmt.Errorf("benchmark chunkers: %w", err)
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "benchmark",
+			"data":    report,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Println("Chunker benchmark (deterministic synthetic datasets)")
+	fmt.Println()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "DATASET\tMETRIC\tV1 SIMPLE (%)\tV2 FASTCDC (%)\tDELTA (%)\tWINNER")
+	for _, row := range report.Rows {
+		_, _ = fmt.Fprintf(
+			tw,
+			"%s\t%s\t%.2f\t%.2f\t%.2f\t%s\n",
+			row.Dataset,
+			row.Metric,
+			row.V1SimplePct,
+			row.V2FastCDCPct,
+			row.DeltaPct,
+			row.WinnerVersion,
+		)
+	}
+	_ = tw.Flush()
+
+	fmt.Println()
+	fmt.Println("Typical outcomes (informational):")
+	fmt.Println("  Small modifications: v1 ~92-96% reuse, v2 ~94-98% reuse")
+	fmt.Println("  Shifted data:        v1 ~5-20% reuse,  v2 ~25-50% reuse")
+	fmt.Println("  The shifted-data gap is the key justification signal.")
+	fmt.Println("  FastCDC is designed to improve dedup stability over time; actual results depend on workload.")
+
+	return nil
+}
+
+func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
+	type metricSpec struct {
+		datasetName string
+		metricName  string
+		compute     func(base, candidate benchmark.Result) (float64, error)
+	}
+
+	metrics := []metricSpec{
+		{
+			datasetName: "slight-modifications",
+			metricName:  "reuse-after-small-edit",
+			compute: func(base, candidate benchmark.Result) (float64, error) {
+				reuse, err := benchmark.CompareReuse(base, candidate)
+				if err != nil {
+					return 0, err
+				}
+				return reuse.ReuseRatioPct, nil
+			},
+		},
+		{
+			datasetName: "shifted-data",
+			metricName:  "reuse-after-shift",
+			compute: func(base, candidate benchmark.Result) (float64, error) {
+				stability, err := benchmark.CompareBoundaryStability(base, candidate)
+				if err != nil {
+					return 0, err
+				}
+				return stability.ReuseAfterShiftPct, nil
+			},
+		},
+	}
+
+	index := make(map[string]benchmark.Dataset)
+	for _, dataset := range benchmark.DefaultDatasets() {
+		index[dataset.Name] = dataset
+	}
+
+	v1 := simplecdc.New()
+	v2 := fastcdc.New()
+
+	rows := make([]BenchmarkChunkersReportRecord, 0, len(metrics))
+	for _, spec := range metrics {
+		dataset, ok := index[spec.datasetName]
+		if !ok {
+			return BenchmarkChunkersReport{}, fmt.Errorf("missing benchmark dataset %q", spec.datasetName)
+		}
+		if len(dataset.Mutations) == 0 {
+			return BenchmarkChunkersReport{}, fmt.Errorf("benchmark dataset %q has no mutation variants", spec.datasetName)
+		}
+
+		baseV1 := benchmark.RunChunker(v1, dataset.Base.Data)
+		candidateV1 := benchmark.RunChunker(v1, dataset.Mutations[0].Data)
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV1); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v1: %w", spec.datasetName, err)
+		}
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV1); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v1: %w", spec.datasetName, err)
+		}
+		v1Pct, err := spec.compute(baseV1, candidateV1)
+		if err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("compute %s for %q v1: %w", spec.metricName, spec.datasetName, err)
+		}
+
+		baseV2 := benchmark.RunChunker(v2, dataset.Base.Data)
+		candidateV2 := benchmark.RunChunker(v2, dataset.Mutations[0].Data)
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV2); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v2: %w", spec.datasetName, err)
+		}
+		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV2); err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v2: %w", spec.datasetName, err)
+		}
+		v2Pct, err := spec.compute(baseV2, candidateV2)
+		if err != nil {
+			return BenchmarkChunkersReport{}, fmt.Errorf("compute %s for %q v2: %w", spec.metricName, spec.datasetName, err)
+		}
+
+		winner := string(chunk.VersionV2FastCDC)
+		if v1Pct > v2Pct {
+			winner = string(chunk.VersionV1SimpleRolling)
+		}
+		if math.Abs(v2Pct-v1Pct) < 0.0001 {
+			winner = "tie"
+		}
+
+		rows = append(rows, BenchmarkChunkersReportRecord{
+			Dataset:       spec.datasetName,
+			Metric:        spec.metricName,
+			V1SimplePct:   v1Pct,
+			V2FastCDCPct:  v2Pct,
+			DeltaPct:      v2Pct - v1Pct,
+			WinnerVersion: winner,
+		})
+	}
+
+	return BenchmarkChunkersReport{
+		GeneratedAtUTC: time.Now().UTC().Format(time.RFC3339),
+		Rows:           rows,
+	}, nil
 }
 
 func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -3626,10 +4107,12 @@ func printHelp() {
 	fmt.Println("Commands:")
 	printHelpRows([][2]string{
 		{"  init", "Initialize Coldkeep with a new aes-gcm encryption key"},
+		{"  config get default-chunker [--output <text|json>]", "Get repository default chunker for new writes"},
+		{"  config set default-chunker <value> [--output <text|json>]", "Set repository default chunker for new writes. Affects only new stored data. Existing data is not modified."},
 		{"  doctor [--standard|--full|--deep] [--output <text|json>]", "Recommended operator health gate (corrective; may update metadata via recovery before verify; default: --standard)"},
 		{"  store [--codec <codec>] <file>", "Store a single file (state-changing)"},
 		{"  store-folder [--codec <codec>] <folder>", "Store all files in a folder recursively (state-changing)"},
-		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs into an output directory"},
+		{"  restore <fileID> [<fileID> ...] <outputDir> [--input <file>] [--dry-run] [--overwrite] [--fail-fast] [--output <text|json>]", "Restore one or more logical file IDs byte-identically (chunker-version independent)"},
 		{"  remove <fileID> [<fileID> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Remove one or more logical file IDs (legacy mode)"},
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  remove --stored-paths <path> [<path> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Batch remove physical path mappings in deterministic input order"},
@@ -3637,7 +4120,9 @@ func printHelp() {
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
+		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
 		{"  stats", "Show storage statistics"},
+		{"  inspect file <fileID> [--output <text|json>]", "Inspect one logical file with chunker and chunking summary"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
@@ -3729,6 +4214,8 @@ func printHelp() {
 	fmt.Println()
 	fmt.Println("Example:")
 	fmt.Println("  coldkeep init")
+	fmt.Println("  coldkeep config get default-chunker")
+	fmt.Println("  coldkeep config set default-chunker v2-fastcdc")
 	fmt.Println("  coldkeep doctor --full")
 	fmt.Println("  coldkeep store myfile.bin")
 	fmt.Println("  coldkeep store --codec aes-gcm myfile.bin")

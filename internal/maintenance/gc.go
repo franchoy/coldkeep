@@ -310,6 +310,19 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		return GCResult{}, err
 	}
 
+	// Final cleanup pass: reclaim active containers that have become fully empty.
+	// An active (unsealed) container where every chunk has live_ref_count = 0 and
+	// pin_count = 0 can be deleted entirely (file + metadata) without violating the
+	// append-only offset invariant, because we remove the whole container.
+	// Partially-dead active containers (mixed live/dead chunks) are left intact;
+	// they will be sealed and collected by the regular sealed-container path later.
+	// Dry-run skips this to avoid side effects.
+	if !dryRun {
+		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachability.RetainedLogicalIDs); err != nil {
+			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
+		}
+	}
+
 	result.AffectedContainers = affectedContainers
 	return result, nil
 }
@@ -349,4 +362,123 @@ func containerHasRetainedChunks(ctx context.Context, q gcChunkQuerier, container
 		}
 	}
 	return false, rows.Err()
+}
+
+// cleanupFullyDeadActiveContainers deletes active (unsealed) containers in which
+// every chunk has live_ref_count = 0 and pin_count = 0. Deleting the whole container
+// (both the physical file and all metadata rows) is safe because the append-only
+// offset invariant is preserved by removing the container entirely — no offsets shift.
+// Partially-dead containers (mixed live and dead chunks) are left intact;
+// they will be handled by the regular sealed-container GC path once sealed.
+func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, retainedIDs map[int64]struct{}) error {
+	// Identify active containers where no chunk is still live or pinned.
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT c.id, c.filename
+		FROM container c
+		WHERE c.sealed = FALSE AND c.quarantine = FALSE
+		AND NOT EXISTS (
+			SELECT 1
+			FROM blocks b
+			JOIN chunk ch ON ch.id = b.chunk_id
+			WHERE b.container_id = c.id
+			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
+		)
+		AND EXISTS (
+			SELECT 1 FROM blocks WHERE container_id = c.id
+		)
+		ORDER BY c.id ASC
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type activeContainer struct {
+		id       int64
+		filename string
+	}
+	var candidates []activeContainer
+	for rows.Next() {
+		var ac activeContainer
+		if err := rows.Scan(&ac.id, &ac.filename); err != nil {
+			return err
+		}
+		candidates = append(candidates, ac)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, ac := range candidates {
+		// Snapshot-retention safety net: skip containers whose chunks are retained.
+		hasRetained, err := containerHasRetainedChunks(ctx, dbconn, ac.id, retainedIDs)
+		if err != nil {
+			return fmt.Errorf("retention safety check for active container %d: %w", ac.id, err)
+		}
+		if hasRetained {
+			continue
+		}
+
+		tx, err := dbconn.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+
+		// Lock and re-verify: no live or pinned chunks in this container.
+		var stillFullyDead bool
+		chunkLockQuery := db.QueryWithOptionalForUpdate(dbconn, `
+			SELECT ch.live_ref_count, ch.pin_count
+			FROM blocks b
+			JOIN chunk ch ON ch.id = b.chunk_id
+			WHERE b.container_id = $1
+		`)
+		emptyQuery := fmt.Sprintf(`
+			WITH locked AS (%s)
+			SELECT NOT EXISTS (
+				SELECT 1 FROM locked WHERE live_ref_count > 0 OR pin_count > 0
+			)
+		`, chunkLockQuery)
+		if err := tx.QueryRowContext(ctx, emptyQuery, ac.id).Scan(&stillFullyDead); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if !stillFullyDead {
+			_ = tx.Rollback()
+			continue
+		}
+
+		// Delete all blocks + chunk rows for this container.
+		_, err = tx.ExecContext(ctx, `
+			WITH deleted_blocks AS (
+				DELETE FROM blocks WHERE container_id = $1 RETURNING chunk_id
+			)
+			DELETE FROM chunk c
+			USING deleted_blocks db
+			WHERE c.id = db.chunk_id
+			AND c.live_ref_count = 0
+			AND c.pin_count = 0
+		`, ac.id)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+
+		// Delete the container row.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM container WHERE id = $1`, ac.id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+
+		// Physical file deletion after commit.
+		containerPath := filepath.Join(containersDir, ac.filename)
+		if err := os.Remove(containerPath); err != nil {
+			log.Println("warning: failed to delete fully-dead active container file:", err)
+		}
+	}
+
+	return nil
 }

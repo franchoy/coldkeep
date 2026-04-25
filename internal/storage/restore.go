@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -61,6 +62,7 @@ type restoreChunkRow struct {
 	plaintextSize       int64
 	storedSize          int64
 	expectedChunkHash   string
+	chunkerVersion      string
 	chunkSize           int64
 	blocksCodec         string
 	blocksFormatVersion int
@@ -70,6 +72,71 @@ type restoreChunkRow struct {
 	chunkStatus         string
 	maxSize             int64
 	chunkID             int64
+}
+
+type restoreLogicalFileRow struct {
+	id           int64
+	originalName string
+	totalSize    int64
+	fileHash     string
+	status       string
+	// chunkerVersion identifies the provenance of the persisted file recipe.
+	// It is metadata about how the logical recipe was originally produced.
+	chunkerVersion string
+}
+
+func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) error {
+	trimmed := strings.TrimSpace(version)
+	if trimmed == "" {
+		return fmt.Errorf("logical file %d has empty chunker_version (migration failure, schema corruption, or unsupported stale repository state)", fileID)
+	}
+	// Restore policy: require syntactic sanity for persisted version metadata so
+	// corruption/migration issues fail fast, but do not require runtime support
+	// for the specific version string to replay already-persisted recipes.
+	if !chunk.IsWellFormedVersion(chunk.Version(trimmed)) {
+		return fmt.Errorf("logical file %d has malformed chunker_version %q (expected format like v1-simple-rolling)", fileID, trimmed)
+	}
+
+	// Restore remains recipe-driven. Unknown versions are tolerated as persisted
+	// compatibility metadata as long as the value is well-formed.
+	//
+	// Critical invariant: restore replays persisted chunk references and bytes; it
+	// does not recompute chunk boundaries with the active runtime chunker.
+	if _, ok := chunk.DefaultRegistry().Get(chunk.Version(trimmed)); !ok {
+		log.Printf("event=restore_metadata_warning action=unknown_chunker_version file_id=%d chunker_version=%q", fileID, trimmed)
+	}
+
+	return nil
+}
+
+func loadCompletedLogicalFileRowForRestore(ctx context.Context, tx *sql.Tx, fileID int64) (restoreLogicalFileRow, error) {
+	var row restoreLogicalFileRow
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT id, original_name, total_size, file_hash, status, chunker_version
+		FROM logical_file
+		WHERE status = $1 AND id = $2`,
+		filestate.LogicalFileCompleted,
+		fileID,
+	).Scan(
+		&row.id,
+		&row.originalName,
+		&row.totalSize,
+		&row.fileHash,
+		&row.status,
+		&row.chunkerVersion,
+	)
+	if err == sql.ErrNoRows {
+		return restoreLogicalFileRow{}, fmt.Errorf("logical file id %d not found", fileID)
+	}
+	if err != nil {
+		return restoreLogicalFileRow{}, fmt.Errorf("query logical_file: %w", err)
+	}
+	if err := validateRestoreLogicalFileChunkerVersion(fileID, row.chunkerVersion); err != nil {
+		return restoreLogicalFileRow{}, err
+	}
+
+	return row, nil
 }
 
 func pinLogicalFileRestoreChunks(dbconn *sql.DB, fileID int64) (string, string, []restoreChunkRow, []int64, error) {
@@ -89,19 +156,9 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		}
 	}()
 
-	var expectedFileHash string
-	var originalName string
-	err = tx.QueryRowContext(
-		ctx,
-		"SELECT original_name, file_hash FROM logical_file WHERE status = $1 AND id = $2",
-		filestate.LogicalFileCompleted,
-		fileID,
-	).Scan(&originalName, &expectedFileHash)
-	if err == sql.ErrNoRows {
-		return "", "", nil, nil, fmt.Errorf("logical file id %d not found", fileID)
-	}
+	logicalFileRow, err := loadCompletedLogicalFileRowForRestore(ctx, tx, fileID)
 	if err != nil {
-		return "", "", nil, nil, fmt.Errorf("query logical_file: %w", err)
+		return "", "", nil, nil, err
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -111,6 +168,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			b.plaintext_size,
 			b.stored_size,
 			c.chunk_hash,
+			c.chunker_version,
 			c.size,
 			b.codec,
 			b.format_version,
@@ -142,6 +200,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			&row.plaintextSize,
 			&row.storedSize,
 			&row.expectedChunkHash,
+			&row.chunkerVersion,
 			&row.chunkSize,
 			&row.blocksCodec,
 			&row.blocksFormatVersion,
@@ -154,6 +213,20 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		); err != nil {
 			return "", "", nil, nil, fmt.Errorf("scan chunk row: %w", err)
 		}
+		trimmedChunkVersion := strings.TrimSpace(row.chunkerVersion)
+		if trimmedChunkVersion == "" {
+			return "", "", nil, nil, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", row.chunkID)
+		}
+		if !chunk.IsWellFormedVersion(chunk.Version(trimmedChunkVersion)) {
+			return "", "", nil, nil, fmt.Errorf("chunk %d has malformed chunker_version %q (expected format like v1-simple-rolling)", row.chunkID, trimmedChunkVersion)
+		}
+		// Phase 4 compatibility rule: restore only requires chunk-level version
+		// metadata sanity/presence. It must not enforce per-file equality between
+		// logical_file.chunker_version and chunk.chunker_version because chunk rows
+		// are content-addressed and can be legitimately reused across version eras.
+		//
+		// chunk.chunker_version is origin metadata for the chunk row, not a restore
+		// compatibility constraint for every logical file that references it.
 		// If the container is missing (quarantined), filename will be NULL
 		// Allow the chunk row, but mark filename as empty string
 		if row.filename == "" {
@@ -189,7 +262,7 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 	}
 	tx = nil
 
-	return originalName, expectedFileHash, chunkRows, pinnedChunkIDs, nil
+	return logicalFileRow.originalName, logicalFileRow.fileHash, chunkRows, pinnedChunkIDs, nil
 }
 
 func unpinRestoreChunks(dbconn *sql.DB, chunkIDs []int64) error {

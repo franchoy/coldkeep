@@ -1,60 +1,27 @@
 package chunk
 
-import (
-	"io"
-	"os"
-)
+import "github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 
-const (
-	minChunkSize = 512 * 1024
-	MaxChunkSize = 2 * 1024 * 1024
-	mask         = 0x3FFFF
-)
+// MaxChunkSize is the hard upper bound on chunk payload size.
+// Sourced from the concrete v1-simple-rolling implementation.
+const MaxChunkSize = simplecdc.MaxChunkSize
 
+// ChunkFile is a compatibility shim retained for callers that have not yet
+// migrated to the interface-based path. New code should use:
+//
+//	chunk.DefaultChunker().ChunkFile(path)
+//
+// or inject a chunk.Chunker via StorageContext.Chunker.
+//
+// Deprecated: transitional — will be removed once all callers use the interface.
 func ChunkFile(filePath string) ([][]byte, error) {
-	file, err := os.Open(filePath)
+	results, err := DefaultChunker().ChunkFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = file.Close() }()
-
-	var chunks [][]byte
-	buffer := make([]byte, 0, MaxChunkSize)
-	var rolling uint32
-
-	temp := make([]byte, 32*1024)
-
-	for {
-		n, err := file.Read(temp)
-		if n > 0 {
-			for i := 0; i < n; i++ {
-				b := temp[i]
-				buffer = append(buffer, b)
-				rolling = (rolling << 1) + uint32(b)
-
-				if len(buffer) >= minChunkSize && ((rolling&mask) == 0 || len(buffer) >= MaxChunkSize) {
-					chunk := make([]byte, len(buffer))
-					copy(chunk, buffer)
-					chunks = append(chunks, chunk)
-					buffer = make([]byte, 0, MaxChunkSize)
-					rolling = 0
-				}
-			}
-		}
-
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
+	chunks := make([][]byte, 0, len(results))
+	for _, r := range results {
+		chunks = append(chunks, r.Data)
 	}
-
-	if len(buffer) > 0 {
-		chunk := make([]byte, len(buffer))
-		copy(chunk, buffer)
-		chunks = append(chunks, chunk)
-	}
-
 	return chunks, nil
 }

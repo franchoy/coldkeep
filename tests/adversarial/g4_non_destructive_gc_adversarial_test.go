@@ -130,8 +130,8 @@ func TestAdversarialG4PinnedChunkWithZeroLiveRefsSurvivesGC(t *testing.T) {
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')
 		 RETURNING id`,
 		"g4-pinned-zero-live-chunk",
 		int64(27),

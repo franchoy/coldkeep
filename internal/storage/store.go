@@ -11,13 +11,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
-	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -835,11 +834,33 @@ func markLogicalFileForReuseValidationFailureWithContext(ctx context.Context, db
 	return markLogicalFileForRebuildWithPolicyWithContext(ctx, dbconn, fileID, true)
 }
 
+func assertLogicalFileVersionMatchesActive(insertedLogicalFileVersion string, activeVersion string) error {
+	insertedTrimmed := strings.TrimSpace(insertedLogicalFileVersion)
+	activeTrimmed := strings.TrimSpace(activeVersion)
+	if insertedTrimmed != activeTrimmed {
+		return fmt.Errorf("logical_file chunker_version mismatch: inserted=%q active=%q", insertedLogicalFileVersion, activeVersion)
+	}
+	return nil
+}
+
+func assertChunkVersionMatchesActive(insertedChunkVersion string, activeVersion string) error {
+	insertedTrimmed := strings.TrimSpace(insertedChunkVersion)
+	activeTrimmed := strings.TrimSpace(activeVersion)
+	if insertedTrimmed != activeTrimmed {
+		return fmt.Errorf("chunk chunker_version mismatch: inserted=%q active=%q", insertedChunkVersion, activeVersion)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // CLAIM-BASED CONCURRENCY CONTROL FOR LOGICAL FILES AND CHUNKS
 // -----------------------------------------------------------------------------
 
-func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
+func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	if strings.TrimSpace(activeVersion) == "" {
+		return 0, "", fmt.Errorf("logical_file.chunker_version must not be empty")
+	}
+
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err
@@ -854,29 +875,35 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 	// Insert logical file (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
 
+	var insertedLogicalFileVersion string
 	insErr := tx.QueryRowContext(
 		ctx,
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, $4, 0)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, $4, 0, $5)
 		ON CONFLICT (file_hash, total_size) DO NOTHING
-		RETURNING id`,
+		RETURNING id, chunker_version`,
 		fileinfo.Name(),
 		fileinfo.Size(),
 		fileHash,
 		filestate.LogicalFileProcessing,
-	).Scan(&fileID)
+		activeVersion,
+	).Scan(&fileID, &insertedLogicalFileVersion)
 
 	switch insErr {
 	case sql.ErrNoRows:
 		// Conflict happened: someone else already stored this file hash
 		var existingID int64
+		var existingChunkerVersion string
 		if err := tx.QueryRowContext(
 			ctx,
-			`SELECT id, status FROM logical_file WHERE file_hash = $1 and total_size = $2`,
+			`SELECT id, status, chunker_version FROM logical_file WHERE file_hash = $1 and total_size = $2`,
 			fileHash,
 			fileinfo.Size(),
-		).Scan(&existingID, &filestatus); err != nil {
+		).Scan(&existingID, &filestatus, &existingChunkerVersion); err != nil {
 			return 0, "", err
+		}
+		if strings.TrimSpace(existingChunkerVersion) == "" {
+			return 0, "", fmt.Errorf("logical_file %d has empty chunker_version (repository corruption or incomplete migration)", existingID)
 		}
 
 		switch filestatus {
@@ -989,6 +1016,11 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 		}
 	case nil:
 		// We won: this file is new and we should store it
+		// Invariant: the logical file recipe owner version must match the
+		// resolved chunker version chosen for this store operation.
+		if err := assertLogicalFileVersionMatchesActive(insertedLogicalFileVersion, activeVersion); err != nil {
+			return 0, "", err
+		}
 		filestatus = filestate.LogicalFileProcessing
 	default:
 		return 0, "", insErr
@@ -1002,14 +1034,21 @@ func claimLogicalFileWithContext(ctx context.Context, dbconn *sql.DB, fileinfo o
 	return fileID, filestatus, nil
 }
 
-func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64) (chunkID int64, chunkstatus string, isNew bool, err error) {
+func claimChunk(dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion string) (chunkID int64, chunkstatus string, isNew bool, err error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
-	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, container.ContainersDir)
+	return claimChunkWithContext(ctx, dbconn, chunkHash, chunksize, activeVersion, container.ContainersDir)
 }
 
-func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, containersDir string) (fileID int64, filestatus string, err error) {
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, containersDir)
+func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, fileinfo os.FileInfo, fileHash string, activeVersion string, containersDir string) (fileID int64, filestatus string, err error) {
+	// Reuse acceptance is intentionally two-phase:
+	//  1) claim by content identity (file_hash + size), then
+	//  2) validate graph/semantic replay safety for COMPLETED candidates.
+	// If validation fails, we mark the candidate ABORTED, clean stale mappings,
+	// and claim again so the caller rebuilds a fresh canonical recipe.
+	//
+	// This is deliberate safety behavior, not opportunistic best-effort reuse.
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
@@ -1028,7 +1067,7 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 		return 0, "", errors.Join(reuseErr, err)
 	}
 
-	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, containersDir)
+	fileID, filestatus, err = claimLogicalFileWithContext(ctx, dbconn, fileinfo, fileHash, activeVersion, containersDir)
 	if err != nil {
 		return 0, "", err
 	}
@@ -1044,7 +1083,10 @@ func prepareLogicalFileForStoreWithContext(ctx context.Context, dbconn *sql.DB, 
 	return fileID, filestatus, nil
 }
 
-func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string, chunksize int64, activeVersion string, containersDir string) (chunkID int64, chunkstatus string, isNew bool, err error) {
+	if strings.TrimSpace(activeVersion) == "" {
+		return 0, "", false, fmt.Errorf("chunk.chunker_version must not be empty")
+	}
 
 	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1059,26 +1101,38 @@ func claimChunkWithContext(ctx context.Context, dbconn *sql.DB, chunkHash string
 
 	// Insert chunk (concurrency-safe)
 	// If another goroutine inserts the same hash at the same time, we won't error.
+	var insertedChunkVersion string
 	insErr := tx.QueryRowContext(
 		ctx,
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-				VALUES ($1, $2, $3, 0)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+				VALUES ($1, $2, $3, 0, $4)
 				ON CONFLICT (chunk_hash, size) DO NOTHING
-				RETURNING id`,
+				RETURNING id, chunker_version`,
 		chunkHash,
 		chunksize,
 		filestate.ChunkProcessing,
-	).Scan(&chunkID)
+		activeVersion,
+	).Scan(&chunkID, &insertedChunkVersion)
 
 	switch insErr {
 	case nil:
 		// We won: this chunk is new
+		if err := assertChunkVersionMatchesActive(insertedChunkVersion, activeVersion); err != nil {
+			return 0, "", false, err
+		}
 		chunkstatus = filestate.ChunkProcessing
 		isNew = true
 	case sql.ErrNoRows:
-		// Someone else inserted it first
-		if err := tx.QueryRowContext(ctx, `SELECT id, status FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus); err != nil {
+		// Someone else inserted a content-identical chunk first.
+		// Keep dedup identity keyed only by hash+size.
+		// chunk.chunker_version is origin metadata for the existing chunk row,
+		// not a compatibility gate for reuse by a later logical file recipe.
+		var existingChunkerVersion string
+		if err := tx.QueryRowContext(ctx, `SELECT id, status, chunker_version FROM chunk WHERE chunk_hash = $1 AND size = $2`, chunkHash, chunksize).Scan(&chunkID, &chunkstatus, &existingChunkerVersion); err != nil {
 			return 0, "", false, err
+		}
+		if strings.TrimSpace(existingChunkerVersion) == "" {
+			return 0, "", false, fmt.Errorf("chunk %d has empty chunker_version (repository corruption or incomplete migration)", chunkID)
 		}
 		switch chunkstatus {
 		case filestate.ChunkCompleted:
@@ -1506,19 +1560,42 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		validationContainerDir = ""
 	}
 
+	// Phase 3 store flow pattern:
+	//  1. resolve one active chunker for the whole operation
+	//  2. capture one active version from that chunker
+	//  3. claim/create the logical file recipe owner with that version
+	//  4. chunk the file with the resolved chunker
+	//  5. for each chunk: hash, reuse-or-create chunk row with activeVersion when new,
+	//     then link ordered file_chunk membership
+	//  6. finalize logical-file state and attach physical-file metadata
+	// The logical_file claim happens before ChunkFile() so the store path preserves
+	// its existing concurrency and recovery semantics, but the version source is the
+	// same resolved chunker used to produce the chunk list.
+	storeService := NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker)
+	dbconn := storeService.Repository().DB()
+	activeChunker, err := storeService.ResolveActiveChunker()
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+	effectiveChunker := activeChunker.Chunker
+	activeVersion := activeChunker.Version
+	if strings.TrimSpace(string(activeVersion)) == "" {
+		return StoreFileResult{}, fmt.Errorf("resolved active chunker version must not be empty")
+	}
+	activeVersionString := string(activeVersion)
 	// Try to claim logical file for this hash (concurrency-safe)
-	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, sgctx.DB, fileinfo, fileHash, validationContainerDir)
+	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, dbconn, fileinfo, fileHash, activeVersionString, validationContainerDir)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 	result.FileID = fileID
 
 	if filestatus == filestate.LogicalFileCompleted {
-		tx, err := sgctx.DB.BeginTx(ctx, nil)
+		tx, err := dbconn.BeginTx(ctx, nil)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
-		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, sgctx.DB, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
 			_ = tx.Rollback()
 			return StoreFileResult{}, err
 		}
@@ -1535,7 +1612,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		if !completed {
 			cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
 			defer cleanupCancel()
-			if _, execErr := sgctx.DB.ExecContext(
+			if _, execErr := dbconn.ExecContext(
 				cleanupCtx,
 				`UPDATE logical_file SET status = $1 WHERE id = $2`,
 				filestate.LogicalFileAborted,
@@ -1547,7 +1624,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}()
 
 	// At this point, we have a logical_file row in "PROCESSING" status for this file hash, either created by us or by another process.
-	chunks, err := chunk.ChunkFile(path)
+	chunks, err := effectiveChunker.ChunkFile(path)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -1561,21 +1638,22 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
 	// not by this low-level result function.
 
-	for _, chunkData := range chunks {
+	for _, chunkResult := range chunks {
 		if err := ctx.Err(); err != nil {
 			return StoreFileResult{}, err
 		}
+		chunkData := chunkResult.Data
 		sum := sha256.Sum256(chunkData)
 		chunkHash := hex.EncodeToString(sum[:])
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, sgctx.DB, chunkHash, int64(len(chunkData)), validationContainerDir)
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, chunkHash, int64(len(chunkData)), activeVersionString, validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 
 		if chunkStatus == filestate.ChunkCompleted {
 			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			tx, err := sgctx.DB.BeginTx(ctx, nil)
+			tx, err := dbconn.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
@@ -1600,7 +1678,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 			if err := ctx.Err(); err != nil {
 				return StoreFileResult{}, err
 			}
-			tx, err := sgctx.DB.BeginTx(ctx, nil)
+			tx, err := dbconn.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
@@ -1636,7 +1714,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				if getBlockErr == nil && existingBlock != nil {
 					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
 					// block metadata already exists for this chunk ID.
-					tx2, err2 := sgctx.DB.BeginTx(ctx, nil)
+					tx2, err2 := dbconn.BeginTx(ctx, nil)
 					if err2 != nil {
 						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
@@ -1681,7 +1759,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 					return StoreFileResult{}, getBlockErr
 				}
 
-				if _, err3 := sgctx.DB.ExecContext(
+				if _, err3 := dbconn.ExecContext(
 					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
 					filestate.ChunkAborted,
@@ -1801,15 +1879,15 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// either all chunks are successfully linked AND the file is marked complete, or the file
 	// remains PROCESSING for corrective recovery if any verification fails. This avoids the semantic gap
 	// where chunks could be fully committed but the file completion is left dangling.
-	if err := finalizeLogicalFileStorageWithContext(ctx, sgctx.DB, fileID, chunkOrder); err != nil {
+	if err := finalizeLogicalFileStorageWithContext(ctx, dbconn, fileID, chunkOrder); err != nil {
 		return StoreFileResult{}, err
 	}
 
-	tx, err := sgctx.DB.BeginTx(ctx, nil)
+	tx, err := dbconn.BeginTx(ctx, nil)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
-	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, sgctx.DB, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
 		_ = tx.Rollback()
 		return StoreFileResult{}, err
 	}
@@ -1868,8 +1946,14 @@ func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
 }
 
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
-
-	workerCount := runtime.NumCPU()
+	// Default to a single worker for deterministic append ordering and safer
+	// container mutation semantics under mixed file sizes.
+	workerCount := 1
+	if configuredWorkers := strings.TrimSpace(os.Getenv("COLDKEEP_STORE_FOLDER_WORKERS")); configuredWorkers != "" {
+		if parsed, parseErr := strconv.Atoi(configuredWorkers); parseErr == nil && parsed > 0 {
+			workerCount = parsed
+		}
+	}
 	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
 		workerCount = 1
 	}

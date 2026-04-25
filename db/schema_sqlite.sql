@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 8 WHERE version < 8;
-INSERT OR IGNORE INTO schema_version(version) VALUES (8);
+UPDATE schema_version SET version = 11 WHERE version < 11;
+INSERT OR IGNORE INTO schema_version(version) VALUES (11);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS chunk (
   pin_count INTEGER NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_hash_size ON chunk(chunk_hash, size);
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS logical_file (
   total_size INTEGER NOT NULL CHECK (total_size >= 0),
   file_hash TEXT NOT NULL,
   ref_count INTEGER NOT NULL DEFAULT 1 CHECK (ref_count >= 0),
+  chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling',
   status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -83,6 +85,16 @@ CREATE TABLE IF NOT EXISTS file_chunk (
 
 CREATE INDEX IF NOT EXISTS idx_file_chunk_logical_file_id ON file_chunk(logical_file_id);
 CREATE INDEX IF NOT EXISTS idx_file_chunk_chunk_id ON file_chunk(chunk_id);
+
+CREATE TABLE IF NOT EXISTS repository_config (
+  key TEXT PRIMARY KEY CHECK (key != ''),
+  value TEXT NOT NULL CHECK (value != '')
+);
+
+-- Fresh v1.5+ installs default to v2-fastcdc. Upgrade paths are handled in
+-- internal/db/migrations.go to keep legacy repositories on v1 unless changed manually.
+INSERT OR IGNORE INTO repository_config(key, value)
+VALUES ('default_chunker', 'v2-fastcdc');
 
 CREATE TABLE IF NOT EXISTS blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

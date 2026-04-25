@@ -70,7 +70,7 @@ func TestApplyPaginationAppendsLimitThenOffset(t *testing.T) {
 	limitValue := int64(10)
 	offsetValue := int64(5)
 
-	query, params := applyPagination("SELECT * FROM logical_file ORDER BY created_at DESC", []interface{}{"completed", "report"}, 3, &limitValue, &offsetValue)
+	query, params := applyPagination("SELECT id, original_name, total_size, file_hash, status, created_at FROM logical_file ORDER BY created_at DESC", []interface{}{"completed", "report"}, 3, &limitValue, &offsetValue)
 
 	if !strings.Contains(query, "LIMIT $3 OFFSET $4") {
 		t.Fatalf("unexpected query: %s", query)
@@ -89,7 +89,7 @@ func TestApplyPaginationAppendsLimitThenOffset(t *testing.T) {
 func TestApplyPaginationWithLimitOnly(t *testing.T) {
 	limitValue := int64(7)
 
-	query, params := applyPagination("SELECT * FROM logical_file", []interface{}{"completed"}, 2, &limitValue, nil)
+	query, params := applyPagination("SELECT id, original_name, total_size, file_hash, status, created_at FROM logical_file", []interface{}{"completed"}, 2, &limitValue, nil)
 
 	if !strings.Contains(query, "LIMIT $2") || strings.Contains(query, "OFFSET") {
 		t.Fatalf("unexpected query for limit-only case: %s", query)
@@ -105,7 +105,7 @@ func TestApplyPaginationWithLimitOnly(t *testing.T) {
 func TestApplyPaginationWithOffsetOnly(t *testing.T) {
 	offsetValue := int64(12)
 
-	query, params := applyPagination("SELECT * FROM logical_file", []interface{}{"completed"}, 2, nil, &offsetValue)
+	query, params := applyPagination("SELECT id, original_name, total_size, file_hash, status, created_at FROM logical_file", []interface{}{"completed"}, 2, nil, &offsetValue)
 
 	if strings.Contains(query, "LIMIT") || !strings.Contains(query, "OFFSET $2") {
 		t.Fatalf("unexpected query for offset-only case: %s", query)
@@ -119,7 +119,7 @@ func TestApplyPaginationWithOffsetOnly(t *testing.T) {
 }
 
 func TestApplyPaginationWithNoPaginationLeavesQueryUnchanged(t *testing.T) {
-	baseQuery := "SELECT * FROM logical_file ORDER BY created_at DESC"
+	baseQuery := "SELECT id, original_name, total_size, file_hash, status, created_at FROM logical_file ORDER BY created_at DESC"
 	baseParams := []interface{}{"completed"}
 
 	query, params := applyPagination(baseQuery, baseParams, 2, nil, nil)

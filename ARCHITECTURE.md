@@ -9,6 +9,7 @@ Read [README.md](README.md) first if you need installation, quickstart, CLI exam
 Companion documents:
 
 - [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
+- [COMPATIBILITY.md](COMPATIBILITY.md) for version-compatibility and chunker-evolution contract
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow and local CI guidance
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
@@ -33,6 +34,20 @@ Correctness has five explicit layers:
 - v1.2 physical-graph coherence: audited physical roots, explicit repair, invariant taxonomy, batch maintenance semantics
 - v1.3 snapshot-based retention: immutable point-in-time captures, snapshot-protected GC, reachability audits
 - v1.4 snapshot clarity hardening: lineage metadata is explicit and non-dependency by contract
+
+Migration philosophy:
+
+- coldkeep prefers non-destructive evolution over automatic optimization.
+
+## Deep Design View
+
+This deep version of the architecture captures five linked aspects:
+
+- chunking system design (CDC + content-addressed recipes),
+- chunker versioning model,
+- explicit store and restore execution flow,
+- invariant families that must remain true across lifecycle phases,
+- supporting diagrams for system and flow understanding.
 
 ### Correctness Layers
 
@@ -106,6 +121,119 @@ Storage pipeline:
 
 ```text
 logical_file -> file_chunk -> chunk -> blocks -> container
+```
+
+## Chunking Model
+
+coldkeep uses content-defined chunking (CDC).
+
+Key properties:
+
+- boundaries depend on input data characteristics,
+- chunker versions implement boundary-strategy differences,
+- persisted state is a chunked reconstruction recipe (`file_chunk -> chunk -> blocks`), not raw file-blob storage.
+
+Example:
+
+```text
+File A (v1):
+    [chunk1][chunk2][chunk3]
+
+File B (v2):
+    [chunk4][chunk5]
+```
+
+Even if content overlaps, chunk layout may differ across versions because boundary strategy differs.
+
+## Chunker Versioning
+
+Versioning model:
+
+- each committed logical file records one `chunker_version` provenance label,
+- repositories may contain mixed-version logical-file history,
+- the effective chunker version is selected at store/write time,
+- restore is recipe replay and does not require executing the active runtime chunker.
+
+This separation is intentional: write-time chunker evolution changes future layout
+behavior while restore compatibility remains metadata-driven.
+
+## Store Flow (Write Path)
+
+The store path is deterministic, transactional, and append-oriented.
+
+High-level flow:
+
+1. Select active write chunker version from repository configuration.
+2. Chunk input bytes according to that version's CDC boundary strategy.
+3. Resolve/reuse-or-create chunk identities under repository integrity rules.
+4. Append physical block payloads to active container files as needed.
+5. Persist logical recipe mapping (`logical_file`, `file_chunk`, `chunk`, `blocks`) transactionally.
+6. Commit only when metadata and durable bytes satisfy completion invariants.
+
+Non-obvious safety gate (important for future maintenance):
+
+- completed-file/chunk reuse is never accepted on content hash alone;
+- store runs structural and (mode-dependent) semantic replay validation before returning `AlreadyStored=true`;
+- if a claimed completed candidate fails validation, store marks it aborted, cleans stale recipe links, and reclaims to rebuild a fresh canonical recipe;
+- semantic reuse mode is controlled by `COLDKEEP_REUSE_SEMANTIC_VALIDATION` (`off`, `suspicious`, `always`; default `suspicious`).
+
+This avoids hidden "magic reuse" behavior: reuse is explicit, gated, and fail-closed when integrity signals disagree.
+
+Store flow diagram:
+
+```text
+input bytes
+    |
+    v
+select active chunker version
+    |
+    v
+chunking (CDC)
+    |
+    v
+chunk identity resolve (reuse/new)
+    |
+    +--> append block bytes to container (if new payload)
+    |
+    v
+persist recipe metadata (logical_file/file_chunk/chunk/blocks)
+    |
+    v
+transaction commit -> COMPLETED state visibility
+```
+
+## Restore Flow (Read Path)
+
+Restore is recipe-driven replay, not re-chunking.
+
+High-level flow:
+
+1. Load completed logical-file recipe metadata.
+2. Validate metadata sanity (including chunker-version field shape/sanity policy).
+3. Resolve ordered `file_chunk -> chunk -> blocks` graph.
+4. Stream/decode referenced block bytes into a temporary output.
+5. Verify reconstructed content hash against stored logical-file hash.
+6. Atomically publish destination file.
+
+Restore flow diagram:
+
+```text
+logical file id/path
+    |
+    v
+load persisted recipe metadata
+    |
+    v
+ordered chunk/block replay
+    |
+    v
+reconstruct temp file
+    |
+    v
+final hash verification
+    |
+    v
+atomic rename to destination
 ```
 
 ## Container and Append Model
@@ -213,6 +341,98 @@ Loss-minimizing behavior:
 No partially written or inconsistent state is exposed as valid user-visible data.
 
 ## Restore Model (Atomic and Hash-Gated)
+
+### Guarantee 1: Chunker-Version-Independent Restore
+
+Restore correctness is intentionally decoupled from write-time chunker evolution.
+
+Contract:
+
+- restore reconstructs bytes from persisted metadata references (`file_chunk`, `chunk`, `blocks`), not from re-chunking input with the current chunker.
+- write-time chunker selection affects future storage shape and dedup behavior, but not replayability of already persisted logical files.
+- chunker version is retained as metadata for auditability and observability.
+
+Non-guarantees:
+
+- cross-version chunk boundary identity is not guaranteed.
+- cross-version dedup ratio identity is not guaranteed.
+
+### Guarantee 2: Snapshot Stability Under Chunker Evolution
+
+Snapshot stability is based on metadata-level logical-file references, not on the active chunker algorithm.
+
+Contract:
+
+- snapshot membership is persisted via `snapshot_file` links to logical files.
+- committed logical files are immutable reconstruction recipes.
+- restore of snapshot content replays persisted logical-file chunk graphs and does not re-chunk data with the current default chunker.
+- therefore, chunker evolution for new writes does not invalidate previously created snapshots.
+
+### Guarantee 3: No Automatic Data Migration
+
+Write-path evolution is explicit and command-driven, not background-mutating.
+
+Contract:
+
+- coldkeep does not perform automatic re-chunking of committed logical files.
+- coldkeep does not run background migration that rewrites persisted chunk/block mappings.
+- stored payload representation is changed only by explicit operator-initiated commands that write new data.
+
+This preserves auditability and avoids implicit state drift caused by unattended migrations.
+
+Non-guarantee note:
+
+- coldkeep does not provide automatic background optimization or re-chunking of existing committed data.
+
+### Guarantee 4: Chunker Evolution Safety in Mixed-Version Repositories
+
+Chunker evolution is designed for coexistence rather than repository bifurcation.
+
+Contract:
+
+- each committed logical file has one chunker-version provenance label.
+- repository history may contain logical files written under multiple chunker versions.
+- fresh v1.5+ repositories initialize write default to `v2-fastcdc`; upgrade paths preserve prior write default (`v1-simple-rolling` unless explicitly changed).
+- chunks may be reused across chunker versions if their content is identical.
+- chunk.chunker_version is origin metadata for the chunk row, not a reuse constraint for later logical files.
+
+This supports long-lived repositories where chunker defaults change over time without breaking compatibility expectations.
+
+Non-guarantee note:
+
+- coexistence safety does not imply guaranteed cross-version dedup efficiency; version transitions may temporarily reduce observed reuse.
+
+Documentation boundary note:
+
+- treat restore correctness and snapshot stability as guarantees,
+- treat cross-version reuse permission as a guarantee when content identity matches,
+- and treat reuse ratios, chunk counts, and boundary alignment as implementation details unless explicitly promoted to contract language.
+
+### Guarantee 5: Deterministic Chunking Per Version
+
+Determinism is defined within each chunker version contract, not across versions.
+
+Contract:
+
+- for the same chunker version and identical input bytes, chunk boundaries and chunk sequence are deterministic.
+- deterministic behavior is evaluated per version because algorithms intentionally differ across versions.
+- boundary differences between versions are expected and do not violate restore correctness or compatibility guarantees.
+
+Non-guarantee note:
+
+- stable chunk boundaries across different chunker versions are not part of the compatibility contract.
+
+### Guarantee 6: Forward-Compatible Chunker Metadata Handling
+
+Forward compatibility is achieved by recipe-driven restore and metadata-sanity gates.
+
+Contract:
+
+- restore does not execute chunker algorithms to reconstruct stored data; it replays persisted chunk bytes and mappings.
+- well-formed but unknown chunker-version labels are tolerated as informational metadata.
+- malformed or empty chunker-version metadata is rejected as repository integrity failure.
+
+This allows future chunker-version labels to coexist with restore correctness while preserving strict metadata sanity checks.
 
 Restore path behavior:
 

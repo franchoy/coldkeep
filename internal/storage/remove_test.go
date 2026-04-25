@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -42,8 +43,8 @@ func TestRemoveFailsWhenFileIsProcessing(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"processing-file.bin", int64(8), strings.Repeat("e", 64), filestate.LogicalFileProcessing,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -68,8 +69,8 @@ func TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-retained.bin", int64(8), strings.Repeat("s", 64), filestate.LogicalFileCompleted, int64(1),
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -134,8 +135,8 @@ func TestRemoveFailsOnInvalidLiveRefCountTransition(t *testing.T) {
 	// Insert a chunk whose live_ref_count is already 0 — decrement should fail.
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, 0) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 'v1-simple-rolling') RETURNING id`,
 		strings.Repeat("a", 64), int64(4), filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -143,8 +144,8 @@ func TestRemoveFailsOnInvalidLiveRefCountTransition(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"zero-ref-file.bin", int64(4), strings.Repeat("b", 64), filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -175,14 +176,22 @@ func TestGetLogicalFileInfoWithDBFound(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"logical-file-info.bin",
 		int64(10),
 		strings.Repeat("f", 64),
 		filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
+	}
+
+	var rawChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, fileID).Scan(&rawChunkerVersion); err != nil {
+		t.Fatalf("read raw logical_file.chunker_version: %v", err)
+	}
+	if rawChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("unexpected raw chunker_version: got=%q want=%q", rawChunkerVersion, chunk.DefaultChunkerVersion)
 	}
 
 	info, err := GetLogicalFileInfoWithDB(dbconn, fileID)
@@ -197,6 +206,9 @@ func TestGetLogicalFileInfoWithDBFound(t *testing.T) {
 	}
 	if info.Status != filestate.LogicalFileCompleted {
 		t.Fatalf("unexpected status: got=%q want=%q", info.Status, filestate.LogicalFileCompleted)
+	}
+	if info.ChunkerVersion != chunk.DefaultChunkerVersion {
+		t.Fatalf("unexpected chunker version: got=%q want=%q", info.ChunkerVersion, chunk.DefaultChunkerVersion)
 	}
 }
 
@@ -219,6 +231,131 @@ func TestGetLogicalFileInfoWithDBNotFound(t *testing.T) {
 	}
 }
 
+func TestGetLogicalFileInfoWithDBFailsOnEmptyChunkerVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
+		"logical-file-info-empty-version.bin",
+		int64(10),
+		strings.Repeat("e", 64),
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE logical_file SET chunker_version = '' WHERE id = $1`, fileID); err != nil {
+		t.Fatalf("set empty chunker_version: %v", err)
+	}
+
+	_, err = GetLogicalFileInfoWithDB(dbconn, fileID)
+	if err == nil || !strings.Contains(err.Error(), "empty chunker_version") {
+		t.Fatalf("expected empty chunker_version error, got: %v", err)
+	}
+}
+
+func TestGetLogicalFileInspectInfoWithDBFound(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkAID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 'v2-fastcdc') RETURNING id`,
+		strings.Repeat("a", 64), int64(65536), filestate.ChunkCompleted,
+	).Scan(&chunkAID); err != nil {
+		t.Fatalf("insert chunk A: %v", err)
+	}
+
+	var chunkBID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 'v2-fastcdc') RETURNING id`,
+		strings.Repeat("b", 64), int64(53248), filestate.ChunkCompleted,
+	).Scan(&chunkBID); err != nil {
+		t.Fatalf("insert chunk B: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v2-fastcdc') RETURNING id`,
+		"inspect-file.bin", int64(118784), strings.Repeat("f", 64), filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0), ($1, $3, 1)`,
+		fileID, chunkAID, chunkBID,
+	); err != nil {
+		t.Fatalf("insert file_chunk rows: %v", err)
+	}
+
+	info, err := GetLogicalFileInspectInfoWithDB(dbconn, fileID)
+	if err != nil {
+		t.Fatalf("GetLogicalFileInspectInfoWithDB: %v", err)
+	}
+	if info.FileID != fileID {
+		t.Fatalf("unexpected file id: got=%d want=%d", info.FileID, fileID)
+	}
+	if info.ChunkerVersion != chunk.VersionV2FastCDC {
+		t.Fatalf("unexpected chunker version: got=%q want=%q", info.ChunkerVersion, chunk.VersionV2FastCDC)
+	}
+	if info.ChunkCount != 2 {
+		t.Fatalf("unexpected chunk count: got=%d want=2", info.ChunkCount)
+	}
+	if info.AvgChunkSizeBytes != 59392 {
+		t.Fatalf("unexpected avg chunk size: got=%.0f want=59392", info.AvgChunkSizeBytes)
+	}
+}
+
+func TestGetLogicalFileInspectInfoWithDBNoChunksReturnsZeroAverage(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v2-fastcdc') RETURNING id`,
+		"inspect-zero.bin", int64(0), strings.Repeat("z", 64), filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	info, err := GetLogicalFileInspectInfoWithDB(dbconn, fileID)
+	if err != nil {
+		t.Fatalf("GetLogicalFileInspectInfoWithDB: %v", err)
+	}
+	if info.ChunkCount != 0 {
+		t.Fatalf("expected chunk count 0, got %d", info.ChunkCount)
+	}
+	if info.AvgChunkSizeBytes != 0 {
+		t.Fatalf("expected avg chunk size 0, got %.2f", info.AvgChunkSizeBytes)
+	}
+}
+
 func TestRemoveByStoredPathUnlinksSingleMappingAndKeepsSharedLogicalAlive(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -231,8 +368,8 @@ func TestRemoveByStoredPathUnlinksSingleMappingAndKeepsSharedLogicalAlive(t *tes
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"shared.bin", int64(8), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -292,8 +429,8 @@ func TestRemoveByStoredPathLastReferenceSetsRefCountToZero(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"single.bin", int64(4), strings.Repeat("b", 64), filestate.LogicalFileCompleted, int64(1),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -349,8 +486,8 @@ func TestRemoveByStoredPathSecondRemoveFailsCleanly(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"again.bin", int64(4), strings.Repeat("c", 64), filestate.LogicalFileCompleted, int64(1),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -383,8 +520,8 @@ func TestRemoveByStoredPathDetectsRefCountInvariantMismatchAndRollsBack(t *testi
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"corrupt.bin", int64(4), strings.Repeat("d", 64), filestate.LogicalFileCompleted, int64(5),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -434,8 +571,8 @@ func TestRemoveFileByIDCascadesPhysicalFileMappings(t *testing.T) {
 	// Set up: single logical_file with 3 physical_file mappings (mirrors the "shared logical" scenario).
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"shared.bin", int64(1000), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(3),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -507,8 +644,8 @@ func TestRemoveFileByIDZerosRefCountDuringCascade(t *testing.T) {
 	// Set up: logical_file with 2 physical_file mappings
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"multi-map.bin", int64(500), strings.Repeat("b", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -569,8 +706,8 @@ func TestRemoveFileByIDAndRemoveByStoredPathAreSymmetric(t *testing.T) {
 	// Scenario 1: remove-by-stored-path leaves logical_file intact (shared mapping).
 	var log1ID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"shared1.bin", int64(100), strings.Repeat("1", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&log1ID); err != nil {
 		t.Fatalf("insert logical file 1: %v", err)
@@ -611,8 +748,8 @@ func TestRemoveFileByIDAndRemoveByStoredPathAreSymmetric(t *testing.T) {
 	// Scenario 2: remove-by-ID cascades all mappings, deletes logical_file.
 	var log2ID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"shared2.bin", int64(200), strings.Repeat("2", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&log2ID); err != nil {
 		t.Fatalf("insert logical file 2: %v", err)

@@ -280,8 +280,8 @@ func TestRunGCSucceedsAfterRepairLogicalRefCounts(t *testing.T) {
 	// Step 1: insert a consistent logical_file + physical_file pair.
 	var logicalID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status)
-		VALUES ('gc-repair-smoke.bin', 1024, 'aabbcc', 1, 'COMPLETED')
+		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status, chunker_version)
+		VALUES ('gc-repair-smoke.bin', 1024, 'aabbcc', 1, 'COMPLETED', 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -336,8 +336,8 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 	// snapshot layer says "retained".
 	var logicalID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status)
-		VALUES ('snap-retained.bin', 512, 'deadbeef01', 0, 'COMPLETED')
+		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status, chunker_version)
+		VALUES ('snap-retained.bin', 512, 'deadbeef01', 0, 'COMPLETED', 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -345,8 +345,8 @@ func setupSnapshotRetainedContainer(t *testing.T, dbconn *sql.DB, containersDir 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
-		VALUES ('deadbeef01chunk', 512, 'COMPLETED', 0, 0)
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ('deadbeef01chunk', 512, 'COMPLETED', 0, 0, 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)

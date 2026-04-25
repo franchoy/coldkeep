@@ -11,12 +11,73 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 8
+const requiredPostgresSchemaVersion = 11
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+type sqlitePreSchemaState struct {
+	freshInstall                  bool
+	hadDefaultChunkerBeforeSchema bool
+}
+
+const (
+	defaultChunkerV1SimpleRolling = "v1-simple-rolling"
+	defaultChunkerV2FastCDC       = "v2-fastcdc"
+)
+
+func sqliteTableExistsWithContext(dbconn sqliteContextExecutor, ctx context.Context, tableName string) (bool, error) {
+	var count int
+	err := dbconn.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		tableName,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func inspectSQLitePreSchemaState(dbconn *sql.DB, ctx context.Context) (sqlitePreSchemaState, error) {
+	var state sqlitePreSchemaState
+
+	var userTableCount int
+	if err := dbconn.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+	).Scan(&userTableCount); err != nil {
+		return state, fmt.Errorf("inspect sqlite user table count: %w", err)
+	}
+
+	hasSchemaVersion, err := sqliteTableExistsWithContext(dbconn, ctx, "schema_version")
+	if err != nil {
+		return state, fmt.Errorf("inspect sqlite schema_version table: %w", err)
+	}
+
+	// Fresh install signal: empty sqlite file with no app tables and no version table.
+	state.freshInstall = !hasSchemaVersion && userTableCount == 0
+
+	hasRepositoryConfig, err := sqliteTableExistsWithContext(dbconn, ctx, "repository_config")
+	if err != nil {
+		return state, fmt.Errorf("inspect sqlite repository_config table: %w", err)
+	}
+	if hasRepositoryConfig {
+		var existingCount int
+		if err := dbconn.QueryRowContext(
+			ctx,
+			`SELECT COUNT(*) FROM repository_config WHERE key = ?`,
+			"default_chunker",
+		).Scan(&existingCount); err != nil {
+			return state, fmt.Errorf("inspect existing repository_config.default_chunker: %w", err)
+		}
+		state.hadDefaultChunkerBeforeSchema = existingCount > 0
+	}
+
+	return state, nil
 }
 
 func sqliteTableHasColumn(dbconn sqliteContextExecutor, ctx context.Context, tableName, columnName string) (bool, error) {
@@ -384,6 +445,142 @@ func runSQLiteSnapshotMigration(dbconn sqliteContextExecutor, ctx context.Contex
 	return nil
 }
 
+func runSQLiteChunkerVersionMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	hasChunkerVersion, err := sqliteTableHasColumn(dbconn, ctx, "logical_file", "chunker_version")
+	if err != nil {
+		return fmt.Errorf("inspect logical_file.chunker_version: %w", err)
+	}
+	if !hasChunkerVersion {
+		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE logical_file ADD COLUMN chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'`); err != nil {
+			return fmt.Errorf("add logical_file.chunker_version: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE logical_file
+		SET chunker_version = 'v1-simple-rolling'
+		WHERE chunker_version IS NULL
+	`); err != nil {
+		return fmt.Errorf("backfill logical_file.chunker_version: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 9
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 9: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (9)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 9: %w", err)
+	}
+
+	return nil
+}
+
+func sqliteHasTable(dbconn sqliteContextExecutor, ctx context.Context, tableName string) (bool, error) {
+	rows, err := dbconn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		return true, rows.Err()
+	}
+	return false, rows.Err()
+}
+
+func runSQLiteChunkChunkerVersionMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	tableExists, err := sqliteHasTable(dbconn, ctx, "chunk")
+	if err != nil {
+		return fmt.Errorf("inspect chunk table existence: %w", err)
+	}
+	if !tableExists {
+		// chunk table absent in legacy schemas; still advance schema version.
+		if _, err := dbconn.ExecContext(ctx, `
+			DELETE FROM schema_version WHERE version < 10
+		`); err != nil {
+			return fmt.Errorf("clean sqlite schema_version before 10: %w", err)
+		}
+
+		if _, err := dbconn.ExecContext(ctx, `
+			INSERT OR IGNORE INTO schema_version(version) VALUES (10)
+		`); err != nil {
+			return fmt.Errorf("insert sqlite schema_version 10: %w", err)
+		}
+
+		return nil
+	}
+
+	hasChunkerVersion, err := sqliteTableHasColumn(dbconn, ctx, "chunk", "chunker_version")
+	if err != nil {
+		return fmt.Errorf("inspect chunk.chunker_version: %w", err)
+	}
+	if !hasChunkerVersion {
+		if _, err := dbconn.ExecContext(ctx, `ALTER TABLE chunk ADD COLUMN chunker_version TEXT NOT NULL DEFAULT 'v1-simple-rolling'`); err != nil {
+			return fmt.Errorf("add chunk.chunker_version: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		UPDATE chunk
+		SET chunker_version = 'v1-simple-rolling'
+		WHERE chunker_version IS NULL
+	`); err != nil {
+		return fmt.Errorf("backfill chunk.chunker_version: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 10
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 10: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (10)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 10: %w", err)
+	}
+
+	return nil
+}
+
+func runSQLiteRepositoryConfigMigration(dbconn sqliteContextExecutor, ctx context.Context, desiredDefaultChunker string, hadDefaultChunkerBeforeSchema bool) error {
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS repository_config (
+			key TEXT PRIMARY KEY CHECK (key != ''),
+			value TEXT NOT NULL CHECK (value != '')
+		)
+	`); err != nil {
+		return fmt.Errorf("create repository_config table: %w", err)
+	}
+
+	if !hadDefaultChunkerBeforeSchema {
+		if _, err := dbconn.ExecContext(ctx, `
+			INSERT INTO repository_config(key, value)
+			VALUES ('default_chunker', ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value
+		`, desiredDefaultChunker); err != nil {
+			return fmt.Errorf("seed repository_config.default_chunker: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 11
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 11: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (11)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 11: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -489,6 +686,11 @@ func RunMigrations(dbconn *sql.DB) error {
 	ctx, cancel := NewOperationContext(context.Background())
 	defer cancel()
 
+	preSchemaState, err := inspectSQLitePreSchemaState(dbconn, ctx)
+	if err != nil {
+		return err
+	}
+
 	if _, err := dbconn.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
 		return fmt.Errorf("enable sqlite foreign keys: %w", err)
 	}
@@ -516,6 +718,23 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteSnapshotMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteChunkerVersionMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteChunkChunkerVersionMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	desiredDefaultChunker := defaultChunkerV1SimpleRolling
+	if preSchemaState.freshInstall {
+		desiredDefaultChunker = defaultChunkerV2FastCDC
+	}
+
+	if err := runSQLiteRepositoryConfigMigration(tx, ctx, desiredDefaultChunker, preSchemaState.hadDefaultChunkerBeforeSchema); err != nil {
 		return err
 	}
 

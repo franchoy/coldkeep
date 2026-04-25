@@ -32,8 +32,8 @@ func TestRepairLogicalRefCountsResultWithDBRepairsMismatch(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"repair.bin", int64(0), strings.Repeat("a", 64), filestate.LogicalFileCompleted, int64(5),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -72,8 +72,8 @@ func TestRepairLogicalRefCountsResultWithDBNoopOnHealthyState(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"healthy.bin", int64(0), strings.Repeat("b", 64), filestate.LogicalFileCompleted, int64(2),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)

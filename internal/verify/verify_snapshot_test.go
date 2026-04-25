@@ -35,8 +35,8 @@ func TestVerifySystemStandardPassesWithConsistentSnapshotReachability(t *testing
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-ok.txt", int64(0), strings.Repeat("d", 64), filestate.LogicalFileCompleted, int64(0),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -56,8 +56,8 @@ func TestVerifySystemStandardAllowsUnusedSnapshotPathRows(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-ok-unused-path.txt", int64(0), strings.Repeat("u", 64), filestate.LogicalFileCompleted, int64(0),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -97,8 +97,8 @@ func TestVerifySystemStandardDetectsOrphanSnapshotPathReference(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-path-orphan.txt", int64(0), strings.Repeat("p", 64), filestate.LogicalFileCompleted, int64(0),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -125,8 +125,8 @@ func TestVerifySystemStandardDetectsDuplicateSnapshotPathPairs(t *testing.T) {
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-dup-path.txt", int64(0), strings.Repeat("q", 64), filestate.LogicalFileCompleted, int64(0),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -156,8 +156,8 @@ func TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState(t *testing.T) 
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-aborted.txt", int64(0), strings.Repeat("e", 64), filestate.LogicalFileAborted, int64(0),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)
@@ -181,8 +181,8 @@ func TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph(t *testing
 
 	var logicalID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
 		"snapshot-missing-graph.txt", int64(128), strings.Repeat("f", 64), filestate.LogicalFileCompleted, int64(0),
 	).Scan(&logicalID); err != nil {
 		t.Fatalf("insert logical file: %v", err)

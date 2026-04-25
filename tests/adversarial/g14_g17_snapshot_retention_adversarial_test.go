@@ -217,8 +217,8 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	// 1) Invalid lifecycle state referenced by snapshot_file.
 	var invalidLifecycleID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ('g15-invalid-lifecycle.bin', 1, repeat('a', 64), 'ABORTED', 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ('g15-invalid-lifecycle.bin', 1, repeat('a', 64), 'ABORTED', 0, 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&invalidLifecycleID); err != nil {
 		t.Fatalf("insert invalid lifecycle logical_file: %v", err)
@@ -233,8 +233,8 @@ func TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC(t *testi
 	// 2) Retained non-empty logical file with missing chunk graph.
 	var missingGraphID int64
 	if err := dbconn.QueryRow(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ('g15-missing-graph.bin', 128, repeat('b', 64), 'COMPLETED', 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ('g15-missing-graph.bin', 128, repeat('b', 64), 'COMPLETED', 0, 'v1-simple-rolling')
 		RETURNING id
 	`).Scan(&missingGraphID); err != nil {
 		t.Fatalf("insert missing graph logical_file: %v", err)
@@ -517,8 +517,8 @@ func TestAdversarialG14SnapshotSurvivesCrashAndRecovery(t *testing.T) {
 
 	// Simulate a crash residue by injecting PROCESSING state before doctor recovery.
 	if _, err := dbconn.Exec(`
-		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		VALUES ($1, $2, $3, 'PROCESSING', 0)
+		INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		VALUES ($1, $2, $3, 'PROCESSING', 0, 'v1-simple-rolling')
 	`, "g14-crash-processing.bin", int64(4096), fmt.Sprintf("%064x", 4142)); err != nil {
 		t.Fatalf("inject crash-like PROCESSING row: %v", err)
 	}

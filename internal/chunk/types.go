@@ -1,8 +1,9 @@
 package chunk
 
-type Info struct {
-	Hash string
-	Size int64
-	// optional (future-safe)
-	Offset int64
-}
+import "github.com/franchoy/coldkeep/internal/chunk/shared"
+
+// Info is the shared chunk metadata contract returned by all chunkers.
+type Info = shared.Info
+
+// Result contains one emitted chunk and its metadata.
+type Result = shared.Result

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -69,6 +70,206 @@ type rollbackCleanupFailureWriter struct {
 	quarantineCalls     int
 	quarantineContainer int64
 	db                  *sql.DB
+}
+
+type fixedVersionChunker struct {
+	delegate chunk.Chunker
+	version  chunk.Version
+}
+
+type fixedBoundaryChunker struct {
+	version  chunk.Version
+	boundary int
+}
+
+func (c fixedVersionChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c fixedVersionChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	return c.delegate.ChunkFile(path)
+}
+
+func (c fixedBoundaryChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c fixedBoundaryChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return []chunk.Result{}, nil
+	}
+	if c.boundary <= 0 || c.boundary >= len(data) {
+		boundary := len(data)
+		all := make([]byte, boundary)
+		copy(all, data)
+		return []chunk.Result{{
+			Info: chunk.Info{Size: int64(boundary), Offset: 0},
+			Data: all,
+		}}, nil
+	}
+
+	first := make([]byte, c.boundary)
+	copy(first, data[:c.boundary])
+	second := make([]byte, len(data)-c.boundary)
+	copy(second, data[c.boundary:])
+
+	return []chunk.Result{
+		{Info: chunk.Info{Size: int64(len(first)), Offset: 0}, Data: first},
+		{Info: chunk.Info{Size: int64(len(second)), Offset: int64(c.boundary)}, Data: second},
+	}, nil
+}
+
+func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
+	service := NewStoreService(nil, nil)
+	resolved, err := service.ResolveActiveChunker()
+	if err != nil {
+		t.Fatalf("ResolveActiveChunker: %v", err)
+	}
+	if resolved.Chunker == nil {
+		t.Fatal("expected resolved chunker to be non-nil")
+	}
+
+	defaultVersion := chunk.DefaultRegistry().DefaultVersion()
+	if resolved.Version != defaultVersion {
+		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, defaultVersion)
+	}
+	if service.Repository() != nil {
+		t.Fatal("expected nil repository when constructor is given nil")
+	}
+}
+
+func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
+	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-injected"
+	repo := NewRepository(nil)
+
+	service := NewStoreService(repo, fixedVersionChunker{
+		delegate: chunk.DefaultChunker(),
+		version:  customChunkerVersion,
+	})
+
+	resolved, err := service.ResolveActiveChunker()
+	if err != nil {
+		t.Fatalf("ResolveActiveChunker: %v", err)
+	}
+	if resolved.Version != customChunkerVersion {
+		t.Fatalf("unexpected resolved chunker version: got=%q want=%q", resolved.Version, customChunkerVersion)
+	}
+	if service.Repository() != repo {
+		t.Fatal("expected service to retain injected repository")
+	}
+}
+
+func TestStoreServiceResolveActiveChunkerUsesRepositoryDefault(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = $1 WHERE key = $2`, string(chunk.VersionV2FastCDC), repositoryDefaultChunkerKey); err != nil {
+		t.Fatalf("set repository default chunker to v2: %v", err)
+	}
+
+	service := NewStoreService(NewRepository(dbconn), nil)
+	resolved, err := service.ResolveActiveChunker()
+	if err != nil {
+		t.Fatalf("ResolveActiveChunker: %v", err)
+	}
+	if got, want := resolved.Version, chunk.VersionV2FastCDC; got != want {
+		t.Fatalf("resolved version mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestStoreServiceResolveActiveChunkerFallsBackWhenConfigRowMissing(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM repository_config WHERE key = $1`, repositoryDefaultChunkerKey); err != nil {
+		t.Fatalf("delete repository default row: %v", err)
+	}
+
+	service := NewStoreService(NewRepository(dbconn), nil)
+	resolved, err := service.ResolveActiveChunker()
+	if err != nil {
+		t.Fatalf("ResolveActiveChunker: %v", err)
+	}
+	if got, want := resolved.Version, chunk.DefaultChunkerVersion; got != want {
+		t.Fatalf("fallback version mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestStoreServiceResolveActiveChunkerFailsFastOnUnregisteredConfiguredVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = $1 WHERE key = $2`, "v9-future-cdc", repositoryDefaultChunkerKey); err != nil {
+		t.Fatalf("set unregistered repository default chunker: %v", err)
+	}
+
+	service := NewStoreService(NewRepository(dbconn), nil)
+	_, err = service.ResolveActiveChunker()
+	if err == nil {
+		t.Fatal("expected ResolveActiveChunker to fail on unregistered configured chunker, got nil")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("expected not-registered error, got: %v", err)
+	}
+}
+
+func TestAssertLogicalFileVersionMatchesActiveDetectsDrift(t *testing.T) {
+	err := assertLogicalFileVersionMatchesActive("v1-simple-rolling", "v1-simple-rolling-test-override")
+	if err == nil {
+		t.Fatal("expected logical_file version drift mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "logical_file chunker_version mismatch") {
+		t.Fatalf("expected mismatch error message, got: %v", err)
+	}
+}
+
+func TestAssertLogicalFileVersionMatchesActiveAllowsMatch(t *testing.T) {
+	err := assertLogicalFileVersionMatchesActive("v1-simple-rolling", "v1-simple-rolling")
+	if err != nil {
+		t.Fatalf("expected matching versions to pass invariant, got: %v", err)
+	}
+}
+
+func TestAssertChunkVersionMatchesActiveDetectsDrift(t *testing.T) {
+	err := assertChunkVersionMatchesActive("v1-simple-rolling", "v2-fastcdc")
+	if err == nil {
+		t.Fatal("expected chunk version drift mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chunk chunker_version mismatch") {
+		t.Fatalf("expected mismatch error message, got: %v", err)
+	}
+}
+
+func TestAssertChunkVersionMatchesActiveAllowsMatch(t *testing.T) {
+	err := assertChunkVersionMatchesActive("v2-fastcdc", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("expected matching chunk versions to pass invariant, got: %v", err)
+	}
 }
 
 func (w *commitAckWriter) FinalizeContainer() error {
@@ -209,8 +410,8 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Helper()
 		var fileID int64
 		err := dbconn.QueryRow(
-			`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+			 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 			 RETURNING id`,
 			name,
 			123,
@@ -226,7 +427,7 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	fileA := insertLogicalFile("a.bin", "hash-a")
 	fileB := insertLogicalFile("b.bin", "hash-b")
 
-	chunkID, chunkStatus, isNew, err := claimChunk(dbconn, "shared-chunk-hash", 777)
+	chunkID, chunkStatus, isNew, err := claimChunk(dbconn, "shared-chunk-hash", 777, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim first chunk: %v", err)
 	}
@@ -235,6 +436,14 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	}
 	if chunkStatus != filestate.ChunkProcessing {
 		t.Fatalf("unexpected first chunk status: %s", chunkStatus)
+	}
+
+	var insertedChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, chunkID).Scan(&insertedChunkerVersion); err != nil {
+		t.Fatalf("read inserted chunk.chunker_version: %v", err)
+	}
+	if insertedChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("unexpected inserted chunker_version: got=%q want=%q", insertedChunkerVersion, chunk.DefaultChunkerVersion)
 	}
 
 	tx1, err := dbconn.Begin()
@@ -283,7 +492,7 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 		t.Fatalf("create reusable container file: %v", err)
 	}
 
-	chunkID2, chunkStatus2, isNew2, err := claimChunk(dbconn, "shared-chunk-hash", 777)
+	chunkID2, chunkStatus2, isNew2, err := claimChunk(dbconn, "shared-chunk-hash", 777, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim reused chunk: %v", err)
 	}
@@ -295,6 +504,37 @@ func TestLinkFileChunkIncrementsRefCountOnReuse(t *testing.T) {
 	}
 	if chunkStatus2 != filestate.ChunkCompleted {
 		t.Fatalf("unexpected reused chunk status: %s", chunkStatus2)
+	}
+
+	ctx := context.Background()
+	chunkID3, chunkStatus3, isNew3, err := claimChunkWithContext(ctx, dbconn, "shared-chunk-hash", 777, "v1-simple-rolling-test-override", container.ContainersDir)
+	if err != nil {
+		t.Fatalf("claim reused chunk across versions: %v", err)
+	}
+	if chunkID3 != chunkID {
+		t.Fatalf("expected same chunk id across versions, got %d vs %d", chunkID3, chunkID)
+	}
+	if isNew3 {
+		t.Fatal("expected cross-version reused claim to remain non-new")
+	}
+	if chunkStatus3 != filestate.ChunkCompleted {
+		t.Fatalf("unexpected cross-version reused chunk status: %s", chunkStatus3)
+	}
+
+	var sameIdentityRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, "shared-chunk-hash", 777).Scan(&sameIdentityRows); err != nil {
+		t.Fatalf("count chunk rows by dedup identity: %v", err)
+	}
+	if sameIdentityRows != 1 {
+		t.Fatalf("expected dedup identity hash+size to keep a single chunk row, got %d", sameIdentityRows)
+	}
+
+	var persistedChunkerVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, chunkID).Scan(&persistedChunkerVersion); err != nil {
+		t.Fatalf("read chunk.chunker_version: %v", err)
+	}
+	if persistedChunkerVersion != string(chunk.DefaultChunkerVersion) {
+		t.Fatalf("expected reused chunk row chunker_version to remain %q, got %q", chunk.DefaultChunkerVersion, persistedChunkerVersion)
 	}
 
 	tx2, err := dbconn.Begin()
@@ -344,8 +584,8 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"orphan-completed-chunk",
 		123,
@@ -355,7 +595,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 		t.Fatalf("insert completed chunk: %v", err)
 	}
 
-	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "orphan-completed-chunk", 123)
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "orphan-completed-chunk", 123, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim malformed completed chunk: %v", err)
 	}
@@ -378,6 +618,41 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithoutValidLocation(t *testing.T) 
 	}
 }
 
+func TestClaimChunkRejectsExistingRowWithEmptyChunkerVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+		 RETURNING id`,
+		"empty-version-existing-chunk",
+		123,
+		filestate.ChunkProcessing,
+		0,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert existing chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunker_version = '' WHERE id = $1`, chunkID); err != nil {
+		t.Fatalf("set empty chunker_version: %v", err)
+	}
+
+	ctx := context.Background()
+	_, _, _, err = claimChunkWithContext(ctx, dbconn, "empty-version-existing-chunk", 123, string(chunk.DefaultChunkerVersion), container.ContainersDir)
+	if err == nil || !strings.Contains(err.Error(), "empty chunker_version") {
+		t.Fatalf("expected empty chunker_version error, got: %v", err)
+	}
+}
+
 func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -391,8 +666,8 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"quarantined-completed-chunk",
 		321,
@@ -405,7 +680,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkInQuarantinedContainer(t *testing.T
 	containerID := insertReusableTestContainer(t, dbconn, "quarantined-reuse.bin", true)
 	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
 
-	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "quarantined-completed-chunk", 321)
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "quarantined-completed-chunk", 321, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim quarantined completed chunk: %v", err)
 	}
@@ -510,6 +785,453 @@ func TestStoreFileUsesAppendLevelDurabilityWithoutExtraSyncHook(t *testing.T) {
 		t.Fatalf("expected container to remain healthy after successful store")
 	}
 
+}
+
+func TestStoreFilePersistsExplicitChunkerVersionMetadata(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"chunker_version_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "chunker-version-metadata.txt")
+	if err := os.WriteFile(path, []byte("verify persisted chunker_version metadata"), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-override"
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+		Chunker: fixedVersionChunker{
+			delegate: chunk.DefaultChunker(),
+			version:  customChunkerVersion,
+		},
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file with injected chunker: %v", err)
+	}
+
+	var logicalFileVersion string
+	if err := dbconn.QueryRow(
+		`SELECT chunker_version FROM logical_file WHERE id = $1`,
+		result.FileID,
+	).Scan(&logicalFileVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	// Phase 3: the persisted version must come from the resolved chunker, not a hardcoded constant.
+	if logicalFileVersion != string(customChunkerVersion) {
+		t.Fatalf("logical_file.chunker_version mismatch: got %q want %q", logicalFileVersion, customChunkerVersion)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`,
+		result.FileID,
+	).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunks: %v", err)
+	}
+	if linkedChunkCount == 0 {
+		t.Fatal("expected at least one linked chunk for stored file")
+	}
+
+	var mismatchedChunkVersions int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> $2`,
+		result.FileID,
+		string(customChunkerVersion),
+	).Scan(&mismatchedChunkVersions); err != nil {
+		t.Fatalf("count chunk version mismatches: %v", err)
+	}
+	if mismatchedChunkVersions != 0 {
+		t.Fatalf("expected all linked chunks to persist chunker_version=%q, mismatches=%d", customChunkerVersion, mismatchedChunkVersions)
+	}
+}
+
+func TestStoreFileDefaultChunkerPersistsLogicalFileVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "default-logical-version.txt")
+	if err := os.WriteFile(path, []byte("default chunker logical version persistence"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var logicalFileVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, result.FileID).Scan(&logicalFileVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalFileVersion != "v2-fastcdc" {
+		t.Fatalf("expected logical_file.chunker_version=v2-fastcdc, got %q", logicalFileVersion)
+	}
+}
+
+func TestStoreFileDefaultChunkerPersistsChunkVersion(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "default-chunk-version.txt")
+	if err := os.WriteFile(path, []byte("default chunker chunk version persistence"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunks: %v", err)
+	}
+	if linkedChunkCount == 0 {
+		t.Fatal("expected at least one linked chunk")
+	}
+
+	var nonDefaultCount int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> 'v2-fastcdc'`,
+		result.FileID,
+	).Scan(&nonDefaultCount); err != nil {
+		t.Fatalf("count non-default chunk versions: %v", err)
+	}
+	if nonDefaultCount != 0 {
+		t.Fatalf("expected all new linked chunk rows to persist chunker_version=v2-fastcdc, mismatches=%d", nonDefaultCount)
+	}
+}
+
+type crossVersionSharedChunkScenario struct {
+	dbconn            *sql.DB
+	fileAID           int64
+	fileBID           int64
+	sharedChunkID     int64
+	sharedChunkHash   string
+	sharedChunkSize   int64
+	originalVersion   chunk.Version
+	secondFileVersion chunk.Version
+}
+
+func setupCrossVersionSharedChunkScenario(t *testing.T) crossVersionSharedChunkScenario {
+	t.Helper()
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	pathA := filepath.Join(tmpDir, "reuse-a.bin")
+	pathB := filepath.Join(tmpDir, "reuse-b.bin")
+
+	sharedPrefix := strings.Repeat("A", 32)
+	contentA := []byte(sharedPrefix + strings.Repeat("B", 32))
+	contentB := []byte(sharedPrefix + strings.Repeat("C", 32))
+	if err := os.WriteFile(pathA, contentA, 0o644); err != nil {
+		t.Fatalf("write first file: %v", err)
+	}
+	if err := os.WriteFile(pathB, contentB, 0o644); err != nil {
+		t.Fatalf("write second file: %v", err)
+	}
+
+	writer := &commitAckWriter{}
+	firstChunker := fixedBoundaryChunker{version: chunk.VersionV1SimpleRolling, boundary: 32}
+	secondChunker := fixedBoundaryChunker{version: chunk.VersionV2FastCDC, boundary: 32}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	resultA, err := StoreFileWithStorageContextAndCodecResult(StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: firstChunker}, pathA, codec)
+	if err != nil {
+		t.Fatalf("store first file: %v", err)
+	}
+
+	sharedHashSum := sha256.Sum256([]byte(sharedPrefix))
+	sharedHash := hex.EncodeToString(sharedHashSum[:])
+
+	var sharedChunkID int64
+	if err := dbconn.QueryRow(`SELECT id FROM chunk WHERE chunk_hash = $1 AND size = $2`, sharedHash, 32).Scan(&sharedChunkID); err != nil {
+		t.Fatalf("locate shared chunk after first store: %v", err)
+	}
+
+	resultB, err := StoreFileWithStorageContextAndCodecResult(StorageContext{DB: dbconn, Writer: writer, ContainerDir: tmpDir, Chunker: secondChunker}, pathB, codec)
+	if err != nil {
+		t.Fatalf("store second file with cross-version reuse: %v", err)
+	}
+
+	return crossVersionSharedChunkScenario{
+		dbconn:            dbconn,
+		fileAID:           resultA.FileID,
+		fileBID:           resultB.FileID,
+		sharedChunkID:     sharedChunkID,
+		sharedChunkHash:   sharedHash,
+		sharedChunkSize:   32,
+		originalVersion:   chunk.VersionV1SimpleRolling,
+		secondFileVersion: chunk.VersionV2FastCDC,
+	}
+}
+
+func TestCrossVersionChunkReuseIsAllowed(t *testing.T) {
+	scenario := setupCrossVersionSharedChunkScenario(t)
+
+	var sharedIdentityRows int
+	if err := scenario.dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash = $1 AND size = $2`, scenario.sharedChunkHash, scenario.sharedChunkSize).Scan(&sharedIdentityRows); err != nil {
+		t.Fatalf("count shared identity rows: %v", err)
+	}
+	if sharedIdentityRows != 1 {
+		t.Fatalf("expected shared chunk to be reused with no duplicate row, got %d rows", sharedIdentityRows)
+	}
+
+	var sharedChunkRefCount int
+	if err := scenario.dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, scenario.sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
+		t.Fatalf("count shared chunk file references: %v", err)
+	}
+	if sharedChunkRefCount != 2 {
+		t.Fatalf("expected shared chunk to be referenced by both files after reuse, got %d references", sharedChunkRefCount)
+	}
+}
+
+func TestCrossVersionChunkVersionRemainsOriginal(t *testing.T) {
+	scenario := setupCrossVersionSharedChunkScenario(t)
+
+	var persistedChunkerVersion string
+	if err := scenario.dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = $1`, scenario.sharedChunkID).Scan(&persistedChunkerVersion); err != nil {
+		t.Fatalf("read chunk.chunker_version: %v", err)
+	}
+	if persistedChunkerVersion != string(scenario.originalVersion) {
+		t.Fatalf("expected shared chunk origin version to remain %q, got %q", scenario.originalVersion, persistedChunkerVersion)
+	}
+}
+
+func TestCrossVersionLogicalFileVersionIsCorrect(t *testing.T) {
+	scenario := setupCrossVersionSharedChunkScenario(t)
+
+	var logicalVersionA string
+	if err := scenario.dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, scenario.fileAID).Scan(&logicalVersionA); err != nil {
+		t.Fatalf("read first logical_file.chunker_version: %v", err)
+	}
+	if logicalVersionA != string(scenario.originalVersion) {
+		t.Fatalf("expected first logical file version %q, got %q", scenario.originalVersion, logicalVersionA)
+	}
+
+	var logicalVersionB string
+	if err := scenario.dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, scenario.fileBID).Scan(&logicalVersionB); err != nil {
+		t.Fatalf("read second logical_file.chunker_version: %v", err)
+	}
+	if logicalVersionB != string(scenario.secondFileVersion) {
+		t.Fatalf("expected second logical file version %q, got %q", scenario.secondFileVersion, logicalVersionB)
+	}
+
+	var sharedChunkRefCount int
+	if err := scenario.dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE chunk_id = $1`, scenario.sharedChunkID).Scan(&sharedChunkRefCount); err != nil {
+		t.Fatalf("count shared chunk file references: %v", err)
+	}
+	if sharedChunkRefCount != 2 {
+		t.Fatalf("expected shared chunk to be reused by both logical files, got %d references", sharedChunkRefCount)
+	}
+}
+
+func TestStoreFileReusedChunkAllowsCrossVersionReuse(t *testing.T) {
+	TestCrossVersionChunkReuseIsAllowed(t)
+}
+
+func TestStoreFileLogicalRecipeSingleVersionInvariance(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed)
+		 VALUES (1, $1, $2, $3, FALSE)`,
+		"ack_test_container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "single-recipe-version.bin")
+	content := []byte(strings.Repeat("A", 32) + strings.Repeat("B", 32) + strings.Repeat("C", 32))
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	const recipeVersion chunk.Version = "v1-simple-rolling-test-recipe"
+	writer := &commitAckWriter{}
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: tmpDir,
+		Chunker: fixedBoundaryChunker{
+			version:  recipeVersion,
+			boundary: 32,
+		},
+	}
+
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var logicalVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = $1`, result.FileID).Scan(&logicalVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalVersion != string(recipeVersion) {
+		t.Fatalf("logical recipe version mismatch: got %q want %q", logicalVersion, recipeVersion)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunks: %v", err)
+	}
+	if linkedChunkCount < 2 {
+		t.Fatalf("expected multiple linked chunks for invariance test, got %d", linkedChunkCount)
+	}
+
+	var distinctLinkedVersions int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(DISTINCT c.chunker_version)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 WHERE fc.logical_file_id = $1`,
+		result.FileID,
+	).Scan(&distinctLinkedVersions); err != nil {
+		t.Fatalf("count distinct linked chunk versions: %v", err)
+	}
+	if distinctLinkedVersions != 1 {
+		t.Fatalf("expected exactly one chunker version across logical recipe, got %d", distinctLinkedVersions)
+	}
+
+	var mismatches int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk c
+		 INNER JOIN file_chunk fc ON fc.chunk_id = c.id
+		 INNER JOIN logical_file lf ON lf.id = fc.logical_file_id
+		 WHERE fc.logical_file_id = $1 AND c.chunker_version <> lf.chunker_version`,
+		result.FileID,
+	).Scan(&mismatches); err != nil {
+		t.Fatalf("count recipe version mismatches: %v", err)
+	}
+	if mismatches != 0 {
+		t.Fatalf("expected no mixed-version chunks in single logical recipe, mismatches=%d", mismatches)
+	}
 }
 
 func TestStoreFileSuccessfulCommitAcknowledgesWriterAppendState(t *testing.T) {
@@ -741,8 +1463,8 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithMissingContainerFile(t *testing
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"missing-file-completed-chunk",
 		456,
@@ -755,7 +1477,7 @@ func TestClaimChunkDoesNotReuseCompletedChunkWithMissingContainerFile(t *testing
 	containerID := insertReusableTestContainer(t, dbconn, "missing-file-reuse.bin", false)
 	insertReusableTestBlock(t, dbconn, chunkID, containerID, 64)
 
-	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "missing-file-completed-chunk", 456)
+	claimedID, claimedStatus, isNew, err := claimChunk(dbconn, "missing-file-completed-chunk", 456, string(chunk.DefaultChunkerVersion))
 	if err != nil {
 		t.Fatalf("claim completed chunk with missing file: %v", err)
 	}
@@ -974,8 +1696,8 @@ func insertReusableTestLogicalFile(t *testing.T, dbconn *sql.DB, totalSize int64
 
 	var fileID int64
 	err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		"reusable.bin",
 		totalSize,
@@ -1007,8 +1729,8 @@ func insertReusableTestChunk(t *testing.T, dbconn *sql.DB, hash string, status s
 
 	var chunkID int64
 	err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		hash,
 		64,
@@ -1102,8 +1824,8 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 	// Create a completed logical file.
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"rebuild_test.bin", 128, "rebuild-file-hash", filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1114,8 +1836,8 @@ func TestMarkLogicalFileForRebuildClearsFilechunkAndDecrementsRefs(t *testing.T)
 		t.Helper()
 		var id int64
 		if err := dbconn.QueryRow(
-			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-			 VALUES ($1, 64, $2, 1) RETURNING id`,
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, 64, $2, 1, 'v1-simple-rolling') RETURNING id`,
 			hash, filestate.ChunkCompleted,
 		).Scan(&id); err != nil {
 			t.Fatalf("insert chunk %s: %v", hash, err)
@@ -1186,8 +1908,8 @@ func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"stale-garbage.bin", 256, "stale-garbage-hash", filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1197,8 +1919,8 @@ func TestMarkLogicalFileForRebuildRemovesStaleFileChunkGarbage(t *testing.T) {
 		t.Helper()
 		var id int64
 		if err := dbconn.QueryRow(
-			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-			 VALUES ($1, 64, $2, 1) RETURNING id`,
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, 64, $2, 1, 'v1-simple-rolling') RETURNING id`,
 			hash, filestate.ChunkCompleted,
 		).Scan(&id); err != nil {
 			t.Fatalf("insert chunk %s: %v", hash, err)
@@ -1260,8 +1982,8 @@ func TestMarkLogicalFileForRebuildIsIdempotentWhenAlreadyAborted(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"idempotent_test.bin", 0, "idempotent-file-hash", filestate.LogicalFileAborted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1299,8 +2021,8 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 		 RETURNING id`,
 		fileInfo.Name(),
 		fileInfo.Size(),
@@ -1314,8 +2036,8 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 		t.Helper()
 		var chunkID int64
 		if err := dbconn.QueryRow(
-			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-			 VALUES ($1, $2, $3, $4)
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
 			 RETURNING id`,
 			hash,
 			int64(len(payload)/2),
@@ -1335,7 +2057,7 @@ func TestClaimLogicalFileReclaimCleansStaleMappingsBeforeRetry(t *testing.T) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	claimedID, claimedStatus, err := claimLogicalFileWithContext(ctx, dbconn, fileInfo, fileHash, tmp)
+	claimedID, claimedStatus, err := claimLogicalFileWithContext(ctx, dbconn, fileInfo, fileHash, string(chunk.DefaultChunkerVersion), tmp)
 	if err != nil {
 		t.Fatalf("claim logical file for retry: %v", err)
 	}
@@ -1378,8 +2100,8 @@ func TestMarkLogicalFileForReuseValidationFailureMarksEachChunkSuspiciousOnce(t 
 
 	var fileID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 		"duplicate-chunk-ref.bin", 128, "duplicate-ref-hash", filestate.LogicalFileCompleted,
 	).Scan(&fileID); err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -1387,8 +2109,8 @@ func TestMarkLogicalFileForReuseValidationFailureMarksEachChunkSuspiciousOnce(t 
 
 	var chunkID int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count)
-		 VALUES ($1, 64, $2, 2) RETURNING id`,
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, 64, $2, 2, 'v1-simple-rolling') RETURNING id`,
 		"duplicate-ref-chunk", filestate.ChunkCompleted,
 	).Scan(&chunkID); err != nil {
 		t.Fatalf("insert chunk: %v", err)
@@ -1473,8 +2195,8 @@ func TestFinalizeLogicalFileStorageAtomicBoundary(t *testing.T) {
 
 			var fileID int64
 			if err := dbconn.QueryRow(
-				`INSERT INTO logical_file (original_name, total_size, file_hash, status)
-				 VALUES ($1, $2, $3, $4) RETURNING id`,
+				`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+				 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
 				"finalize_test.bin", 1024, "finalize-test-hash", filestate.LogicalFileProcessing,
 			).Scan(&fileID); err != nil {
 				t.Fatalf("insert logical_file: %v", err)

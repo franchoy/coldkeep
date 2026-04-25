@@ -19,6 +19,146 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## [1.5.0] - 2026-04-25
+
+Compatibility-contract and chunker-evolution clarity milestone.
+
+v1.5 introduces CDC evolution through chunker versioning, FastCDC support,
+explicit chunker configuration, observability, and benchmark validation while
+preserving compatibility with existing repositories.
+
+### Release highlights (1.5.0)
+
+- **CDC evolution with compatibility preserved** — repositories can safely
+  contain mixed `v1-simple-rolling` and `v2-fastcdc` write history, while
+  restore remains metadata-replay and byte-identical for persisted data.
+- **FastCDC as the new-repo default write policy** — fresh v1.5+ repositories
+  initialize with `v2-fastcdc`; upgraded repositories preserve their prior
+  default unless explicitly changed by the operator.
+- **Explicit chunker policy controls** — `coldkeep config set default-chunker`
+  is now clearly documented and CLI-described as affecting only future writes,
+  with no automatic re-chunking of historical data.
+- **Observability for mixed-version operation** — docs and contracts now make
+  chunker provenance and version-distribution visibility explicit through
+  existing stats/verify/doctor surfaces.
+- **Benchmark validation guidance for chunker decisions** — chunker benchmark
+  commands and interpretation notes are documented so boundary/reuse behavior
+  can be evaluated with deterministic inputs before policy changes.
+
+### Added (1.5.0)
+
+- **Compatibility contract document** — added [COMPATIBILITY.md](COMPATIBILITY.md) as the
+  canonical source for guarantees, non-guarantees, versioning rules, and
+  upgrade behavior.
+- **Explicit guarantee set (G1-G6)** — restore correctness across chunker
+  versions, snapshot stability, no automatic data migration, mixed-version
+  coexistence safety, deterministic chunking per version, and forward-compatible
+  restore metadata handling.
+- **Explicit non-guarantee set** — cross-version dedup efficiency, stable
+  cross-version boundaries, and automatic optimization/re-chunking are
+  intentionally not contractual guarantees.
+- **Common mistakes guidance** — added contract-authoring guardrails to avoid
+  overpromising implementation outcomes and to keep guarantees separate from
+  implementation details.
+
+### Changed (1.5.0)
+
+- **README high-level contract summary** — updated [README.md](README.md) with
+  concise operator-facing sections for chunking model, chunker versions,
+  config behavior, and high-level safety guarantees.
+- **Architecture deep contract model** — updated [ARCHITECTURE.md](ARCHITECTURE.md)
+  with detailed chunking/versioning model, guarantee deep-dive, and explicit
+  boundary guidance between stable guarantees and evolving implementation
+  behavior.
+- **CLI help safety wording** — `config set default-chunker` help now states:
+  "Affects only new stored data. Existing data is not modified."
+
+### Scope alignment (v1.5)
+
+- Restore remains recipe-driven; runtime chunker selection is not used to
+  reconstruct already persisted files.
+- Fresh v1.5+ repositories default new writes to `v2-fastcdc`; upgraded
+  repositories preserve prior write default (`v1-simple-rolling` unless
+  explicitly changed).
+- Chunker default changes affect only future writes.
+- Mixed-version repositories are first-class and expected.
+- Cross-version chunk reuse is opportunistic under content identity and
+  integrity constraints; reuse efficiency is intentionally non-guaranteed.
+- Documentation contract language is aligned with implementation behavior and
+  test coverage.
+
+------------------------------------------------------------------------
+
+## [1.4.1] - 2026-04-21
+
+Recovery and release-readiness hardening patch.
+
+v1.4.1 does not change the v1.4 snapshot model. It hardens recovery behavior,
+snapshot capture safety under churn, and release-validation ergonomics.
+
+### Recovery hardening
+
+- Strict recovery now converges safely on a known edge case: preexisting
+  quarantined orphan container rows with stale size metadata are resynchronized
+  instead of forcing strict-recovery abort.
+- Quarantine metadata synchronization now aligns with physical file size when
+  containers are quarantined directly.
+- Strict recovery remains conservative and correctness-first, while reducing
+  unnecessary blocking for unrelated healthy data during restart.
+
+### Snapshot safety under churn
+
+- Snapshot source enumeration on PostgreSQL now uses stronger locking during
+  snapshot capture.
+- This reduces metadata-race risk during heavy create/remove churn.
+- The v1.4 contract is preserved: snapshots remain self-contained and
+  restore-safe.
+
+### Validation and adversarial coverage
+
+- Added adversarial coverage for preexisting quarantined-orphan
+  size-drift resynchronization behavior.
+- Updated validation-matrix evidence mapping so release evidence is tied more
+  explicitly to behavior contracts.
+
+### Documentation and release-readiness guidance
+
+- Pre-release guidance was clarified around prerequisites, storage cleanup, and
+  DB/storage alignment.
+- Contributor guidance now better separates first-contribution workflow from
+  full release-validation workflow.
+- Validation docs/scripts were aligned with clearer matrix title/wording.
+- Changelog, architecture, and overview docs were cross-linked more
+  consistently.
+
+### Local validation scope (v1.4.1)
+
+- quality-equivalent checks
+- validation-matrix audit
+- CI-enforcement local audit
+- package tests across plain and `aes-gcm`
+- smoke validation across both codecs
+- adversarial coverage reruns during hardening work
+
+### Correctness impact and non-changes
+
+Preserved from v1.4:
+
+- snapshots remain self-contained
+- restore remains deterministic and byte-identical
+- snapshot deletion remains metadata-only
+- GC safety model remains conservative
+- recovery remains corrective and correctness-first
+
+Not changed in v1.4.1:
+
+- no feature-surface expansion
+- no snapshot-lineage semantic change
+- no restore dependency model change
+- no retention/GC contract relaxation
+
+------------------------------------------------------------------------
+
 ## [1.4.0] - 2026-04-19
 
 Snapshot clarity and release hardening milestone.

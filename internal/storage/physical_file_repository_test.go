@@ -21,8 +21,8 @@ func insertLogicalForPhysicalTest(t *testing.T, dbconn *sql.DB, name, hash strin
 	t.Helper()
 	var id int64
 	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling')
 		 RETURNING id`,
 		name,
 		int64(8),

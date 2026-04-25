@@ -112,14 +112,67 @@ Documentation is split into:
 
 - [README.md](README.md) for overview, quickstart, and CLI usage
 - [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model, invariants, lifecycle, and trust boundary
+- [COMPATIBILITY.md](COMPATIBILITY.md) for version-compatibility, chunker-evolution contract, and explicit non-guarantees
 - [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping
-- [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow and local CI guidance
+- [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, local CI guidance, and stats benchmark commands for observability-sensitive changes
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
 - [CHANGELOG.md](CHANGELOG.md) for milestone history
 
 For the deeper model (invariants, lifecycle, validity, recovery, trust boundary), see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Chunking at a Glance
+
+coldkeep uses content-defined chunking (CDC).
+
+- chunk boundaries depend on data patterns (not fixed-size windows),
+- different chunker versions can choose different boundary strategies,
+- stored state is a chunked reconstruction recipe (`file_chunk -> chunk -> blocks`), not a raw whole-file blob.
+
+Example:
+
+```text
+File A (v1):
+  [chunk1][chunk2][chunk3]
+
+File B (v2):
+  [chunk4][chunk5]
+```
+
+Even with overlapping content, layout can differ across chunker versions.
+
+## Chunker Versions
+
+- each committed logical file stores `chunker_version` metadata,
+- one repository can contain multiple chunker versions,
+- chunker version is selected at store time,
+- fresh v1.5+ repositories default new writes to `v2-fastcdc`,
+- upgraded repositories preserve prior write default (`v1-simple-rolling` unless explicitly changed),
+- chunks may be reused across chunker versions if their content is identical,
+- cross-version reuse is opportunistic and not guaranteed for efficiency ratios,
+- `chunker_version` on chunk rows is origin metadata, not a reuse constraint,
+- restore is recipe-driven and does not depend on the active write chunker.
+
+Configure repository write default:
+
+```bash
+coldkeep config set default-chunker <version>
+```
+
+This affects new writes only and does not rewrite existing data.
+
+## Safety Guarantees (High-Level)
+
+- restore correctness: stored files restore byte-identically,
+- snapshot stability: snapshots remain valid across upgrades,
+- non-destructive evolution: no automatic background re-chunking or silent rewrite,
+- forward-compatible metadata: unknown but well-formed future chunker labels do not block restore.
+
+For full guarantees, non-guarantees, and upgrade behavior details:
+
+- [COMPATIBILITY.md](COMPATIBILITY.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## When to use coldkeep
 
@@ -150,15 +203,31 @@ coldkeep init
 # 2) Load environment
 export $(cat .env | xargs)
 
-# 3) Store and inspect
+# 3) Configure local PostgreSQL connection (required for local mode)
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+
+# 4) Store and inspect
 coldkeep store samples/hello.txt
 coldkeep stats
 
-# 4) Restore
+# 5) Restore + verify
+# restore expects file ID(s), not source filename
 coldkeep restore 1 ./restored
+coldkeep verify system --standard
 ```
 
 Security note: if the encryption key is lost, encrypted data cannot be recovered.
+
+Command form tips:
+
+- `restore` expects logical file IDs (`coldkeep restore <fileID> <outputDir>`); use `--stored-path` if you want path-based restore.
+- `verify` expects a target: `coldkeep verify system ...` or `coldkeep verify file <fileID> ...`.
 
 ### Docker
 
@@ -184,6 +253,7 @@ workflow below. Both are valid and both are used by contributors.
 PR author tip: use the PR template at [`.github/pull_request_template.md`](.github/pull_request_template.md)
 to summarize invariants and lifecycle-semantics impact for reviewers.
 For a contributor-oriented local CI path before that, see [CONTRIBUTING.md](CONTRIBUTING.md).
+If your change touches `coldkeep stats` or stats query shape, the same guide also includes a short stats benchmarking section with small/medium/large benchmark commands.
 
 ### Approach A: Docker runner
 
@@ -248,6 +318,7 @@ Typical flows:
 coldkeep store file.txt
 coldkeep store-folder ./data
 coldkeep restore 12 ./out
+coldkeep restore --stored-path docs/report.txt --destination ./out/report.txt --mode override
 coldkeep remove 12
 coldkeep gc
 coldkeep stats
@@ -263,6 +334,31 @@ Simulation (no physical writes):
 coldkeep simulate store-folder ./data
 coldkeep simulate store file.txt --output json
 ```
+
+Chunker benchmark and interpretation:
+
+```bash
+coldkeep benchmark chunkers
+```
+
+Typical outcomes to expect (informational ranges):
+
+- Small modifications:
+  v1: ~92-96% reuse
+  v2: ~94-98% reuse
+- Shifted data:
+  v1: ~5-20% reuse
+  v2: ~25-50% reuse
+
+Interpretation note: the shifted-data reuse gap is the main justification signal for v2 FastCDC boundary stability improvements.
+Critical insight: this indicates FastCDC improves not only dedup ratio, but dedup stability over time under boundary-shifting changes.
+
+Common mistakes to avoid:
+
+- Do not assert exact chunk counts; implementations can vary slightly while preserving correctness.
+- Do not use non-deterministic input data; keep all generated data seed-driven for CI reliability.
+- Do not ignore shifted-data comparisons; this is the most important stability signal.
+- Do not overcomplicate metrics; keep interpretation focused on reuse percentage, chunk count, and coverage invariants.
 
 ## Batch Operations (v1.2)
 

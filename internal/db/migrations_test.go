@@ -61,8 +61,8 @@ func TestRunMigrationsFailsWhenSQLiteDBIsClosed(t *testing.T) {
 	}
 
 	err = RunMigrations(dbconn)
-	if err == nil || !strings.Contains(err.Error(), "enable sqlite foreign keys") {
-		t.Fatalf("expected wrapped foreign-keys pragma error contract, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "database is closed") {
+		t.Fatalf("expected closed-database error contract, got: %v", err)
 	}
 }
 
@@ -156,8 +156,16 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 8 {
-		t.Fatalf("expected schema version 8 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected schema version 11 after first migration pass, got %d", schemaVersion)
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker: %v", err)
+	}
+	if configuredDefaultChunker != "v2-fastcdc" {
+		t.Fatalf("expected repository default chunker=v2-fastcdc on fresh install, got %q", configuredDefaultChunker)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -191,8 +199,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 8 {
-		t.Fatalf("expected schema version to stay 8 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 11 {
+		t.Fatalf("expected schema version to stay 11 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -226,7 +234,11 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 	}
 
 	checks := []string{
-		"UPDATE schema_version SET version = 8 WHERE version < 8",
+		"UPDATE schema_version SET version = 9 WHERE version < 9",
+		"UPDATE schema_version SET version = 10 WHERE version < 10",
+		"UPDATE schema_version SET version = 11 WHERE version < 11",
+		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
+		"CREATE TABLE IF NOT EXISTS repository_config",
 		"ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id",
 		"ON DELETE SET NULL",
 		"CREATE TABLE IF NOT EXISTS snapshot_path",
@@ -267,8 +279,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 8 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 8, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 11, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -289,6 +301,17 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	}
 	if sqliteTestTableHasColumn(t, dbconn, "snapshot_file", "path") {
 		t.Fatal("did not expect legacy snapshot_file.path in direct sqlite bootstrap")
+	}
+	if sqliteTestTableHasColumn(t, dbconn, "file_chunk", "chunker_version") {
+		t.Fatal("did not expect file_chunk.chunker_version in direct sqlite bootstrap")
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker in direct sqlite bootstrap: %v", err)
+	}
+	if configuredDefaultChunker != "v2-fastcdc" {
+		t.Fatalf("expected direct sqlite bootstrap default_chunker=v2-fastcdc, got %q", configuredDefaultChunker)
 	}
 }
 
@@ -401,8 +424,16 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 8 {
-		t.Fatalf("expected schema version 8 after migration, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected schema version 11 after migration, got %d", schemaVersion)
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker after migration: %v", err)
+	}
+	if configuredDefaultChunker != "v1-simple-rolling" {
+		t.Fatalf("expected repository default chunker=v1-simple-rolling after migration, got %q", configuredDefaultChunker)
 	}
 
 	if !sqliteTestTableHasColumn(t, dbconn, "snapshot", "parent_id") {
@@ -558,6 +589,229 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	}
 }
 
+func TestRunMigrationsPreservesExistingRepositoryDefaultChunker(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations first pass: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = 'v1-simple-rolling' WHERE key = 'default_chunker'`); err != nil {
+		t.Fatalf("set repository default chunker before rerun: %v", err)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations second pass: %v", err)
+	}
+
+	var configuredDefaultChunker string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_chunker'`).Scan(&configuredDefaultChunker); err != nil {
+		t.Fatalf("read repository default chunker after rerun: %v", err)
+	}
+	if configuredDefaultChunker != "v1-simple-rolling" {
+		t.Fatalf("expected existing repository default chunker to remain unchanged, got %q", configuredDefaultChunker)
+	}
+}
+
+func TestRunMigrationsBackfillsChunkerVersionForLegacyLogicalFileAndChunkRows(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	legacySchema := `
+		PRAGMA foreign_keys = ON;
+		CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+		INSERT INTO schema_version(version) VALUES (8);
+
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			filename TEXT NOT NULL UNIQUE,
+			sealed BOOLEAN NOT NULL DEFAULT 0,
+			sealing BOOLEAN NOT NULL DEFAULT 0,
+			quarantine BOOLEAN NOT NULL DEFAULT 0,
+			current_size INTEGER NOT NULL DEFAULT 0,
+			max_size INTEGER NOT NULL DEFAULT 1048576,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE logical_file (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			original_name TEXT NOT NULL,
+			total_size INTEGER NOT NULL CHECK (total_size >= 0),
+			file_hash TEXT NOT NULL,
+			ref_count INTEGER NOT NULL DEFAULT 1 CHECK (ref_count >= 0),
+			status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
+			retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (file_hash, total_size)
+		);
+
+		CREATE TABLE chunk (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chunk_hash TEXT NOT NULL,
+			size INTEGER NOT NULL CHECK (size > 0),
+			status TEXT NOT NULL CHECK (status IN ('PROCESSING','COMPLETED','ABORTED')),
+			live_ref_count INTEGER NOT NULL DEFAULT 0 CHECK (live_ref_count >= 0),
+			pin_count INTEGER NOT NULL DEFAULT 0 CHECK (pin_count >= 0),
+			retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE UNIQUE INDEX idx_chunk_hash_size ON chunk(chunk_hash, size);
+
+		CREATE TABLE file_chunk (
+			logical_file_id INTEGER NOT NULL REFERENCES logical_file(id),
+			chunk_id INTEGER NOT NULL REFERENCES chunk(id),
+			chunk_order INTEGER NOT NULL,
+			PRIMARY KEY (logical_file_id, chunk_order)
+		);
+
+		CREATE TABLE blocks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chunk_id INTEGER NOT NULL REFERENCES chunk(id),
+			codec TEXT NOT NULL,
+			format_version INTEGER NOT NULL,
+			plaintext_size INTEGER NOT NULL,
+			stored_size INTEGER NOT NULL,
+			nonce BLOB,
+			container_id INTEGER NOT NULL REFERENCES container(id),
+			block_offset INTEGER NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(chunk_id, container_id, block_offset)
+		);
+	`
+	if _, err := dbconn.Exec(legacySchema); err != nil {
+		t.Fatalf("create legacy pre-v1.5 schema: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, sealed, current_size, max_size)
+		 VALUES (?, 1, ?, ?) RETURNING id`,
+		"migration-pre-v1.5.bin",
+		4096,
+		1048576,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert legacy container: %v", err)
+	}
+
+	var logicalFileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
+		 VALUES (?, ?, ?, ?, ?) RETURNING id`,
+		"legacy-file.bin",
+		int64(11),
+		"legacy-file-hash",
+		"COMPLETED",
+		1,
+	).Scan(&logicalFileID); err != nil {
+		t.Fatalf("insert legacy logical_file: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
+		 VALUES (?, ?, ?, ?, ?) RETURNING id`,
+		"legacy-chunk-hash",
+		int64(11),
+		"COMPLETED",
+		1,
+		0,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert legacy chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, 0)`,
+		logicalFileID,
+		chunkID,
+	); err != nil {
+		t.Fatalf("insert legacy file_chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES (?, 'plain', 1, 11, 11, x'', ?, 0)`,
+		chunkID,
+		containerID,
+	); err != nil {
+		t.Fatalf("insert legacy block: %v", err)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations pre-v1.5 -> current: %v", err)
+	}
+
+	if !sqliteTestTableHasColumn(t, dbconn, "logical_file", "chunker_version") {
+		t.Fatal("expected logical_file.chunker_version after migration")
+	}
+	if !sqliteTestTableHasColumn(t, dbconn, "chunk", "chunker_version") {
+		t.Fatal("expected chunk.chunker_version after migration")
+	}
+
+	var logicalFileVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM logical_file WHERE id = ?`, logicalFileID).Scan(&logicalFileVersion); err != nil {
+		t.Fatalf("read logical_file.chunker_version: %v", err)
+	}
+	if logicalFileVersion != "v1-simple-rolling" {
+		t.Fatalf("expected logical_file chunker_version=v1-simple-rolling, got %q", logicalFileVersion)
+	}
+
+	var chunkVersion string
+	if err := dbconn.QueryRow(`SELECT chunker_version FROM chunk WHERE id = ?`, chunkID).Scan(&chunkVersion); err != nil {
+		t.Fatalf("read chunk.chunker_version: %v", err)
+	}
+	if chunkVersion != "v1-simple-rolling" {
+		t.Fatalf("expected chunk chunker_version=v1-simple-rolling, got %q", chunkVersion)
+	}
+
+	var nullOrEmptyLogicalVersions int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE chunker_version IS NULL OR TRIM(chunker_version) = ''`).Scan(&nullOrEmptyLogicalVersions); err != nil {
+		t.Fatalf("count null/empty logical_file.chunker_version: %v", err)
+	}
+	if nullOrEmptyLogicalVersions != 0 {
+		t.Fatalf("expected no null/empty logical_file.chunker_version rows, got %d", nullOrEmptyLogicalVersions)
+	}
+
+	var nullOrEmptyChunkVersions int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunker_version IS NULL OR TRIM(chunker_version) = ''`).Scan(&nullOrEmptyChunkVersions); err != nil {
+		t.Fatalf("count null/empty chunk.chunker_version: %v", err)
+	}
+	if nullOrEmptyChunkVersions != 0 {
+		t.Fatalf("expected no null/empty chunk.chunker_version rows, got %d", nullOrEmptyChunkVersions)
+	}
+
+	// Lightweight readability/restorability proof: the legacy linked file/chunk/block/container
+	// graph remains queryable via the core restore join shape after migration.
+	var joinedRows int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM file_chunk fc
+		JOIN chunk c ON c.id = fc.chunk_id
+		JOIN blocks b ON b.chunk_id = c.id
+		JOIN container ctr ON ctr.id = b.container_id
+		WHERE fc.logical_file_id = ? AND c.status = 'COMPLETED' AND ctr.quarantine = 0
+	`, logicalFileID).Scan(&joinedRows); err != nil {
+		t.Fatalf("query restore-style chunk graph after migration: %v", err)
+	}
+	if joinedRows != 1 {
+		t.Fatalf("expected one restorable chunk graph row after migration, got %d", joinedRows)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("rerun migrations for idempotency: %v", err)
+	}
+}
+
 func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
@@ -620,8 +874,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
-	if schemaVersion != 8 {
-		t.Fatalf("expected schema_version=8 after fresh postgres bootstrap, got %d", schemaVersion)
+	if schemaVersion != 11 {
+		t.Fatalf("expected schema_version=11 after fresh postgres bootstrap, got %d", schemaVersion)
 	}
 
 	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {
@@ -700,10 +954,10 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 		t.Fatal("expected idx_snapshot_file_unique index")
 	}
 
-	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ('p1.txt', 10, 'phase1-hash-1', 'COMPLETED')`); err != nil {
+	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES ('p1.txt', 10, 'phase1-hash-1', 'COMPLETED', 'v1-simple-rolling')`); err != nil {
 		t.Fatalf("insert logical_file row 1: %v", err)
 	}
-	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES ('p2.txt', 20, 'phase1-hash-2', 'COMPLETED')`); err != nil {
+	if _, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES ('p2.txt', 20, 'phase1-hash-2', 'COMPLETED', 'v1-simple-rolling')`); err != nil {
 		t.Fatalf("insert logical_file row 2: %v", err)
 	}
 
@@ -1105,9 +1359,12 @@ func extractPostgresV8MigrationSQL(schemaSQL string) (string, error) {
 		return "", fmt.Errorf("schema version 8 marker not found")
 	}
 	v8AndAfter := schemaSQL[start:]
-	end := strings.Index(v8AndAfter, "\nCOMMIT;")
+	end := strings.Index(v8AndAfter, "\n-- Schema version 9:")
 	if end < 0 {
-		return "", fmt.Errorf("schema version 8 block terminator not found")
+		end = strings.Index(v8AndAfter, "\nCOMMIT;")
+		if end < 0 {
+			return "", fmt.Errorf("schema version 8 block terminator not found")
+		}
 	}
 	return strings.TrimSpace(v8AndAfter[:end]), nil
 }
@@ -1269,11 +1526,12 @@ func TestRunMigrationsAllowsMultiplePhysicalFilesPerLogicalFile(t *testing.T) {
 	}
 
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
 		"data.bin",
 		int64(64),
 		"hash-shared",
 		"COMPLETED",
+		"v1-simple-rolling",
 	)
 	if err != nil {
 		t.Fatalf("insert logical_file row: %v", err)
@@ -1323,11 +1581,12 @@ func TestRunMigrationsRejectsEmptyPhysicalFilePath(t *testing.T) {
 	}
 
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
 		"tiny.txt",
 		int64(4),
 		"hash-tiny",
 		"COMPLETED",
+		"v1-simple-rolling",
 	)
 	if err != nil {
 		t.Fatalf("insert logical_file row: %v", err)
