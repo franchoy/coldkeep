@@ -3,8 +3,8 @@ package observability
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,8 +86,8 @@ func TestInspectUnsupportedTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "unsupported inspect entity") {
-		t.Fatalf("expected unsupported inspect entity error, got %v", err)
+	if !errors.Is(err, ErrUnsupportedEntity) {
+		t.Fatalf("expected ErrUnsupportedEntity, got %v", err)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestInspectMissingFileReturnsEntityNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "logical file 999 not found") {
-		t.Fatalf("expected not found error, got %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

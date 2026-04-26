@@ -1,20 +1,9 @@
 package observability
 
-import (
-	"errors"
-	"fmt"
-)
+import "errors"
 
 var (
-	ErrUnsupportedInspectTarget  = errors.New("unsupported inspect target")
-	ErrUnsupportedSimulateTarget = errors.New("unsupported simulate target")
+	ErrUnsupportedEntity = errors.New("unsupported observability entity")
+	ErrNotFound          = errors.New("observability target not found")
+	ErrInvalidTarget     = errors.New("invalid observability target")
 )
-
-type EntityNotFoundError struct {
-	EntityType EntityType
-	EntityID   string
-}
-
-func (e EntityNotFoundError) Error() string {
-	return fmt.Sprintf("%s %q not found", e.EntityType, e.EntityID)
-}

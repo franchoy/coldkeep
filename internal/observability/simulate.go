@@ -16,6 +16,6 @@ func (s *Service) Simulate(ctx context.Context, opts SimulationOptions) (*Simula
 	case SimulationKindGC:
 		return nil, fmt.Errorf("gc simulation not implemented yet")
 	default:
-		return nil, fmt.Errorf("unsupported simulation kind %q", opts.Kind)
+		return nil, fmt.Errorf("%w: unsupported simulation kind %q", ErrInvalidTarget, opts.Kind)
 	}
 }

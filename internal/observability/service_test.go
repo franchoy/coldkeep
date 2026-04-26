@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,9 @@ func TestSimulateRejectsUnsupportedKind(t *testing.T) {
 	_, err := svc.Simulate(context.Background(), SimulationOptions{Kind: "store"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("expected ErrInvalidTarget, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "unsupported simulation kind") {
 		t.Fatalf("unexpected error: %v", err)

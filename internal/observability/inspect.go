@@ -20,7 +20,7 @@ func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opt
 	case EntityFile, EntityLogicalFile:
 		return s.inspectLogicalFile(ctx, id, opts)
 	default:
-		return nil, fmt.Errorf("unsupported inspect entity %q", entity)
+		return nil, fmt.Errorf("%w: %q", ErrUnsupportedEntity, entity)
 	}
 }
 
@@ -28,7 +28,7 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, _ InspectOp
 	fileIDText := strings.TrimSpace(id)
 	fileID, err := strconv.ParseInt(fileIDText, 10, 64)
 	if err != nil || fileID <= 0 {
-		return nil, fmt.Errorf("invalid logical file id %q", id)
+		return nil, fmt.Errorf("%w: invalid logical file id %q", ErrInvalidTarget, id)
 	}
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("observability service requires non-nil db")
@@ -37,7 +37,7 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, _ InspectOp
 	info, err := storage.GetLogicalFileInspectInfoWithDBContext(ctx, s.db, fileID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("logical file %d not found", fileID)
+			return nil, fmt.Errorf("%w: logical file %d", ErrNotFound, fileID)
 		}
 		return nil, fmt.Errorf("inspect logical file %d: %w", fileID, err)
 	}
