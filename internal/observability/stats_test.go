@@ -241,6 +241,12 @@ func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
 	if len(result.Containers.Records) != 1 {
 		t.Fatalf("expected one container record, got %d", len(result.Containers.Records))
 	}
+	if result.Snapshots.TotalSnapshots != 1 {
+		t.Fatalf("expected snapshot total=1, got %d", result.Snapshots.TotalSnapshots)
+	}
+	if !hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
+		t.Fatalf("expected non-numeric snapshot id warning, got %+v", result.Warnings)
+	}
 }
 
 func TestObservabilityDoesNotMutateState(t *testing.T) {
@@ -321,4 +327,13 @@ func mustCount(t *testing.T, dbconn *sql.DB, query string, args ...any) int64 {
 		t.Fatalf("count query failed (%s): %v", query, err)
 	}
 	return count
+}
+
+func hasWarningCode(warnings []ObservationWarning, code string) bool {
+	for _, warning := range warnings {
+		if warning.Code == code {
+			return true
+		}
+	}
+	return false
 }

@@ -3,6 +3,8 @@ package observability
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -21,7 +23,13 @@ func (s *Service) Stats(ctx context.Context, opts StatsOptions) (*StatsResult, e
 		return nil, fmt.Errorf("collect observability stats: %w", err)
 	}
 
-	return s.mapMaintenanceStats(raw, opts), nil
+	result := s.mapMaintenanceStats(raw, opts)
+	if err := s.enrichStatsWithGraph(ctx, result, opts); err != nil {
+		return nil, fmt.Errorf("collect observability stats: enrich with graph: %w", err)
+	}
+
+	result.Efficiency = calculateEfficiency(result)
+	return result, nil
 }
 
 func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOptions) *StatsResult {
@@ -79,8 +87,6 @@ func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOp
 		SharedLogicalFiles:             raw.SnapshotRetention.SharedLogicalFiles,
 		SharedBytes:                    raw.SnapshotRetention.SharedBytes,
 	}
-	r.Efficiency = buildEfficiencyStats(r.Logical.CompletedSizeBytes, r.Chunks.CompletedBytes, r.Containers.TotalBytes)
-
 	if opts.IncludeContainers {
 		r.Containers.Records = mapContainerRecords(raw.Containers)
 	}
@@ -110,7 +116,9 @@ func mapContainerRecords(in []maintenance.ContainerStatRecord) []ContainerStatRe
 
 func mapStatsResult(generatedAtUTC time.Time, raw *maintenance.StatsResult) StatsResult {
 	service := &Service{now: func() time.Time { return generatedAtUTC }}
-	return *service.mapMaintenanceStats(raw, StatsOptions{IncludeContainers: true})
+	result := service.mapMaintenanceStats(raw, StatsOptions{IncludeContainers: true})
+	result.Efficiency = calculateEfficiency(result)
+	return *result
 }
 
 func contextErr(ctx context.Context) error {
@@ -129,6 +137,95 @@ func cloneInt64Map(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+func (s *Service) enrichStatsWithGraph(ctx context.Context, result *StatsResult, _ StatsOptions) error {
+	if result == nil {
+		return nil
+	}
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+
+	count, err := s.countSnapshots(ctx)
+	if err != nil {
+		return err
+	}
+	result.Snapshots.TotalSnapshots = count
+
+	snapshotIDs, skipped, err := s.listNumericSnapshotIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if skipped > 0 {
+		result.Warnings = append(result.Warnings, ObservationWarning{
+			Code:    "snapshot_ids_non_numeric_skipped",
+			Message: fmt.Sprintf("skipped %d snapshot id(s) that are not numeric for graph reachability", skipped),
+		})
+	}
+	if len(snapshotIDs) == 0 || s == nil || s.graph == nil {
+		return nil
+	}
+
+	reachableChunks, err := s.graph.GetReachableChunks(ctx, snapshotIDs)
+	if err != nil {
+		return err
+	}
+	result.Chunks.UniqueReferenced = int64(len(reachableChunks))
+
+	return nil
+}
+
+func (s *Service) countSnapshots(ctx context.Context) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+
+	var total int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot`).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Service) listNumericSnapshotIDs(ctx context.Context) ([]int64, int, error) {
+	if s == nil || s.db == nil {
+		return nil, 0, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM snapshot ORDER BY created_at, id`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]int64, 0)
+	skipped := 0
+	for rows.Next() {
+		var rawID string
+		if err := rows.Scan(&rawID); err != nil {
+			return nil, 0, err
+		}
+
+		parsed, err := strconv.ParseInt(strings.TrimSpace(rawID), 10, 64)
+		if err != nil {
+			skipped++
+			continue
+		}
+		ids = append(ids, parsed)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	return ids, skipped, nil
+}
+
+func calculateEfficiency(result *StatsResult) EfficiencyStats {
+	if result == nil {
+		return EfficiencyStats{}
+	}
+	return buildEfficiencyStats(result.Logical.CompletedSizeBytes, result.Chunks.CompletedBytes, result.Containers.TotalBytes)
 }
 
 func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) EfficiencyStats {
