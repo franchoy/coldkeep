@@ -80,12 +80,10 @@ func RenderStatsHuman(w io.Writer, r *StatsResult) error {
 	if _, err := fmt.Fprintln(w, "\nEfficiency"); err != nil {
 		return err
 	}
-	dedupRatioX := dedupRatioX(r)
-	dedupSavingsPct := dedupSavingsPct(r)
-	if _, err := fmt.Fprintf(w, "  dedup ratio:         %.2fx\n", dedupRatioX); err != nil {
+	if _, err := fmt.Fprintf(w, "  dedup ratio:         %.2fx\n", r.Efficiency.DedupRatio); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  dedup savings:       %.1f%%\n", dedupSavingsPct); err != nil {
+	if _, err := fmt.Fprintf(w, "  dedup savings:       %.1f%%\n", r.Efficiency.DedupRatioPercent); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  container overhead:  %.1f%%\n", r.Efficiency.ContainerOverheadPct); err != nil {
@@ -298,23 +296,4 @@ func fallbackString(v, fallback string) string {
 		return fallback
 	}
 	return v
-}
-
-func dedupRatioX(r *StatsResult) float64 {
-	if r == nil || r.Chunks.CompletedBytes <= 0 {
-		return 1.0
-	}
-	return float64(r.Logical.CompletedSizeBytes) / float64(r.Chunks.CompletedBytes)
-}
-
-func dedupSavingsPct(r *StatsResult) float64 {
-	if r == nil || r.Logical.CompletedSizeBytes <= 0 {
-		return 0
-	}
-	uniqueOverLogical := float64(r.Chunks.CompletedBytes) / float64(r.Logical.CompletedSizeBytes)
-	savings := (1.0 - uniqueOverLogical) * 100
-	if savings < 0 {
-		return 0
-	}
-	return savings
 }

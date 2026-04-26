@@ -251,3 +251,48 @@ func TestRenderStatsHumanShowsContainerDetailsWhenRequested(t *testing.T) {
 		t.Fatalf("expected container row, got:\n%s", out)
 	}
 }
+
+func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
+	input := &StatsResult{
+		Efficiency: EfficiencyStats{
+			DedupRatio:           2.29,
+			DedupRatioPercent:    56.3,
+			ContainerOverheadPct: 3.1,
+			StorageOverheadPct:   3.1,
+		},
+	}
+
+	var human bytes.Buffer
+	if err := RenderStatsHuman(&human, input); err != nil {
+		t.Fatalf("RenderStatsHuman: %v", err)
+	}
+	humanOut := human.String()
+	for _, want := range []string{"dedup ratio:         2.29x", "dedup savings:       56.3%", "container overhead:  3.1%"} {
+		if !strings.Contains(humanOut, want) {
+			t.Fatalf("expected human output to contain %q, got:\n%s", want, humanOut)
+		}
+	}
+
+	var jsonBuf bytes.Buffer
+	if err := RenderStatsJSON(&jsonBuf, input); err != nil {
+		t.Fatalf("RenderStatsJSON: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(jsonBuf.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode json output: %v", err)
+	}
+	eff, ok := decoded["efficiency"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing efficiency object in json output: %+v", decoded)
+	}
+	if got, _ := eff["dedup_ratio"].(float64); got != 2.29 {
+		t.Fatalf("expected dedup_ratio 2.29, got %v", eff["dedup_ratio"])
+	}
+	if got, _ := eff["dedup_ratio_percent"].(float64); got != 56.3 {
+		t.Fatalf("expected dedup_ratio_percent 56.3, got %v", eff["dedup_ratio_percent"])
+	}
+	if got, _ := eff["container_overhead_pct"].(float64); got != 3.1 {
+		t.Fatalf("expected container_overhead_pct 3.1, got %v", eff["container_overhead_pct"])
+	}
+}
