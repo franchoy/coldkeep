@@ -6809,8 +6809,8 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 			Summary: observability.GCSimulationSummary{
 				ReachableChunks:            11,
 				UnreachableChunks:          2,
-				LogicallyReclaimableBytes:  200,
-				PhysicallyReclaimableBytes: 100,
+				LogicallyReclaimableBytes:  200 * 1024 * 1024,
+				PhysicallyReclaimableBytes: 100 * 1024 * 1024,
 				FullyReclaimableContainers: 1,
 				PartiallyDeadContainers:    1,
 			},
@@ -6840,7 +6840,7 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	if !strings.Contains(textOutput, "reachable chunks:       11") || !strings.Contains(textOutput, "unreachable chunks:     2") {
 		t.Fatalf("text output missing reachability summary: %s", textOutput)
 	}
-	if !strings.Contains(textOutput, "logical bytes:          200 B") || !strings.Contains(textOutput, "physical bytes now:     100 B") {
+	if !strings.Contains(textOutput, "logical bytes:          200 MiB") || !strings.Contains(textOutput, "physical bytes now:     100 MiB") {
 		t.Fatalf("text output missing reclaimable summary: %s", textOutput)
 	}
 	if !strings.Contains(textOutput, "snapshot treated as deleted: snap-a") {
@@ -6859,8 +6859,8 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	summary := gcNode["summary"].(map[string]any)
 	assertJSONNumber(t, summary, "reachable_chunks", 11)
 	assertJSONNumber(t, summary, "unreachable_chunks", 2)
-	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200)
-	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200*1024*1024)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100*1024*1024)
 	assumptions := gcNode["assumptions"].(map[string]any)
 	deleted := assumptions["deleted_snapshots"].([]any)
 	if len(deleted) != 1 || deleted[0] != "snap-a" {
