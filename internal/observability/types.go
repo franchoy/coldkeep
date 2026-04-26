@@ -1,0 +1,142 @@
+package observability
+
+import "time"
+
+type OutputFormat string
+
+const (
+	OutputHuman OutputFormat = "human"
+	OutputJSON  OutputFormat = "json"
+)
+
+type EntityType string
+
+const (
+	EntityRepository   EntityType = "repository"
+	EntityFile         EntityType = "file"
+	EntityLogicalFile  EntityType = "logical_file"
+	EntityPhysicalFile EntityType = "physical_file"
+	EntityChunk        EntityType = "chunk"
+	EntityContainer    EntityType = "container"
+	EntitySnapshot     EntityType = "snapshot"
+)
+
+type RelationDirection string
+
+const (
+	RelationOutgoing RelationDirection = "outgoing"
+	RelationIncoming RelationDirection = "incoming"
+)
+
+type Relation struct {
+	Type       string            `json:"type"`
+	Direction  RelationDirection `json:"direction"`
+	TargetType EntityType        `json:"target_type"`
+	TargetID   string            `json:"target_id"`
+	Metadata   map[string]any    `json:"metadata,omitempty"`
+}
+
+type StatsResult struct {
+	GeneratedAtUTC time.Time `json:"generated_at_utc"`
+
+	Repository RepositoryStats `json:"repository"`
+	Logical    LogicalStats    `json:"logical"`
+	Physical   PhysicalStats   `json:"physical"`
+	Chunks     ChunkStats      `json:"chunks"`
+	Containers ContainerStats  `json:"containers"`
+	Snapshots  SnapshotStats   `json:"snapshots"`
+	Retention  RetentionStats  `json:"retention"`
+
+	Warnings []ObservationWarning `json:"warnings,omitempty"`
+}
+
+type RepositoryStats struct {
+	ActiveWriteChunker string `json:"active_write_chunker"`
+}
+
+type LogicalStats struct {
+	TotalFiles             int64   `json:"total_files"`
+	CompletedFiles         int64   `json:"completed_files"`
+	ProcessingFiles        int64   `json:"processing_files"`
+	AbortedFiles           int64   `json:"aborted_files"`
+	TotalSizeBytes         int64   `json:"total_size_bytes"`
+	CompletedSizeBytes     int64   `json:"completed_size_bytes"`
+	EstimatedDedupRatioPct float64 `json:"estimated_dedup_ratio_pct"`
+}
+
+type PhysicalStats struct {
+	TotalPhysicalFiles int64 `json:"total_physical_files"`
+}
+
+type ChunkStats struct {
+	TotalChunks      int64            `json:"total_chunks"`
+	CompletedChunks  int64            `json:"completed_chunks"`
+	CompletedBytes   int64            `json:"completed_bytes"`
+	CountsByVersion  map[string]int64 `json:"counts_by_version"`
+	BytesByVersion   map[string]int64 `json:"bytes_by_version"`
+	TotalReferences  int64            `json:"total_references"`
+	UniqueReferenced int64            `json:"unique_referenced"`
+}
+
+type ContainerStats struct {
+	TotalContainers       int64                 `json:"total_containers"`
+	HealthyContainers     int64                 `json:"healthy_containers"`
+	QuarantineContainers  int64                 `json:"quarantine_containers"`
+	TotalBytes            int64                 `json:"total_bytes"`
+	HealthyBytes          int64                 `json:"healthy_bytes"`
+	QuarantineBytes       int64                 `json:"quarantine_bytes"`
+	LiveBlockBytes        int64                 `json:"live_block_bytes"`
+	DeadBlockBytes        int64                 `json:"dead_block_bytes"`
+	FragmentationRatioPct float64               `json:"fragmentation_ratio_pct"`
+	Records               []ContainerStatRecord `json:"records,omitempty"`
+}
+
+type ContainerStatRecord struct {
+	ID           int64   `json:"id"`
+	Filename     string  `json:"filename"`
+	TotalBytes   int64   `json:"total_bytes"`
+	LiveBytes    int64   `json:"live_bytes"`
+	DeadBytes    int64   `json:"dead_bytes"`
+	Quarantine   bool    `json:"quarantine"`
+	LiveRatioPct float64 `json:"live_ratio_pct"`
+}
+
+type SnapshotStats struct {
+	TotalSnapshots int64 `json:"total_snapshots"`
+}
+
+type RetentionStats struct {
+	CurrentOnlyLogicalFiles        int64 `json:"current_only_logical_files"`
+	CurrentOnlyBytes               int64 `json:"current_only_bytes"`
+	SnapshotReferencedLogicalFiles int64 `json:"snapshot_referenced_logical_files"`
+	SnapshotReferencedBytes        int64 `json:"snapshot_referenced_bytes"`
+	SnapshotOnlyLogicalFiles       int64 `json:"snapshot_only_logical_files"`
+	SnapshotOnlyBytes              int64 `json:"snapshot_only_bytes"`
+	SharedLogicalFiles             int64 `json:"shared_logical_files"`
+	SharedBytes                    int64 `json:"shared_bytes"`
+}
+
+type InspectResult struct {
+	GeneratedAtUTC time.Time            `json:"generated_at_utc"`
+	EntityType     EntityType           `json:"entity_type"`
+	EntityID       string               `json:"entity_id"`
+	Summary        map[string]any       `json:"summary"`
+	Metadata       map[string]any       `json:"metadata,omitempty"`
+	Relations      []Relation           `json:"relations,omitempty"`
+	Warnings       []ObservationWarning `json:"warnings,omitempty"`
+}
+
+type SimulationResult struct {
+	GeneratedAtUTC time.Time `json:"generated_at_utc"`
+	Kind           string    `json:"kind"`
+	Exact          bool      `json:"exact"`
+	Mutated        bool      `json:"mutated"`
+
+	Summary  map[string]any       `json:"summary"`
+	Warnings []ObservationWarning `json:"warnings,omitempty"`
+}
+
+type ObservationWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
