@@ -1837,6 +1837,7 @@ func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 			EntityType: observability.EntityLogicalFile,
 			EntityID:   "42",
 			Summary: map[string]any{
+				"original_name":        "photo.jpg",
 				"chunker_version":      "v2-fastcdc",
 				"chunk_count":          int64(142),
 				"avg_chunk_size_bytes": 58 * 1024.0,
@@ -1856,9 +1857,14 @@ func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Chunker: v2-fastcdc",
-		"Chunks: 142",
-		"Avg chunk size: 58KB",
+		"Logical file 42",
+		"Summary",
+		"name:",
+		"photo.jpg",
+		"chunks:",
+		"142",
+		"chunker version:",
+		"v2-fastcdc",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected inspect text output to contain %q, got output:\n%s", want, output)

@@ -1832,30 +1832,12 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
-	chunkerVersion, err := toStringFromAny(r.Summary["chunker_version"])
-	if err != nil {
-		return fmt.Errorf("inspect logical file %d: parse chunker_version: %w", fileID, err)
-	}
-	chunkCount, err := toInt64FromAny(r.Summary["chunk_count"])
-	if err != nil {
-		return fmt.Errorf("inspect logical file %d: parse chunk_count: %w", fileID, err)
-	}
-	avgChunkSizeBytes, err := toFloat64FromAny(r.Summary["avg_chunk_size_bytes"])
-	if err != nil {
-		return fmt.Errorf("inspect logical file %d: parse avg_chunk_size_bytes: %w", fileID, err)
-	}
-	avgChunkSizeKB := int64(math.Round(avgChunkSizeBytes / 1024.0))
-
 	if outputMode == outputModeJSON {
 		enc := json.NewEncoder(os.Stdout)
 		return enc.Encode(r)
 	}
 
-	fmt.Printf("Chunker: %s\n", chunkerVersion)
-	fmt.Printf("Chunks: %d\n", chunkCount)
-	fmt.Printf("Avg chunk size: %dKB\n", avgChunkSizeKB)
-
-	return nil
+	return observability.RenderInspectHuman(os.Stdout, r)
 }
 
 func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
