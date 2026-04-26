@@ -336,9 +336,13 @@ func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) 
 		ContainerBytes:   containerBytes,
 	}
 
-	if logicalBytes > 0 {
-		stats.DedupRatio = float64(uniqueChunkBytes) / float64(logicalBytes)
-		stats.DedupRatioPercent = stats.DedupRatio * 100
+	if logicalBytes > 0 && uniqueChunkBytes > 0 {
+		stats.DedupRatio = float64(logicalBytes) / float64(uniqueChunkBytes)
+		savings := (1.0 - float64(uniqueChunkBytes)/float64(logicalBytes)) * 100
+		if savings < 0 {
+			savings = 0
+		}
+		stats.DedupRatioPercent = savings
 	}
 
 	if uniqueChunkBytes > 0 {

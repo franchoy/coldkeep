@@ -11,8 +11,9 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
 		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
-		Logical:    LogicalStats{TotalFiles: 3},
+		Logical:    LogicalStats{TotalFiles: 3, CompletedSizeBytes: 1000},
 		Chunks: ChunkStats{
+			CompletedBytes:   400,
 			TotalReferences:  10,
 			UniqueReferenced: 7,
 			ChunkerVersions: []VersionStat{
@@ -20,6 +21,7 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 				{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
 			},
 		},
+		Efficiency: EfficiencyStats{DedupRatio: 2.5, DedupRatioPercent: 60.0, StorageOverheadPct: 5.0},
 	}
 
 	if err := RenderStatsJSON(&buf, input); err != nil {
@@ -32,6 +34,16 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 	}
 	if got, _ := decoded["repository"].(map[string]any)["active_write_chunker"].(string); got != "v2-fastcdc" {
 		t.Fatalf("unexpected active_write_chunker: %q", got)
+	}
+	eff, ok := decoded["efficiency"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing efficiency object: %+v", decoded)
+	}
+	if got, ok := eff["dedup_ratio"].(float64); !ok || got != 2.5 {
+		t.Fatalf("unexpected efficiency.dedup_ratio: %v", eff["dedup_ratio"])
+	}
+	if got, ok := eff["dedup_ratio_percent"].(float64); !ok || got != 60.0 {
+		t.Fatalf("unexpected efficiency.dedup_ratio_percent: %v", eff["dedup_ratio_percent"])
 	}
 }
 

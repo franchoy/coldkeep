@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"database/sql"
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -98,12 +99,8 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	if result.Efficiency.ContainerBytes != 900 {
 		t.Fatalf("unexpected efficiency container_bytes: %d", result.Efficiency.ContainerBytes)
 	}
-	if result.Efficiency.DedupRatio != 0.9 {
-		t.Fatalf("unexpected efficiency dedup_ratio: %f", result.Efficiency.DedupRatio)
-	}
-	if result.Efficiency.DedupRatioPercent != 90 {
-		t.Fatalf("unexpected efficiency dedup_ratio_percent: %f", result.Efficiency.DedupRatioPercent)
-	}
+	assertFloatApprox(t, result.Efficiency.DedupRatio, 500.0/450.0, 1e-9, "efficiency dedup_ratio")
+	assertFloatApprox(t, result.Efficiency.DedupRatioPercent, 10.0, 1e-9, "efficiency dedup_ratio_percent")
 	if result.Efficiency.StorageOverheadPct != 100 {
 		t.Fatalf("unexpected efficiency storage_overhead_pct: %f", result.Efficiency.StorageOverheadPct)
 	}
@@ -419,4 +416,11 @@ func hasWarningCode(warnings []ObservationWarning, code string) bool {
 		}
 	}
 	return false
+}
+
+func assertFloatApprox(t *testing.T, got, want, eps float64, label string) {
+	t.Helper()
+	if math.Abs(got-want) > eps {
+		t.Fatalf("unexpected %s: got=%f want=%f eps=%f", label, got, want, eps)
+	}
 }
