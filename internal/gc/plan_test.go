@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -300,6 +301,104 @@ func TestBuildPlanAssumeDeletedSnapshotsMakesChunkReclaimable(t *testing.T) {
 	}
 	if plan2.PhysicallyReclaimableBytes != 1024 {
 		t.Errorf("with deletion: PhysicallyReclaimableBytes = %d, want 1024", plan2.PhysicallyReclaimableBytes)
+	}
+}
+
+func TestBuildPlanAssumeDeletedSnapshotMustExist(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	_, err := BuildPlan(context.Background(), dbconn, PlanOptions{
+		AssumeDeletedSnapshots: []string{"missing-snapshot"},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing snapshot")
+	}
+	if !strings.Contains(err.Error(), `snapshot "missing-snapshot" does not exist`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildPlanDeleteSnapshotKeepsChunkReachableWhenCurrentFileStillExists(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	fileID := insertLogicalFile(t, dbconn, "current-and-snapshot.txt")
+	chunkID := insertChunk(t, dbconn, "shared-current-snapshot", 256, 0, 0)
+	linkFileChunk(t, dbconn, fileID, chunkID, 0)
+
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current-and-snapshot.txt", fileID); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-current', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	pathRes, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('/current-and-snapshot.txt')`)
+	if err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	pathID, _ := pathRes.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-current', ?, ?)`, pathID, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	containerID := insertContainer(t, dbconn, "c-live-protected.bin", 256)
+	insertBlock(t, dbconn, chunkID, containerID, 256)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{
+		AssumeDeletedSnapshots: []string{"snap-current"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReachableChunks != 1 {
+		t.Errorf("ReachableChunks = %d, want 1", plan.ReachableChunks)
+	}
+	if plan.UnreachableChunks != 0 {
+		t.Errorf("UnreachableChunks = %d, want 0", plan.UnreachableChunks)
+	}
+	if plan.ReclaimableBytes != 0 {
+		t.Errorf("ReclaimableBytes = %d, want 0", plan.ReclaimableBytes)
+	}
+}
+
+func TestBuildPlanDeleteSnapshotKeepsChunkReachableWhenOtherSnapshotStillProtectsIt(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	fileID := insertLogicalFile(t, dbconn, "shared-by-two-snaps.txt")
+	chunkID := insertChunk(t, dbconn, "shared-two-snaps", 300, 0, 0)
+	linkFileChunk(t, dbconn, fileID, chunkID, 0)
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-a', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snap-a: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-b', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snap-b: %v", err)
+	}
+	pathRes, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('/shared-by-two-snaps.txt')`)
+	if err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	pathID, _ := pathRes.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-a', ?, ?), ('snap-b', ?, ?)`, pathID, fileID, pathID, fileID); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
+
+	containerID := insertContainer(t, dbconn, "c-other-snapshot.bin", 300)
+	insertBlock(t, dbconn, chunkID, containerID, 300)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{
+		AssumeDeletedSnapshots: []string{"snap-a"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReachableChunks != 1 {
+		t.Errorf("ReachableChunks = %d, want 1", plan.ReachableChunks)
+	}
+	if plan.UnreachableChunks != 0 {
+		t.Errorf("UnreachableChunks = %d, want 0", plan.UnreachableChunks)
+	}
+	if plan.ReclaimableBytes != 0 {
+		t.Errorf("ReclaimableBytes = %d, want 0", plan.ReclaimableBytes)
 	}
 }
 

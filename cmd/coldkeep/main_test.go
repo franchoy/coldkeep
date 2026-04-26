@@ -6677,3 +6677,26 @@ func TestRunSimulateGCCommandDeleteSnapshotFlagPassThrough(t *testing.T) {
 		t.Fatalf("captured.AssumeDeletedSnapshots = %v, want [s3 s4]", captured.AssumeDeletedSnapshots)
 	}
 }
+
+func TestRunSimulateGCCommandRejectsMissingSnapshot(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return nil, fmt.Errorf(`gc simulation: build plan: gc.BuildPlan: validate assumed-deleted snapshots: snapshot %q does not exist`, opts.AssumeDeletedSnapshots[0])
+	}
+
+	err := runSimulateGCCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"gc"},
+		flags: map[string][]string{
+			"delete-snapshot": {"missing-snapshot"},
+		},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `simulate gc: gc simulation: build plan: gc.BuildPlan: validate assumed-deleted snapshots: snapshot "missing-snapshot" does not exist`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

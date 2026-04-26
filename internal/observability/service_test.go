@@ -84,6 +84,9 @@ func TestSimulateGCEmptyRepo(t *testing.T) {
 func TestSimulateGCAssumptionsIncludeDeletedSnapshots(t *testing.T) {
 	dbconn := openSimulateTestDB(t)
 	svc := newServiceForTest(dbconn, nil)
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('s1', CURRENT_TIMESTAMP, 'full'), ('s2', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snapshots: %v", err)
+	}
 
 	result, err := svc.Simulate(context.Background(), SimulationOptions{
 		Kind:                   SimulationKindGC,
@@ -106,6 +109,25 @@ func TestSimulateGCAssumptionsIncludeDeletedSnapshots(t *testing.T) {
 	}
 	if result.GC.Mutated {
 		t.Error("expected GC.Mutated=false")
+	}
+}
+
+func TestSimulateGCRejectsMissingDeletedSnapshot(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{
+		Kind:                   SimulationKindGC,
+		AssumeDeletedSnapshots: []string{"missing-snapshot"},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+	if !strings.Contains(err.Error(), `snapshot "missing-snapshot" does not exist`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

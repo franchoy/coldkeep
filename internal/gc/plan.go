@@ -96,6 +96,9 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	if dbconn == nil {
 		return nil, fmt.Errorf("gc.BuildPlan: nil db")
 	}
+	if err := validateAssumeDeletedSnapshots(ctx, dbconn, opts.AssumeDeletedSnapshots); err != nil {
+		return nil, fmt.Errorf("gc.BuildPlan: validate assumed-deleted snapshots: %w", err)
+	}
 
 	g := graph.NewService(dbconn)
 
@@ -130,6 +133,33 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	}
 
 	return plan, nil
+}
+
+func validateAssumeDeletedSnapshots(ctx context.Context, dbconn *sql.DB, snapshotIDs []string) error {
+	if len(snapshotIDs) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(snapshotIDs))
+	for _, snapshotID := range snapshotIDs {
+		if snapshotID == "" {
+			return fmt.Errorf("snapshot id must not be empty")
+		}
+		if _, exists := seen[snapshotID]; exists {
+			continue
+		}
+		seen[snapshotID] = struct{}{}
+
+		var exists bool
+		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = ?)`, snapshotID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("snapshot %q does not exist", snapshotID)
+		}
+	}
+
+	return nil
 }
 
 func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord, error) {
