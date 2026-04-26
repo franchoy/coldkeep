@@ -3,6 +3,7 @@ package observability
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -144,5 +145,109 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	}
 	if firstDetail >= secondDetail {
 		t.Fatalf("expected deterministic container detail sort by id, got:\n%s", output)
+	}
+}
+
+func TestRenderStatsHumanIsDeterministic(t *testing.T) {
+	input := &StatsResult{
+		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical:    LogicalStats{TotalFiles: 10, CompletedFiles: 10, TotalSizeBytes: 1024},
+		Chunks: ChunkStats{TotalChunks: 3, CompletedChunks: 3, CompletedBytes: 512, ChunkerVersions: []VersionStat{
+			{Version: "v2-fastcdc", Chunks: 2, Bytes: 200},
+			{Version: "unknown", Chunks: 1, Bytes: 50},
+		}},
+	}
+
+	var first bytes.Buffer
+	if err := RenderStatsHuman(&first, input); err != nil {
+		t.Fatalf("RenderStatsHuman first: %v", err)
+	}
+	var second bytes.Buffer
+	if err := RenderStatsHuman(&second, input); err != nil {
+		t.Fatalf("RenderStatsHuman second: %v", err)
+	}
+
+	if first.String() != second.String() {
+		t.Fatalf("expected deterministic human output\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
+	}
+}
+
+func TestRenderStatsJSONRoundTrips(t *testing.T) {
+	input := &StatsResult{
+		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical:    LogicalStats{TotalFiles: 5, CompletedFiles: 5, CompletedSizeBytes: 1000},
+		Chunks:     ChunkStats{ChunkerVersions: []VersionStat{{Version: "v2-fastcdc", Chunks: 5, Bytes: 1000}}},
+		Efficiency: EfficiencyStats{DedupRatio: 2.0, DedupRatioPercent: 50.0, ContainerOverheadPct: 3.0, StorageOverheadPct: 3.0},
+	}
+
+	var buf bytes.Buffer
+	if err := RenderStatsJSON(&buf, input); err != nil {
+		t.Fatalf("RenderStatsJSON: %v", err)
+	}
+
+	var decoded StatsResult
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal roundtrip: %v", err)
+	}
+
+	if decoded.Repository.ActiveWriteChunker != input.Repository.ActiveWriteChunker {
+		t.Fatalf("repository chunker mismatch: got=%q want=%q", decoded.Repository.ActiveWriteChunker, input.Repository.ActiveWriteChunker)
+	}
+	if !reflect.DeepEqual(decoded.Chunks.ChunkerVersions, input.Chunks.ChunkerVersions) {
+		t.Fatalf("chunker_versions mismatch: got=%+v want=%+v", decoded.Chunks.ChunkerVersions, input.Chunks.ChunkerVersions)
+	}
+}
+
+func TestRenderStatsHumanSortsChunkerVersions(t *testing.T) {
+	var buf bytes.Buffer
+	input := &StatsResult{
+		Chunks: ChunkStats{ChunkerVersions: []VersionStat{
+			{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
+			{Version: "unknown", Chunks: 1, Bytes: 9},
+			{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
+		}},
+	}
+
+	if err := RenderStatsHuman(&buf, input); err != nil {
+		t.Fatalf("RenderStatsHuman: %v", err)
+	}
+	out := buf.String()
+	idxUnknown := strings.Index(out, "unknown:")
+	idxV1 := strings.Index(out, "v1-simple-rolling:")
+	idxV2 := strings.Index(out, "v2-fastcdc:")
+	if !(idxUnknown < idxV1 && idxV1 < idxV2) {
+		t.Fatalf("expected sorted chunker version order, got:\n%s", out)
+	}
+}
+
+func TestRenderStatsHumanHidesContainerDetailsByDefault(t *testing.T) {
+	var buf bytes.Buffer
+	input := &StatsResult{
+		Containers: ContainerStats{Records: nil},
+	}
+
+	if err := RenderStatsHuman(&buf, input); err != nil {
+		t.Fatalf("RenderStatsHuman: %v", err)
+	}
+	if strings.Contains(buf.String(), "Container details") {
+		t.Fatalf("expected no container details section by default, got:\n%s", buf.String())
+	}
+}
+
+func TestRenderStatsHumanShowsContainerDetailsWhenRequested(t *testing.T) {
+	var buf bytes.Buffer
+	input := &StatsResult{
+		Containers: ContainerStats{Records: []ContainerStatRecord{{ID: 1, Filename: "container_000001.ck", TotalBytes: 64, LiveBytes: 64, DeadBytes: 0, Quarantine: false}}},
+	}
+
+	if err := RenderStatsHuman(&buf, input); err != nil {
+		t.Fatalf("RenderStatsHuman: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Container details") {
+		t.Fatalf("expected container details section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "container_000001.ck") {
+		t.Fatalf("expected container row, got:\n%s", out)
 	}
 }

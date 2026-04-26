@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -428,5 +429,195 @@ func assertFloatApprox(t *testing.T, got, want, eps float64, label string) {
 	t.Helper()
 	if math.Abs(got-want) > eps {
 		t.Fatalf("unexpected %s: got=%f want=%f eps=%f", label, got, want, eps)
+	}
+}
+
+func TestStatsReturnsStructuredSections(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	result, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.GeneratedAtUTC.IsZero() {
+		t.Fatal("expected generated_at_utc to be set")
+	}
+
+	if strings.TrimSpace(result.Repository.ActiveWriteChunker) == "" {
+		t.Fatalf("expected repository section to include active_write_chunker, got %+v", result.Repository)
+	}
+	if result.Logical.TotalFiles != 0 || result.Logical.CompletedFiles != 0 {
+		t.Fatalf("expected zero logical counts for empty DB, got %+v", result.Logical)
+	}
+	if result.Chunks.TotalChunks != 0 || result.Chunks.TotalReferences != 0 {
+		t.Fatalf("expected zero chunk totals for empty DB, got %+v", result.Chunks)
+	}
+	if result.Containers.TotalContainers != 0 || result.Containers.TotalBytes != 0 {
+		t.Fatalf("expected zero container totals for empty DB, got %+v", result.Containers)
+	}
+	if result.Retention.CurrentOnlyLogicalFiles != 0 || result.Retention.SharedLogicalFiles != 0 {
+		t.Fatalf("expected zero retention section for empty DB, got %+v", result.Retention)
+	}
+}
+
+func TestStatsIncludesChunkerVersionDistribution(t *testing.T) {
+	result := mapStatsResult(time.Now().UTC(), &maintenance.StatsResult{
+		ChunkCountsByVersion: map[string]int64{
+			"v2-fastcdc":        3,
+			"v1-simple-rolling": 1,
+		},
+		ChunkBytesByVersion: map[string]int64{
+			"v2-fastcdc":        300,
+			"v1-simple-rolling": 100,
+		},
+	})
+
+	if len(result.Chunks.ChunkerVersions) != 2 {
+		t.Fatalf("expected 2 chunker versions, got %d", len(result.Chunks.ChunkerVersions))
+	}
+	if result.Chunks.ChunkerVersions[0].Version != "v1-simple-rolling" {
+		t.Fatalf("expected sorted chunker_versions[0]=v1-simple-rolling, got %q", result.Chunks.ChunkerVersions[0].Version)
+	}
+	if result.Chunks.ChunkerVersions[1].Version != "v2-fastcdc" {
+		t.Fatalf("expected sorted chunker_versions[1]=v2-fastcdc, got %q", result.Chunks.ChunkerVersions[1].Version)
+	}
+}
+
+func TestStatsCalculatesEfficiencyWithoutDivisionByZero(t *testing.T) {
+	result := buildEfficiencyStats(0, 0, 123)
+	if result.DedupRatio != 0 {
+		t.Fatalf("expected zero dedup ratio, got %f", result.DedupRatio)
+	}
+	if result.DedupRatioPercent != 0 {
+		t.Fatalf("expected zero dedup savings pct, got %f", result.DedupRatioPercent)
+	}
+	if result.ContainerOverheadPct != 0 {
+		t.Fatalf("expected zero container overhead pct, got %f", result.ContainerOverheadPct)
+	}
+}
+
+func TestStatsIncludesContainerRecordsOnlyWhenRequested(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	lfRes, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"gamma.txt", 55, "hash-gamma", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	logicalFileID, err := lfRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical_file last insert id: %v", err)
+	}
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_records.bin", 512, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := ctrRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-records", 64, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, logicalFileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 64, 64, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	without, err := svc.Stats(context.Background(), StatsOptions{IncludeContainers: false})
+	if err != nil {
+		t.Fatalf("Stats without containers: %v", err)
+	}
+	with, err := svc.Stats(context.Background(), StatsOptions{IncludeContainers: true})
+	if err != nil {
+		t.Fatalf("Stats with containers: %v", err)
+	}
+
+	if len(without.Containers.Records) != 0 {
+		t.Fatalf("expected no container records without option, got %d", len(without.Containers.Records))
+	}
+	if len(with.Containers.Records) == 0 {
+		t.Fatal("expected container records when option is enabled")
+	}
+}
+
+func TestStatsAddsWarningsButDoesNotRepair(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`,
+		"non-numeric-snap", time.Now().UTC(), "full",
+	); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+
+	before := mustCount(t, dbconn, `SELECT COUNT(*) FROM snapshot`)
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	after := mustCount(t, dbconn, `SELECT COUNT(*) FROM snapshot`)
+
+	if !hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
+		t.Fatalf("expected warning for non-numeric snapshot ids, got %+v", result.Warnings)
+	}
+	if before != after {
+		t.Fatalf("expected no mutation/repair during stats: before=%d after=%d", before, after)
+	}
+}
+
+func TestStatsDoesNotMutateState(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"delta.txt", 100, "hash-delta", "COMPLETED", "v2-fastcdc",
+	); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	beforeLogical := mustCount(t, dbconn, `SELECT COUNT(*) FROM logical_file`)
+	beforeChunks := mustCount(t, dbconn, `SELECT COUNT(*) FROM chunk`)
+	beforeContainers := mustCount(t, dbconn, `SELECT COUNT(*) FROM container`)
+
+	svc := newServiceForTest(dbconn, nil)
+	if _, err := svc.Stats(context.Background(), StatsOptions{IncludeContainers: true}); err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+
+	afterLogical := mustCount(t, dbconn, `SELECT COUNT(*) FROM logical_file`)
+	afterChunks := mustCount(t, dbconn, `SELECT COUNT(*) FROM chunk`)
+	afterContainers := mustCount(t, dbconn, `SELECT COUNT(*) FROM container`)
+
+	if beforeLogical != afterLogical {
+		t.Fatalf("logical_file count mutated: before=%d after=%d", beforeLogical, afterLogical)
+	}
+	if beforeChunks != afterChunks {
+		t.Fatalf("chunk count mutated: before=%d after=%d", beforeChunks, afterChunks)
+	}
+	if beforeContainers != afterContainers {
+		t.Fatalf("container count mutated: before=%d after=%d", beforeContainers, afterContainers)
 	}
 }

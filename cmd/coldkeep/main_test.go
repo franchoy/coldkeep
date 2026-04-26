@@ -5344,6 +5344,101 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	}
 }
 
+func TestStatsCommandHuman(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:    observability.LogicalStats{TotalFiles: 1, CompletedFiles: 1, TotalSizeBytes: 1024, CompletedSizeBytes: 1024},
+			Chunks:     observability.ChunkStats{TotalChunks: 1, CompletedChunks: 1, CompletedBytes: 512},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeText); err != nil {
+			t.Fatalf("runStatsCommand human returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Coldkeep repository stats") {
+		t.Fatalf("expected human stats output header, got:\n%s", output)
+	}
+}
+
+func TestStatsCommandJSON(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:    observability.LogicalStats{TotalFiles: 1},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse json payload: %v\noutput=%q", err, output)
+	}
+	repo, ok := payload["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing repository object: %v", payload)
+	}
+	if got, _ := repo["active_write_chunker"].(string); got != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%q", got)
+	}
+}
+
+func TestStatsCommandJSONShorthand(t *testing.T) {
+	parsed := parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}
+	mode, err := resolveOutputMode(parsed)
+	if err != nil {
+		t.Fatalf("resolveOutputMode: %v", err)
+	}
+	if mode != outputModeJSON {
+		t.Fatalf("expected outputModeJSON for --json shorthand, got %q", mode)
+	}
+}
+
+func TestStatsCommandContainers(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	var includeContainers bool
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		includeContainers = opts.IncludeContainers
+		return &observability.StatsResult{}, nil
+	}
+
+	if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"containers": {""}}}, outputModeText); err != nil {
+		t.Fatalf("runStatsCommand with --containers returned error: %v", err)
+	}
+	if !includeContainers {
+		t.Fatal("expected IncludeContainers=true when --containers is set")
+	}
+}
+
+func TestStatsCommandConflictingOutputFlags(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"json":   {""},
+			"output": {"human"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+		t.Fatalf("expected output flag conflict error, got %v", err)
+	}
+}
+
 func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
 	output := captureStdout(t, func() {
 		printStatsReport(&maintenance.StatsResult{
