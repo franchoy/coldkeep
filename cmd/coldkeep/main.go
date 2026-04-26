@@ -1811,23 +1811,55 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "relations", "reverse", "deep", "limit"); err != nil {
 		return err
 	}
 
-	if len(parsed.positionals) != 2 || parsed.positionals[0] != "file" {
-		return usageErrorf("Usage: coldkeep inspect file <fileID>")
+	validEntities := map[string]observability.EntityType{
+		"file":      observability.EntityFile,
+		"snapshot":  observability.EntitySnapshot,
+		"chunk":     observability.EntityChunk,
+		"container": observability.EntityContainer,
 	}
 
-	fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
-	if err != nil || fileID <= 0 {
-		return usageErrorf("Invalid fileID: %s", parsed.positionals[1])
+	if len(parsed.positionals) != 2 {
+		return usageErrorf("Usage: coldkeep inspect (file|snapshot|chunk|container) <id>")
+	}
+	entityName := parsed.positionals[0]
+	entityType, ok := validEntities[entityName]
+	if !ok {
+		return usageErrorf("Usage: coldkeep inspect (file|snapshot|chunk|container) <id>")
 	}
 
-	r, err := runObservabilityInspectPhase(observability.EntityFile, strconv.FormatInt(fileID, 10), observability.InspectOptions{})
+	entityID := strings.TrimSpace(parsed.positionals[1])
+	if entityID == "" {
+		return usageErrorf("Invalid %s id: %q", entityName, parsed.positionals[1])
+	}
+
+	// For file/chunk/container a numeric id is required; validate early for a clear error.
+	if entityType == observability.EntityFile || entityType == observability.EntityChunk || entityType == observability.EntityContainer {
+		if n, err := strconv.ParseInt(entityID, 10, 64); err != nil || n <= 0 {
+			return usageErrorf("Invalid %s id: %s", entityName, entityID)
+		}
+	}
+
+	opts := observability.InspectOptions{
+		Relations: parsed.hasFlag("relations"),
+		Reverse:   parsed.hasFlag("reverse"),
+		Deep:      parsed.hasFlag("deep"),
+	}
+	if limitStr, hasLimit := parsed.lastFlagValue("limit"); hasLimit {
+		n, err := strconv.Atoi(limitStr)
+		if err != nil || n <= 0 {
+			return usageErrorf("Invalid --limit value: %s", limitStr)
+		}
+		opts.Limit = n
+	}
+
+	r, err := runObservabilityInspectPhase(entityType, entityID, opts)
 	if err != nil {
 		if errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("file ID %d not found", fileID)
+			return fmt.Errorf("%s %s not found", entityName, entityID)
 		}
 		return err
 	}

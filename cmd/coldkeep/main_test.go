@@ -1959,22 +1959,224 @@ func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
 }
 
 func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
+	// unknown entity type
 	err := runInspectCommand(parsedCommandLine{
 		method:      "inspect",
-		positionals: []string{"chunk", "1"},
+		positionals: []string{"blob", "1"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect file <fileID>") {
-		t.Fatalf("expected inspect usage error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|snapshot|chunk|container) <id>") {
+		t.Fatalf("expected inspect usage error for unknown entity, got: %v", err)
 	}
 
+	// wrong number of positional args
 	err = runInspectCommand(parsedCommandLine{
 		method:      "inspect",
-		positionals: []string{"file", "invalid"},
+		positionals: []string{"file"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Invalid fileID") {
-		t.Fatalf("expected invalid fileID error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|snapshot|chunk|container) <id>") {
+		t.Fatalf("expected inspect usage error for missing id, got: %v", err)
+	}
+
+	// invalid numeric id for file
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "notanumber"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Invalid file id") {
+		t.Fatalf("expected invalid file id error, got: %v", err)
+	}
+
+	// invalid numeric id for chunk
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"chunk", "abc"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Invalid chunk id") {
+		t.Fatalf("expected invalid chunk id error, got: %v", err)
+	}
+
+	// invalid limit flag
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"snapshot", "snap-1"},
+		flags:       map[string][]string{"limit": {"bad"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Invalid --limit value") {
+		t.Fatalf("expected invalid limit error, got: %v", err)
+	}
+}
+
+func TestRunInspectCommandSnapshotTextNewEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntitySnapshot {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "snap-99" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		if !opts.Relations {
+			t.Fatalf("expected relations=true")
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntitySnapshot,
+			EntityID:   "snap-99",
+			Summary: map[string]any{
+				"type":               "full",
+				"logical_file_count": int64(3),
+				"total_size_bytes":   int64(1024),
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"snapshot", "snap-99"},
+			flags:       map[string][]string{"relations": {""}},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand snapshot text returned error: %v", err)
+		}
+	})
+
+	for _, want := range []string{"Snapshot snap-99", "Summary"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunInspectCommandChunkTextNewEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityChunk {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "77" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   "77",
+			Summary: map[string]any{
+				"size_bytes":      int64(2048),
+				"chunker_version": "v2-fastcdc",
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"chunk", "77"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand chunk text returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Chunk 77") {
+		t.Fatalf("expected output to contain chunk header, got:\n%s", output)
+	}
+}
+
+func TestRunInspectCommandContainerTextNewEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityContainer {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "5" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityContainer,
+			EntityID:   "5",
+			Summary: map[string]any{
+				"filename":    "ctr_5.bin",
+				"size_bytes":  int64(4096),
+				"chunk_count": int64(12),
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"container", "5"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand container text returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Container 5") {
+		t.Fatalf("expected output to contain container header, got:\n%s", output)
+	}
+}
+
+func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedOpts observability.InspectOptions
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedOpts = opts
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   id,
+			Summary:    map[string]any{},
+		}, nil
+	}
+
+	_ = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "1"},
+		flags:       map[string][]string{"relations": {""}, "reverse": {""}, "deep": {""}, "limit": {"7"}},
+	}, outputModeText)
+
+	if !capturedOpts.Relations {
+		t.Fatal("expected Relations=true from --relations flag")
+	}
+	if !capturedOpts.Reverse {
+		t.Fatal("expected Reverse=true from --reverse flag")
+	}
+	if !capturedOpts.Deep {
+		t.Fatal("expected Deep=true from --deep flag")
+	}
+	if capturedOpts.Limit != 7 {
+		t.Fatalf("expected Limit=7 from --limit 7, got %d", capturedOpts.Limit)
+	}
+}
+
+func TestRunInspectCommandNotFoundError(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		return nil, fmt.Errorf("%w: chunk %s", observability.ErrNotFound, id)
+	}
+
+	err := runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"chunk", "9999"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not-found error, got: %v", err)
 	}
 }
 

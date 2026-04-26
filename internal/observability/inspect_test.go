@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"strconv"
 	"testing"
@@ -814,4 +815,94 @@ func TestInspectDoesNotMutateState(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("inspect mutated repository state\nbefore: %+v\nafter:  %+v", before, after)
 	}
+}
+
+func TestInspectChunkForwardRelationsIncludesContainer(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-fwd-ctr", 88, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_fwd.bin", 512, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 88, 88, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Relations: true})
+	if err != nil {
+		t.Fatalf("Inspect chunk with relations: %v", err)
+	}
+	if len(result.Relations) != 1 {
+		t.Fatalf("expected 1 forward relation, got %d: %+v", len(result.Relations), result.Relations)
+	}
+	rel := result.Relations[0]
+	if rel.Type != "references" || rel.Direction != RelationOutgoing || rel.TargetType != EntityContainer || rel.TargetID != strconv.FormatInt(containerID, 10) {
+		t.Fatalf("unexpected chunk→container relation: %+v", rel)
+	}
+}
+
+func TestInspectNoFSWrites(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "fswrite.txt", 55, "h-fswrite", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	// snapshot with numeric id for deep traversal
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "50", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "fswrite.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "50", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	workDir := t.TempDir()
+
+	// Record files present before
+	entriesBefore := dirEntries(t, workDir)
+
+	svc := newServiceForTest(dbconn, nil)
+	_, err = svc.Inspect(context.Background(), EntitySnapshot, "50", InspectOptions{Relations: true, Deep: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("Inspect snapshot: %v", err)
+	}
+	_, err = svc.Inspect(context.Background(), EntityLogicalFile, strconv.FormatInt(fileID, 10), InspectOptions{Relations: true, Reverse: true})
+	if err != nil {
+		t.Fatalf("Inspect logical file: %v", err)
+	}
+
+	entriesAfter := dirEntries(t, workDir)
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Fatalf("inspect wrote files to workdir: before=%v after=%v", entriesBefore, entriesAfter)
+	}
+}
+
+func dirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir %s: %v", dir, err)
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return names
 }
