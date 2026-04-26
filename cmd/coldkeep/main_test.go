@@ -1349,6 +1349,32 @@ func TestResolveOutputModeSupportsJSONShorthand(t *testing.T) {
 	}
 }
 
+func TestResolveOutputModeSupportsHumanAlias(t *testing.T) {
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"output": {"human"}},
+	})
+	if err != nil {
+		t.Fatalf("expected no error for --output human, got %v", err)
+	}
+	if mode != outputModeText {
+		t.Fatalf("expected text output mode for --output human, got %q", mode)
+	}
+}
+
+func TestResolveOutputModeRejectsJSONConflictWithHumanOutput(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"json":   {""},
+			"output": {"human"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+		t.Fatalf("expected conflict error for --json with --output human, got %v", err)
+	}
+}
+
 func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runSimulateCommand(parsedCommandLine{
 		method:      "simulate",

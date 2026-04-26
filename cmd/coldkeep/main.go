@@ -708,15 +708,16 @@ func verifyLevelToString(level verify.VerifyLevel) string {
 func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	value, hasValue := parsed.lastFlagValue("output")
 	hasJSONFlag := parsed.hasFlag("json")
+	normalized := strings.ToLower(strings.TrimSpace(value))
 
-	if hasJSONFlag && hasValue && strings.EqualFold(value, "text") {
-		return outputModeText, usageErrorf("cannot combine --json with --output text")
+	if hasJSONFlag && hasValue && normalized != "" && normalized != "json" {
+		return outputModeText, usageErrorf("cannot combine --json with --output %s", normalized)
 	}
 	if hasJSONFlag {
 		if !hasValue {
 			return outputModeJSON, nil
 		}
-		if strings.EqualFold(value, "json") {
+		if normalized == "json" {
 			return outputModeJSON, nil
 		}
 	}
@@ -725,13 +726,13 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 		return outputModeText, nil
 	}
 
-	switch strings.ToLower(value) {
-	case "", "text":
+	switch normalized {
+	case "", "text", "human":
 		return outputModeText, nil
 	case "json":
 		return outputModeJSON, nil
 	default:
-		return outputModeText, usageErrorf("invalid --output value %q (allowed: text, json)", value)
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	}
 }
 
