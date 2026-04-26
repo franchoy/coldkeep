@@ -56,6 +56,15 @@ type Plan struct {
 // BuildPlan performs the GC mark phase and returns a Plan describing what
 // would be reclaimed. It never modifies the database or filesystem.
 //
+// Reachability roots include:
+//   - Current live logical files (from physical_file table)
+//   - All snapshot roots (from snapshot_file table), excluding those in opts.AssumeDeletedSnapshots
+//   - Quarantine/protection rules: only sealed, non-quarantined containers are planned for reclamation
+//
+// A chunk is reclaimable if and only if it is:
+//   - Unreachable (not descended from any root)
+//   - AND has no live references (live_ref_count == 0 AND pin_count == 0)
+//
 // BuildPlan is SQLite-compatible (uses ? placeholders). It does not acquire
 // advisory locks — it is a read-only snapshot of reachability at one instant.
 func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, error) {

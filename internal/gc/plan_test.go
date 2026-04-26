@@ -3,6 +3,7 @@ package gc
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -38,8 +39,8 @@ func insertChunk(t *testing.T, dbconn *sql.DB, hash string, size, liveRef, pinCo
 func insertLogicalFile(t *testing.T, dbconn *sql.DB, name string) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, 100, 'h', 'COMPLETED', 'v2-fastcdc')`,
-		name,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, 100, ?, 'COMPLETED', 'v2-fastcdc')`,
+		name, fmt.Sprintf("hash-%s", name),
 	)
 	if err != nil {
 		t.Fatalf("insert logical_file: %v", err)
@@ -264,5 +265,115 @@ func TestBuildPlanNoDBWritesSideEffect(t *testing.T) {
 	}
 	if containersBefore != containersAfter {
 		t.Errorf("container count changed: %d → %d", containersBefore, containersAfter)
+	}
+}
+
+// TestReachabilityRootsDocumentation verifies the exact reachability semantics:
+//   - For normal simulation: roots = physical_file + all snapshot_file
+//   - For --delete-snapshot s1: roots = physical_file + snapshot_file (excluding s1)
+//   - Snapshots are never deleted, only excluded from root set
+func TestReachabilityRootsDocumentation(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	// Setup: 2 physical files, 2 snapshots with different files
+	physFile1 := insertLogicalFile(t, dbconn, "current_a.txt")
+	physFile2 := insertLogicalFile(t, dbconn, "current_b.txt")
+	snapFile1 := insertLogicalFile(t, dbconn, "snap1_file.txt")
+	snapFile2 := insertLogicalFile(t, dbconn, "snap2_file.txt")
+
+	chunk1 := insertChunk(t, dbconn, "phys1", 100, 0, 0) // from physFile1
+	chunk2 := insertChunk(t, dbconn, "phys2", 100, 0, 0) // from physFile2
+	chunk3 := insertChunk(t, dbconn, "snap1", 100, 0, 0) // from snapFile1 (via snap-001)
+	chunk4 := insertChunk(t, dbconn, "snap2", 100, 0, 0) // from snapFile2 (via snap-002)
+
+	linkFileChunk(t, dbconn, physFile1, chunk1, 0)
+	linkFileChunk(t, dbconn, physFile2, chunk2, 0)
+	linkFileChunk(t, dbconn, snapFile1, chunk3, 0)
+	linkFileChunk(t, dbconn, snapFile2, chunk4, 0)
+
+	// Register as physical files and snapshots
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current_a.txt", physFile1); err != nil {
+		t.Fatalf("insert physical_file 1: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current_b.txt", physFile2); err != nil {
+		t.Fatalf("insert physical_file 2: %v", err)
+	}
+
+	// Create snapshots and link files
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-001', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snap-001: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-002', CURRENT_TIMESTAMP, 'full')`); err != nil {
+		t.Fatalf("insert snap-002: %v", err)
+	}
+
+	pathRes1, _ := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('/snap1_file.txt')`)
+	pathID1, _ := pathRes1.LastInsertId()
+	pathRes2, _ := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('/snap2_file.txt')`)
+	pathID2, _ := pathRes2.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-001', ?, ?)`, pathID1, snapFile1); err != nil {
+		t.Fatalf("insert snapshot_file snap-001: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES ('snap-002', ?, ?)`, pathID2, snapFile2); err != nil {
+		t.Fatalf("insert snapshot_file snap-002: %v", err)
+	}
+
+	// Place all chunks in containers
+	for _, chunkID := range []int64{chunk1, chunk2, chunk3, chunk4} {
+		containerID := insertContainer(t, dbconn, fmt.Sprintf("c_%d.bin", chunkID), 100)
+		insertBlock(t, dbconn, chunkID, containerID, 100)
+	}
+
+	// Test 1: Normal simulation includes all files
+	// Reachable: chunk1 (physFile1), chunk2 (physFile2), chunk3 (snap-001), chunk4 (snap-002)
+	plan1, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan normal: %v", err)
+	}
+	if plan1.ReachableChunks != 4 {
+		t.Errorf("normal: ReachableChunks = %d, want 4 (all chunks from physical + all snapshots)", plan1.ReachableChunks)
+	}
+	if plan1.UnreachableChunks != 0 {
+		t.Errorf("normal: UnreachableChunks = %d, want 0", plan1.UnreachableChunks)
+	}
+
+	// Test 2: With --delete-snapshot snap-001 excluded
+	// Reachable: chunk1 (physFile1), chunk2 (physFile2), chunk4 (snap-002)
+	// Unreachable: chunk3 (snap-001 is excluded from roots, no live refs)
+	plan2, err := BuildPlan(context.Background(), dbconn, PlanOptions{
+		AssumeDeletedSnapshots: []string{"snap-001"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan with delete snap-001: %v", err)
+	}
+	if plan2.ReachableChunks != 3 {
+		t.Errorf("with delete snap-001: ReachableChunks = %d, want 3 (physical + snap-002)", plan2.ReachableChunks)
+	}
+	if plan2.UnreachableChunks != 1 {
+		t.Errorf("with delete snap-001: UnreachableChunks = %d, want 1 (chunk3 from snap-001)", plan2.UnreachableChunks)
+	}
+
+	// Test 3: With both snapshots excluded
+	// Reachable: chunk1 (physFile1), chunk2 (physFile2)
+	// Unreachable: chunk3, chunk4 (both snapshots excluded)
+	plan3, err := BuildPlan(context.Background(), dbconn, PlanOptions{
+		AssumeDeletedSnapshots: []string{"snap-001", "snap-002"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan with delete both: %v", err)
+	}
+	if plan3.ReachableChunks != 2 {
+		t.Errorf("with delete both: ReachableChunks = %d, want 2 (only physical)", plan3.ReachableChunks)
+	}
+	if plan3.UnreachableChunks != 2 {
+		t.Errorf("with delete both: UnreachableChunks = %d, want 2 (both snap chunks)", plan3.UnreachableChunks)
+	}
+
+	// Verify no snapshots were marked/deleted (they are only excluded from root set)
+	var snapCount int64
+	_ = dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id IN ('snap-001', 'snap-002')`).Scan(&snapCount)
+	if snapCount != 2 {
+		t.Errorf("snapshots were modified: count = %d, want 2", snapCount)
 	}
 }
