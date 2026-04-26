@@ -1,9 +1,12 @@
 package observability
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -755,5 +758,386 @@ func TestNormalizeInspectOptionsClampsLimit(t *testing.T) {
 	nonPositive := normalizeInspectOptions(InspectOptions{Limit: 0})
 	if nonPositive.Limit != DefaultInspectLimit {
 		t.Fatalf("expected default limit %d for non-positive input, got %d", DefaultInspectLimit, nonPositive.Limit)
+	}
+}
+
+func TestInspectSnapshotRelations(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "snap-rel.txt", 12, "h-snap-rel", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "snap-rel-1", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "snap-rel.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "snap-rel-1", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntitySnapshot, "snap-rel-1", InspectOptions{Relations: true})
+	if err != nil {
+		t.Fatalf("Inspect snapshot relations: %v", err)
+	}
+	if len(result.Relations) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(result.Relations))
+	}
+	rel := result.Relations[0]
+	if rel.Type != "references" || rel.Direction != RelationOutgoing || rel.TargetType != EntityLogicalFile || rel.TargetID != strconv.FormatInt(fileID, 10) {
+		t.Fatalf("unexpected relation: %+v", rel)
+	}
+}
+
+func TestInspectLogicalFileForwardRelations(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "forward.txt", 14, "h-forward", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-forward", 14, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityLogicalFile, strconv.FormatInt(fileID, 10), InspectOptions{Relations: true})
+	if err != nil {
+		t.Fatalf("Inspect logical file forward relations: %v", err)
+	}
+	if len(result.Relations) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(result.Relations))
+	}
+	rel := result.Relations[0]
+	if rel.Type != "references" || rel.Direction != RelationOutgoing || rel.TargetType != EntityChunk || rel.TargetID != strconv.FormatInt(chunkID, 10) {
+		t.Fatalf("unexpected relation: %+v", rel)
+	}
+}
+
+func TestInspectLogicalFileReverseRelations(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "reverse.txt", 22, "h-reverse", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "99", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "reverse.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "99", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityLogicalFile, strconv.FormatInt(fileID, 10), InspectOptions{Reverse: true})
+	if err != nil {
+		t.Fatalf("Inspect logical file reverse relations: %v", err)
+	}
+	if len(result.Relations) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(result.Relations))
+	}
+	rel := result.Relations[0]
+	if rel.Type != "referenced_by" || rel.Direction != RelationIncoming || rel.TargetType != EntitySnapshot || rel.TargetID != "99" {
+		t.Fatalf("unexpected relation: %+v", rel)
+	}
+}
+
+func TestInspectChunkReverseRelations(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-rev.txt", 18, "h-chunk-rev", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-rev", 18, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Reverse: true})
+	if err != nil {
+		t.Fatalf("Inspect chunk reverse relations: %v", err)
+	}
+	if len(result.Relations) != 1 {
+		t.Fatalf("expected 1 relation, got %d", len(result.Relations))
+	}
+	rel := result.Relations[0]
+	if rel.Type != "referenced_by" || rel.Direction != RelationIncoming || rel.TargetType != EntityLogicalFile || rel.TargetID != strconv.FormatInt(fileID, 10) {
+		t.Fatalf("unexpected relation: %+v", rel)
+	}
+}
+
+func TestInspectDeepTraversalLimited(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "deep-limited.txt", 60, "h-deep-limited", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-deep-limited", 60, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_deep_limited.bin", 256, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 60, 60, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "3", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "deep-limited.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "3", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(ctx, EntitySnapshot, "3", InspectOptions{Deep: true, Limit: 2})
+	if err != nil {
+		t.Fatalf("Inspect deep limited: %v", err)
+	}
+
+	if len(result.Relations) > 2 {
+		t.Fatalf("expected relation limit <= 2, got %d", len(result.Relations))
+	}
+
+	seen := make(map[string]struct{}, len(result.Relations))
+	for _, rel := range result.Relations {
+		key := string(rel.TargetType) + ":" + rel.TargetID
+		if _, exists := seen[key]; exists {
+			t.Fatalf("duplicate relation suggests traversal issue: %s", key)
+		}
+		seen[key] = struct{}{}
+	}
+}
+
+func TestInspectDeterministicOutput(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "det.txt", 33, "h-det", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-det", 33, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_det.bin", 128, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 33, 33, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+
+	fixedNow := time.Date(2026, time.April, 26, 18, 0, 0, 0, time.UTC)
+	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
+
+	r1, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Relations: true, Reverse: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("first inspect: %v", err)
+	}
+	r2, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Relations: true, Reverse: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("second inspect: %v", err)
+	}
+
+	b1, err := json.Marshal(r1)
+	if err != nil {
+		t.Fatalf("marshal first: %v", err)
+	}
+	b2, err := json.Marshal(r2)
+	if err != nil {
+		t.Fatalf("marshal second: %v", err)
+	}
+	if !bytes.Equal(b1, b2) {
+		t.Fatalf("expected deterministic output\nfirst:  %s\nsecond: %s", string(b1), string(b2))
+	}
+}
+
+func TestInspectInvalidEntity(t *testing.T) {
+	svc := newServiceForTest(nil, nil)
+	_, err := svc.Inspect(context.Background(), EntityPhysicalFile, "1", InspectOptions{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrUnsupportedEntity) {
+		t.Fatalf("expected ErrUnsupportedEntity, got %v", err)
+	}
+}
+
+func TestInspectInvalidID(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	for _, tc := range []struct {
+		entity EntityType
+		id     string
+	}{
+		{entity: EntityLogicalFile, id: "0"},
+		{entity: EntityChunk, id: "abc"},
+		{entity: EntityContainer, id: "-2"},
+		{entity: EntitySnapshot, id: ""},
+	} {
+		t.Run(string(tc.entity)+"/"+tc.id, func(t *testing.T) {
+			_, err := svc.Inspect(context.Background(), tc.entity, tc.id, InspectOptions{})
+			if err == nil {
+				t.Fatalf("expected invalid target error for entity=%s id=%q", tc.entity, tc.id)
+			}
+			if !errors.Is(err, ErrInvalidTarget) {
+				t.Fatalf("expected ErrInvalidTarget, got %v", err)
+			}
+		})
+	}
+}
+
+func TestInspectNotFound(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	_, err := svc.Inspect(context.Background(), EntityChunk, "999", InspectOptions{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestInspectDoesNotMutateState(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "immut.txt", 77, "h-immut", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-immut", 77, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_immut.bin", 256, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 77, 77, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "7", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "immut.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "7", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	countTables := []string{"logical_file", "chunk", "container", "file_chunk", "blocks", "snapshot", "snapshot_file", "snapshot_path", "repository_config"}
+	before := make(map[string]int64, len(countTables))
+	for _, table := range countTables {
+		var c int64
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&c); err != nil {
+			t.Fatalf("count before %s: %v", table, err)
+		}
+		before[table] = c
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	_, err = svc.Inspect(context.Background(), EntitySnapshot, "7", InspectOptions{Relations: true, Deep: true, Reverse: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("Inspect should not mutate (snapshot): %v", err)
+	}
+	_, err = svc.Inspect(context.Background(), EntityLogicalFile, strconv.FormatInt(fileID, 10), InspectOptions{Relations: true, Deep: true, Reverse: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("Inspect should not mutate (logical file): %v", err)
+	}
+	_, err = svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Relations: true, Deep: true, Reverse: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("Inspect should not mutate (chunk): %v", err)
+	}
+
+	after := make(map[string]int64, len(countTables))
+	for _, table := range countTables {
+		var c int64
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&c); err != nil {
+			t.Fatalf("count after %s: %v", table, err)
+		}
+		after[table] = c
+	}
+
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("inspect mutated repository state\nbefore: %+v\nafter:  %+v", before, after)
 	}
 }
