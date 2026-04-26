@@ -2773,6 +2773,16 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 }
 
 func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep simulate <gc|store|store-folder> ...")
+	}
+
+	subcommand := parsed.positionals[0]
+
+	if subcommand == "gc" {
+		return runSimulateGCCommand(parsed, outputMode)
+	}
+
 	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
 		return err
 	}
@@ -2780,14 +2790,13 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 		return usageErrorf("Usage: coldkeep simulate <store|store-folder> [--codec <codec>] <path>")
 	}
 
-	subcommand := parsed.positionals[0]
 	path := parsed.positionals[1]
 	codecName, _ := parsed.lastFlagValue("codec")
 
 	switch subcommand {
 	case "store", "store-folder":
 	default:
-		return usageErrorf("unknown simulate subcommand %q (expected: store, store-folder)", subcommand)
+		return usageErrorf("unknown simulate subcommand %q (expected: gc, store, store-folder)", subcommand)
 	}
 
 	var codec blocks.Codec
@@ -2830,6 +2839,78 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	}
 
 	return emitSimulateReport(sgctx, subcommand, path, outputMode)
+}
+
+// runSimulateGCCommand implements `coldkeep simulate gc [--delete-snapshot <id>]*`.
+// It is a pure read-only operation: it calls BuildPlan and reports what would
+// be reclaimable, without deleting anything.
+func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output", "delete-snapshot"); err != nil {
+		return err
+	}
+
+	deleteSnapshots := parsed.flagValues("delete-snapshot")
+
+	r, err := runObservabilitySimulateGCPhase(observability.SimulationOptions{
+		Kind:                   observability.SimulationKindGC,
+		AssumeDeletedSnapshots: deleteSnapshots,
+	})
+	if err != nil {
+		return fmt.Errorf("simulate gc: %w", err)
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "simulate gc",
+			"data":    r,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	// Human text output
+	fmt.Println("Simulate GC (dry run — no changes applied)")
+	fmt.Println()
+	if r.GC != nil {
+		fmt.Printf("  Total chunks:        %d\n", r.GC.TotalChunks)
+		fmt.Printf("  Reachable chunks:    %d\n", r.GC.ReachableChunks)
+		fmt.Printf("  Unreachable chunks:  %d\n", r.GC.UnreachableChunks)
+		fmt.Printf("  Reclaimable bytes:   %d\n", r.GC.ReclaimableBytes)
+		fmt.Printf("  Affected containers: %d\n", len(r.GC.AffectedContainers))
+	}
+	if len(deleteSnapshots) > 0 {
+		fmt.Printf("  Assumed deleted:     %s\n", strings.Join(deleteSnapshots, ", "))
+	}
+	if len(r.GC.AffectedContainers) > 0 {
+		fmt.Println()
+		fmt.Println("  Containers with reclaimable chunks:")
+		for _, c := range r.GC.AffectedContainers {
+			deleteNote := ""
+			if c.WouldDeleteFile {
+				deleteNote = " [would delete]"
+			}
+			fmt.Printf("    container %d (%s): %d reclaimable bytes%s\n",
+				c.ContainerID, c.Filename, c.ReclaimableBytes, deleteNote)
+		}
+	}
+	return nil
+}
+
+var runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	svc, err := newObservabilityServicePhase(sgctx.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.Simulate(context.Background(), opts)
 }
 
 // suppressStdoutDuring redirects os.Stdout to /dev/null for the duration of fn.
@@ -4350,6 +4431,8 @@ func printHelp() {
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
 		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
+		{"  simulate gc", "Preview what GC would reclaim (exact, no mutations)"},
+		{"  simulate gc --delete-snapshot <id>", "Preview GC impact assuming snapshot <id> is deleted"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")

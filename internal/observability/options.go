@@ -34,6 +34,9 @@ func normalizeInspectOptions(opts InspectOptions) InspectOptions {
 
 type SimulationOptions struct {
 	Kind string
+	// AssumeDeletedSnapshots lists snapshot IDs to exclude from reachability
+	// roots before running the GC plan. Allows hypothetical impact preview.
+	AssumeDeletedSnapshots []string
 }
 
 type InspectTarget struct {

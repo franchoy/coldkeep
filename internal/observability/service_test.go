@@ -6,11 +6,26 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/franchoy/coldkeep/internal/db"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-func TestSimulateGCNotImplementedYet(t *testing.T) {
-	svc := newServiceForTest(nil, nil)
+func openSimulateTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	return dbconn
+}
 
+func TestSimulateGCRequiresDB(t *testing.T) {
+	svc := newServiceForTest(nil, nil)
 	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
 	if err == nil {
 		t.Fatal("expected error")
@@ -18,8 +33,36 @@ func TestSimulateGCNotImplementedYet(t *testing.T) {
 	if result != nil {
 		t.Fatal("expected nil result")
 	}
-	if !strings.Contains(err.Error(), "gc simulation not implemented yet") {
-		t.Fatalf("unexpected error: %v", err)
+}
+
+func TestSimulateGCEmptyRepo(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if result == nil || result.GC == nil {
+		t.Fatal("expected non-nil result with GC field")
+	}
+	if result.GC.TotalChunks != 0 {
+		t.Errorf("TotalChunks = %d, want 0", result.GC.TotalChunks)
+	}
+	if result.GC.UnreachableChunks != 0 {
+		t.Errorf("UnreachableChunks = %d, want 0", result.GC.UnreachableChunks)
+	}
+	if result.GC.ReclaimableBytes != 0 {
+		t.Errorf("ReclaimableBytes = %d, want 0", result.GC.ReclaimableBytes)
+	}
+	if len(result.GC.AffectedContainers) != 0 {
+		t.Errorf("AffectedContainers = %d, want 0", len(result.GC.AffectedContainers))
+	}
+	if !result.Exact {
+		t.Error("expected Exact=true")
+	}
+	if result.Mutated {
+		t.Error("expected Mutated=false")
 	}
 }
 

@@ -163,7 +163,27 @@ type SimulationResult struct {
 	Mutated        bool      `json:"mutated"`
 
 	Summary  map[string]any       `json:"summary"`
+	GC       *GCSimulationResult  `json:"gc,omitempty"`
 	Warnings []ObservationWarning `json:"warnings,omitempty"`
+}
+
+// GCSimulationResult carries the structured output of a GC dry-run plan.
+type GCSimulationResult struct {
+	TotalChunks        int64                       `json:"total_chunks"`
+	ReachableChunks    int64                       `json:"reachable_chunks"`
+	UnreachableChunks  int64                       `json:"unreachable_chunks"`
+	ReclaimableBytes   int64                       `json:"reclaimable_bytes"`
+	AffectedContainers []ContainerSimulationImpact `json:"affected_containers"`
+}
+
+// ContainerSimulationImpact is the per-container summary within a GC simulation.
+type ContainerSimulationImpact struct {
+	ContainerID       int64  `json:"container_id"`
+	Filename          string `json:"filename"`
+	TotalBytes        int64  `json:"total_bytes"`
+	ReclaimableBytes  int64  `json:"reclaimable_bytes"`
+	ReclaimableChunks int64  `json:"reclaimable_chunks"`
+	WouldDeleteFile   bool   `json:"would_delete_file"`
 }
 
 type ObservationWarning struct {
