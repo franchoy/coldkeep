@@ -11,48 +11,52 @@ import (
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
-func (s *Service) Inspect(ctx context.Context, target InspectTarget) (InspectResult, error) {
-	if err := contextErr(ctx); err != nil {
-		return InspectResult{}, err
+func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opts InspectOptions) (*InspectResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	entityType := normalizeInspectEntityType(target.EntityType)
-	if entityType != EntityFile {
-		return InspectResult{}, fmt.Errorf("%w: %q", ErrUnsupportedInspectTarget, target.EntityType)
+	switch entity {
+	case EntityFile, EntityLogicalFile:
+		return s.inspectLogicalFile(ctx, id, opts)
+	default:
+		return nil, fmt.Errorf("unsupported inspect entity %q", entity)
 	}
+}
 
-	fileIDText := strings.TrimSpace(target.EntityID)
+func (s *Service) inspectLogicalFile(ctx context.Context, id string, _ InspectOptions) (*InspectResult, error) {
+	fileIDText := strings.TrimSpace(id)
 	fileID, err := strconv.ParseInt(fileIDText, 10, 64)
 	if err != nil || fileID <= 0 {
-		return InspectResult{}, fmt.Errorf("%w: invalid file id %q", ErrUnsupportedInspectTarget, target.EntityID)
+		return nil, fmt.Errorf("invalid logical file id %q", id)
 	}
 	if s == nil || s.db == nil {
-		return InspectResult{}, fmt.Errorf("observability service requires non-nil db")
+		return nil, fmt.Errorf("observability service requires non-nil db")
 	}
 
-	info, err := storage.GetLogicalFileInspectInfoWithDB(s.db, fileID)
+	info, err := storage.GetLogicalFileInspectInfoWithDBContext(ctx, s.db, fileID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return InspectResult{}, EntityNotFoundError{EntityType: EntityFile, EntityID: fileIDText}
+			return nil, fmt.Errorf("logical file %d not found", fileID)
 		}
-		return InspectResult{}, err
+		return nil, fmt.Errorf("inspect logical file %d: %w", fileID, err)
 	}
 
-	return InspectResult{
-		GeneratedAtUTC: s.now().UTC(),
-		EntityType:     EntityFile,
-		EntityID:       fileIDText,
+	result := &InspectResult{
+		GeneratedAtUTC: s.now(),
+		EntityType:     EntityLogicalFile,
+		EntityID:       strconv.FormatInt(info.FileID, 10),
 		Summary: map[string]any{
-			"chunker":              string(info.ChunkerVersion),
-			"chunks":               info.ChunkCount,
+			"file_id":              info.FileID,
+			"original_name":        info.OriginalName,
+			"status":               info.Status,
+			"chunker_version":      string(info.ChunkerVersion),
+			"chunk_count":          info.ChunkCount,
 			"avg_chunk_size_bytes": info.AvgChunkSizeBytes,
 		},
-		Metadata: map[string]any{
-			"logical_file_id": info.FileID,
-			"original_name":   info.OriginalName,
-			"status":          info.Status,
-		},
-	}, nil
+	}
+
+	return result, nil
 }
 
 func (s *Service) Simulate(ctx context.Context, target SimulationTarget) (SimulationResult, error) {
@@ -82,14 +86,4 @@ func (s *Service) defaultSimulationRunner(_ context.Context, target SimulationTa
 			},
 		},
 	}, nil
-}
-
-func normalizeInspectEntityType(entityType EntityType) EntityType {
-	trimmed := EntityType(strings.TrimSpace(string(entityType)))
-	switch trimmed {
-	case EntityFile, EntityLogicalFile:
-		return EntityFile
-	default:
-		return trimmed
-	}
 }

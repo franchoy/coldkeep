@@ -3,8 +3,8 @@ package observability
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +60,7 @@ func TestInspectFileReturnsStableModel(t *testing.T) {
 	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
 
 	entityID := strconv.FormatInt(fileID, 10)
-	result, err := svc.Inspect(context.Background(), InspectTarget{EntityType: EntityFile, EntityID: entityID})
+	result, err := svc.Inspect(context.Background(), EntityFile, entityID, InspectOptions{})
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
@@ -68,26 +68,26 @@ func TestInspectFileReturnsStableModel(t *testing.T) {
 	if result.GeneratedAtUTC != fixedNow {
 		t.Fatalf("generated_at_utc mismatch: got %s want %s", result.GeneratedAtUTC, fixedNow)
 	}
-	if result.EntityType != EntityFile || result.EntityID != entityID {
+	if result.EntityType != EntityLogicalFile || result.EntityID != entityID {
 		t.Fatalf("unexpected entity: type=%s id=%s", result.EntityType, result.EntityID)
 	}
-	if got := result.Summary["chunks"]; got != int64(1) {
-		t.Fatalf("expected chunks=1, got %v", got)
+	if got := result.Summary["chunk_count"]; got != int64(1) {
+		t.Fatalf("expected chunk_count=1, got %v", got)
 	}
-	if got := result.Metadata["logical_file_id"]; got != fileID {
-		t.Fatalf("expected logical_file_id=%d, got %v", fileID, got)
+	if got := result.Summary["file_id"]; got != fileID {
+		t.Fatalf("expected file_id=%d, got %v", fileID, got)
 	}
 }
 
 func TestInspectUnsupportedTarget(t *testing.T) {
 	svc := newServiceForTest(nil, nil)
 
-	_, err := svc.Inspect(context.Background(), InspectTarget{EntityType: EntityContainer, EntityID: "7"})
+	_, err := svc.Inspect(context.Background(), EntityContainer, "7", InspectOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !errors.Is(err, ErrUnsupportedInspectTarget) {
-		t.Fatalf("expected ErrUnsupportedInspectTarget, got %v", err)
+	if !strings.Contains(err.Error(), "unsupported inspect entity") {
+		t.Fatalf("expected unsupported inspect entity error, got %v", err)
 	}
 }
 
@@ -95,16 +95,11 @@ func TestInspectMissingFileReturnsEntityNotFound(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 	svc := newServiceForTest(dbconn, nil)
 
-	_, err := svc.Inspect(context.Background(), InspectTarget{EntityType: EntityFile, EntityID: "999"})
+	_, err := svc.Inspect(context.Background(), EntityFile, "999", InspectOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
-
-	var notFound EntityNotFoundError
-	if !errors.As(err, &notFound) {
-		t.Fatalf("expected EntityNotFoundError, got %T (%v)", err, err)
-	}
-	if notFound.EntityType != EntityFile || notFound.EntityID != "999" {
-		t.Fatalf("unexpected not found payload: %+v", notFound)
+	if !strings.Contains(err.Error(), "logical file 999 not found") {
+		t.Fatalf("expected not found error, got %v", err)
 	}
 }

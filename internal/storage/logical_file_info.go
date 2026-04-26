@@ -56,6 +56,14 @@ func GetLogicalFileInfoWithDB(dbconn *sql.DB, fileID int64) (LogicalFileInfo, er
 func GetLogicalFileInspectInfoWithDB(dbconn *sql.DB, fileID int64) (LogicalFileInspectInfo, error) {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
+	return GetLogicalFileInspectInfoWithDBContext(ctx, dbconn, fileID)
+}
+
+// GetLogicalFileInspectInfoWithDBContext returns inspect-focused metadata for a given file ID using the provided context.
+func GetLogicalFileInspectInfoWithDBContext(ctx context.Context, dbconn *sql.DB, fileID int64) (LogicalFileInspectInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	var info LogicalFileInspectInfo
 	if err := dbconn.QueryRowContext(
