@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -11,8 +12,11 @@ func (s *Service) Stats(ctx context.Context) (StatsResult, error) {
 	if err := contextErr(ctx); err != nil {
 		return StatsResult{}, err
 	}
+	if s == nil || s.db == nil {
+		return StatsResult{}, fmt.Errorf("observability service requires non-nil db")
+	}
 
-	raw, err := s.statsRunner()
+	raw, err := maintenance.RunStatsResultWithDB(ctx, s.db)
 	if err != nil {
 		return StatsResult{}, err
 	}

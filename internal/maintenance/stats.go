@@ -102,6 +102,12 @@ func RunStatsResult() (*StatsResult, error) {
 	return runStatsResultWithDB(ctx, dbconn)
 }
 
+// RunStatsResultWithDB collects and returns all stats using the provided DB.
+// The caller owns DB lifecycle and context cancellation.
+func RunStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, error) {
+	return runStatsResultWithDB(ctx, dbconn)
+}
+
 func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, error) {
 	if dbconn == nil {
 		return nil, fmt.Errorf("db connection is nil")

@@ -2,13 +2,14 @@ package observability
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 )
 
 func TestSimulateFoundationPlaceholder(t *testing.T) {
 	fixedNow := time.Date(2026, time.April, 26, 12, 30, 0, 0, time.UTC)
-	svc := NewService(WithNowFunc(func() time.Time { return fixedNow }))
+	svc := newServiceForTest(nil, func() time.Time { return fixedNow })
 
 	result, err := svc.Simulate(context.Background(), SimulationTarget{Kind: "gc"})
 	if err != nil {
@@ -33,10 +34,28 @@ func TestSimulateFoundationPlaceholder(t *testing.T) {
 }
 
 func TestSimulateRejectsEmptyKind(t *testing.T) {
-	svc := NewService()
+	svc := newServiceForTest(nil, nil)
 
 	_, err := svc.Simulate(context.Background(), SimulationTarget{})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestNewServiceRequiresNonNilDB(t *testing.T) {
+	_, err := NewService(nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestNewServiceWithDB(t *testing.T) {
+	dbconn := &sql.DB{}
+	svc, err := NewService(dbconn)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if svc == nil || svc.db != dbconn {
+		t.Fatal("expected service with injected db")
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/franchoy/coldkeep/internal/storage"
 )
 
 func (s *Service) Inspect(ctx context.Context, target InspectTarget) (InspectResult, error) {
@@ -24,14 +26,11 @@ func (s *Service) Inspect(ctx context.Context, target InspectTarget) (InspectRes
 	if err != nil || fileID <= 0 {
 		return InspectResult{}, fmt.Errorf("%w: invalid file id %q", ErrUnsupportedInspectTarget, target.EntityID)
 	}
-
-	storageCtx, err := s.storageLoader()
-	if err != nil {
-		return InspectResult{}, err
+	if s == nil || s.db == nil {
+		return InspectResult{}, fmt.Errorf("observability service requires non-nil db")
 	}
-	defer func() { _ = storageCtx.Close() }()
 
-	info, err := s.inspectLogicalFileReader(storageCtx.DB, fileID)
+	info, err := storage.GetLogicalFileInspectInfoWithDB(s.db, fileID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return InspectResult{}, EntityNotFoundError{EntityType: EntityFile, EntityID: fileIDText}
@@ -60,7 +59,7 @@ func (s *Service) Simulate(ctx context.Context, target SimulationTarget) (Simula
 	if err := contextErr(ctx); err != nil {
 		return SimulationResult{}, err
 	}
-	return s.simulationRunner(ctx, target)
+	return s.defaultSimulationRunner(ctx, target)
 }
 
 func (s *Service) defaultSimulationRunner(_ context.Context, target SimulationTarget) (SimulationResult, error) {

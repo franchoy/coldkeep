@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
-	"github.com/franchoy/coldkeep/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -58,12 +57,7 @@ func TestInspectFileReturnsStableModel(t *testing.T) {
 	}
 
 	fixedNow := time.Date(2026, time.April, 26, 13, 0, 0, 0, time.UTC)
-	svc := NewService(
-		WithNowFunc(func() time.Time { return fixedNow }),
-		WithStorageLoader(func() (storage.StorageContext, error) {
-			return storage.StorageContext{DB: dbconn}, nil
-		}),
-	)
+	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
 
 	entityID := strconv.FormatInt(fileID, 10)
 	result, err := svc.Inspect(context.Background(), InspectTarget{EntityType: EntityFile, EntityID: entityID})
@@ -86,7 +80,7 @@ func TestInspectFileReturnsStableModel(t *testing.T) {
 }
 
 func TestInspectUnsupportedTarget(t *testing.T) {
-	svc := NewService()
+	svc := newServiceForTest(nil, nil)
 
 	_, err := svc.Inspect(context.Background(), InspectTarget{EntityType: EntityContainer, EntityID: "7"})
 	if err == nil {
@@ -99,11 +93,7 @@ func TestInspectUnsupportedTarget(t *testing.T) {
 
 func TestInspectMissingFileReturnsEntityNotFound(t *testing.T) {
 	dbconn := openInspectTestDB(t)
-	svc := NewService(
-		WithStorageLoader(func() (storage.StorageContext, error) {
-			return storage.StorageContext{DB: dbconn}, nil
-		}),
-	)
+	svc := newServiceForTest(dbconn, nil)
 
 	_, err := svc.Inspect(context.Background(), InspectTarget{EntityType: EntityFile, EntityID: "999"})
 	if err == nil {

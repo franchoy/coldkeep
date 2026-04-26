@@ -1,50 +1,30 @@
 package observability
 
 import (
-	"context"
 	"database/sql"
+	"fmt"
 	"time"
-
-	"github.com/franchoy/coldkeep/internal/maintenance"
-	"github.com/franchoy/coldkeep/internal/storage"
 )
 
 type Service struct {
-	now                      func() time.Time
-	statsRunner              func() (*maintenance.StatsResult, error)
-	storageLoader            func() (storage.StorageContext, error)
-	inspectLogicalFileReader func(*sql.DB, int64) (storage.LogicalFileInspectInfo, error)
-	simulationRunner         func(ctx context.Context, target SimulationTarget) (SimulationResult, error)
+	db  *sql.DB
+	now func() time.Time
 }
 
-func NewService(opts ...ServiceOption) *Service {
-	svc := &Service{
-		now:                      time.Now,
-		statsRunner:              maintenance.RunStatsResult,
-		storageLoader:            storage.LoadDefaultStorageContext,
-		inspectLogicalFileReader: storage.GetLogicalFileInspectInfoWithDB,
+func NewService(db *sql.DB) (*Service, error) {
+	if db == nil {
+		return nil, fmt.Errorf("observability service requires non-nil db")
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(svc)
-		}
+
+	return &Service{
+		db:  db,
+		now: func() time.Time { return time.Now().UTC() },
+	}, nil
+}
+
+func newServiceForTest(db *sql.DB, now func() time.Time) *Service {
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
 	}
-	if svc.simulationRunner == nil {
-		svc.simulationRunner = svc.defaultSimulationRunner
-	}
-	return svc
-}
-
-var defaultService = NewService()
-
-func Stats(ctx context.Context) (StatsResult, error) {
-	return defaultService.Stats(ctx)
-}
-
-func Inspect(ctx context.Context, target InspectTarget) (InspectResult, error) {
-	return defaultService.Inspect(ctx, target)
-}
-
-func Simulate(ctx context.Context, target SimulationTarget) (SimulationResult, error) {
-	return defaultService.Simulate(ctx, target)
+	return &Service{db: db, now: now}
 }
