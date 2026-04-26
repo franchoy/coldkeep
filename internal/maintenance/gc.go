@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -25,6 +26,10 @@ var gcPhysicalIntegrityCheck = func(dbconn *sql.DB) (verify.PhysicalFileIntegrit
 
 var gcComputeReachability = func(ctx context.Context, dbconn *sql.DB) (*retention.ReachabilitySummary, error) {
 	return retention.ComputeReachabilitySummary(ctx, dbconn)
+}
+
+var gcMarkReachableChunks = func(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	return MarkReachableChunks(ctx, dbconn)
 }
 
 // GCResult contains structured metadata about a GC run.
@@ -147,6 +152,11 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	result.RetainedSnapshotOnlyLogical = len(classification.SnapshotOnly)
 	result.RetainedSharedLogical = len(classification.Shared)
 
+	reachableChunks, err := gcMarkReachableChunks(ctx, dbconn)
+	if err != nil {
+		return GCResult{}, fmt.Errorf("GC pre-flight: failed to mark reachable chunks: %w", err)
+	}
+
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
 		FROM container WHERE quarantine = FALSE AND sealed = TRUE 
@@ -246,7 +256,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 
 		// Snapshot-retention safety net: even if live_ref_count == 0, skip any
 		// container whose chunks are still reachable from a retained logical file.
-		hasRetained, err := containerHasRetainedChunks(ctx, tx, containerID, reachability.RetainedLogicalIDs)
+		hasRetained, err := containerHasReachableChunks(ctx, tx, containerID, reachableChunks)
 		if err != nil {
 			_ = tx.Rollback()
 			return GCResult{}, fmt.Errorf("retention safety check for container %d: %w", containerID, err)
@@ -267,18 +277,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		}
 
 		// Delete location records and then chunk rows linked to this container.
-		_, err = tx.ExecContext(ctx, `
-			WITH deleted_blocks AS (
-				DELETE FROM blocks
-				WHERE container_id = $1
-				RETURNING chunk_id
-			)
-			DELETE FROM chunk c
-			USING deleted_blocks db
-			WHERE c.id = db.chunk_id
-			AND c.live_ref_count = 0
-			AND c.pin_count = 0
-		`, containerID)
+		err = SweepUnreachableChunks(ctx, tx, containerID)
 		if err != nil {
 			_ = tx.Rollback()
 			return GCResult{}, err
@@ -318,7 +317,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	// they will be sealed and collected by the regular sealed-container path later.
 	// Dry-run skips this to avoid side effects.
 	if !dryRun {
-		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachability.RetainedLogicalIDs); err != nil {
+		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks); err != nil {
 			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
 		}
 	}
@@ -328,23 +327,61 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 }
 
 // gcChunkQuerier is a minimal interface satisfied by *sql.Tx and *sql.DB,
-// allowing containerHasRetainedChunks to operate inside a transaction.
+// allowing containerHasReachableChunks to operate inside a transaction.
 type gcChunkQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// containerHasRetainedChunks reports whether any chunk in containerID is
-// associated (via file_chunk) with a logical file that appears in retainedIDs.
-// It is the snapshot-retention safety net: even when live_ref_count == 0, a
-// container must not be reclaimed if its chunks are logically reachable.
-func containerHasRetainedChunks(ctx context.Context, q gcChunkQuerier, containerID int64, retainedIDs map[int64]struct{}) (bool, error) {
-	if len(retainedIDs) == 0 {
+// MarkReachableChunks computes chunk reachability from snapshot-retained roots
+// using the shared graph traversal engine.
+func MarkReachableChunks(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	g := graph.NewService(dbconn)
+
+	rows, err := dbconn.QueryContext(ctx, `SELECT DISTINCT logical_file_id FROM snapshot_file ORDER BY logical_file_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	start := make([]graph.NodeID, 0)
+	for rows.Next() {
+		var logicalFileID int64
+		if err := rows.Scan(&logicalFileID); err != nil {
+			return nil, err
+		}
+		start = append(start, graph.NodeID{Type: graph.EntityLogicalFile, ID: logicalFileID})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	reachable := make(map[int64]struct{})
+	if err := g.Traverse(ctx, start, func(n graph.NodeID) error {
+		if n.Type == graph.EntityChunk {
+			reachable[n.ID] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return reachable, nil
+}
+
+// containerHasReachableChunks reports whether any chunk in containerID is in
+// reachableChunkIDs. It is the snapshot-retention safety net: even when
+// live_ref_count == 0, a container must not be reclaimed if its chunks are
+// graph-reachable from retained roots.
+func containerHasReachableChunks(ctx context.Context, q gcChunkQuerier, containerID int64, reachableChunkIDs map[int64]struct{}) (bool, error) {
+	if len(reachableChunkIDs) == 0 {
 		return false, nil
 	}
 	rows, err := q.QueryContext(ctx, `
-		SELECT DISTINCT fc.logical_file_id
+		SELECT DISTINCT b.chunk_id
 		FROM blocks b
-		JOIN file_chunk fc ON fc.chunk_id = b.chunk_id
 		WHERE b.container_id = $1
 	`, containerID)
 	if err != nil {
@@ -353,15 +390,37 @@ func containerHasRetainedChunks(ctx context.Context, q gcChunkQuerier, container
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
 			return false, err
 		}
-		if _, retained := retainedIDs[id]; retained {
+		if _, retained := reachableChunkIDs[chunkID]; retained {
 			return true, nil
 		}
 	}
 	return false, rows.Err()
+}
+
+type gcSweepExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// SweepUnreachableChunks performs the chunk/blocks sweep for one container.
+// It relies on the earlier mark phase and active liveness guards.
+func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, containerID int64) error {
+	_, err := execer.ExecContext(ctx, `
+		WITH deleted_blocks AS (
+			DELETE FROM blocks
+			WHERE container_id = $1
+			RETURNING chunk_id
+		)
+		DELETE FROM chunk c
+		USING deleted_blocks db
+		WHERE c.id = db.chunk_id
+		AND c.live_ref_count = 0
+		AND c.pin_count = 0
+	`, containerID)
+	return err
 }
 
 // cleanupFullyDeadActiveContainers deletes active (unsealed) containers in which
@@ -370,7 +429,7 @@ func containerHasRetainedChunks(ctx context.Context, q gcChunkQuerier, container
 // offset invariant is preserved by removing the container entirely — no offsets shift.
 // Partially-dead containers (mixed live and dead chunks) are left intact;
 // they will be handled by the regular sealed-container GC path once sealed.
-func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, retainedIDs map[int64]struct{}) error {
+func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}) error {
 	// Identify active containers where no chunk is still live or pinned.
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT c.id, c.filename
@@ -411,7 +470,7 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 
 	for _, ac := range candidates {
 		// Snapshot-retention safety net: skip containers whose chunks are retained.
-		hasRetained, err := containerHasRetainedChunks(ctx, dbconn, ac.id, retainedIDs)
+		hasRetained, err := containerHasReachableChunks(ctx, dbconn, ac.id, reachableChunkIDs)
 		if err != nil {
 			return fmt.Errorf("retention safety check for active container %d: %w", ac.id, err)
 		}
@@ -448,16 +507,7 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 		}
 
 		// Delete all blocks + chunk rows for this container.
-		_, err = tx.ExecContext(ctx, `
-			WITH deleted_blocks AS (
-				DELETE FROM blocks WHERE container_id = $1 RETURNING chunk_id
-			)
-			DELETE FROM chunk c
-			USING deleted_blocks db
-			WHERE c.id = db.chunk_id
-			AND c.live_ref_count = 0
-			AND c.pin_count = 0
-		`, ac.id)
+		err = SweepUnreachableChunks(ctx, tx, ac.id)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
