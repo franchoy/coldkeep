@@ -73,6 +73,13 @@ func (s *Service) getOutgoing(ctx context.Context, n NodeID) ([]NodeID, error) {
 	}
 }
 
+func (s *Service) GetOutgoing(ctx context.Context, n NodeID) ([]NodeID, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.getOutgoing(ctx, n)
+}
+
 func (s *Service) getSnapshotFiles(ctx context.Context, snapshotID int64) ([]NodeID, error) {
 	rows, err := s.db.QueryContext(
 		ctx,

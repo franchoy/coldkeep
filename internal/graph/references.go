@@ -19,6 +19,8 @@ func (s *Service) GetReverseReferences(ctx context.Context, target NodeID) ([]No
 		return s.getChunkFiles(ctx, target.ID)
 	case EntityLogicalFile:
 		return s.getFileSnapshots(ctx, target.ID)
+	case EntityContainer:
+		return s.getContainerChunks(ctx, target.ID)
 	default:
 		return nil, nil
 	}
@@ -77,6 +79,34 @@ func (s *Service) getFileSnapshots(ctx context.Context, logicalFileID int64) ([]
 			return nil, fmt.Errorf("parse snapshot id %q: %w", snapshotIDRaw, err)
 		}
 		out = append(out, NodeID{Type: EntitySnapshot, ID: snapshotID})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Service) getContainerChunks(ctx context.Context, containerID int64) ([]NodeID, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT chunk_id
+		 FROM blocks
+		 WHERE container_id = ?
+		 ORDER BY chunk_id`,
+		containerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]NodeID, 0)
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			return nil, err
+		}
+		out = append(out, NodeID{Type: EntityChunk, ID: chunkID})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
