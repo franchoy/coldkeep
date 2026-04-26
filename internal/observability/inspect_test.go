@@ -130,3 +130,46 @@ func TestInspectRejectsInvalidLogicalFileID(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeInspectOptionsDefaultsToSummaryOnlyWithDefaultLimit(t *testing.T) {
+	opts := normalizeInspectOptions(InspectOptions{})
+
+	if opts.Deep {
+		t.Fatal("expected deep=false by default")
+	}
+	if opts.Relations {
+		t.Fatal("expected relations=false by default")
+	}
+	if opts.Reverse {
+		t.Fatal("expected reverse=false by default")
+	}
+	if opts.Limit != DefaultInspectLimit {
+		t.Fatalf("expected default limit %d, got %d", DefaultInspectLimit, opts.Limit)
+	}
+}
+
+func TestNormalizeInspectOptionsDeepImpliesRelations(t *testing.T) {
+	opts := normalizeInspectOptions(InspectOptions{Deep: true, Limit: 5})
+
+	if !opts.Deep {
+		t.Fatal("expected deep=true")
+	}
+	if !opts.Relations {
+		t.Fatal("expected relations=true when deep=true")
+	}
+	if opts.Limit != 5 {
+		t.Fatalf("expected explicit limit to be preserved, got %d", opts.Limit)
+	}
+}
+
+func TestNormalizeInspectOptionsClampsLimit(t *testing.T) {
+	tooLarge := normalizeInspectOptions(InspectOptions{Limit: MaxInspectLimit + 1})
+	if tooLarge.Limit != MaxInspectLimit {
+		t.Fatalf("expected clamped limit %d, got %d", MaxInspectLimit, tooLarge.Limit)
+	}
+
+	nonPositive := normalizeInspectOptions(InspectOptions{Limit: 0})
+	if nonPositive.Limit != DefaultInspectLimit {
+		t.Fatalf("expected default limit %d for non-positive input, got %d", DefaultInspectLimit, nonPositive.Limit)
+	}
+}

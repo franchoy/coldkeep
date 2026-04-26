@@ -15,6 +15,7 @@ func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opt
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	opts = normalizeInspectOptions(opts)
 
 	switch entity {
 	case EntityFile, EntityLogicalFile:
