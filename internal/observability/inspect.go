@@ -213,14 +213,14 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, opts Inspec
 	}
 
 	if opts.Relations {
-		relations, err := s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit, "contains", RelationOutgoing)
+		relations, err := s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect logical file %d forward relations: %w", fileID, err)
 		}
 		result.Relations = append(result.Relations, relations...)
 	}
 	if opts.Reverse {
-		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit, "contains")
+		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect logical file %d reverse relations: %w", fileID, err)
 		}
@@ -282,14 +282,14 @@ func (s *Service) inspectChunk(ctx context.Context, id string, opts InspectOptio
 	}
 
 	if opts.Relations {
-		relations, err := s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit, "stored_in", RelationOutgoing)
+		relations, err := s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect chunk %d forward relations: %w", chunkID, err)
 		}
 		result.Relations = append(result.Relations, relations...)
 	}
 	if opts.Reverse {
-		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit, "contains")
+		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect chunk %d reverse relations: %w", chunkID, err)
 		}
@@ -351,7 +351,7 @@ func (s *Service) inspectContainer(ctx context.Context, id string, opts InspectO
 	}
 
 	if opts.Reverse {
-		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityContainer, ID: containerID}, opts.Limit, "stored_in")
+		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityContainer, ID: containerID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %d reverse relations: %w", containerID, err)
 		}
@@ -398,7 +398,7 @@ func (s *Service) inspectRepositorySnapshotRelations(ctx context.Context, limit 
 func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID string, limit int) ([]Relation, error) {
 	graphID, err := strconv.ParseInt(snapshotID, 10, 64)
 	if err == nil {
-		return s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntitySnapshot, ID: graphID}, limit, "contains", RelationOutgoing)
+		return s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntitySnapshot, ID: graphID}, limit)
 	}
 
 	rows, queryErr := s.db.QueryContext(
@@ -423,7 +423,7 @@ func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID s
 			return nil, fmt.Errorf("inspect snapshot %s relation row: %w", snapshotID, scanErr)
 		}
 		out = append(out, Relation{
-			Type:       "contains",
+			Type:       relationTypeReferences,
 			Direction:  RelationOutgoing,
 			TargetType: EntityLogicalFile,
 			TargetID:   strconv.FormatInt(logicalFileID, 10),
@@ -436,7 +436,7 @@ func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID s
 	return out, nil
 }
 
-func (s *Service) getGraphOutgoingRelations(ctx context.Context, node graph.NodeID, limit int, relationType string, direction RelationDirection) ([]Relation, error) {
+func (s *Service) getGraphOutgoingRelations(ctx context.Context, node graph.NodeID, limit int) ([]Relation, error) {
 	if s == nil || s.graph == nil {
 		return nil, nil
 	}
@@ -444,10 +444,10 @@ func (s *Service) getGraphOutgoingRelations(ctx context.Context, node graph.Node
 	if err != nil {
 		return nil, err
 	}
-	return graphNodesToRelations(outgoing, limit, relationType, direction), nil
+	return graphNodesToRelations(outgoing, limit, relationTypeReferences, RelationOutgoing), nil
 }
 
-func (s *Service) getGraphReverseRelations(ctx context.Context, node graph.NodeID, limit int, relationType string) ([]Relation, error) {
+func (s *Service) getGraphReverseRelations(ctx context.Context, node graph.NodeID, limit int) ([]Relation, error) {
 	if s == nil || s.graph == nil {
 		return nil, nil
 	}
@@ -455,8 +455,13 @@ func (s *Service) getGraphReverseRelations(ctx context.Context, node graph.NodeI
 	if err != nil {
 		return nil, err
 	}
-	return graphNodesToRelations(references, limit, relationType, RelationIncoming), nil
+	return graphNodesToRelations(references, limit, relationTypeReferencedBy, RelationIncoming), nil
 }
+
+const (
+	relationTypeReferences   = "references"
+	relationTypeReferencedBy = "referenced_by"
+)
 
 func graphNodesToRelations(nodes []graph.NodeID, limit int, relationType string, direction RelationDirection) []Relation {
 	if limit <= 0 || len(nodes) == 0 {

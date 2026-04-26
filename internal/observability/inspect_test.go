@@ -291,7 +291,7 @@ func TestInspectSnapshotIncludesForwardRelations(t *testing.T) {
 	if len(result.Relations) != 1 {
 		t.Fatalf("expected 1 relation, got %d", len(result.Relations))
 	}
-	if rel := result.Relations[0]; rel.TargetType != EntityLogicalFile || rel.TargetID != strconv.FormatInt(fileID, 10) || rel.Direction != RelationOutgoing {
+	if rel := result.Relations[0]; rel.TargetType != EntityLogicalFile || rel.TargetID != strconv.FormatInt(fileID, 10) || rel.Direction != RelationOutgoing || rel.Type != "references" {
 		t.Fatalf("unexpected relation: %+v", rel)
 	}
 }
@@ -339,6 +339,18 @@ func TestInspectLogicalFileIncludesForwardAndReverseRelations(t *testing.T) {
 	}
 	if len(result.Relations) != 2 {
 		t.Fatalf("expected 2 relations, got %d", len(result.Relations))
+	}
+	var sawOutgoing, sawIncoming bool
+	for _, rel := range result.Relations {
+		if rel.Direction == RelationOutgoing && rel.Type == "references" && rel.TargetType == EntityChunk {
+			sawOutgoing = true
+		}
+		if rel.Direction == RelationIncoming && rel.Type == "referenced_by" && rel.TargetType == EntitySnapshot {
+			sawIncoming = true
+		}
+	}
+	if !sawOutgoing || !sawIncoming {
+		t.Fatalf("expected outgoing references and incoming referenced_by, got %+v", result.Relations)
 	}
 }
 
@@ -389,6 +401,18 @@ func TestInspectChunkIncludesForwardAndReverseRelations(t *testing.T) {
 	if len(result.Relations) != 2 {
 		t.Fatalf("expected 2 relations, got %d", len(result.Relations))
 	}
+	var sawOutgoing, sawIncoming bool
+	for _, rel := range result.Relations {
+		if rel.Direction == RelationOutgoing && rel.Type == "references" && rel.TargetType == EntityContainer {
+			sawOutgoing = true
+		}
+		if rel.Direction == RelationIncoming && rel.Type == "referenced_by" && rel.TargetType == EntityLogicalFile {
+			sawIncoming = true
+		}
+	}
+	if !sawOutgoing || !sawIncoming {
+		t.Fatalf("expected outgoing references and incoming referenced_by, got %+v", result.Relations)
+	}
 }
 
 func TestInspectContainerIncludesReverseRelations(t *testing.T) {
@@ -427,7 +451,7 @@ func TestInspectContainerIncludesReverseRelations(t *testing.T) {
 	if len(result.Relations) != 1 {
 		t.Fatalf("expected 1 relation, got %d", len(result.Relations))
 	}
-	if rel := result.Relations[0]; rel.TargetType != EntityChunk || rel.TargetID != strconv.FormatInt(chunkID, 10) || rel.Direction != RelationIncoming {
+	if rel := result.Relations[0]; rel.TargetType != EntityChunk || rel.TargetID != strconv.FormatInt(chunkID, 10) || rel.Direction != RelationIncoming || rel.Type != "referenced_by" {
 		t.Fatalf("unexpected reverse relation: %+v", rel)
 	}
 }
