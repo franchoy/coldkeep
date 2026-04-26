@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/gc"
@@ -183,6 +184,30 @@ func TestSimulateGCDoesNotMutateState(t *testing.T) {
 	}
 }
 
+func TestSimulateGCZeroDBWritesOnQueryOnlyConnection(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	chunkID := insertSimChunk(t, dbconn, "dead-query-only", 64, 0, 0, "v2-fastcdc")
+	containerID := insertSimContainer(t, dbconn, "c-query-only.bin", 64, true, false)
+	insertSimBlock(t, dbconn, chunkID, containerID, 64)
+
+	if _, err := dbconn.Exec(`PRAGMA query_only = ON`); err != nil {
+		t.Fatalf("enable query_only: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = dbconn.Exec(`PRAGMA query_only = OFF`)
+	})
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("Simulate with query_only db: %v", err)
+	}
+	if result == nil || result.GC == nil {
+		t.Fatal("expected gc result")
+	}
+}
+
 func TestSimulateGCMatchesGCPlan(t *testing.T) {
 	dbconn := openSimulateTestDB(t)
 	svc := newServiceForTest(dbconn, nil)
@@ -340,6 +365,45 @@ func TestSimulateGCJSONRoundTrip(t *testing.T) {
 	if decoded.GC.Kind != SimulationKindGC || !decoded.GC.Exact || decoded.GC.Mutated {
 		t.Fatalf("unexpected decoded gc metadata: %+v", decoded.GC)
 	}
+	if _, hasGeneratedAt := any(decoded).(SimulationResult).Summary["generated_at_utc"]; hasGeneratedAt {
+		t.Fatal("simulation summary should not carry generated_at_utc")
+	}
+}
+
+func TestSimulateGCDeterministicAcrossCalls(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+
+	deadChunkID := insertSimChunk(t, dbconn, "dead-deterministic", 90, 0, 0, "v2-fastcdc")
+	deadContainerID := insertSimContainer(t, dbconn, "c-deterministic.bin", 90, true, false)
+	insertSimBlock(t, dbconn, deadChunkID, deadContainerID, 90)
+
+	serviceA := newServiceForTest(dbconn, func() time.Time {
+		return time.Date(2026, time.April, 26, 10, 0, 0, 0, time.UTC)
+	})
+	serviceB := newServiceForTest(dbconn, func() time.Time {
+		return time.Date(2026, time.April, 26, 10, 5, 0, 0, time.UTC)
+	})
+
+	resultA, err := serviceA.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("first Simulate: %v", err)
+	}
+	resultB, err := serviceB.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("second Simulate: %v", err)
+	}
+
+	encodedA, err := json.Marshal(resultA)
+	if err != nil {
+		t.Fatalf("Marshal first result: %v", err)
+	}
+	encodedB, err := json.Marshal(resultB)
+	if err != nil {
+		t.Fatalf("Marshal second result: %v", err)
+	}
+	if string(encodedA) != string(encodedB) {
+		t.Fatalf("simulation output not deterministic:\nfirst=%s\nsecond=%s", string(encodedA), string(encodedB))
+	}
 }
 
 func TestSimulateGCEmptyRepo(t *testing.T) {
@@ -416,6 +480,34 @@ func TestSimulateGCAssumptionsIncludeDeletedSnapshots(t *testing.T) {
 	}
 	if result.GC.Mutated {
 		t.Error("expected GC.Mutated=false")
+	}
+}
+
+func TestSimulateGCDeleteSnapshotAssumptionDoesNotDeleteSnapshotMetadata(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	fileID := insertSimLogicalFile(t, dbconn, "snapshot-retained.txt")
+	chunkID := insertSimChunk(t, dbconn, "snapshot-retained-chunk", 100, 0, 0, "v2-fastcdc")
+	linkSimFileChunk(t, dbconn, fileID, chunkID, 0)
+	insertSimSnapshot(t, dbconn, "snap-meta")
+	insertSimSnapshotFile(t, dbconn, "snap-meta", "/snapshot-retained.txt", fileID)
+
+	beforeSnapshots := countTableRows(t, dbconn, "snapshot")
+	beforeSnapshotFiles := countTableRows(t, dbconn, "snapshot_file")
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC, AssumeDeletedSnapshots: []string{"snap-meta"}})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if result == nil || result.GC == nil {
+		t.Fatal("expected gc result")
+	}
+	if got := countTableRows(t, dbconn, "snapshot"); got != beforeSnapshots {
+		t.Fatalf("snapshot row count changed: got=%d want=%d", got, beforeSnapshots)
+	}
+	if got := countTableRows(t, dbconn, "snapshot_file"); got != beforeSnapshotFiles {
+		t.Fatalf("snapshot_file row count changed: got=%d want=%d", got, beforeSnapshotFiles)
 	}
 }
 

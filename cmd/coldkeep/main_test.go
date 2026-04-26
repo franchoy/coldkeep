@@ -6744,3 +6744,130 @@ func TestRunSimulateGCCommandTextOutputIncludesWarnings(t *testing.T) {
 		t.Fatalf("expected no state changed footer, got:\n%s", output)
 	}
 }
+
+func TestRunCLISimulateSkipsStartupRecovery(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilitySimulateGCPhase = originalSimulate
+	})
+
+	startupCalls := 0
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		startupCalls++
+		return recovery.Report{}, nil
+	}
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+			},
+		}, nil
+	}
+
+	stderrOutput := captureStderr(t, func() {
+		stdoutOutput := captureStdout(t, func() {
+			code := runCLI([]string{"simulate", "gc"})
+			if code != exitSuccess {
+				t.Fatalf("expected exitSuccess, got %d", code)
+			}
+		})
+		if !strings.Contains(stdoutOutput, "GC simulation") {
+			t.Fatalf("expected simulate output, got %q", stdoutOutput)
+		}
+	})
+	if stderrOutput != "" {
+		t.Fatalf("expected no stderr output, got %q", stderrOutput)
+	}
+	if startupCalls != 0 {
+		t.Fatalf("expected startup recovery to be skipped for simulate, got %d calls", startupCalls)
+	}
+}
+
+func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	result := &observability.SimulationResult{
+		Kind:    observability.SimulationKindGC,
+		Exact:   true,
+		Mutated: false,
+		GC: &observability.GCSimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			Assumptions: observability.GCSimulationAssumptions{
+				DeletedSnapshots: []string{"snap-a"},
+			},
+			Summary: observability.GCSimulationSummary{
+				ReachableChunks:            11,
+				UnreachableChunks:          2,
+				LogicallyReclaimableBytes:  200,
+				PhysicallyReclaimableBytes: 100,
+				FullyReclaimableContainers: 1,
+				PartiallyDeadContainers:    1,
+			},
+			Warnings: []observability.ObservationWarning{{
+				Code:    "PARTIAL_RECLAIM_REQUIRES_COMPACTION",
+				Message: "some dead bytes are in partially live containers and are not physically reclaimable yet",
+			}},
+		},
+	}
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return result, nil
+	}
+
+	textOutput := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}}, outputModeText)
+		if err != nil {
+			t.Fatalf("text simulate: %v", err)
+		}
+	})
+	jsonOutput := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}}}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("json simulate: %v", err)
+		}
+	})
+
+	if !strings.Contains(textOutput, "reachable chunks:       11") || !strings.Contains(textOutput, "unreachable chunks:     2") {
+		t.Fatalf("text output missing reachability summary: %s", textOutput)
+	}
+	if !strings.Contains(textOutput, "logical bytes:          200 B") || !strings.Contains(textOutput, "physical bytes now:     100 B") {
+		t.Fatalf("text output missing reclaimable summary: %s", textOutput)
+	}
+	if !strings.Contains(textOutput, "snapshot treated as deleted: snap-a") {
+		t.Fatalf("text output missing assumptions: %s", textOutput)
+	}
+	if !strings.Contains(textOutput, "[PARTIAL_RECLAIM_REQUIRES_COMPACTION] some dead bytes are in partially live containers and are not physically reclaimable yet") {
+		t.Fatalf("text output missing warning: %s", textOutput)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOutput)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, jsonOutput)
+	}
+	data := payload["data"].(map[string]any)
+	gcNode := data["gc"].(map[string]any)
+	summary := gcNode["summary"].(map[string]any)
+	assertJSONNumber(t, summary, "reachable_chunks", 11)
+	assertJSONNumber(t, summary, "unreachable_chunks", 2)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
+	assumptions := gcNode["assumptions"].(map[string]any)
+	deleted := assumptions["deleted_snapshots"].([]any)
+	if len(deleted) != 1 || deleted[0] != "snap-a" {
+		t.Fatalf("unexpected deleted_snapshots: %v", assumptions["deleted_snapshots"])
+	}
+	warnings := gcNode["warnings"].([]any)
+	if len(warnings) != 1 {
+		t.Fatalf("expected one warning, got %v", warnings)
+	}
+}

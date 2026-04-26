@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/gc"
 )
@@ -52,8 +53,8 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 	for i, warning := range plan.Warnings {
 		warnings[i] = ObservationWarning{Code: warning.Code, Message: warning.Message}
 	}
-	generatedAt := s.now()
 	deletedSnapshots := append([]string(nil), opts.AssumeDeletedSnapshots...)
+	var generatedAt time.Time
 
 	result := &SimulationResult{
 		GeneratedAtUTC: generatedAt,

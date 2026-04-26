@@ -157,7 +157,7 @@ type InspectResult struct {
 }
 
 type SimulationResult struct {
-	GeneratedAtUTC time.Time `json:"generated_at_utc"`
+	GeneratedAtUTC time.Time `json:"generated_at_utc,omitempty"`
 	Kind           string    `json:"kind"`
 	Exact          bool      `json:"exact"`
 	Mutated        bool      `json:"mutated"`
@@ -169,7 +169,7 @@ type SimulationResult struct {
 
 // GCSimulationResult carries the structured output of a GC dry-run plan.
 type GCSimulationResult struct {
-	GeneratedAtUTC time.Time `json:"generated_at_utc"`
+	GeneratedAtUTC time.Time `json:"generated_at_utc,omitempty"`
 	Kind           string    `json:"kind"`
 	Exact          bool      `json:"exact"`
 	Mutated        bool      `json:"mutated"`
