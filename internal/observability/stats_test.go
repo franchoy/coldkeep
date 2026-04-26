@@ -1,11 +1,14 @@
 package observability
 
 import (
+	"context"
 	"database/sql"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/tests/testdb"
 )
 
 func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
@@ -116,4 +119,172 @@ func TestNewServiceStoresInjectedDB(t *testing.T) {
 	if svc.db != dbconn {
 		t.Fatal("service db was not injected")
 	}
+}
+
+func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	lfRes, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"alpha.txt", 123, "hash-alpha", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	logicalFileID, err := lfRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical_file last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, 1)`,
+		"/data/alpha.txt", logicalFileID,
+	); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`,
+		"snap-stats", time.Now().UTC(), "full",
+	); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "snap-stats", "snap/alpha.txt", logicalFileID)
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_1.bin", 512, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := ctrRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-alpha", 64, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, logicalFileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 64, 64, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, func() time.Time {
+		return time.Date(2026, time.April, 26, 16, 0, 0, 0, time.UTC)
+	})
+
+	result, err := svc.Stats(context.Background(), StatsOptions{IncludeContainers: true})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+
+	if result.GeneratedAtUTC.IsZero() {
+		t.Fatal("expected generated timestamp")
+	}
+	if result.Logical.TotalFiles != 1 {
+		t.Fatalf("expected total logical files=1, got %d", result.Logical.TotalFiles)
+	}
+	if result.Chunks.CountsByVersion == nil || len(result.Chunks.CountsByVersion) == 0 {
+		t.Fatalf("expected non-empty chunker version map, got %+v", result.Chunks.CountsByVersion)
+	}
+	if got := result.Chunks.CountsByVersion["v2-fastcdc"]; got != 1 {
+		t.Fatalf("expected v2-fastcdc chunk count=1, got %d", got)
+	}
+	if result.Retention.SnapshotReferencedLogicalFiles == 0 {
+		t.Fatalf("expected retention stats to be populated, got %+v", result.Retention)
+	}
+	if len(result.Containers.Records) != 1 {
+		t.Fatalf("expected one container record, got %d", len(result.Containers.Records))
+	}
+}
+
+func TestObservabilityDoesNotMutateState(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	lfRes, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"immutable.txt", 100, "hash-immutable", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	logicalFileID, err := lfRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical_file last insert id: %v", err)
+	}
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_immut.bin", 256, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := ctrRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-immut", 40, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, logicalFileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 40, 40, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	beforeLogical := mustCount(t, dbconn, `SELECT COUNT(*) FROM logical_file`)
+	beforeChunks := mustCount(t, dbconn, `SELECT COUNT(*) FROM chunk`)
+	beforeContainers := mustCount(t, dbconn, `SELECT COUNT(*) FROM container`)
+
+	svc := newServiceForTest(dbconn, nil)
+	if _, err := svc.Stats(context.Background(), StatsOptions{IncludeContainers: true}); err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if _, err := svc.Inspect(context.Background(), EntityLogicalFile, strconv.FormatInt(logicalFileID, 10), InspectOptions{}); err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+
+	afterLogical := mustCount(t, dbconn, `SELECT COUNT(*) FROM logical_file`)
+	afterChunks := mustCount(t, dbconn, `SELECT COUNT(*) FROM chunk`)
+	afterContainers := mustCount(t, dbconn, `SELECT COUNT(*) FROM container`)
+
+	if beforeLogical != afterLogical {
+		t.Fatalf("logical_file count mutated: before=%d after=%d", beforeLogical, afterLogical)
+	}
+	if beforeChunks != afterChunks {
+		t.Fatalf("chunk count mutated: before=%d after=%d", beforeChunks, afterChunks)
+	}
+	if beforeContainers != afterContainers {
+		t.Fatalf("container count mutated: before=%d after=%d", beforeContainers, afterContainers)
+	}
+}
+
+func mustCount(t *testing.T, dbconn *sql.DB, query string, args ...any) int64 {
+	t.Helper()
+	var count int64
+	if err := dbconn.QueryRow(query, args...).Scan(&count); err != nil {
+		t.Fatalf("count query failed (%s): %v", query, err)
+	}
+	return count
 }

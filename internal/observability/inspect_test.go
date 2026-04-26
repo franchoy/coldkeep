@@ -27,7 +27,7 @@ func openInspectTestDB(t *testing.T) *sql.DB {
 	return dbconn
 }
 
-func TestInspectFileReturnsStableModel(t *testing.T) {
+func TestInspectLogicalFileBasic(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 
 	res, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
@@ -77,9 +77,18 @@ func TestInspectFileReturnsStableModel(t *testing.T) {
 	if got := result.Summary["file_id"]; got != fileID {
 		t.Fatalf("expected file_id=%d, got %v", fileID, got)
 	}
+	if got := result.Summary["original_name"]; got != "notes.txt" {
+		t.Fatalf("expected original_name=notes.txt, got %v", got)
+	}
+	if got := result.Summary["status"]; got != "COMPLETED" {
+		t.Fatalf("expected status=COMPLETED, got %v", got)
+	}
+	if got := result.Summary["chunker_version"]; got != "v2-fastcdc" {
+		t.Fatalf("expected chunker_version=v2-fastcdc, got %v", got)
+	}
 }
 
-func TestInspectUnsupportedTarget(t *testing.T) {
+func TestInspectRejectsUnsupportedEntity(t *testing.T) {
 	svc := newServiceForTest(nil, nil)
 
 	_, err := svc.Inspect(context.Background(), EntityContainer, "7", InspectOptions{})
@@ -101,5 +110,23 @@ func TestInspectMissingFileReturnsEntityNotFound(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestInspectRejectsInvalidLogicalFileID(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	ids := []string{"", "abc", "0", "-1"}
+	for _, id := range ids {
+		t.Run(id, func(t *testing.T) {
+			_, err := svc.Inspect(context.Background(), EntityLogicalFile, id, InspectOptions{})
+			if err == nil {
+				t.Fatalf("expected error for id %q", id)
+			}
+			if !errors.Is(err, ErrInvalidTarget) {
+				t.Fatalf("expected ErrInvalidTarget for id %q, got %v", id, err)
+			}
+		})
 	}
 }

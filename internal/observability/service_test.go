@@ -45,6 +45,13 @@ func TestNewServiceRequiresNonNilDB(t *testing.T) {
 	}
 }
 
+func TestNewServiceRejectsNilDB(t *testing.T) {
+	_, err := NewService(nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestNewServiceWithDB(t *testing.T) {
 	dbconn := &sql.DB{}
 	svc, err := NewService(dbconn)
