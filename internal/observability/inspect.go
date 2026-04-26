@@ -58,32 +58,3 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, _ InspectOp
 
 	return result, nil
 }
-
-func (s *Service) Simulate(ctx context.Context, target SimulationTarget) (SimulationResult, error) {
-	if err := contextErr(ctx); err != nil {
-		return SimulationResult{}, err
-	}
-	return s.defaultSimulationRunner(ctx, target)
-}
-
-func (s *Service) defaultSimulationRunner(_ context.Context, target SimulationTarget) (SimulationResult, error) {
-	if strings.TrimSpace(target.Kind) == "" {
-		return SimulationResult{}, fmt.Errorf("%w: empty kind", ErrUnsupportedSimulateTarget)
-	}
-
-	return SimulationResult{
-		GeneratedAtUTC: s.now().UTC(),
-		Kind:           target.Kind,
-		Exact:          false,
-		Mutated:        false,
-		Summary: map[string]any{
-			"phase": "v1.6-foundation",
-		},
-		Warnings: []ObservationWarning{
-			{
-				Code:    "SIMULATION_NOT_IMPLEMENTED",
-				Message: "simulation foundation is wired, but this target is not implemented in phase 1",
-			},
-		},
-	}, nil
-}

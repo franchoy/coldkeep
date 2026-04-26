@@ -3,42 +3,34 @@ package observability
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
-	"time"
 )
 
-func TestSimulateFoundationPlaceholder(t *testing.T) {
-	fixedNow := time.Date(2026, time.April, 26, 12, 30, 0, 0, time.UTC)
-	svc := newServiceForTest(nil, func() time.Time { return fixedNow })
+func TestSimulateGCNotImplementedYet(t *testing.T) {
+	svc := newServiceForTest(nil, nil)
 
-	result, err := svc.Simulate(context.Background(), SimulationTarget{Kind: "gc"})
-	if err != nil {
-		t.Fatalf("Simulate: %v", err)
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err == nil {
+		t.Fatal("expected error")
 	}
-
-	if result.GeneratedAtUTC != fixedNow {
-		t.Fatalf("generated_at_utc mismatch: got %s want %s", result.GeneratedAtUTC, fixedNow)
+	if result != nil {
+		t.Fatal("expected nil result")
 	}
-	if result.Exact {
-		t.Fatal("expected exact=false for phase 1 placeholder")
-	}
-	if result.Mutated {
-		t.Fatal("expected mutated=false")
-	}
-	if result.Kind != "gc" {
-		t.Fatalf("unexpected kind: %q", result.Kind)
-	}
-	if len(result.Warnings) == 0 {
-		t.Fatal("expected at least one warning")
+	if !strings.Contains(err.Error(), "gc simulation not implemented yet") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestSimulateRejectsEmptyKind(t *testing.T) {
+func TestSimulateRejectsUnsupportedKind(t *testing.T) {
 	svc := newServiceForTest(nil, nil)
 
-	_, err := svc.Simulate(context.Background(), SimulationTarget{})
+	_, err := svc.Simulate(context.Background(), SimulationOptions{Kind: "store"})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "unsupported simulation kind") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
