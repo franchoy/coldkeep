@@ -34,6 +34,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -137,8 +138,60 @@ var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
-var runStatsPhase = maintenance.RunStatsResult
-var inspectLogicalFilePhase = storage.GetLogicalFileInspectInfoWithDB
+var newObservabilityServicePhase = observability.NewService
+var runStatsPhase = func() (*maintenance.StatsResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	svc, err := newObservabilityServicePhase(sgctx.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := svc.Stats(context.Background(), observability.StatsOptions{IncludeContainers: true})
+	if err != nil {
+		return nil, err
+	}
+
+	return mapObservabilityStatsToMaintenance(r), nil
+}
+var inspectLogicalFilePhase = func(dbconn *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
+	svc, err := newObservabilityServicePhase(dbconn)
+	if err != nil {
+		return storage.LogicalFileInspectInfo{}, err
+	}
+
+	r, err := svc.Inspect(context.Background(), observability.EntityFile, strconv.FormatInt(fileID, 10), observability.InspectOptions{})
+	if err != nil {
+		if errors.Is(err, observability.ErrNotFound) {
+			return storage.LogicalFileInspectInfo{}, sql.ErrNoRows
+		}
+		return storage.LogicalFileInspectInfo{}, err
+	}
+
+	chunkCount, err := toInt64FromAny(r.Summary["chunk_count"])
+	if err != nil {
+		return storage.LogicalFileInspectInfo{}, fmt.Errorf("inspect logical file %d: parse chunk_count: %w", fileID, err)
+	}
+	avgChunkSizeBytes, err := toFloat64FromAny(r.Summary["avg_chunk_size_bytes"])
+	if err != nil {
+		return storage.LogicalFileInspectInfo{}, fmt.Errorf("inspect logical file %d: parse avg_chunk_size_bytes: %w", fileID, err)
+	}
+	chunkerVersion, err := toStringFromAny(r.Summary["chunker_version"])
+	if err != nil {
+		return storage.LogicalFileInspectInfo{}, fmt.Errorf("inspect logical file %d: parse chunker_version: %w", fileID, err)
+	}
+
+	return storage.LogicalFileInspectInfo{
+		FileID:            fileID,
+		ChunkerVersion:    chunk.Version(chunkerVersion),
+		ChunkCount:        chunkCount,
+		AvgChunkSizeBytes: avgChunkSizeBytes,
+	}, nil
+}
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
@@ -2064,6 +2117,116 @@ func hasMixedRepositoryChunkerVersions(r *maintenance.StatsResult) bool {
 	collect(r.LogicalFileCountsByVersion)
 
 	return len(versions) > 1
+}
+
+func mapObservabilityStatsToMaintenance(r *observability.StatsResult) *maintenance.StatsResult {
+	if r == nil {
+		return &maintenance.StatsResult{}
+	}
+
+	out := &maintenance.StatsResult{
+		TotalFiles:               r.Logical.TotalFiles,
+		CompletedFiles:           r.Logical.CompletedFiles,
+		ProcessingFiles:          r.Logical.ProcessingFiles,
+		AbortedFiles:             r.Logical.AbortedFiles,
+		TotalLogicalSizeBytes:    r.Logical.TotalSizeBytes,
+		CompletedSizeBytes:       r.Logical.CompletedSizeBytes,
+		ActiveWriteChunker:       r.Repository.ActiveWriteChunker,
+		EstimatedDedupRatioPct:   r.Logical.EstimatedDedupRatioPct,
+		TotalChunks:              r.Chunks.TotalChunks,
+		CompletedChunks:          r.Chunks.CompletedChunks,
+		CompletedChunkBytes:      r.Chunks.CompletedBytes,
+		ChunkCountsByVersion:     cloneInt64MapAny(r.Chunks.CountsByVersion),
+		ChunkBytesByVersion:      cloneInt64MapAny(r.Chunks.BytesByVersion),
+		TotalChunkReferences:     r.Chunks.TotalReferences,
+		UniqueReferencedChunks:   r.Chunks.UniqueReferenced,
+		TotalContainers:          r.Containers.TotalContainers,
+		HealthyContainers:        r.Containers.HealthyContainers,
+		QuarantineContainers:     r.Containers.QuarantineContainers,
+		TotalContainerBytes:      r.Containers.TotalBytes,
+		HealthyContainerBytes:    r.Containers.HealthyBytes,
+		QuarantineContainerBytes: r.Containers.QuarantineBytes,
+		LiveBlockBytes:           r.Containers.LiveBlockBytes,
+		DeadBlockBytes:           r.Containers.DeadBlockBytes,
+		FragmentationRatioPct:    r.Containers.FragmentationRatioPct,
+		SnapshotRetention: maintenance.SnapshotRetentionStats{
+			CurrentOnlyLogicalFiles:        r.Retention.CurrentOnlyLogicalFiles,
+			CurrentOnlyBytes:               r.Retention.CurrentOnlyBytes,
+			SnapshotReferencedLogicalFiles: r.Retention.SnapshotReferencedLogicalFiles,
+			SnapshotReferencedBytes:        r.Retention.SnapshotReferencedBytes,
+			SnapshotOnlyLogicalFiles:       r.Retention.SnapshotOnlyLogicalFiles,
+			SnapshotOnlyBytes:              r.Retention.SnapshotOnlyBytes,
+			SharedLogicalFiles:             r.Retention.SharedLogicalFiles,
+			SharedBytes:                    r.Retention.SharedBytes,
+		},
+	}
+
+	out.Containers = make([]maintenance.ContainerStatRecord, 0, len(r.Containers.Records))
+	for _, record := range r.Containers.Records {
+		out.Containers = append(out.Containers, maintenance.ContainerStatRecord{
+			ID:           record.ID,
+			Filename:     record.Filename,
+			TotalBytes:   record.TotalBytes,
+			LiveBytes:    record.LiveBytes,
+			DeadBytes:    record.DeadBytes,
+			Quarantine:   record.Quarantine,
+			LiveRatioPct: record.LiveRatioPct,
+		})
+	}
+
+	if out.CompletedSizeBytes > 0 {
+		out.GlobalDedupRatioPct = (1.0 - float64(out.LiveBlockBytes)/float64(out.CompletedSizeBytes)) * 100
+	}
+
+	return out
+}
+
+func cloneInt64MapAny(in map[string]int64) map[string]int64 {
+	if in == nil {
+		return map[string]int64{}
+	}
+	out := make(map[string]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func toInt64FromAny(v any) (int64, error) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), nil
+	case int64:
+		return n, nil
+	case float64:
+		if math.Trunc(n) != n {
+			return 0, fmt.Errorf("non-integer float value %v", n)
+		}
+		return int64(n), nil
+	default:
+		return 0, fmt.Errorf("unexpected type %T", v)
+	}
+}
+
+func toFloat64FromAny(v any) (float64, error) {
+	switch n := v.(type) {
+	case float64:
+		return n, nil
+	case int:
+		return float64(n), nil
+	case int64:
+		return float64(n), nil
+	default:
+		return 0, fmt.Errorf("unexpected type %T", v)
+	}
+}
+
+func toStringFromAny(v any) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("unexpected type %T", v)
+	}
+	return s, nil
 }
 
 func printStatsReport(r *maintenance.StatsResult) {
