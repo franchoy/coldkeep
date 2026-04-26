@@ -8,30 +8,93 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 )
 
-func (s *Service) Stats(ctx context.Context) (StatsResult, error) {
-	if err := contextErr(ctx); err != nil {
-		return StatsResult{}, err
+func (s *Service) Stats(ctx context.Context, opts StatsOptions) (*StatsResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if s == nil || s.db == nil {
-		return StatsResult{}, fmt.Errorf("observability service requires non-nil db")
+		return nil, fmt.Errorf("collect observability stats: observability service requires non-nil db")
 	}
 
 	raw, err := maintenance.RunStatsResultWithDB(ctx, s.db)
 	if err != nil {
-		return StatsResult{}, err
+		return nil, fmt.Errorf("collect observability stats: %w", err)
 	}
 
-	return mapStatsResult(s.now().UTC(), raw), nil
+	return s.mapMaintenanceStats(raw, opts), nil
 }
 
-func mapStatsResult(generatedAtUTC time.Time, raw *maintenance.StatsResult) StatsResult {
-	if raw == nil {
-		return StatsResult{GeneratedAtUTC: generatedAtUTC}
+func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOptions) *StatsResult {
+	generatedAtUTC := time.Now().UTC()
+	if s != nil && s.now != nil {
+		generatedAtUTC = s.now()
 	}
 
-	records := make([]ContainerStatRecord, 0, len(raw.Containers))
-	for _, record := range raw.Containers {
-		records = append(records, ContainerStatRecord{
+	r := &StatsResult{
+		GeneratedAtUTC: generatedAtUTC,
+	}
+	if raw == nil {
+		return r
+	}
+
+	r.Repository = RepositoryStats{
+		ActiveWriteChunker: raw.ActiveWriteChunker,
+	}
+	r.Logical = LogicalStats{
+		TotalFiles:             raw.TotalFiles,
+		CompletedFiles:         raw.CompletedFiles,
+		ProcessingFiles:        raw.ProcessingFiles,
+		AbortedFiles:           raw.AbortedFiles,
+		TotalSizeBytes:         raw.TotalLogicalSizeBytes,
+		CompletedSizeBytes:     raw.CompletedSizeBytes,
+		EstimatedDedupRatioPct: raw.EstimatedDedupRatioPct,
+	}
+	r.Chunks = ChunkStats{
+		TotalChunks:      raw.TotalChunks,
+		CompletedChunks:  raw.CompletedChunks,
+		CompletedBytes:   raw.CompletedChunkBytes,
+		CountsByVersion:  cloneInt64Map(raw.ChunkCountsByVersion),
+		BytesByVersion:   cloneInt64Map(raw.ChunkBytesByVersion),
+		TotalReferences:  raw.TotalChunkReferences,
+		UniqueReferenced: raw.UniqueReferencedChunks,
+	}
+	r.Containers = ContainerStats{
+		TotalContainers:       raw.TotalContainers,
+		HealthyContainers:     raw.HealthyContainers,
+		QuarantineContainers:  raw.QuarantineContainers,
+		TotalBytes:            raw.TotalContainerBytes,
+		HealthyBytes:          raw.HealthyContainerBytes,
+		QuarantineBytes:       raw.QuarantineContainerBytes,
+		LiveBlockBytes:        raw.LiveBlockBytes,
+		DeadBlockBytes:        raw.DeadBlockBytes,
+		FragmentationRatioPct: raw.FragmentationRatioPct,
+	}
+	r.Retention = RetentionStats{
+		CurrentOnlyLogicalFiles:        raw.SnapshotRetention.CurrentOnlyLogicalFiles,
+		CurrentOnlyBytes:               raw.SnapshotRetention.CurrentOnlyBytes,
+		SnapshotReferencedLogicalFiles: raw.SnapshotRetention.SnapshotReferencedLogicalFiles,
+		SnapshotReferencedBytes:        raw.SnapshotRetention.SnapshotReferencedBytes,
+		SnapshotOnlyLogicalFiles:       raw.SnapshotRetention.SnapshotOnlyLogicalFiles,
+		SnapshotOnlyBytes:              raw.SnapshotRetention.SnapshotOnlyBytes,
+		SharedLogicalFiles:             raw.SnapshotRetention.SharedLogicalFiles,
+		SharedBytes:                    raw.SnapshotRetention.SharedBytes,
+	}
+
+	if opts.IncludeContainers {
+		r.Containers.Records = mapContainerRecords(raw.Containers)
+	}
+
+	return r
+}
+
+func mapContainerRecords(in []maintenance.ContainerStatRecord) []ContainerStatRecord {
+	if len(in) == 0 {
+		return nil
+	}
+
+	out := make([]ContainerStatRecord, 0, len(in))
+	for _, record := range in {
+		out = append(out, ContainerStatRecord{
 			ID:           record.ID,
 			Filename:     record.Filename,
 			TotalBytes:   record.TotalBytes,
@@ -41,57 +104,19 @@ func mapStatsResult(generatedAtUTC time.Time, raw *maintenance.StatsResult) Stat
 			LiveRatioPct: record.LiveRatioPct,
 		})
 	}
+	return out
+}
 
-	return StatsResult{
-		GeneratedAtUTC: generatedAtUTC,
-		Repository: RepositoryStats{
-			ActiveWriteChunker: raw.ActiveWriteChunker,
-		},
-		Logical: LogicalStats{
-			TotalFiles:             raw.TotalFiles,
-			CompletedFiles:         raw.CompletedFiles,
-			ProcessingFiles:        raw.ProcessingFiles,
-			AbortedFiles:           raw.AbortedFiles,
-			TotalSizeBytes:         raw.TotalLogicalSizeBytes,
-			CompletedSizeBytes:     raw.CompletedSizeBytes,
-			EstimatedDedupRatioPct: raw.EstimatedDedupRatioPct,
-		},
-		Physical: PhysicalStats{
-			TotalPhysicalFiles: 0,
-		},
-		Chunks: ChunkStats{
-			TotalChunks:      raw.TotalChunks,
-			CompletedChunks:  raw.CompletedChunks,
-			CompletedBytes:   raw.CompletedChunkBytes,
-			CountsByVersion:  cloneInt64Map(raw.ChunkCountsByVersion),
-			BytesByVersion:   cloneInt64Map(raw.ChunkBytesByVersion),
-			TotalReferences:  raw.TotalChunkReferences,
-			UniqueReferenced: raw.UniqueReferencedChunks,
-		},
-		Containers: ContainerStats{
-			TotalContainers:       raw.TotalContainers,
-			HealthyContainers:     raw.HealthyContainers,
-			QuarantineContainers:  raw.QuarantineContainers,
-			TotalBytes:            raw.TotalContainerBytes,
-			HealthyBytes:          raw.HealthyContainerBytes,
-			QuarantineBytes:       raw.QuarantineContainerBytes,
-			LiveBlockBytes:        raw.LiveBlockBytes,
-			DeadBlockBytes:        raw.DeadBlockBytes,
-			FragmentationRatioPct: raw.FragmentationRatioPct,
-			Records:               records,
-		},
-		Snapshots: SnapshotStats{},
-		Retention: RetentionStats{
-			CurrentOnlyLogicalFiles:        raw.SnapshotRetention.CurrentOnlyLogicalFiles,
-			CurrentOnlyBytes:               raw.SnapshotRetention.CurrentOnlyBytes,
-			SnapshotReferencedLogicalFiles: raw.SnapshotRetention.SnapshotReferencedLogicalFiles,
-			SnapshotReferencedBytes:        raw.SnapshotRetention.SnapshotReferencedBytes,
-			SnapshotOnlyLogicalFiles:       raw.SnapshotRetention.SnapshotOnlyLogicalFiles,
-			SnapshotOnlyBytes:              raw.SnapshotRetention.SnapshotOnlyBytes,
-			SharedLogicalFiles:             raw.SnapshotRetention.SharedLogicalFiles,
-			SharedBytes:                    raw.SnapshotRetention.SharedBytes,
-		},
+func mapStatsResult(generatedAtUTC time.Time, raw *maintenance.StatsResult) StatsResult {
+	service := &Service{now: func() time.Time { return generatedAtUTC }}
+	return *service.mapMaintenanceStats(raw, StatsOptions{IncludeContainers: true})
+}
+
+func contextErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
 	}
+	return ctx.Err()
 }
 
 func cloneInt64Map(in map[string]int64) map[string]int64 {
@@ -103,11 +128,4 @@ func cloneInt64Map(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
-}
-
-func contextErr(ctx context.Context) error {
-	if ctx == nil {
-		return nil
-	}
-	return ctx.Err()
 }

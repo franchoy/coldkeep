@@ -76,6 +76,10 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	if len(result.Containers.Records) != 1 {
 		t.Fatalf("expected one container record, got %d", len(result.Containers.Records))
 	}
+	withoutRecords := (&Service{now: func() time.Time { return fixedNow }}).mapMaintenanceStats(raw, StatsOptions{})
+	if len(withoutRecords.Containers.Records) != 0 {
+		t.Fatalf("expected no container records when include option is false, got %d", len(withoutRecords.Containers.Records))
+	}
 	if result.Physical.TotalPhysicalFiles != 0 {
 		t.Fatalf("expected phase-1 default physical total=0, got %d", result.Physical.TotalPhysicalFiles)
 	}
@@ -97,7 +101,7 @@ func TestMapStatsResultHandlesNilMaintenanceResult(t *testing.T) {
 func TestStatsReturnsErrorWhenDBIsMissing(t *testing.T) {
 	svc := newServiceForTest(nil, func() time.Time { return time.Now().UTC() })
 
-	_, err := svc.Stats(nil)
+	_, err := svc.Stats(nil, StatsOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
