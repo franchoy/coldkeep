@@ -79,7 +79,7 @@ func (s *Service) getSnapshotFiles(ctx context.Context, snapshotID int64) ([]Nod
 		`SELECT logical_file_id
 		 FROM snapshot_file
 		 WHERE snapshot_id = ?
-		 ORDER BY logical_file_id`,
+		 ORDER BY id`,
 		strconv.FormatInt(snapshotID, 10),
 	)
 	if err != nil {
@@ -108,7 +108,7 @@ func (s *Service) getFileChunks(ctx context.Context, logicalFileID int64) ([]Nod
 		`SELECT chunk_id
 		 FROM file_chunk
 		 WHERE logical_file_id = ?
-		 ORDER BY chunk_order, chunk_id`,
+		 ORDER BY chunk_id`,
 		logicalFileID,
 	)
 	if err != nil {
