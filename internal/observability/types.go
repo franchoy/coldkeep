@@ -57,12 +57,14 @@ type RepositoryStats struct {
 }
 
 type LogicalStats struct {
-	TotalFiles             int64   `json:"total_files"`
-	CompletedFiles         int64   `json:"completed_files"`
-	ProcessingFiles        int64   `json:"processing_files"`
-	AbortedFiles           int64   `json:"aborted_files"`
-	TotalSizeBytes         int64   `json:"total_size_bytes"`
-	CompletedSizeBytes     int64   `json:"completed_size_bytes"`
+	TotalFiles         int64 `json:"total_files"`
+	CompletedFiles     int64 `json:"completed_files"`
+	ProcessingFiles    int64 `json:"processing_files"`
+	AbortedFiles       int64 `json:"aborted_files"`
+	TotalSizeBytes     int64 `json:"total_size_bytes"`
+	CompletedSizeBytes int64 `json:"completed_size_bytes"`
+	// EstimatedDedupRatioPct is a legacy aggregate signal from maintenance stats.
+	// Prefer EfficiencyStats for exact metadata-derived dedup/overhead values.
 	EstimatedDedupRatioPct float64 `json:"estimated_dedup_ratio_pct"`
 }
 
@@ -111,11 +113,16 @@ type ContainerStatRecord struct {
 }
 
 type EfficiencyStats struct {
-	LogicalBytes       int64   `json:"logical_bytes"`
-	UniqueChunkBytes   int64   `json:"unique_chunk_bytes"`
-	ContainerBytes     int64   `json:"container_bytes"`
-	DedupRatio         float64 `json:"dedup_ratio"`
-	DedupRatioPercent  float64 `json:"dedup_ratio_percent"`
+	LogicalBytes     int64 `json:"logical_bytes"`
+	UniqueChunkBytes int64 `json:"unique_chunk_bytes"`
+	ContainerBytes   int64 `json:"container_bytes"`
+	// DedupRatio is metadata-derived logical-to-unique multiplier (e.g. 2.29x).
+	DedupRatio float64 `json:"dedup_ratio"`
+	// DedupRatioPercent is metadata-derived dedup savings percentage.
+	DedupRatioPercent float64 `json:"dedup_ratio_percent"`
+	// ContainerOverheadPct captures container overhead against unique chunk bytes.
+	ContainerOverheadPct float64 `json:"container_overhead_pct"`
+	// StorageOverheadPct is a deprecated alias kept for backward compatibility.
 	StorageOverheadPct float64 `json:"storage_overhead_pct"`
 }
 

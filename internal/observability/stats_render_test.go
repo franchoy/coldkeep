@@ -21,7 +21,7 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 				{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
 			},
 		},
-		Efficiency: EfficiencyStats{DedupRatio: 2.5, DedupRatioPercent: 60.0, StorageOverheadPct: 5.0},
+		Efficiency: EfficiencyStats{DedupRatio: 2.5, DedupRatioPercent: 60.0, ContainerOverheadPct: 5.0, StorageOverheadPct: 5.0},
 	}
 
 	if err := RenderStatsJSON(&buf, input); err != nil {
@@ -44,6 +44,12 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 	}
 	if got, ok := eff["dedup_ratio_percent"].(float64); !ok || got != 60.0 {
 		t.Fatalf("unexpected efficiency.dedup_ratio_percent: %v", eff["dedup_ratio_percent"])
+	}
+	if got, ok := eff["container_overhead_pct"].(float64); !ok || got != 5.0 {
+		t.Fatalf("unexpected efficiency.container_overhead_pct: %v", eff["container_overhead_pct"])
+	}
+	if got, ok := eff["storage_overhead_pct"].(float64); !ok || got != 5.0 {
+		t.Fatalf("unexpected efficiency.storage_overhead_pct: %v", eff["storage_overhead_pct"])
 	}
 }
 
@@ -70,7 +76,7 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 				{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
 			},
 		},
-		Efficiency: EfficiencyStats{StorageOverheadPct: 3.1},
+		Efficiency: EfficiencyStats{ContainerOverheadPct: 3.1, StorageOverheadPct: 3.1},
 		Containers: ContainerStats{
 			TotalContainers:       320,
 			HealthyContainers:     320,
@@ -121,6 +127,7 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 		"physical files:      140",
 		"total chunks:        892,104",
 		"references:          1,902,220",
+		"container overhead:  3.1%",
 		"current-only files:  20",
 		"snapshot-only files: 8",
 		"shared files:        100",

@@ -101,6 +101,9 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	}
 	assertFloatApprox(t, result.Efficiency.DedupRatio, 500.0/450.0, 1e-9, "efficiency dedup_ratio")
 	assertFloatApprox(t, result.Efficiency.DedupRatioPercent, 10.0, 1e-9, "efficiency dedup_ratio_percent")
+	if result.Efficiency.ContainerOverheadPct != 100 {
+		t.Fatalf("unexpected efficiency container_overhead_pct: %f", result.Efficiency.ContainerOverheadPct)
+	}
 	if result.Efficiency.StorageOverheadPct != 100 {
 		t.Fatalf("unexpected efficiency storage_overhead_pct: %f", result.Efficiency.StorageOverheadPct)
 	}
@@ -129,6 +132,9 @@ func TestBuildEfficiencyStatsHandlesZeroDenominators(t *testing.T) {
 	}
 	if result.StorageOverheadPct != 0 {
 		t.Fatalf("expected zero storage overhead pct, got %f", result.StorageOverheadPct)
+	}
+	if result.ContainerOverheadPct != 0 {
+		t.Fatalf("expected zero container overhead pct, got %f", result.ContainerOverheadPct)
 	}
 }
 

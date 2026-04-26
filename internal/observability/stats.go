@@ -346,7 +346,9 @@ func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) 
 	}
 
 	if uniqueChunkBytes > 0 {
-		stats.StorageOverheadPct = (float64(containerBytes-uniqueChunkBytes) / float64(uniqueChunkBytes)) * 100
+		overhead := (float64(containerBytes-uniqueChunkBytes) / float64(uniqueChunkBytes)) * 100
+		stats.ContainerOverheadPct = overhead
+		stats.StorageOverheadPct = overhead
 	}
 
 	return stats

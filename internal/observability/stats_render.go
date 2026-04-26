@@ -88,7 +88,7 @@ func RenderStatsHuman(w io.Writer, r *StatsResult) error {
 	if _, err := fmt.Fprintf(w, "  dedup savings:       %.1f%%\n", dedupSavingsPct); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  storage overhead:    %.1f%%\n", r.Efficiency.StorageOverheadPct); err != nil {
+	if _, err := fmt.Fprintf(w, "  container overhead:  %.1f%%\n", r.Efficiency.ContainerOverheadPct); err != nil {
 		return err
 	}
 
