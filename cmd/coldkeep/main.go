@@ -139,7 +139,7 @@ var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
 var newObservabilityServicePhase = observability.NewService
-var runStatsPhase = func() (*maintenance.StatsResult, error) {
+var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return nil, err
@@ -151,7 +151,16 @@ var runStatsPhase = func() (*maintenance.StatsResult, error) {
 		return nil, err
 	}
 
-	r, err := svc.Stats(context.Background(), observability.StatsOptions{IncludeContainers: true})
+	r, err := svc.Stats(context.Background(), opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+var runStatsPhase = func() (*maintenance.StatsResult, error) {
+	r, err := runObservabilityStatsPhase(observability.StatsOptions{IncludeContainers: true})
 	if err != nil {
 		return nil, err
 	}
@@ -698,6 +707,20 @@ func verifyLevelToString(level verify.VerifyLevel) string {
 
 func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	value, hasValue := parsed.lastFlagValue("output")
+	hasJSONFlag := parsed.hasFlag("json")
+
+	if hasJSONFlag && hasValue && strings.EqualFold(value, "text") {
+		return outputModeText, usageErrorf("cannot combine --json with --output text")
+	}
+	if hasJSONFlag {
+		if !hasValue {
+			return outputModeJSON, nil
+		}
+		if strings.EqualFold(value, "json") {
+			return outputModeJSON, nil
+		}
+	}
+
 	if !hasValue {
 		return outputModeText, nil
 	}
@@ -733,6 +756,13 @@ var outputSupportedCommands = map[string]bool{
 func inferOutputModeFromArgs(args []string) cliOutputMode {
 	if len(args) < 1 || !outputSupportedCommands[args[0]] {
 		return outputModeText
+	}
+	if args[0] == "stats" {
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--json" {
+				return outputModeJSON
+			}
+		}
 	}
 
 	for i := 1; i < len(args); i++ {
@@ -1740,18 +1770,20 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "containers"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
 		return usageErrorf("Usage: coldkeep stats")
 	}
 
+	includeContainers := parsed.hasFlag("containers")
+	r, err := runObservabilityStatsPhase(observability.StatsOptions{IncludeContainers: includeContainers})
+	if err != nil {
+		return err
+	}
+
 	if outputMode == outputModeJSON {
-		r, err := runStatsPhase()
-		if err != nil {
-			return err
-		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "stats",
@@ -1762,11 +1794,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return nil
 	}
 
-	r, err := runStatsPhase()
-	if err != nil {
-		return err
-	}
-	printStatsReport(r)
+	printStatsReport(mapObservabilityStatsToMaintenance(r))
 	return nil
 }
 

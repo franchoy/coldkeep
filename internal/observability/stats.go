@@ -79,6 +79,7 @@ func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOp
 		SharedLogicalFiles:             raw.SnapshotRetention.SharedLogicalFiles,
 		SharedBytes:                    raw.SnapshotRetention.SharedBytes,
 	}
+	r.Efficiency = buildEfficiencyStats(r.Logical.CompletedSizeBytes, r.Chunks.CompletedBytes, r.Containers.TotalBytes)
 
 	if opts.IncludeContainers {
 		r.Containers.Records = mapContainerRecords(raw.Containers)
@@ -128,4 +129,23 @@ func cloneInt64Map(in map[string]int64) map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) EfficiencyStats {
+	stats := EfficiencyStats{
+		LogicalBytes:     logicalBytes,
+		UniqueChunkBytes: uniqueChunkBytes,
+		ContainerBytes:   containerBytes,
+	}
+
+	if logicalBytes > 0 {
+		stats.DedupRatio = float64(uniqueChunkBytes) / float64(logicalBytes)
+		stats.DedupRatioPercent = stats.DedupRatio * 100
+	}
+
+	if uniqueChunkBytes > 0 {
+		stats.StorageOverheadPct = (float64(containerBytes-uniqueChunkBytes) / float64(uniqueChunkBytes)) * 100
+	}
+
+	return stats
 }

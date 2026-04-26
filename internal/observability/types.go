@@ -44,6 +44,7 @@ type StatsResult struct {
 	Physical   PhysicalStats   `json:"physical"`
 	Chunks     ChunkStats      `json:"chunks"`
 	Containers ContainerStats  `json:"containers"`
+	Efficiency EfficiencyStats `json:"efficiency"`
 	Snapshots  SnapshotStats   `json:"snapshots"`
 	Retention  RetentionStats  `json:"retention"`
 
@@ -99,6 +100,15 @@ type ContainerStatRecord struct {
 	DeadBytes    int64   `json:"dead_bytes"`
 	Quarantine   bool    `json:"quarantine"`
 	LiveRatioPct float64 `json:"live_ratio_pct"`
+}
+
+type EfficiencyStats struct {
+	LogicalBytes       int64   `json:"logical_bytes"`
+	UniqueChunkBytes   int64   `json:"unique_chunk_bytes"`
+	ContainerBytes     int64   `json:"container_bytes"`
+	DedupRatio         float64 `json:"dedup_ratio"`
+	DedupRatioPercent  float64 `json:"dedup_ratio_percent"`
+	StorageOverheadPct float64 `json:"storage_overhead_pct"`
 }
 
 type SnapshotStats struct {

@@ -23,6 +23,7 @@ import (
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -1335,6 +1336,19 @@ func TestResolveOutputModeInvalidValueClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestResolveOutputModeSupportsJSONShorthand(t *testing.T) {
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"json": {""}},
+	})
+	if err != nil {
+		t.Fatalf("expected no error for --json shorthand, got %v", err)
+	}
+	if mode != outputModeJSON {
+		t.Fatalf("expected json output mode for --json shorthand, got %q", mode)
+	}
+}
+
 func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runSimulateCommand(parsedCommandLine{
 		method:      "simulate",
@@ -1641,6 +1655,13 @@ func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsStatsJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"stats", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected stats --json to infer json mode, got %q", mode)
 	}
 }
 
@@ -5154,34 +5175,39 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 }
 
 func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
-	originalRunStats := runStatsPhase
+	originalRunStats := runObservabilityStatsPhase
 	t.Cleanup(func() {
-		runStatsPhase = originalRunStats
+		runObservabilityStatsPhase = originalRunStats
 	})
 
-	runStatsPhase = func() (*maintenance.StatsResult, error) {
-		return &maintenance.StatsResult{
-			TotalFiles:             7,
-			ActiveWriteChunker:     "v2-fastcdc",
-			TotalChunkReferences:   10000,
-			UniqueReferencedChunks: 7500,
-			EstimatedDedupRatioPct: 25,
-			LogicalFileCountsByVersion: map[string]int64{
-				"v1-simple-rolling": 5,
-				"v2-fastcdc":        2,
-				"unknown":           1,
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		records := []observability.ContainerStatRecord{}
+		if opts.IncludeContainers {
+			records = append(records, observability.ContainerStatRecord{ID: 10, Filename: "ctr-10.bin", TotalBytes: 99})
+		}
+
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical: observability.LogicalStats{
+				TotalFiles:             7,
+				EstimatedDedupRatioPct: 25,
 			},
-			ChunkCountsByVersion: map[string]int64{
-				"v1-simple-rolling": 3,
-				"v2-fastcdc":        2,
-				"unknown":           1,
+			Chunks: observability.ChunkStats{
+				TotalReferences:  10000,
+				UniqueReferenced: 7500,
+				CountsByVersion: map[string]int64{
+					"v1-simple-rolling": 3,
+					"v2-fastcdc":        2,
+					"unknown":           1,
+				},
+				BytesByVersion: map[string]int64{
+					"v1-simple-rolling": 30,
+					"v2-fastcdc":        20,
+					"unknown":           9,
+				},
 			},
-			ChunkBytesByVersion: map[string]int64{
-				"v1-simple-rolling": 30,
-				"v2-fastcdc":        20,
-				"unknown":           9,
-			},
-			SnapshotRetention: maintenance.SnapshotRetentionStats{
+			Containers: observability.ContainerStats{Records: records},
+			Retention: observability.RetentionStats{
 				CurrentOnlyLogicalFiles:        2,
 				CurrentOnlyBytes:               256,
 				SnapshotReferencedLogicalFiles: 3,
@@ -5195,7 +5221,7 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"containers": {""}}}, outputModeJSON); err != nil {
 			t.Fatalf("runStatsCommand JSON returned error: %v", err)
 		}
 	})
@@ -5208,32 +5234,37 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing data object in payload: %v", payload)
 	}
-	retentionData, ok := data["snapshot_retention"].(map[string]any)
+	retentionData, ok := data["retention"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing snapshot_retention object in payload: %v", data)
+		t.Fatalf("missing retention object in payload: %v", data)
 	}
-	chunkCounts, ok := data["chunk_counts_by_version"].(map[string]any)
+	chunksData, ok := data["chunks"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing chunk_counts_by_version object in payload: %v", data)
+		t.Fatalf("missing chunks object in payload: %v", data)
 	}
-	logicalFileCounts, ok := data["logical_file_counts_by_version"].(map[string]any)
+	chunkCounts, ok := chunksData["counts_by_version"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing logical_file_counts_by_version object in payload: %v", data)
+		t.Fatalf("missing chunks.counts_by_version object in payload: %v", chunksData)
 	}
-	chunkBytes, ok := data["chunk_bytes_by_version"].(map[string]any)
+	chunkBytes, ok := chunksData["bytes_by_version"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing chunk_bytes_by_version object in payload: %v", data)
+		t.Fatalf("missing chunks.bytes_by_version object in payload: %v", chunksData)
 	}
-	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
-	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
-	assertJSONNumber(t, logicalFileCounts, "unknown", 1)
-	if raw, ok := data["active_write_chunker"].(string); !ok || raw != "v2-fastcdc" {
-		t.Fatalf("active_write_chunker mismatch: got=%v payload=%v", data["active_write_chunker"], data)
+	repositoryData, ok := data["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing repository object in payload: %v", data)
 	}
-	assertJSONNumber(t, data, "total_chunk_references", 10000)
-	assertJSONNumber(t, data, "unique_referenced_chunks", 7500)
-	if raw, ok := data["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
-		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", data["estimated_dedup_ratio_pct"], data)
+	logicalData, ok := data["logical"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing logical object in payload: %v", data)
+	}
+	if raw, ok := repositoryData["active_write_chunker"].(string); !ok || raw != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%v payload=%v", repositoryData["active_write_chunker"], data)
+	}
+	assertJSONNumber(t, chunksData, "total_references", 10000)
+	assertJSONNumber(t, chunksData, "unique_referenced", 7500)
+	if raw, ok := logicalData["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
+		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", logicalData["estimated_dedup_ratio_pct"], data)
 	}
 	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
 	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
@@ -5249,6 +5280,18 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	assertJSONNumber(t, retentionData, "snapshot_only_bytes", 128)
 	assertJSONNumber(t, retentionData, "shared_bytes", 640)
 	assertJSONNumber(t, retentionData, "current_only_bytes", 256)
+
+	containersData, ok := data["containers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing containers object in payload: %v", data)
+	}
+	records, ok := containersData["records"].([]any)
+	if !ok {
+		t.Fatalf("expected containers.records array when --containers is set: %v", containersData)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one container record, got %d", len(records))
+	}
 }
 
 func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {

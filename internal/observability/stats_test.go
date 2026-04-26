@@ -89,6 +89,24 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	if result.Retention.SnapshotOnlyLogicalFiles != 2 {
 		t.Fatalf("unexpected retention stats: %+v", result.Retention)
 	}
+	if result.Efficiency.LogicalBytes != 500 {
+		t.Fatalf("unexpected efficiency logical_bytes: %d", result.Efficiency.LogicalBytes)
+	}
+	if result.Efficiency.UniqueChunkBytes != 450 {
+		t.Fatalf("unexpected efficiency unique_chunk_bytes: %d", result.Efficiency.UniqueChunkBytes)
+	}
+	if result.Efficiency.ContainerBytes != 900 {
+		t.Fatalf("unexpected efficiency container_bytes: %d", result.Efficiency.ContainerBytes)
+	}
+	if result.Efficiency.DedupRatio != 0.9 {
+		t.Fatalf("unexpected efficiency dedup_ratio: %f", result.Efficiency.DedupRatio)
+	}
+	if result.Efficiency.DedupRatioPercent != 90 {
+		t.Fatalf("unexpected efficiency dedup_ratio_percent: %f", result.Efficiency.DedupRatioPercent)
+	}
+	if result.Efficiency.StorageOverheadPct != 100 {
+		t.Fatalf("unexpected efficiency storage_overhead_pct: %f", result.Efficiency.StorageOverheadPct)
+	}
 }
 
 func TestMapStatsResultHandlesNilMaintenanceResult(t *testing.T) {
@@ -98,6 +116,22 @@ func TestMapStatsResultHandlesNilMaintenanceResult(t *testing.T) {
 	}
 	if result.Chunks.CountsByVersion != nil {
 		t.Fatal("expected zero-value result when maintenance payload is nil")
+	}
+}
+
+func TestBuildEfficiencyStatsHandlesZeroDenominators(t *testing.T) {
+	result := buildEfficiencyStats(0, 0, 123)
+	if result.LogicalBytes != 0 || result.UniqueChunkBytes != 0 || result.ContainerBytes != 123 {
+		t.Fatalf("unexpected passthrough values: %+v", result)
+	}
+	if result.DedupRatio != 0 {
+		t.Fatalf("expected zero dedup ratio, got %f", result.DedupRatio)
+	}
+	if result.DedupRatioPercent != 0 {
+		t.Fatalf("expected zero dedup ratio percent, got %f", result.DedupRatioPercent)
+	}
+	if result.StorageOverheadPct != 0 {
+		t.Fatalf("expected zero storage overhead pct, got %f", result.StorageOverheadPct)
 	}
 }
 
