@@ -48,6 +48,10 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 			RequiresCompaction: c.RequiresCompaction,
 		}
 	}
+	warnings := make([]ObservationWarning, len(plan.Warnings))
+	for i, warning := range plan.Warnings {
+		warnings[i] = ObservationWarning{Code: warning.Code, Message: warning.Message}
+	}
 	generatedAt := s.now()
 	deletedSnapshots := append([]string(nil), opts.AssumeDeletedSnapshots...)
 
@@ -83,7 +87,9 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 				PartiallyDeadContainers:    plan.Summary.PartiallyDeadContainers,
 			},
 			Containers: impacts,
+			Warnings:   warnings,
 		},
+		Warnings: warnings,
 	}
 
 	return result, nil

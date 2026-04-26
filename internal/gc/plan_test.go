@@ -443,6 +443,54 @@ func TestBuildPlanPartiallyDeadContainerDistinguishesLogicalVsPhysical(t *testin
 	if c.LiveBytesAfterGC != 100 {
 		t.Errorf("LiveBytesAfterGC = %d, want 100", c.LiveBytesAfterGC)
 	}
+	found := false
+	for _, warning := range plan.Warnings {
+		if warning.Code == "PARTIAL_RECLAIM_REQUIRES_COMPACTION" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected PARTIAL_RECLAIM_REQUIRES_COMPACTION warning, got %v", plan.Warnings)
+	}
+}
+
+func TestBuildPlanWarningsForMissingContainerUnknownVersionAndQuarantine(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	// Missing container placement: completed chunk with no block row.
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'COMPLETED', ?, ?, ?)`,
+		"orphan-placement", 50, 0, 0, "v9-future-cdc",
+	); err != nil {
+		t.Fatalf("insert placementless chunk: %v", err)
+	}
+
+	// Quarantined dead chunk.
+	quarantineChunkID := insertChunk(t, dbconn, "quarantine-dead", 70, 0, 0)
+	res, err := dbconn.Exec(
+		`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES (?, 1, 1, ?, 67108864)`,
+		"q.bin", 70,
+	)
+	if err != nil {
+		t.Fatalf("insert quarantined container: %v", err)
+	}
+	quarantineContainerID, _ := res.LastInsertId()
+	insertBlock(t, dbconn, quarantineChunkID, quarantineContainerID, 70)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	codes := make(map[string]struct{}, len(plan.Warnings))
+	for _, warning := range plan.Warnings {
+		codes[warning.Code] = struct{}{}
+	}
+	for _, expected := range []string{"CHUNK_MISSING_CONTAINER", "UNKNOWN_CHUNKER_VERSION", "QUARANTINED_CONTAINER"} {
+		if _, ok := codes[expected]; !ok {
+			t.Fatalf("expected warning %s, got %v", expected, plan.Warnings)
+		}
+	}
 }
 
 func TestBuildPlanNoDBWritesSideEffect(t *testing.T) {

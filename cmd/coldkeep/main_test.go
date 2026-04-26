@@ -6700,3 +6700,47 @@ func TestRunSimulateGCCommandRejectsMissingSnapshot(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestRunSimulateGCCommandTextOutputIncludesWarnings(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+				Warnings: []observability.ObservationWarning{{
+					Code:    "QUARANTINED_CONTAINER",
+					Message: "quarantined containers are excluded from physical reclaim calculation",
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Warnings") {
+		t.Fatalf("expected warnings section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "[QUARANTINED_CONTAINER] quarantined containers are excluded from physical reclaim calculation") {
+		t.Fatalf("expected warning message, got:\n%s", output)
+	}
+	if !strings.Contains(output, "No state was changed.") {
+		t.Fatalf("expected no state changed footer, got:\n%s", output)
+	}
+}

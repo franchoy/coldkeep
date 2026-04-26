@@ -131,6 +131,35 @@ func TestSimulateGCRejectsMissingDeletedSnapshot(t *testing.T) {
 	}
 }
 
+func TestSimulateGCIncludesWarnings(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'COMPLETED', ?, ?, ?)`,
+		"orphan-placement", 50, 0, 0, "v9-future-cdc",
+	); err != nil {
+		t.Fatalf("insert placementless chunk: %v", err)
+	}
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if result == nil || result.GC == nil {
+		t.Fatal("expected non-nil result with GC field")
+	}
+	if len(result.GC.Warnings) == 0 {
+		t.Fatal("expected nested GC warnings")
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected top-level warnings")
+	}
+	if result.GC.Warnings[0].Code == "" || result.Warnings[0].Code == "" {
+		t.Fatalf("expected warning codes, got gc=%v top=%v", result.GC.Warnings, result.Warnings)
+	}
+}
+
 func TestSimulateRejectsUnsupportedKind(t *testing.T) {
 	svc := newServiceForTest(nil, nil)
 

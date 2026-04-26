@@ -2934,6 +2934,13 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 				c.ContainerID, c.Filename, c.ReclaimableBytes, c.LiveBytesAfterGC, c.ReclaimableChunks, c.TotalChunks, state)
 		}
 	}
+	if r.GC != nil && len(r.GC.Warnings) > 0 {
+		fmt.Println()
+		fmt.Println("Warnings")
+		for _, warning := range r.GC.Warnings {
+			fmt.Printf("  [%s] %s\n", warning.Code, warning.Message)
+		}
+	}
 
 	fmt.Println()
 	fmt.Println("No state was changed.")

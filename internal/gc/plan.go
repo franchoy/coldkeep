@@ -10,7 +10,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 
+	chunkmeta "github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/graph"
 )
 
@@ -44,6 +47,11 @@ type SimulationSummary struct {
 	PartiallyDeadContainers    int64 `json:"partially_dead_containers"`
 }
 
+type Warning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // Plan is the result of the GC mark phase. It describes what would be
 // reclaimed if GC ran right now (optionally under AssumeDeletedSnapshots).
 // No writes are made during plan computation.
@@ -67,12 +75,22 @@ type Plan struct {
 	// AffectedContainers lists containers that contain at least one reclaimable
 	// chunk.
 	AffectedContainers []ContainerImpact
+	Warnings           []Warning
 }
 
 type chunkRecord struct {
-	ID           int64
-	LiveRefCount int64
-	PinCount     int64
+	ID             int64
+	LiveRefCount   int64
+	PinCount       int64
+	ChunkerVersion string
+}
+
+type warningInputs struct {
+	UnknownChunkerVersions    []string
+	MissingContainerChunks    int64
+	QuarantinedDeadContainers int64
+	InconsistentContainers    int64
+	PartiallyDeadContainers   int64
 }
 
 // BuildPlan performs the GC mark phase and returns a Plan describing what
@@ -116,6 +134,12 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	if err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: load completed chunks: %w", err)
 	}
+	unknownVersions := make(map[string]struct{})
+	for _, ch := range allChunks {
+		if version := ch.ChunkerVersion; version != string(chunkmeta.VersionV1SimpleRolling) && version != string(chunkmeta.VersionV2FastCDC) {
+			unknownVersions[version] = struct{}{}
+		}
+	}
 
 	unreachable := make([]chunkRecord, 0)
 	var reachableCompletedCount int64
@@ -127,7 +151,7 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 		unreachable = append(unreachable, ch)
 	}
 
-	plan, err := buildPlanFromUnreachable(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, unreachable)
+	plan, err := buildPlanFromUnreachable(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, unreachable, unknownVersions)
 	if err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: build plan from unreachable: %w", err)
 	}
@@ -164,7 +188,7 @@ func validateAssumeDeletedSnapshots(ctx context.Context, dbconn *sql.DB, snapsho
 
 func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord, error) {
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT id, live_ref_count, pin_count
+		SELECT id, live_ref_count, pin_count, chunker_version
 		FROM chunk
 		WHERE status = 'COMPLETED'
 		ORDER BY id ASC
@@ -177,7 +201,7 @@ func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord,
 	out := make([]chunkRecord, 0)
 	for rows.Next() {
 		var ch chunkRecord
-		if err := rows.Scan(&ch.ID, &ch.LiveRefCount, &ch.PinCount); err != nil {
+		if err := rows.Scan(&ch.ID, &ch.LiveRefCount, &ch.PinCount, &ch.ChunkerVersion); err != nil {
 			return nil, err
 		}
 		out = append(out, ch)
@@ -189,16 +213,36 @@ func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord,
 	return out, nil
 }
 
-func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, unreachable []chunkRecord) (*Plan, error) {
+func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, unreachable []chunkRecord, unknownVersions map[string]struct{}) (*Plan, error) {
 	unreachableChunkIDs := make(map[int64]struct{}, len(unreachable))
 	for _, ch := range unreachable {
 		unreachableChunkIDs[ch.ID] = struct{}{}
 	}
 
-	affectedContainers, logicalReclaimableBytes, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs)
+	affectedContainers, logicalReclaimableBytes, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs)
 	if err != nil {
 		return nil, err
 	}
+	missingContainerChunks, err := countUnreachableChunksWithoutContainer(ctx, dbconn, unreachableChunkIDs)
+	if err != nil {
+		return nil, err
+	}
+	quarantinedDeadContainers, err := countQuarantinedContainersWithDeadChunks(ctx, dbconn, unreachableChunkIDs)
+	if err != nil {
+		return nil, err
+	}
+	unknown := make([]string, 0, len(unknownVersions))
+	for version := range unknownVersions {
+		unknown = append(unknown, version)
+	}
+	sort.Strings(unknown)
+	warnings := buildWarnings(warningInputs{
+		UnknownChunkerVersions:    unknown,
+		MissingContainerChunks:    missingContainerChunks,
+		QuarantinedDeadContainers: quarantinedDeadContainers,
+		InconsistentContainers:    inconsistentContainers,
+		PartiallyDeadContainers:   partiallyDeadContainers,
+	})
 
 	return &Plan{
 		TotalChunks:                totalChunks,
@@ -214,12 +258,13 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 			PartiallyDeadContainers:    partiallyDeadContainers,
 		},
 		AffectedContainers: affectedContainers,
+		Warnings:           warnings,
 	}, nil
 }
 
 // planContainerImpact scans sealed non-quarantined containers and returns the
 // per-container impact summary and total reclaimable bytes.
-func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, error) {
+func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename, current_size
 		FROM container
@@ -227,7 +272,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 		ORDER BY id ASC
 	`)
 	if err != nil {
-		return nil, 0, 0, 0, 0, err
+		return nil, 0, 0, 0, 0, 0, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -240,12 +285,12 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 	for rows.Next() {
 		var c containerRow
 		if err := rows.Scan(&c.id, &c.filename, &c.size); err != nil {
-			return nil, 0, 0, 0, 0, err
+			return nil, 0, 0, 0, 0, 0, err
 		}
 		containers = append(containers, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, 0, 0, 0, err
+		return nil, 0, 0, 0, 0, 0, err
 	}
 
 	var affected []ContainerImpact
@@ -253,10 +298,11 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 	var totalPhysicalReclaimable int64
 	var fullyReclaimableContainers int64
 	var partiallyDeadContainers int64
+	var inconsistentContainers int64
 
 	for _, c := range containers {
 		if err := ctx.Err(); err != nil {
-			return nil, 0, 0, 0, 0, err
+			return nil, 0, 0, 0, 0, 0, err
 		}
 
 		chunkRows, err := dbconn.QueryContext(ctx, `
@@ -267,11 +313,12 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			AND ch.status = 'COMPLETED'
 		`, c.id)
 		if err != nil {
-			return nil, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
+			return nil, 0, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
 		}
 
 		var totalChunks, reclaimChunks int64
 		var reclaimBytes int64
+		var totalBlockBytes int64
 
 		for chunkRows.Next() {
 			var chunkID int64
@@ -279,9 +326,10 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			var liveRefCount, pinCount int64
 			if err := chunkRows.Scan(&chunkID, &storedSize, &liveRefCount, &pinCount); err != nil {
 				_ = chunkRows.Close()
-				return nil, 0, 0, 0, 0, err
+				return nil, 0, 0, 0, 0, 0, err
 			}
 			totalChunks++
+			totalBlockBytes += storedSize
 			_, isUnreachable := unreachableChunkIDs[chunkID]
 			isLive := liveRefCount > 0 || pinCount > 0
 			if isUnreachable && !isLive {
@@ -291,7 +339,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 		}
 		_ = chunkRows.Close()
 		if err := chunkRows.Err(); err != nil {
-			return nil, 0, 0, 0, 0, err
+			return nil, 0, 0, 0, 0, 0, err
 		}
 
 		if reclaimChunks == 0 {
@@ -302,7 +350,11 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 		requiresCompaction := reclaimChunks > 0 && !fullyReclaimable
 		liveBytesAfterGC := c.size - reclaimBytes
 		if liveBytesAfterGC < 0 {
+			inconsistentContainers++
 			liveBytesAfterGC = 0
+		}
+		if totalBlockBytes > c.size {
+			inconsistentContainers++
 		}
 
 		impact := ContainerImpact{
@@ -326,5 +378,101 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 		}
 	}
 
-	return affected, totalLogicalReclaimable, totalPhysicalReclaimable, fullyReclaimableContainers, partiallyDeadContainers, nil
+	return affected, totalLogicalReclaimable, totalPhysicalReclaimable, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, nil
+}
+
+func countUnreachableChunksWithoutContainer(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) (int64, error) {
+	if len(unreachableChunkIDs) == 0 {
+		return 0, nil
+	}
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT ch.id
+		FROM chunk ch
+		WHERE ch.status = 'COMPLETED'
+		AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.chunk_id = ch.id)
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var count int64
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			return 0, err
+		}
+		if _, ok := unreachableChunkIDs[chunkID]; ok {
+			count++
+		}
+	}
+	return count, rows.Err()
+}
+
+func countQuarantinedContainersWithDeadChunks(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) (int64, error) {
+	if len(unreachableChunkIDs) == 0 {
+		return 0, nil
+	}
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT DISTINCT c.id, b.chunk_id
+		FROM container c
+		JOIN blocks b ON b.container_id = c.id
+		JOIN chunk ch ON ch.id = b.chunk_id
+		WHERE c.quarantine = 1
+		AND ch.status = 'COMPLETED'
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	seen := make(map[int64]struct{})
+	for rows.Next() {
+		var containerID, chunkID int64
+		if err := rows.Scan(&containerID, &chunkID); err != nil {
+			return 0, err
+		}
+		if _, ok := unreachableChunkIDs[chunkID]; ok {
+			seen[containerID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return int64(len(seen)), nil
+}
+
+func buildWarnings(inputs warningInputs) []Warning {
+	warnings := make([]Warning, 0, 5)
+	if inputs.QuarantinedDeadContainers > 0 {
+		warnings = append(warnings, Warning{
+			Code:    "QUARANTINED_CONTAINER",
+			Message: fmt.Sprintf("quarantined containers are excluded from physical reclaim calculation (%d affected container(s))", inputs.QuarantinedDeadContainers),
+		})
+	}
+	if inputs.InconsistentContainers > 0 {
+		warnings = append(warnings, Warning{
+			Code:    "INCONSISTENT_METADATA",
+			Message: fmt.Sprintf("inconsistent container metadata found; physical reclaim calculation may be approximate (%d container(s))", inputs.InconsistentContainers),
+		})
+	}
+	if inputs.MissingContainerChunks > 0 {
+		warnings = append(warnings, Warning{
+			Code:    "CHUNK_MISSING_CONTAINER",
+			Message: fmt.Sprintf("completed chunks without container placement were found; physical reclaim calculation excludes them (%d chunk(s))", inputs.MissingContainerChunks),
+		})
+	}
+	if len(inputs.UnknownChunkerVersions) > 0 {
+		warnings = append(warnings, Warning{
+			Code:    "UNKNOWN_CHUNKER_VERSION",
+			Message: fmt.Sprintf("unknown chunker version(s) found in completed chunks: %s", strings.Join(inputs.UnknownChunkerVersions, ", ")),
+		})
+	}
+	if inputs.PartiallyDeadContainers > 0 {
+		warnings = append(warnings, Warning{
+			Code:    "PARTIAL_RECLAIM_REQUIRES_COMPACTION",
+			Message: fmt.Sprintf("partial container reclaim is not physically possible yet; %d container(s) require future compaction/block work", inputs.PartiallyDeadContainers),
+		})
+	}
+	return warnings
 }
