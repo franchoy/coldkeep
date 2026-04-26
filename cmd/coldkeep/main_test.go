@@ -6466,6 +6466,7 @@ func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
 			method:      "simulate",
 			positionals: []string{"gc"},
 			flags: map[string][]string{
+				"json":            {""},
 				"delete-snapshot": {"s1"},
 			},
 		}, outputModeJSON)
@@ -6513,6 +6514,9 @@ func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
 	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
 	assertJSONNumber(t, summary, "fully_reclaimable_containers", 1)
 	assertJSONNumber(t, summary, "partially_dead_containers", 1)
+	if _, exists := gcNode["containers"]; exists {
+		t.Fatalf("expected gc.containers omitted without --containers flag, got %v", gcNode["containers"])
+	}
 }
 
 func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
@@ -6531,8 +6535,8 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 				Summary: observability.GCSimulationSummary{
 					ReachableChunks:            3,
 					UnreachableChunks:          2,
-					LogicallyReclaimableBytes:  150,
-					PhysicallyReclaimableBytes: 100,
+					LogicallyReclaimableBytes:  150 * 1024 * 1024,
+					PhysicallyReclaimableBytes: 100 * 1024 * 1024,
 					FullyReclaimableContainers: 1,
 					PartiallyDeadContainers:    1,
 				},
@@ -6550,6 +6554,7 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 			method:      "simulate",
 			positionals: []string{"gc"},
 			flags: map[string][]string{
+				"containers":      {""},
 				"delete-snapshot": {"s1", "s2"},
 			},
 		}, outputModeText)
@@ -6558,20 +6563,79 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Logically reclaimable bytes:  150") {
-		t.Fatalf("expected logical reclaimability line, got:\n%s", output)
+	if !strings.Contains(output, "GC simulation") {
+		t.Fatalf("expected gc simulation header, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Physically reclaimable bytes: 100") {
-		t.Fatalf("expected physical reclaimability line, got:\n%s", output)
+	if !strings.Contains(output, "Mode") || !strings.Contains(output, "exact:       true") || !strings.Contains(output, "mutated:     false") {
+		t.Fatalf("expected mode section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Assumed deleted:     s1, s2") {
-		t.Fatalf("expected assumed deleted line, got:\n%s", output)
+	if !strings.Contains(output, "Reachability") || !strings.Contains(output, "reachable chunks:       3") || !strings.Contains(output, "unreachable chunks:     2") {
+		t.Fatalf("expected reachability section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Reclaimable") || !strings.Contains(output, "logical bytes:          150 MiB") || !strings.Contains(output, "physical bytes now:     100 MiB") {
+		t.Fatalf("expected reclaimable section with MiB formatting, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Containers") || !strings.Contains(output, "fully reclaimable:      1") || !strings.Contains(output, "partially dead:         1") {
+		t.Fatalf("expected containers summary section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Assumptions") || !strings.Contains(output, "snapshot treated as deleted: s1") || !strings.Contains(output, "snapshot treated as deleted: s2") {
+		t.Fatalf("expected assumptions section, got:\n%s", output)
 	}
 	if !strings.Contains(output, "[fully reclaimable now]") {
 		t.Fatalf("expected fully reclaimable container marker, got:\n%s", output)
 	}
 	if !strings.Contains(output, "[requires compaction]") {
 		t.Fatalf("expected requires compaction marker, got:\n%s", output)
+	}
+	if !strings.Contains(output, "No state was changed.") {
+		t.Fatalf("expected no state changed footer, got:\n%s", output)
+	}
+}
+
+func TestRunSimulateGCCommandJSONIncludesContainersWhenRequested(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+				Containers: []observability.ContainerSimulationImpact{{
+					ContainerID: 42,
+					Filename:    "c042.bin",
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags: map[string][]string{
+				"containers": {""},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	gcNode := data["gc"].(map[string]any)
+	containers, ok := gcNode["containers"].([]any)
+	if !ok || len(containers) != 1 {
+		t.Fatalf("expected one container in gc.containers when --containers is set, got %v", gcNode["containers"])
 	}
 }
 

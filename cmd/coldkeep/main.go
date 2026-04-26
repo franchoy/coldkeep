@@ -2144,6 +2144,10 @@ func bytesToGB(bytes int64) float64 {
 	return float64(bytes) / (1024 * 1024 * 1024)
 }
 
+func formatMiB(bytes int64) string {
+	return fmt.Sprintf("%.0f MiB", bytesToMB(bytes))
+}
+
 func hasMixedRepositoryChunkerVersions(r *maintenance.StatsResult) bool {
 	if r == nil {
 		return false
@@ -2845,11 +2849,12 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 // It is a pure read-only operation: it calls BuildPlan and reports what would
 // be reclaimable, without deleting anything.
 func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "delete-snapshot"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "delete-snapshot", "containers"); err != nil {
 		return err
 	}
 
 	deleteSnapshots := parsed.flagValues("delete-snapshot")
+	includeContainers := parsed.hasFlag("containers")
 
 	r, err := runObservabilitySimulateGCPhase(observability.SimulationOptions{
 		Kind:                   observability.SimulationKindGC,
@@ -2860,6 +2865,11 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 	}
 
 	if outputMode == outputModeJSON {
+		if r.GC != nil && !includeContainers {
+			trimmed := *r.GC
+			trimmed.Containers = nil
+			r.GC = &trimmed
+		}
 		payload := map[string]any{
 			"status":  "ok",
 			"command": "simulate gc",
@@ -2871,25 +2881,48 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 	}
 
 	// Human text output
-	fmt.Println("Simulate GC (dry run — no changes applied)")
+	fmt.Println("GC simulation")
 	fmt.Println()
+
+	modeExact := r.Exact
+	modeMutated := r.Mutated
 	if r.GC != nil {
-		fmt.Printf("  Reachable chunks:             %d\n", r.GC.Summary.ReachableChunks)
-		fmt.Printf("  Unreachable chunks:           %d\n", r.GC.Summary.UnreachableChunks)
-		fmt.Printf("  Logically reclaimable bytes:  %d\n", r.GC.Summary.LogicallyReclaimableBytes)
-		fmt.Printf("  Physically reclaimable bytes: %d\n", r.GC.Summary.PhysicallyReclaimableBytes)
-		fmt.Printf("  Fully reclaimable containers: %d\n", r.GC.Summary.FullyReclaimableContainers)
-		fmt.Printf("  Partially dead containers:    %d\n", r.GC.Summary.PartiallyDeadContainers)
-		fmt.Printf("  Affected containers:          %d\n", len(r.GC.Containers))
+		modeExact = r.GC.Exact
+		modeMutated = r.GC.Mutated
 	}
+	fmt.Println("Mode")
+	fmt.Printf("  exact:       %t\n", modeExact)
+	fmt.Printf("  mutated:     %t\n", modeMutated)
+	fmt.Println()
+
+	if r.GC != nil {
+		fmt.Println("Reachability")
+		fmt.Printf("  reachable chunks:       %d\n", r.GC.Summary.ReachableChunks)
+		fmt.Printf("  unreachable chunks:     %d\n", r.GC.Summary.UnreachableChunks)
+		fmt.Println()
+
+		fmt.Println("Reclaimable")
+		fmt.Printf("  logical bytes:          %s\n", formatMiB(r.GC.Summary.LogicallyReclaimableBytes))
+		fmt.Printf("  physical bytes now:     %s\n", formatMiB(r.GC.Summary.PhysicallyReclaimableBytes))
+		fmt.Println()
+
+		fmt.Println("Containers")
+		fmt.Printf("  fully reclaimable:      %d\n", r.GC.Summary.FullyReclaimableContainers)
+		fmt.Printf("  partially dead:         %d\n", r.GC.Summary.PartiallyDeadContainers)
+	}
+
 	assumedDeleted := deleteSnapshots
 	if r.GC != nil && len(r.GC.Assumptions.DeletedSnapshots) > 0 {
 		assumedDeleted = r.GC.Assumptions.DeletedSnapshots
 	}
 	if len(assumedDeleted) > 0 {
-		fmt.Printf("  Assumed deleted:     %s\n", strings.Join(assumedDeleted, ", "))
+		fmt.Println()
+		fmt.Println("Assumptions")
+		for _, snapshotID := range assumedDeleted {
+			fmt.Printf("  snapshot treated as deleted: %s\n", snapshotID)
+		}
 	}
-	if r.GC != nil && len(r.GC.Containers) > 0 {
+	if includeContainers && r.GC != nil && len(r.GC.Containers) > 0 {
 		fmt.Println()
 		fmt.Println("  Containers with reclaimable chunks:")
 		for _, c := range r.GC.Containers {
@@ -2901,6 +2934,9 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 				c.ContainerID, c.Filename, c.ReclaimableBytes, c.LiveBytesAfterGC, c.ReclaimableChunks, c.TotalChunks, state)
 		}
 	}
+
+	fmt.Println()
+	fmt.Println("No state was changed.")
 	return nil
 }
 
@@ -4437,8 +4473,7 @@ func printHelp() {
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
 		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
-		{"  simulate gc", "Preview what GC would reclaim (exact, no mutations)"},
-		{"  simulate gc --delete-snapshot <id>", "Preview GC impact assuming snapshot <id> is deleted"},
+		{"  simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>] [--json]", "Preview exact GC impact without mutations; use --containers for per-container detail"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
