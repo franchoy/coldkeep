@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,20 +19,29 @@ func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opt
 	}
 	opts = normalizeInspectOptions(opts)
 
+	var result *InspectResult
+	var err error
+
 	switch entity {
 	case EntityRepository:
-		return s.inspectRepository(ctx, opts)
+		result, err = s.inspectRepository(ctx, opts)
 	case EntitySnapshot:
-		return s.inspectSnapshot(ctx, id, opts)
+		result, err = s.inspectSnapshot(ctx, id, opts)
 	case EntityFile, EntityLogicalFile:
-		return s.inspectLogicalFile(ctx, id, opts)
+		result, err = s.inspectLogicalFile(ctx, id, opts)
 	case EntityChunk:
-		return s.inspectChunk(ctx, id, opts)
+		result, err = s.inspectChunk(ctx, id, opts)
 	case EntityContainer:
-		return s.inspectContainer(ctx, id, opts)
+		result, err = s.inspectContainer(ctx, id, opts)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedEntity, entity)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+	sortRelations(result.Relations)
+	return result, nil
 }
 
 func (s *Service) inspectRepository(ctx context.Context, opts InspectOptions) (*InspectResult, error) {
@@ -598,6 +608,15 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func sortRelations(relations []Relation) {
+	sort.Slice(relations, func(i, j int) bool {
+		if relations[i].TargetType == relations[j].TargetType {
+			return relations[i].TargetID < relations[j].TargetID
+		}
+		return relations[i].TargetType < relations[j].TargetType
+	})
 }
 
 func parsePositiveInt64(id string) (int64, error) {

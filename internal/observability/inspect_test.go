@@ -607,6 +607,83 @@ func TestInspectDeepTraversalRespectsLimit(t *testing.T) {
 	}
 }
 
+func TestInspectRelationsAreDeterministicallySorted(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileResA, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"f-a.txt", 10, "h-a-sort", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert file A: %v", err)
+	}
+	fileAID, _ := fileResA.LastInsertId()
+
+	fileResB, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"f-b.txt", 10, "h-b-sort", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert file B: %v", err)
+	}
+	fileBID, _ := fileResB.LastInsertId()
+
+	chunkResA, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-a-sort", 10, "COMPLETED", 2, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk A: %v", err)
+	}
+	chunkAID, _ := chunkResA.LastInsertId()
+
+	chunkResB, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-b-sort", 10, "COMPLETED", 2, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk B: %v", err)
+	}
+	chunkBID, _ := chunkResB.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileAID, chunkAID, 0); err != nil {
+		t.Fatalf("insert fileA/chunkA: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileBID, chunkAID, 0); err != nil {
+		t.Fatalf("insert fileB/chunkA: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileAID, chunkBID, 1); err != nil {
+		t.Fatalf("insert fileA/chunkB: %v", err)
+	}
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr-sort.bin", 128, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerRes.LastInsertId()
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkAID, "plain", 1, 10, 10, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(
+		context.Background(),
+		EntityChunk,
+		strconv.FormatInt(chunkAID, 10),
+		InspectOptions{Relations: true, Reverse: true, Limit: 10},
+	)
+	if err != nil {
+		t.Fatalf("Inspect chunk sorted relations: %v", err)
+	}
+	if len(result.Relations) != 3 {
+		t.Fatalf("expected 3 relations, got %d", len(result.Relations))
+	}
+
+	for i := 1; i < len(result.Relations); i++ {
+		prev := result.Relations[i-1]
+		curr := result.Relations[i]
+		if prev.TargetType > curr.TargetType || (prev.TargetType == curr.TargetType && prev.TargetID > curr.TargetID) {
+			t.Fatalf("relations not sorted at index %d: prev=%+v curr=%+v", i, prev, curr)
+		}
+	}
+}
+
 func TestInspectMissingFileReturnsEntityNotFound(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 	svc := newServiceForTest(dbconn, nil)
