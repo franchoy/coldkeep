@@ -340,35 +340,20 @@ func MarkReachableChunks(ctx context.Context, dbconn *sql.DB) (map[int64]struct{
 	}
 	g := graph.NewService(dbconn)
 
-	rows, err := dbconn.QueryContext(ctx, `SELECT DISTINCT logical_file_id FROM snapshot_file ORDER BY logical_file_id`)
+	currentRoots, err := g.CurrentLogicalFileRoots(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	start := make([]graph.NodeID, 0)
-	for rows.Next() {
-		var logicalFileID int64
-		if err := rows.Scan(&logicalFileID); err != nil {
-			return nil, err
-		}
-		start = append(start, graph.NodeID{Type: graph.EntityLogicalFile, ID: logicalFileID})
-	}
-	if err := rows.Err(); err != nil {
+	snapshotRoots, err := g.SnapshotRoots(ctx, nil)
+	if err != nil {
 		return nil, err
 	}
 
-	reachable := make(map[int64]struct{})
-	if err := g.Traverse(ctx, start, func(n graph.NodeID) error {
-		if n.Type == graph.EntityChunk {
-			reachable[n.ID] = struct{}{}
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
+	roots := make([]graph.NodeID, 0, len(currentRoots)+len(snapshotRoots))
+	roots = append(roots, currentRoots...)
+	roots = append(roots, snapshotRoots...)
 
-	return reachable, nil
+	return g.ReachableChunksFromRoots(ctx, roots)
 }
 
 // containerHasReachableChunks reports whether any chunk in containerID is in

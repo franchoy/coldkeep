@@ -89,6 +89,107 @@ func TestGetReachableChunksFromSnapshots(t *testing.T) {
 	}
 }
 
+func TestCurrentLogicalFileRoots(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	lfARes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "a.txt", 100, "lf-root-a", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file a: %v", err)
+	}
+	lfAID, _ := lfARes.LastInsertId()
+	lfBRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "b.txt", 200, "lf-root-b", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file b: %v", err)
+	}
+	lfBID, _ := lfBRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?), (?, ?)`, "/a.txt", lfAID, "/b.txt", lfBID); err != nil {
+		t.Fatalf("insert physical_file rows: %v", err)
+	}
+
+	roots, err := svc.CurrentLogicalFileRoots(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentLogicalFileRoots: %v", err)
+	}
+	if len(roots) != 2 {
+		t.Fatalf("expected 2 roots, got %d", len(roots))
+	}
+	if roots[0].Type != EntityLogicalFile || roots[1].Type != EntityLogicalFile {
+		t.Fatalf("expected logical_file roots, got %#v", roots)
+	}
+}
+
+func TestSnapshotRootsExcludeSnapshotIDs(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, CURRENT_TIMESTAMP, ?), (?, CURRENT_TIMESTAMP, ?)`, "snap-1", "full", "snap-2", "full"); err != nil {
+		t.Fatalf("insert snapshots: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?), (?)`, "docs/a.txt", "docs/b.txt"); err != nil {
+		t.Fatalf("insert snapshot paths: %v", err)
+	}
+
+	lfARes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "a.txt", 100, "lf-snap-a", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file a: %v", err)
+	}
+	lfAID, _ := lfARes.LastInsertId()
+	lfBRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "b.txt", 100, "lf-snap-b", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file b: %v", err)
+	}
+	lfBID, _ := lfBRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?), (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`, "snap-1", "docs/a.txt", lfAID, "snap-2", "docs/b.txt", lfBID); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
+
+	roots, err := svc.SnapshotRoots(context.Background(), []string{"snap-1"})
+	if err != nil {
+		t.Fatalf("SnapshotRoots: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("expected 1 root after exclusion, got %d", len(roots))
+	}
+	if roots[0].Type != EntityLogicalFile || roots[0].ID != lfBID {
+		t.Fatalf("unexpected roots after exclusion: %#v", roots)
+	}
+}
+
+func TestReachableChunksFromRoots(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	lfRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "reachable.txt", 64, "lf-reach", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	lfID, _ := lfRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-reach", 64, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, lfID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	reachable, err := svc.ReachableChunksFromRoots(context.Background(), []NodeID{{Type: EntityLogicalFile, ID: lfID}})
+	if err != nil {
+		t.Fatalf("ReachableChunksFromRoots: %v", err)
+	}
+	if len(reachable) != 1 {
+		t.Fatalf("expected 1 reachable chunk, got %d", len(reachable))
+	}
+	if _, ok := reachable[chunkID]; !ok {
+		t.Fatalf("expected chunk %d to be reachable", chunkID)
+	}
+}
+
 func TestGetReachableChunksDeduplicatesSharedChunks(t *testing.T) {
 	dbconn := openGraphTestDB(t)
 	svc := NewService(dbconn)

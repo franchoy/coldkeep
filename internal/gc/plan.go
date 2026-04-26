@@ -75,26 +75,25 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 		return nil, fmt.Errorf("gc.BuildPlan: nil db")
 	}
 
-	// Build exclusion set for assumed-deleted snapshots.
-	excludedSnapshots := make(map[string]struct{}, len(opts.AssumeDeletedSnapshots))
-	for _, id := range opts.AssumeDeletedSnapshots {
-		excludedSnapshots[id] = struct{}{}
-	}
+	g := graph.NewService(dbconn)
 
 	// --- Mark phase ---
-	// Collect all retained logical file IDs from:
-	//   1. physical_file (current working set)
-	//   2. snapshot_file (snapshot history), excluding assumed-deleted snapshots
-
-	reachableFileIDs, err := collectRetainedLogicalFileIDs(ctx, dbconn, excludedSnapshots)
+	currentRoots, err := g.CurrentLogicalFileRoots(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: collect retained file ids: %w", err)
+		return nil, fmt.Errorf("gc.BuildPlan: current logical file roots: %w", err)
+	}
+	snapshotRoots, err := g.SnapshotRoots(ctx, opts.AssumeDeletedSnapshots)
+	if err != nil {
+		return nil, fmt.Errorf("gc.BuildPlan: snapshot roots: %w", err)
 	}
 
-	// Walk the graph from retained file roots to find all reachable chunks.
-	reachableChunkIDs, err := markReachableChunksFromFiles(ctx, dbconn, reachableFileIDs)
+	roots := make([]graph.NodeID, 0, len(currentRoots)+len(snapshotRoots))
+	roots = append(roots, currentRoots...)
+	roots = append(roots, snapshotRoots...)
+
+	reachableChunkIDs, err := g.ReachableChunksFromRoots(ctx, roots)
 	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: mark reachable chunks: %w", err)
+		return nil, fmt.Errorf("gc.BuildPlan: reachable chunks from roots: %w", err)
 	}
 
 	// --- Count phase ---
@@ -124,77 +123,6 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 	}
 
 	return plan, nil
-}
-
-// collectRetainedLogicalFileIDs returns the union of all logical_file IDs
-// referenced by physical_file and snapshot_file rows, excluding snapshots in
-// excludedSnapshots.
-func collectRetainedLogicalFileIDs(ctx context.Context, dbconn *sql.DB, excludedSnapshots map[string]struct{}) (map[int64]struct{}, error) {
-	ids := make(map[int64]struct{})
-
-	// Current working set (physical_file)
-	rows, err := dbconn.QueryContext(ctx, `SELECT DISTINCT logical_file_id FROM physical_file`)
-	if err == nil {
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				return nil, err
-			}
-			ids[id] = struct{}{}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-	}
-	// physical_file not existing is acceptable in minimal repos.
-
-	// Snapshot working set
-	snapshotRows, err := dbconn.QueryContext(ctx, `SELECT DISTINCT snapshot_id, logical_file_id FROM snapshot_file`)
-	if err != nil {
-		// snapshot_file not existing is acceptable (old schema or empty repo).
-		return ids, nil //nolint:nilerr
-	}
-	defer func() { _ = snapshotRows.Close() }()
-	for snapshotRows.Next() {
-		var snapshotID string
-		var logicalFileID int64
-		if err := snapshotRows.Scan(&snapshotID, &logicalFileID); err != nil {
-			return nil, err
-		}
-		if _, excluded := excludedSnapshots[snapshotID]; excluded {
-			continue
-		}
-		ids[logicalFileID] = struct{}{}
-	}
-	return ids, snapshotRows.Err()
-}
-
-// markReachableChunksFromFiles walks the graph from a set of logical file IDs
-// and returns the set of all chunk IDs reachable (via file_chunk links).
-func markReachableChunksFromFiles(ctx context.Context, dbconn *sql.DB, fileIDs map[int64]struct{}) (map[int64]struct{}, error) {
-	if len(fileIDs) == 0 {
-		return make(map[int64]struct{}), nil
-	}
-
-	g := graph.NewService(dbconn)
-
-	roots := make([]graph.NodeID, 0, len(fileIDs))
-	for id := range fileIDs {
-		roots = append(roots, graph.NodeID{Type: graph.EntityLogicalFile, ID: id})
-	}
-
-	reachable := make(map[int64]struct{})
-	if err := g.Traverse(ctx, roots, func(n graph.NodeID) error {
-		if n.Type == graph.EntityChunk {
-			reachable[n.ID] = struct{}{}
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	return reachable, nil
 }
 
 // planContainerImpact scans sealed non-quarantined containers and returns the
