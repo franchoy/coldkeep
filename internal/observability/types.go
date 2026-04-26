@@ -74,10 +74,17 @@ type ChunkStats struct {
 	TotalChunks      int64            `json:"total_chunks"`
 	CompletedChunks  int64            `json:"completed_chunks"`
 	CompletedBytes   int64            `json:"completed_bytes"`
-	CountsByVersion  map[string]int64 `json:"counts_by_version"`
-	BytesByVersion   map[string]int64 `json:"bytes_by_version"`
+	CountsByVersion  map[string]int64 `json:"-"`
+	BytesByVersion   map[string]int64 `json:"-"`
+	ChunkerVersions  []VersionStat    `json:"chunker_versions,omitempty"`
 	TotalReferences  int64            `json:"total_references"`
 	UniqueReferenced int64            `json:"unique_referenced"`
+}
+
+type VersionStat struct {
+	Version string `json:"version"`
+	Chunks  int64  `json:"chunks"`
+	Bytes   int64  `json:"bytes"`
 }
 
 type ContainerStats struct {

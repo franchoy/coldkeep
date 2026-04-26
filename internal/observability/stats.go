@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOp
 		CompletedBytes:   raw.CompletedChunkBytes,
 		CountsByVersion:  cloneInt64Map(raw.ChunkCountsByVersion),
 		BytesByVersion:   cloneInt64Map(raw.ChunkBytesByVersion),
+		ChunkerVersions:  buildVersionStats(raw.ChunkCountsByVersion, raw.ChunkBytesByVersion),
 		TotalReferences:  raw.TotalChunkReferences,
 		UniqueReferenced: raw.UniqueReferencedChunks,
 	}
@@ -344,4 +346,35 @@ func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) 
 	}
 
 	return stats
+}
+
+func buildVersionStats(countsByVersion, bytesByVersion map[string]int64) []VersionStat {
+	if len(countsByVersion) == 0 && len(bytesByVersion) == 0 {
+		return nil
+	}
+
+	allVersions := make(map[string]struct{}, len(countsByVersion)+len(bytesByVersion))
+	for version := range countsByVersion {
+		allVersions[version] = struct{}{}
+	}
+	for version := range bytesByVersion {
+		allVersions[version] = struct{}{}
+	}
+
+	versions := make([]string, 0, len(allVersions))
+	for version := range allVersions {
+		versions = append(versions, version)
+	}
+	sort.Strings(versions)
+
+	out := make([]VersionStat, 0, len(versions))
+	for _, version := range versions {
+		out = append(out, VersionStat{
+			Version: version,
+			Chunks:  countsByVersion[version],
+			Bytes:   bytesByVersion[version],
+		})
+	}
+
+	return out
 }

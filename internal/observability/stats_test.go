@@ -135,6 +135,27 @@ func TestBuildEfficiencyStatsHandlesZeroDenominators(t *testing.T) {
 	}
 }
 
+func TestBuildVersionStatsSortedAndComplete(t *testing.T) {
+	stats := buildVersionStats(
+		map[string]int64{"v2-fastcdc": 2, "unknown": 1},
+		map[string]int64{"v1-simple-rolling": 30, "v2-fastcdc": 20, "unknown": 9},
+	)
+
+	if len(stats) != 3 {
+		t.Fatalf("expected 3 version stats, got %d", len(stats))
+	}
+
+	if stats[0].Version != "unknown" || stats[0].Chunks != 1 || stats[0].Bytes != 9 {
+		t.Fatalf("unexpected first version stat: %+v", stats[0])
+	}
+	if stats[1].Version != "v1-simple-rolling" || stats[1].Chunks != 0 || stats[1].Bytes != 30 {
+		t.Fatalf("unexpected second version stat: %+v", stats[1])
+	}
+	if stats[2].Version != "v2-fastcdc" || stats[2].Chunks != 2 || stats[2].Bytes != 20 {
+		t.Fatalf("unexpected third version stat: %+v", stats[2])
+	}
+}
+
 func TestStatsReturnsErrorWhenDBIsMissing(t *testing.T) {
 	svc := newServiceForTest(nil, func() time.Time { return time.Now().UTC() })
 

@@ -5205,6 +5205,11 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 					"v2-fastcdc":        20,
 					"unknown":           9,
 				},
+				ChunkerVersions: []observability.VersionStat{
+					{Version: "unknown", Chunks: 1, Bytes: 9},
+					{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
+					{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
+				},
 			},
 			Containers: observability.ContainerStats{Records: records},
 			Retention: observability.RetentionStats{
@@ -5242,14 +5247,42 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing chunks object in payload: %v", data)
 	}
-	chunkCounts, ok := chunksData["counts_by_version"].(map[string]any)
+	chunkerVersions, ok := chunksData["chunker_versions"].([]any)
 	if !ok {
-		t.Fatalf("missing chunks.counts_by_version object in payload: %v", chunksData)
+		t.Fatalf("missing chunks.chunker_versions array in payload: %v", chunksData)
 	}
-	chunkBytes, ok := chunksData["bytes_by_version"].(map[string]any)
+	if len(chunkerVersions) != 3 {
+		t.Fatalf("expected 3 chunker_versions entries, got %d", len(chunkerVersions))
+	}
+
+	entry0, ok := chunkerVersions[0].(map[string]any)
 	if !ok {
-		t.Fatalf("missing chunks.bytes_by_version object in payload: %v", chunksData)
+		t.Fatalf("expected chunker_versions[0] object, got %T", chunkerVersions[0])
 	}
+	entry1, ok := chunkerVersions[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected chunker_versions[1] object, got %T", chunkerVersions[1])
+	}
+	entry2, ok := chunkerVersions[2].(map[string]any)
+	if !ok {
+		t.Fatalf("expected chunker_versions[2] object, got %T", chunkerVersions[2])
+	}
+
+	if got, _ := entry0["version"].(string); got != "unknown" {
+		t.Fatalf("expected chunker_versions[0].version=unknown, got %q", got)
+	}
+	assertJSONNumber(t, entry0, "chunks", 1)
+	assertJSONNumber(t, entry0, "bytes", 9)
+	if got, _ := entry1["version"].(string); got != "v1-simple-rolling" {
+		t.Fatalf("expected chunker_versions[1].version=v1-simple-rolling, got %q", got)
+	}
+	assertJSONNumber(t, entry1, "chunks", 3)
+	assertJSONNumber(t, entry1, "bytes", 30)
+	if got, _ := entry2["version"].(string); got != "v2-fastcdc" {
+		t.Fatalf("expected chunker_versions[2].version=v2-fastcdc, got %q", got)
+	}
+	assertJSONNumber(t, entry2, "chunks", 2)
+	assertJSONNumber(t, entry2, "bytes", 20)
 	repositoryData, ok := data["repository"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing repository object in payload: %v", data)
@@ -5266,12 +5299,6 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if raw, ok := logicalData["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
 		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", logicalData["estimated_dedup_ratio_pct"], data)
 	}
-	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
-	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
-	assertJSONNumber(t, chunkCounts, "unknown", 1)
-	assertJSONNumber(t, chunkBytes, "v1-simple-rolling", 30)
-	assertJSONNumber(t, chunkBytes, "v2-fastcdc", 20)
-	assertJSONNumber(t, chunkBytes, "unknown", 9)
 	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
 	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
 	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
