@@ -169,14 +169,28 @@ type SimulationResult struct {
 
 // GCSimulationResult carries the structured output of a GC dry-run plan.
 type GCSimulationResult struct {
-	TotalChunks                int64                       `json:"total_chunks"`
-	ReachableChunks            int64                       `json:"reachable_chunks"`
-	UnreachableChunks          int64                       `json:"unreachable_chunks"`
-	LogicallyReclaimableBytes  int64                       `json:"logically_reclaimable_bytes"`
-	PhysicallyReclaimableBytes int64                       `json:"physically_reclaimable_bytes"`
-	FullyReclaimableContainers int64                       `json:"fully_reclaimable_containers"`
-	PartiallyDeadContainers    int64                       `json:"partially_dead_containers"`
-	AffectedContainers         []ContainerSimulationImpact `json:"affected_containers"`
+	GeneratedAtUTC time.Time `json:"generated_at_utc"`
+	Kind           string    `json:"kind"`
+	Exact          bool      `json:"exact"`
+	Mutated        bool      `json:"mutated"`
+
+	Assumptions GCSimulationAssumptions     `json:"assumptions"`
+	Summary     GCSimulationSummary         `json:"summary"`
+	Containers  []ContainerSimulationImpact `json:"containers,omitempty"`
+	Warnings    []ObservationWarning        `json:"warnings,omitempty"`
+}
+
+type GCSimulationAssumptions struct {
+	DeletedSnapshots []string `json:"deleted_snapshots,omitempty"`
+}
+
+type GCSimulationSummary struct {
+	ReachableChunks            int64 `json:"reachable_chunks"`
+	UnreachableChunks          int64 `json:"unreachable_chunks"`
+	LogicallyReclaimableBytes  int64 `json:"logically_reclaimable_bytes"`
+	PhysicallyReclaimableBytes int64 `json:"physically_reclaimable_bytes"`
+	FullyReclaimableContainers int64 `json:"fully_reclaimable_containers"`
+	PartiallyDeadContainers    int64 `json:"partially_dead_containers"`
 }
 
 // ContainerSimulationImpact is the per-container summary within a GC simulation.

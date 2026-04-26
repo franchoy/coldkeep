@@ -46,26 +46,66 @@ func TestSimulateGCEmptyRepo(t *testing.T) {
 	if result == nil || result.GC == nil {
 		t.Fatal("expected non-nil result with GC field")
 	}
-	if result.GC.TotalChunks != 0 {
-		t.Errorf("TotalChunks = %d, want 0", result.GC.TotalChunks)
+	if result.GC.Kind != SimulationKindGC {
+		t.Errorf("Kind = %q, want %q", result.GC.Kind, SimulationKindGC)
 	}
-	if result.GC.UnreachableChunks != 0 {
-		t.Errorf("UnreachableChunks = %d, want 0", result.GC.UnreachableChunks)
+	if !result.GC.Exact {
+		t.Error("expected GC.Exact=true")
 	}
-	if result.GC.LogicallyReclaimableBytes != 0 {
-		t.Errorf("LogicallyReclaimableBytes = %d, want 0", result.GC.LogicallyReclaimableBytes)
+	if result.GC.Mutated {
+		t.Error("expected GC.Mutated=false")
 	}
-	if result.GC.PhysicallyReclaimableBytes != 0 {
-		t.Errorf("PhysicallyReclaimableBytes = %d, want 0", result.GC.PhysicallyReclaimableBytes)
+	if len(result.GC.Assumptions.DeletedSnapshots) != 0 {
+		t.Errorf("DeletedSnapshots = %v, want empty", result.GC.Assumptions.DeletedSnapshots)
 	}
-	if len(result.GC.AffectedContainers) != 0 {
-		t.Errorf("AffectedContainers = %d, want 0", len(result.GC.AffectedContainers))
+	if result.GC.Summary.ReachableChunks != 0 {
+		t.Errorf("ReachableChunks = %d, want 0", result.GC.Summary.ReachableChunks)
+	}
+	if result.GC.Summary.UnreachableChunks != 0 {
+		t.Errorf("UnreachableChunks = %d, want 0", result.GC.Summary.UnreachableChunks)
+	}
+	if result.GC.Summary.LogicallyReclaimableBytes != 0 {
+		t.Errorf("LogicallyReclaimableBytes = %d, want 0", result.GC.Summary.LogicallyReclaimableBytes)
+	}
+	if result.GC.Summary.PhysicallyReclaimableBytes != 0 {
+		t.Errorf("PhysicallyReclaimableBytes = %d, want 0", result.GC.Summary.PhysicallyReclaimableBytes)
+	}
+	if len(result.GC.Containers) != 0 {
+		t.Errorf("Containers = %d, want 0", len(result.GC.Containers))
 	}
 	if !result.Exact {
 		t.Error("expected Exact=true")
 	}
 	if result.Mutated {
 		t.Error("expected Mutated=false")
+	}
+}
+
+func TestSimulateGCAssumptionsIncludeDeletedSnapshots(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{
+		Kind:                   SimulationKindGC,
+		AssumeDeletedSnapshots: []string{"s1", "s2"},
+	})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if result == nil || result.GC == nil {
+		t.Fatal("expected non-nil result with GC field")
+	}
+	if len(result.GC.Assumptions.DeletedSnapshots) != 2 {
+		t.Fatalf("DeletedSnapshots length = %d, want 2", len(result.GC.Assumptions.DeletedSnapshots))
+	}
+	if result.GC.Assumptions.DeletedSnapshots[0] != "s1" || result.GC.Assumptions.DeletedSnapshots[1] != "s2" {
+		t.Fatalf("DeletedSnapshots = %v, want [s1 s2]", result.GC.Assumptions.DeletedSnapshots)
+	}
+	if !result.GC.Exact {
+		t.Error("expected GC.Exact=true")
+	}
+	if result.GC.Mutated {
+		t.Error("expected GC.Mutated=false")
 	}
 }
 

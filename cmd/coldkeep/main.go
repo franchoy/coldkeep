@@ -2874,22 +2874,25 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 	fmt.Println("Simulate GC (dry run — no changes applied)")
 	fmt.Println()
 	if r.GC != nil {
-		fmt.Printf("  Total chunks:                 %d\n", r.GC.TotalChunks)
-		fmt.Printf("  Reachable chunks:             %d\n", r.GC.ReachableChunks)
-		fmt.Printf("  Unreachable chunks:           %d\n", r.GC.UnreachableChunks)
-		fmt.Printf("  Logically reclaimable bytes:  %d\n", r.GC.LogicallyReclaimableBytes)
-		fmt.Printf("  Physically reclaimable bytes: %d\n", r.GC.PhysicallyReclaimableBytes)
-		fmt.Printf("  Fully reclaimable containers: %d\n", r.GC.FullyReclaimableContainers)
-		fmt.Printf("  Partially dead containers:    %d\n", r.GC.PartiallyDeadContainers)
-		fmt.Printf("  Affected containers:          %d\n", len(r.GC.AffectedContainers))
+		fmt.Printf("  Reachable chunks:             %d\n", r.GC.Summary.ReachableChunks)
+		fmt.Printf("  Unreachable chunks:           %d\n", r.GC.Summary.UnreachableChunks)
+		fmt.Printf("  Logically reclaimable bytes:  %d\n", r.GC.Summary.LogicallyReclaimableBytes)
+		fmt.Printf("  Physically reclaimable bytes: %d\n", r.GC.Summary.PhysicallyReclaimableBytes)
+		fmt.Printf("  Fully reclaimable containers: %d\n", r.GC.Summary.FullyReclaimableContainers)
+		fmt.Printf("  Partially dead containers:    %d\n", r.GC.Summary.PartiallyDeadContainers)
+		fmt.Printf("  Affected containers:          %d\n", len(r.GC.Containers))
 	}
-	if len(deleteSnapshots) > 0 {
-		fmt.Printf("  Assumed deleted:     %s\n", strings.Join(deleteSnapshots, ", "))
+	assumedDeleted := deleteSnapshots
+	if r.GC != nil && len(r.GC.Assumptions.DeletedSnapshots) > 0 {
+		assumedDeleted = r.GC.Assumptions.DeletedSnapshots
 	}
-	if len(r.GC.AffectedContainers) > 0 {
+	if len(assumedDeleted) > 0 {
+		fmt.Printf("  Assumed deleted:     %s\n", strings.Join(assumedDeleted, ", "))
+	}
+	if r.GC != nil && len(r.GC.Containers) > 0 {
 		fmt.Println()
 		fmt.Println("  Containers with reclaimable chunks:")
-		for _, c := range r.GC.AffectedContainers {
+		for _, c := range r.GC.Containers {
 			state := "[requires compaction]"
 			if c.FullyReclaimable {
 				state = "[fully reclaimable now]"

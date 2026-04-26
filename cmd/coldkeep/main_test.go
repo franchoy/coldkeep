@@ -6419,3 +6419,197 @@ func TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata(t *testi
 		t.Fatalf("expected recommended_action to mention orphan physical_file handling, got first=%v", first)
 	}
 }
+
+func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 26, 10, 0, 0, 0, time.UTC),
+			Kind:           observability.SimulationKindGC,
+			Exact:          true,
+			Mutated:        false,
+			GC: &observability.GCSimulationResult{
+				GeneratedAtUTC: time.Date(2026, time.April, 26, 10, 0, 0, 0, time.UTC),
+				Kind:           observability.SimulationKindGC,
+				Exact:          true,
+				Mutated:        false,
+				Assumptions: observability.GCSimulationAssumptions{
+					DeletedSnapshots: opts.AssumeDeletedSnapshots,
+				},
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            10,
+					UnreachableChunks:          2,
+					LogicallyReclaimableBytes:  200,
+					PhysicallyReclaimableBytes: 100,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    1,
+				},
+				Containers: []observability.ContainerSimulationImpact{{
+					ContainerID:        7,
+					Filename:           "c007.bin",
+					TotalBytes:         100,
+					LiveBytesAfterGC:   0,
+					ReclaimableBytes:   100,
+					ReclaimableChunks:  1,
+					TotalChunks:        1,
+					FullyReclaimable:   true,
+					RequiresCompaction: false,
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags: map[string][]string{
+				"delete-snapshot": {"s1"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object: %v", payload)
+	}
+	gcNode, ok := data["gc"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc object: %v", data)
+	}
+	if got, _ := gcNode["kind"].(string); got != "gc" {
+		t.Fatalf("expected gc.kind=gc, got %v", gcNode["kind"])
+	}
+	if got, _ := gcNode["exact"].(bool); !got {
+		t.Fatalf("expected gc.exact=true, got %v", gcNode["exact"])
+	}
+	if got, _ := gcNode["mutated"].(bool); got {
+		t.Fatalf("expected gc.mutated=false, got %v", gcNode["mutated"])
+	}
+	assumptions, ok := gcNode["assumptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc.assumptions object: %v", gcNode)
+	}
+	deleted, ok := assumptions["deleted_snapshots"].([]any)
+	if !ok || len(deleted) != 1 || deleted[0] != "s1" {
+		t.Fatalf("unexpected deleted_snapshots: %v", assumptions["deleted_snapshots"])
+	}
+	summary, ok := gcNode["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc.summary object: %v", gcNode)
+	}
+	assertJSONNumber(t, summary, "reachable_chunks", 10)
+	assertJSONNumber(t, summary, "unreachable_chunks", 2)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
+	assertJSONNumber(t, summary, "fully_reclaimable_containers", 1)
+	assertJSONNumber(t, summary, "partially_dead_containers", 1)
+}
+
+func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            3,
+					UnreachableChunks:          2,
+					LogicallyReclaimableBytes:  150,
+					PhysicallyReclaimableBytes: 100,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    1,
+				},
+				Containers: []observability.ContainerSimulationImpact{
+					{ContainerID: 1, Filename: "full.bin", ReclaimableBytes: 100, LiveBytesAfterGC: 0, ReclaimableChunks: 2, TotalChunks: 2, FullyReclaimable: true},
+					{ContainerID: 2, Filename: "partial.bin", ReclaimableBytes: 50, LiveBytesAfterGC: 50, ReclaimableChunks: 1, TotalChunks: 2, FullyReclaimable: false, RequiresCompaction: true},
+				},
+				Assumptions: observability.GCSimulationAssumptions{DeletedSnapshots: opts.AssumeDeletedSnapshots},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags: map[string][]string{
+				"delete-snapshot": {"s1", "s2"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand text returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Logically reclaimable bytes:  150") {
+		t.Fatalf("expected logical reclaimability line, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Physically reclaimable bytes: 100") {
+		t.Fatalf("expected physical reclaimability line, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Assumed deleted:     s1, s2") {
+		t.Fatalf("expected assumed deleted line, got:\n%s", output)
+	}
+	if !strings.Contains(output, "[fully reclaimable now]") {
+		t.Fatalf("expected fully reclaimable container marker, got:\n%s", output)
+	}
+	if !strings.Contains(output, "[requires compaction]") {
+		t.Fatalf("expected requires compaction marker, got:\n%s", output)
+	}
+}
+
+func TestRunSimulateGCCommandDeleteSnapshotFlagPassThrough(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	var captured observability.SimulationOptions
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		captured = opts
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+			},
+		}, nil
+	}
+
+	err := runSimulateGCCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"gc"},
+		flags: map[string][]string{
+			"delete-snapshot": {"s3", "s4"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSimulateGCCommand returned error: %v", err)
+	}
+
+	if captured.Kind != observability.SimulationKindGC {
+		t.Fatalf("captured.Kind = %q, want %q", captured.Kind, observability.SimulationKindGC)
+	}
+	if len(captured.AssumeDeletedSnapshots) != 2 || captured.AssumeDeletedSnapshots[0] != "s3" || captured.AssumeDeletedSnapshots[1] != "s4" {
+		t.Fatalf("captured.AssumeDeletedSnapshots = %v, want [s3 s4]", captured.AssumeDeletedSnapshots)
+	}
+}

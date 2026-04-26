@@ -48,9 +48,11 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 			RequiresCompaction: c.RequiresCompaction,
 		}
 	}
+	generatedAt := s.now()
+	deletedSnapshots := append([]string(nil), opts.AssumeDeletedSnapshots...)
 
 	result := &SimulationResult{
-		GeneratedAtUTC: s.now(),
+		GeneratedAtUTC: generatedAt,
 		Kind:           SimulationKindGC,
 		Exact:          true,
 		Mutated:        false,
@@ -65,14 +67,22 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 			"affected_containers":          len(plan.AffectedContainers),
 		},
 		GC: &GCSimulationResult{
-			TotalChunks:                plan.TotalChunks,
-			ReachableChunks:            plan.ReachableChunks,
-			UnreachableChunks:          plan.Summary.UnreachableChunks,
-			LogicallyReclaimableBytes:  plan.Summary.LogicallyReclaimableBytes,
-			PhysicallyReclaimableBytes: plan.Summary.PhysicallyReclaimableBytes,
-			FullyReclaimableContainers: plan.Summary.FullyReclaimableContainers,
-			PartiallyDeadContainers:    plan.Summary.PartiallyDeadContainers,
-			AffectedContainers:         impacts,
+			GeneratedAtUTC: generatedAt,
+			Kind:           SimulationKindGC,
+			Exact:          true,
+			Mutated:        false,
+			Assumptions: GCSimulationAssumptions{
+				DeletedSnapshots: deletedSnapshots,
+			},
+			Summary: GCSimulationSummary{
+				ReachableChunks:            plan.ReachableChunks,
+				UnreachableChunks:          plan.Summary.UnreachableChunks,
+				LogicallyReclaimableBytes:  plan.Summary.LogicallyReclaimableBytes,
+				PhysicallyReclaimableBytes: plan.Summary.PhysicallyReclaimableBytes,
+				FullyReclaimableContainers: plan.Summary.FullyReclaimableContainers,
+				PartiallyDeadContainers:    plan.Summary.PartiallyDeadContainers,
+			},
+			Containers: impacts,
 		},
 	}
 
