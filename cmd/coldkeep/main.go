@@ -1784,18 +1784,10 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	}
 
 	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "stats",
-			"data":    r,
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
+		return observability.RenderStatsJSON(os.Stdout, r)
 	}
 
-	printStatsReport(mapObservabilityStatsToMaintenance(r))
-	return nil
+	return observability.RenderStatsHuman(os.Stdout, r)
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {

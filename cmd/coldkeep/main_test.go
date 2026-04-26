@@ -5235,10 +5235,7 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
 	}
-	data, ok := payload["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing data object in payload: %v", payload)
-	}
+	data := payload
 	retentionData, ok := data["retention"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing retention object in payload: %v", data)
