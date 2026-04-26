@@ -1821,27 +1821,26 @@ func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
 }
 
 func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalInspect := inspectLogicalFilePhase
+	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		inspectLogicalFilePhase = originalInspect
+		runObservabilityInspectPhase = originalInspect
 	})
 
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityFile {
+			t.Fatalf("unexpected entity: %s", entity)
 		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
-		return storage.LogicalFileInspectInfo{
-			FileID:            fileID,
-			ChunkerVersion:    chunk.VersionV2FastCDC,
-			ChunkCount:        142,
-			AvgChunkSizeBytes: 58 * 1024,
+		if id != "42" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   "42",
+			Summary: map[string]any{
+				"chunker_version":      "v2-fastcdc",
+				"chunk_count":          int64(142),
+				"avg_chunk_size_bytes": 58 * 1024.0,
+			},
 		}, nil
 	}
 
@@ -1868,27 +1867,35 @@ func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 }
 
 func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalInspect := inspectLogicalFilePhase
+	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		inspectLogicalFilePhase = originalInspect
+		runObservabilityInspectPhase = originalInspect
 	})
 
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityFile {
+			t.Fatalf("unexpected entity: %s", entity)
 		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
-		return storage.LogicalFileInspectInfo{
-			FileID:            fileID,
-			ChunkerVersion:    chunk.VersionV2FastCDC,
-			ChunkCount:        142,
-			AvgChunkSizeBytes: 58 * 1024,
+		if id != "42" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   "123",
+			Summary: map[string]any{
+				"size_bytes":           int64(4096),
+				"chunker_version":      "v2-fastcdc",
+				"chunk_count":          int64(142),
+				"avg_chunk_size_bytes": 58 * 1024.0,
+			},
+			Relations: []observability.Relation{
+				{
+					Type:       "referenced_by",
+					Direction:  observability.RelationIncoming,
+					TargetType: observability.EntityLogicalFile,
+					TargetID:   "45",
+				},
+			},
 		}, nil
 	}
 
@@ -1909,12 +1916,40 @@ func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
 		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
 	}
-	data := payload["data"].(map[string]any)
-	if got, _ := data["chunker"].(string); got != "v2-fastcdc" {
-		t.Fatalf("expected chunker=v2-fastcdc, got %v", data["chunker"])
+	if got, _ := payload["entity_type"].(string); got != "chunk" {
+		t.Fatalf("expected entity_type=chunk, got %v", payload["entity_type"])
 	}
-	assertJSONNumber(t, data, "chunks", 142)
-	assertJSONNumber(t, data, "avg_chunk_size_kb", 58)
+	if got, _ := payload["entity_id"].(string); got != "123" {
+		t.Fatalf("expected entity_id=123, got %v", payload["entity_id"])
+	}
+	summary, ok := payload["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary object, got %T", payload["summary"])
+	}
+	if got, _ := summary["chunker_version"].(string); got != "v2-fastcdc" {
+		t.Fatalf("expected chunker_version=v2-fastcdc, got %v", summary["chunker_version"])
+	}
+	assertJSONNumber(t, summary, "size_bytes", 4096)
+	relations, ok := payload["relations"].([]any)
+	if !ok || len(relations) != 1 {
+		t.Fatalf("expected 1 relation, got %T (%v)", payload["relations"], payload["relations"])
+	}
+	rel, ok := relations[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected relation object, got %T", relations[0])
+	}
+	if got, _ := rel["type"].(string); got != "referenced_by" {
+		t.Fatalf("expected relation type referenced_by, got %v", rel["type"])
+	}
+	if got, _ := rel["direction"].(string); got != "incoming" {
+		t.Fatalf("expected relation direction incoming, got %v", rel["direction"])
+	}
+	if got, _ := rel["target_type"].(string); got != "logical_file" {
+		t.Fatalf("expected relation target_type logical_file, got %v", rel["target_type"])
+	}
+	if got, _ := rel["target_id"].(string); got != "45" {
+		t.Fatalf("expected relation target_id 45, got %v", rel["target_id"])
+	}
 }
 
 func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {

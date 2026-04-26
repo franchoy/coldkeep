@@ -167,6 +167,25 @@ var runStatsPhase = func() (*maintenance.StatsResult, error) {
 
 	return mapObservabilityStatsToMaintenance(r), nil
 }
+var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	svc, err := newObservabilityServicePhase(sgctx.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := svc.Inspect(context.Background(), entity, id, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
 var inspectLogicalFilePhase = func(dbconn *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
 	svc, err := newObservabilityServicePhase(dbconn)
 	if err != nil {
@@ -1805,42 +1824,35 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return usageErrorf("Invalid fileID: %s", parsed.positionals[1])
 	}
 
-	sgctx, err := loadDefaultStorageContextPhase()
+	r, err := runObservabilityInspectPhase(observability.EntityFile, strconv.FormatInt(fileID, 10), observability.InspectOptions{})
 	if err != nil {
-		return err
-	}
-	defer func() { _ = sgctx.DB.Close() }()
-
-	info, err := inspectLogicalFilePhase(sgctx.DB, fileID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("file ID %d not found", fileID)
 		}
 		return err
 	}
 
-	avgChunkSizeKB := int64(math.Round(info.AvgChunkSizeBytes / 1024.0))
+	chunkerVersion, err := toStringFromAny(r.Summary["chunker_version"])
+	if err != nil {
+		return fmt.Errorf("inspect logical file %d: parse chunker_version: %w", fileID, err)
+	}
+	chunkCount, err := toInt64FromAny(r.Summary["chunk_count"])
+	if err != nil {
+		return fmt.Errorf("inspect logical file %d: parse chunk_count: %w", fileID, err)
+	}
+	avgChunkSizeBytes, err := toFloat64FromAny(r.Summary["avg_chunk_size_bytes"])
+	if err != nil {
+		return fmt.Errorf("inspect logical file %d: parse avg_chunk_size_bytes: %w", fileID, err)
+	}
+	avgChunkSizeKB := int64(math.Round(avgChunkSizeBytes / 1024.0))
 
 	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "inspect",
-			"data": map[string]any{
-				"target":               "file",
-				"file_id":              info.FileID,
-				"chunker":              string(info.ChunkerVersion),
-				"chunks":               info.ChunkCount,
-				"avg_chunk_size_bytes": info.AvgChunkSizeBytes,
-				"avg_chunk_size_kb":    avgChunkSizeKB,
-			},
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
+		enc := json.NewEncoder(os.Stdout)
+		return enc.Encode(r)
 	}
 
-	fmt.Printf("Chunker: %s\n", info.ChunkerVersion)
-	fmt.Printf("Chunks: %d\n", info.ChunkCount)
+	fmt.Printf("Chunker: %s\n", chunkerVersion)
+	fmt.Printf("Chunks: %d\n", chunkCount)
 	fmt.Printf("Avg chunk size: %dKB\n", avgChunkSizeKB)
 
 	return nil
