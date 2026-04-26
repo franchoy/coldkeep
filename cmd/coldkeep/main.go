@@ -1775,7 +1775,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
-		return usageErrorf("Usage: coldkeep stats")
+		return usageErrorf("Usage: coldkeep stats [--output <human|text|json>] [--json] [--containers]")
 	}
 
 	includeContainers := parsed.hasFlag("containers")
@@ -4305,7 +4305,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  stats", "Show storage statistics"},
+		{"  stats [--output <human|text|json>] [--json] [--containers]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
 		{"  inspect file <fileID> [--output <text|json>]", "Inspect one logical file with chunker and chunking summary"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
@@ -4435,6 +4435,8 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --regex \"\\.log$\"")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
+	fmt.Println("  coldkeep stats --json")
+	fmt.Println("  coldkeep stats --containers")
 	fmt.Println("  coldkeep simulate store myfile.bin")
 	fmt.Println("  coldkeep simulate store-folder --codec aes-gcm ./samples")
 }
