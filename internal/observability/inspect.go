@@ -170,11 +170,19 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 	}
 
 	if opts.Relations {
-		relations, err := s.getSnapshotOutgoingRelations(ctx, snapshotID, opts.Limit)
+		relations, err := s.getSnapshotRelations(ctx, snapshotID, opts)
 		if err != nil {
 			return nil, err
 		}
 		result.Relations = append(result.Relations, relations...)
+		if opts.Deep {
+			if _, parseErr := strconv.ParseInt(snapshotID, 10, 64); parseErr != nil {
+				result.Warnings = append(result.Warnings, ObservationWarning{
+					Code:    "inspect.deep.snapshot_id_non_numeric",
+					Message: fmt.Sprintf("deep traversal requires numeric snapshot id; using direct relations only for snapshot %q", snapshotID),
+				})
+			}
+		}
 	}
 
 	return result, nil
@@ -213,7 +221,7 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, opts Inspec
 	}
 
 	if opts.Relations {
-		relations, err := s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit)
+		relations, err := s.getLogicalFileRelations(ctx, fileID, opts)
 		if err != nil {
 			return nil, fmt.Errorf("inspect logical file %d forward relations: %w", fileID, err)
 		}
@@ -282,7 +290,7 @@ func (s *Service) inspectChunk(ctx context.Context, id string, opts InspectOptio
 	}
 
 	if opts.Relations {
-		relations, err := s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit)
+		relations, err := s.getChunkRelations(ctx, chunkID, opts)
 		if err != nil {
 			return nil, fmt.Errorf("inspect chunk %d forward relations: %w", chunkID, err)
 		}
@@ -434,6 +442,90 @@ func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID s
 	}
 
 	return out, nil
+}
+
+func (s *Service) getSnapshotRelations(ctx context.Context, snapshotID string, opts InspectOptions) ([]Relation, error) {
+	graphID, err := strconv.ParseInt(snapshotID, 10, 64)
+	if opts.Deep && err == nil {
+		return s.expandDeep(ctx, graph.NodeID{Type: graph.EntitySnapshot, ID: graphID}, opts)
+	}
+	return s.getSnapshotOutgoingRelations(ctx, snapshotID, opts.Limit)
+}
+
+func (s *Service) getLogicalFileRelations(ctx context.Context, fileID int64, opts InspectOptions) ([]Relation, error) {
+	if opts.Deep {
+		return s.expandDeep(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts)
+	}
+	return s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit)
+}
+
+func (s *Service) getChunkRelations(ctx context.Context, chunkID int64, opts InspectOptions) ([]Relation, error) {
+	if opts.Deep {
+		return s.expandDeep(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts)
+	}
+	return s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit)
+}
+
+func (s *Service) expandDeep(ctx context.Context, root graph.NodeID, opts InspectOptions) ([]Relation, error) {
+	if s == nil || s.graph == nil {
+		return nil, nil
+	}
+	const maxDepth = 3
+	if opts.Limit <= 0 {
+		return nil, nil
+	}
+
+	type queuedNode struct {
+		node  graph.NodeID
+		depth int
+	}
+
+	queue := []queuedNode{{node: root, depth: 0}}
+	seen := map[graph.NodeID]struct{}{root: {}}
+	relations := make([]Relation, 0, opts.Limit)
+
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		current := queue[0]
+		queue = queue[1:]
+		if current.depth >= maxDepth {
+			continue
+		}
+
+		neighbors, err := s.graph.GetOutgoing(ctx, current.node)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, neighbor := range neighbors {
+			if _, exists := seen[neighbor]; exists {
+				continue
+			}
+			if len(relations) >= opts.Limit {
+				return relations, nil
+			}
+
+			seen[neighbor] = struct{}{}
+			targetType, ok := mapGraphEntityType(neighbor.Type)
+			if !ok {
+				continue
+			}
+			depth := current.depth + 1
+			relations = append(relations, Relation{
+				Type:       relationTypeReferences,
+				Direction:  RelationOutgoing,
+				TargetType: targetType,
+				TargetID:   strconv.FormatInt(neighbor.ID, 10),
+				Metadata:   map[string]any{"depth": depth},
+			})
+			queue = append(queue, queuedNode{node: neighbor, depth: depth})
+		}
+	}
+
+	return relations, nil
 }
 
 func (s *Service) getGraphOutgoingRelations(ctx context.Context, node graph.NodeID, limit int) ([]Relation, error) {

@@ -475,6 +475,138 @@ func TestInspectRepositoryIncludesAggregateAndSnapshotRelations(t *testing.T) {
 	}
 }
 
+func TestInspectSnapshotDeepTraversalExpandsRecursively(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"deep.txt", 50, "h-deep", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-deep", 50, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_deep.bin", 256, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 50, 50, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "1", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "deep.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "1", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntitySnapshot, "1", InspectOptions{Deep: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("Inspect snapshot deep: %v", err)
+	}
+	if len(result.Relations) != 3 {
+		t.Fatalf("expected 3 deep relations, got %d", len(result.Relations))
+	}
+
+	depthByTarget := map[string]int{}
+	for _, rel := range result.Relations {
+		if rel.Type != "references" || rel.Direction != RelationOutgoing {
+			t.Fatalf("expected references/outgoing relation, got %+v", rel)
+		}
+		depthRaw, ok := rel.Metadata["depth"]
+		if !ok {
+			t.Fatalf("expected depth metadata, got %+v", rel)
+		}
+		depth, ok := depthRaw.(int)
+		if !ok {
+			t.Fatalf("expected depth metadata to be int, got %T", depthRaw)
+		}
+		depthByTarget[string(rel.TargetType)+":"+rel.TargetID] = depth
+	}
+
+	if depthByTarget[string(EntityLogicalFile)+":"+strconv.FormatInt(fileID, 10)] != 1 {
+		t.Fatalf("expected logical file at depth 1, got %+v", depthByTarget)
+	}
+	if depthByTarget[string(EntityChunk)+":"+strconv.FormatInt(chunkID, 10)] != 2 {
+		t.Fatalf("expected chunk at depth 2, got %+v", depthByTarget)
+	}
+	if depthByTarget[string(EntityContainer)+":"+strconv.FormatInt(containerID, 10)] != 3 {
+		t.Fatalf("expected container at depth 3, got %+v", depthByTarget)
+	}
+}
+
+func TestInspectDeepTraversalRespectsLimit(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"deep-limit.txt", 60, "h-limit", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-limit", 60, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_limit.bin", 256, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 60, 60, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "2", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "deep-limit.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "2", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntitySnapshot, "2", InspectOptions{Deep: true, Limit: 2})
+	if err != nil {
+		t.Fatalf("Inspect snapshot deep limited: %v", err)
+	}
+	if len(result.Relations) != 2 {
+		t.Fatalf("expected exactly 2 deep relations due limit, got %d", len(result.Relations))
+	}
+}
+
 func TestInspectMissingFileReturnsEntityNotFound(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 	svc := newServiceForTest(dbconn, nil)
