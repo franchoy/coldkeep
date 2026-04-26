@@ -190,6 +190,43 @@ func TestReachableChunksFromRoots(t *testing.T) {
 	}
 }
 
+func TestGCRootsMergesCurrentAndSnapshotRoots(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	lfCurrentRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "current.txt", 64, "lf-gc-current", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert current logical_file: %v", err)
+	}
+	lfCurrentID, _ := lfCurrentRes.LastInsertId()
+	lfSnapshotRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "snapshot.txt", 64, "lf-gc-snap", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert snapshot logical_file: %v", err)
+	}
+	lfSnapshotID, _ := lfSnapshotRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current.txt", lfCurrentID); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, CURRENT_TIMESTAMP, ?)`, "snap-1", "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "/snapshot.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`, "snap-1", "/snapshot.txt", lfSnapshotID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	roots, err := svc.GCRoots(context.Background(), GCRootOptions{})
+	if err != nil {
+		t.Fatalf("GCRoots: %v", err)
+	}
+	if len(roots) != 2 {
+		t.Fatalf("expected 2 merged roots, got %d", len(roots))
+	}
+}
+
 func TestGetReachableChunksDeduplicatesSharedChunks(t *testing.T) {
 	dbconn := openGraphTestDB(t)
 	svc := NewService(dbconn)

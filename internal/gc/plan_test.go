@@ -193,6 +193,53 @@ func TestBuildPlanPinnedChunkNotReclaimable(t *testing.T) {
 	}
 }
 
+func TestBuildPlanIgnoresNonCompletedChunks(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	// Completed unreachable chunk should be counted/reclaimable.
+	completedChunkID := insertChunk(t, dbconn, "completed-unreachable", 128, 0, 0)
+	c1 := insertContainer(t, dbconn, "c-noncompleted-a.bin", 128)
+	insertBlock(t, dbconn, completedChunkID, c1, 128)
+
+	// PROCESSING and ABORTED chunks should not contribute to total/reclaimable.
+	processingRes, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'PROCESSING', ?, ?, 'v2-fastcdc')`,
+		"processing-chunk", 64, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("insert processing chunk: %v", err)
+	}
+	processingChunkID, _ := processingRes.LastInsertId()
+	c2 := insertContainer(t, dbconn, "c-noncompleted-b.bin", 64)
+	insertBlock(t, dbconn, processingChunkID, c2, 64)
+
+	abortedRes, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES (?, ?, 'ABORTED', ?, ?, 'v2-fastcdc')`,
+		"aborted-chunk", 64, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("insert aborted chunk: %v", err)
+	}
+	abortedChunkID, _ := abortedRes.LastInsertId()
+	c3 := insertContainer(t, dbconn, "c-noncompleted-c.bin", 64)
+	insertBlock(t, dbconn, abortedChunkID, c3, 64)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	if plan.TotalChunks != 1 {
+		t.Errorf("TotalChunks = %d, want 1 (only COMPLETED)", plan.TotalChunks)
+	}
+	if plan.UnreachableChunks != 1 {
+		t.Errorf("UnreachableChunks = %d, want 1", plan.UnreachableChunks)
+	}
+	if plan.ReclaimableBytes != 128 {
+		t.Errorf("ReclaimableBytes = %d, want 128", plan.ReclaimableBytes)
+	}
+}
+
 func TestBuildPlanAssumeDeletedSnapshotsMakesChunkReclaimable(t *testing.T) {
 	dbconn := openTestDB(t)
 

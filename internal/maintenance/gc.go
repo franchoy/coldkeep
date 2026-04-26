@@ -340,18 +340,10 @@ func MarkReachableChunks(ctx context.Context, dbconn *sql.DB) (map[int64]struct{
 	}
 	g := graph.NewService(dbconn)
 
-	currentRoots, err := g.CurrentLogicalFileRoots(ctx)
+	roots, err := g.GCRoots(ctx, graph.GCRootOptions{})
 	if err != nil {
 		return nil, err
 	}
-	snapshotRoots, err := g.SnapshotRoots(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	roots := make([]graph.NodeID, 0, len(currentRoots)+len(snapshotRoots))
-	roots = append(roots, currentRoots...)
-	roots = append(roots, snapshotRoots...)
 
 	return g.ReachableChunksFromRoots(ctx, roots)
 }

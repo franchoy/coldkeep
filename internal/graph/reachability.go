@@ -5,6 +5,11 @@ import (
 	"strconv"
 )
 
+// GCRootOptions configures root collection for GC mark traversal.
+type GCRootOptions struct {
+	ExcludeSnapshots []string
+}
+
 // CurrentLogicalFileRoots returns logical-file roots from the current
 // repository state (physical_file table).
 func (s *Service) CurrentLogicalFileRoots(ctx context.Context) ([]NodeID, error) {
@@ -79,6 +84,48 @@ func (s *Service) SnapshotRoots(ctx context.Context, excludeSnapshotIDs []string
 	}
 
 	return out, nil
+}
+
+// GCRoots returns the full GC root set: current logical files plus snapshot
+// logical files, with optional snapshot exclusions.
+func (s *Service) GCRoots(ctx context.Context, opts GCRootOptions) ([]NodeID, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	currentRoots, err := s.CurrentLogicalFileRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshotRoots, err := s.SnapshotRoots(ctx, opts.ExcludeSnapshots)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[int64]struct{}, len(currentRoots)+len(snapshotRoots))
+	roots := make([]NodeID, 0, len(currentRoots)+len(snapshotRoots))
+	for _, n := range currentRoots {
+		if n.Type != EntityLogicalFile {
+			continue
+		}
+		if _, exists := seen[n.ID]; exists {
+			continue
+		}
+		seen[n.ID] = struct{}{}
+		roots = append(roots, n)
+	}
+	for _, n := range snapshotRoots {
+		if n.Type != EntityLogicalFile {
+			continue
+		}
+		if _, exists := seen[n.ID]; exists {
+			continue
+		}
+		seen[n.ID] = struct{}{}
+		roots = append(roots, n)
+	}
+
+	return roots, nil
 }
 
 // ReachableChunksFromRoots traverses the graph from arbitrary roots and returns

@@ -53,6 +53,12 @@ type Plan struct {
 	AffectedContainers []ContainerImpact
 }
 
+type chunkRecord struct {
+	ID           int64
+	LiveRefCount int64
+	PinCount     int64
+}
+
 // BuildPlan performs the GC mark phase and returns a Plan describing what
 // would be reclaimed. It never modifies the database or filesystem.
 //
@@ -77,57 +83,89 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 
 	g := graph.NewService(dbconn)
 
-	// --- Mark phase ---
-	currentRoots, err := g.CurrentLogicalFileRoots(ctx)
+	roots, err := g.GCRoots(ctx, graph.GCRootOptions{ExcludeSnapshots: opts.AssumeDeletedSnapshots})
 	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: current logical file roots: %w", err)
+		return nil, fmt.Errorf("gc.BuildPlan: gc roots: %w", err)
 	}
-	snapshotRoots, err := g.SnapshotRoots(ctx, opts.AssumeDeletedSnapshots)
-	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: snapshot roots: %w", err)
-	}
-
-	roots := make([]graph.NodeID, 0, len(currentRoots)+len(snapshotRoots))
-	roots = append(roots, currentRoots...)
-	roots = append(roots, snapshotRoots...)
 
 	reachableChunkIDs, err := g.ReachableChunksFromRoots(ctx, roots)
 	if err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: reachable chunks from roots: %w", err)
 	}
 
-	// --- Count phase ---
-	var totalChunks int64
-	if err := dbconn.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`,
-	).Scan(&totalChunks); err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: count completed chunks: %w", err)
-	}
-
-	reachableCount := int64(len(reachableChunkIDs))
-	unreachableCount := totalChunks - reachableCount
-
-	// --- Sweep planning phase ---
-	// Find sealed, non-quarantined containers and compute per-container impact.
-	affectedContainers, reclaimableBytes, err := planContainerImpact(ctx, dbconn, reachableChunkIDs)
+	allChunks, err := loadAllCompletedChunks(ctx, dbconn)
 	if err != nil {
-		return nil, fmt.Errorf("gc.BuildPlan: plan container impact: %w", err)
+		return nil, fmt.Errorf("gc.BuildPlan: load completed chunks: %w", err)
 	}
 
-	plan := &Plan{
-		TotalChunks:        totalChunks,
-		ReachableChunks:    reachableCount,
-		UnreachableChunks:  unreachableCount,
-		ReclaimableBytes:   reclaimableBytes,
-		AffectedContainers: affectedContainers,
+	unreachable := make([]chunkRecord, 0)
+	var reachableCompletedCount int64
+	for _, ch := range allChunks {
+		if _, ok := reachableChunkIDs[ch.ID]; ok {
+			reachableCompletedCount++
+			continue
+		}
+		unreachable = append(unreachable, ch)
+	}
+
+	plan, err := buildPlanFromUnreachable(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, unreachable)
+	if err != nil {
+		return nil, fmt.Errorf("gc.BuildPlan: build plan from unreachable: %w", err)
 	}
 
 	return plan, nil
 }
 
+func loadAllCompletedChunks(ctx context.Context, dbconn *sql.DB) ([]chunkRecord, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT id, live_ref_count, pin_count
+		FROM chunk
+		WHERE status = 'COMPLETED'
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]chunkRecord, 0)
+	for rows.Next() {
+		var ch chunkRecord
+		if err := rows.Scan(&ch.ID, &ch.LiveRefCount, &ch.PinCount); err != nil {
+			return nil, err
+		}
+		out = append(out, ch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, unreachable []chunkRecord) (*Plan, error) {
+	unreachableChunkIDs := make(map[int64]struct{}, len(unreachable))
+	for _, ch := range unreachable {
+		unreachableChunkIDs[ch.ID] = struct{}{}
+	}
+
+	affectedContainers, reclaimableBytes, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		TotalChunks:        totalChunks,
+		ReachableChunks:    reachableChunks,
+		UnreachableChunks:  int64(len(unreachable)),
+		ReclaimableBytes:   reclaimableBytes,
+		AffectedContainers: affectedContainers,
+	}, nil
+}
+
 // planContainerImpact scans sealed non-quarantined containers and returns the
 // per-container impact summary and total reclaimable bytes.
-func planContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, error) {
+func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename, current_size
 		FROM container
@@ -169,6 +207,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChunkIDs 
 			FROM blocks b
 			JOIN chunk ch ON ch.id = b.chunk_id
 			WHERE b.container_id = ?
+			AND ch.status = 'COMPLETED'
 		`, c.id)
 		if err != nil {
 			return nil, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
@@ -186,9 +225,9 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChunkIDs 
 				return nil, 0, err
 			}
 			totalChunks++
-			_, isReachable := reachableChunkIDs[chunkID]
+			_, isUnreachable := unreachableChunkIDs[chunkID]
 			isLive := liveRefCount > 0 || pinCount > 0
-			if !isReachable && !isLive {
+			if isUnreachable && !isLive {
 				reclaimChunks++
 				reclaimBytes += storedSize
 			}
