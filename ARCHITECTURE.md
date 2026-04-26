@@ -607,6 +607,23 @@ This preserves a clear source of truth: current-state `physical_file` rows win f
 
 This phase also wires GC to the audited physical roots: `RunGCWithContainersDirResult` runs `CheckPhysicalFileGraphIntegrity` as a pre-flight immediately after acquiring the advisory lock. If any integrity issue is detected (orphan `physical_file` rows, `ref_count` mismatches, or negative ref counts), GC is refused with an actionable error directing the operator to run `repair ref-counts` first. This prevents GC from treating live blocks as unreferenced due to drift in `logical_file.ref_count`.
 
+#### Phase 5 ready definition
+
+Phase 5 is complete when `coldkeep simulate gc` can exactly predict what real GC would consider reclaimable while remaining strictly read-only.
+
+That readiness bar is defined by all of the following:
+
+- simulation and real GC share the same reachability path for current-state and snapshot-retained roots
+- hypothetical `--delete-snapshot <id>` simulation excludes that snapshot only from simulated roots and never deletes snapshot metadata
+- current live files still protect chunks during simulation
+- other retained snapshots still protect chunks during simulation
+- reclaimability reporting distinguishes logical reclaimability from immediately recoverable physical disk space
+- `coldkeep simulate gc` does not call sweep/delete execution
+- `coldkeep simulate gc` performs zero DB writes and zero filesystem writes
+- CLI text and JSON outputs are both rendered from the same simulation result model
+
+Operationally, this means Phase 5 is not "estimate GC impact"; it is "compute the same reclaimability decision boundary as real GC, plus hypothetical snapshot-root removal, without changing repository state".
+
 ### Phase 6 — GC root model formalization
 
 Phase 6 formalizes the GC trust model to explicitly operate under the v1.2 audited-root model (Option A — conservative path):
