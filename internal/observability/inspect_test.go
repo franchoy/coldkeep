@@ -91,12 +91,133 @@ func TestInspectLogicalFileBasic(t *testing.T) {
 func TestInspectRejectsUnsupportedEntity(t *testing.T) {
 	svc := newServiceForTest(nil, nil)
 
-	_, err := svc.Inspect(context.Background(), EntityContainer, "7", InspectOptions{})
+	_, err := svc.Inspect(context.Background(), EntityPhysicalFile, "7", InspectOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !errors.Is(err, ErrUnsupportedEntity) {
 		t.Fatalf("expected ErrUnsupportedEntity, got %v", err)
+	}
+}
+
+func TestInspectRepositoryBasic(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	result, err := svc.Inspect(context.Background(), EntityRepository, "", InspectOptions{})
+	if err != nil {
+		t.Fatalf("Inspect repository: %v", err)
+	}
+
+	if result.EntityType != EntityRepository {
+		t.Fatalf("expected repository entity type, got %s", result.EntityType)
+	}
+	if result.EntityID != "repository" {
+		t.Fatalf("expected repository id, got %q", result.EntityID)
+	}
+	if result.Summary["active_write_chunker"] == nil {
+		t.Fatalf("expected active_write_chunker in summary: %+v", result.Summary)
+	}
+}
+
+func TestInspectSnapshotBasic(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type, label) VALUES (?, ?, ?, ?)`, "snap-10", time.Now().UTC(), "full", "release"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntitySnapshot, "snap-10", InspectOptions{})
+	if err != nil {
+		t.Fatalf("Inspect snapshot: %v", err)
+	}
+
+	if result.EntityType != EntitySnapshot || result.EntityID != "snap-10" {
+		t.Fatalf("unexpected snapshot entity: type=%s id=%s", result.EntityType, result.EntityID)
+	}
+	if got := result.Summary["type"]; got != "full" {
+		t.Fatalf("expected snapshot type full, got %v", got)
+	}
+	if got := result.Summary["label"]; got != "release" {
+		t.Fatalf("expected snapshot label release, got %v", got)
+	}
+}
+
+func TestInspectChunkBasic(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-x", 99, "COMPLETED", 2, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk last insert id: %v", err)
+	}
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_x.bin", 512, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := ctrRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 99, 99, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{})
+	if err != nil {
+		t.Fatalf("Inspect chunk: %v", err)
+	}
+
+	if result.EntityType != EntityChunk {
+		t.Fatalf("expected chunk entity type, got %s", result.EntityType)
+	}
+	if got := result.Summary["chunk_hash"]; got != "chunk-x" {
+		t.Fatalf("expected chunk hash chunk-x, got %v", got)
+	}
+	if got := result.Summary["container_id"]; got != containerID {
+		t.Fatalf("expected container_id=%d, got %v", containerID, got)
+	}
+}
+
+func TestInspectContainerBasic(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	res, err := dbconn.Exec(`INSERT INTO container (filename, sealed, sealing, current_size, max_size, quarantine) VALUES (?, ?, ?, ?, ?, ?)`, "ctr_y.bin", 1, 0, 256, 1024, 1)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityContainer, strconv.FormatInt(containerID, 10), InspectOptions{})
+	if err != nil {
+		t.Fatalf("Inspect container: %v", err)
+	}
+
+	if result.EntityType != EntityContainer {
+		t.Fatalf("expected container entity type, got %s", result.EntityType)
+	}
+	if got := result.Summary["filename"]; got != "ctr_y.bin" {
+		t.Fatalf("expected filename ctr_y.bin, got %v", got)
+	}
+	if got := result.Summary["sealed"]; got != true {
+		t.Fatalf("expected sealed=true, got %v", got)
+	}
+	if got := result.Summary["quarantine"]; got != true {
+		t.Fatalf("expected quarantine=true, got %v", got)
 	}
 }
 
