@@ -37,12 +37,15 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 	impacts := make([]ContainerSimulationImpact, len(plan.AffectedContainers))
 	for i, c := range plan.AffectedContainers {
 		impacts[i] = ContainerSimulationImpact{
-			ContainerID:       c.ContainerID,
-			Filename:          c.Filename,
-			TotalBytes:        c.TotalBytes,
-			ReclaimableBytes:  c.ReclaimableBytes,
-			ReclaimableChunks: c.ReclaimableChunks,
-			WouldDeleteFile:   c.WouldDeleteFile,
+			ContainerID:        c.ContainerID,
+			Filename:           c.Filename,
+			TotalBytes:         c.TotalBytes,
+			LiveBytesAfterGC:   c.LiveBytesAfterGC,
+			ReclaimableBytes:   c.ReclaimableBytes,
+			ReclaimableChunks:  c.ReclaimableChunks,
+			TotalChunks:        c.TotalChunks,
+			FullyReclaimable:   c.FullyReclaimable,
+			RequiresCompaction: c.RequiresCompaction,
 		}
 	}
 
@@ -52,18 +55,24 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 		Exact:          true,
 		Mutated:        false,
 		Summary: map[string]any{
-			"total_chunks":        plan.TotalChunks,
-			"reachable_chunks":    plan.ReachableChunks,
-			"unreachable_chunks":  plan.UnreachableChunks,
-			"reclaimable_bytes":   plan.ReclaimableBytes,
-			"affected_containers": len(plan.AffectedContainers),
+			"total_chunks":                 plan.TotalChunks,
+			"reachable_chunks":             plan.ReachableChunks,
+			"unreachable_chunks":           plan.Summary.UnreachableChunks,
+			"logically_reclaimable_bytes":  plan.Summary.LogicallyReclaimableBytes,
+			"physically_reclaimable_bytes": plan.Summary.PhysicallyReclaimableBytes,
+			"fully_reclaimable_containers": plan.Summary.FullyReclaimableContainers,
+			"partially_dead_containers":    plan.Summary.PartiallyDeadContainers,
+			"affected_containers":          len(plan.AffectedContainers),
 		},
 		GC: &GCSimulationResult{
-			TotalChunks:        plan.TotalChunks,
-			ReachableChunks:    plan.ReachableChunks,
-			UnreachableChunks:  plan.UnreachableChunks,
-			ReclaimableBytes:   plan.ReclaimableBytes,
-			AffectedContainers: impacts,
+			TotalChunks:                plan.TotalChunks,
+			ReachableChunks:            plan.ReachableChunks,
+			UnreachableChunks:          plan.Summary.UnreachableChunks,
+			LogicallyReclaimableBytes:  plan.Summary.LogicallyReclaimableBytes,
+			PhysicallyReclaimableBytes: plan.Summary.PhysicallyReclaimableBytes,
+			FullyReclaimableContainers: plan.Summary.FullyReclaimableContainers,
+			PartiallyDeadContainers:    plan.Summary.PartiallyDeadContainers,
+			AffectedContainers:         impacts,
 		},
 	}
 

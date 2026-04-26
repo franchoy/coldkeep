@@ -52,8 +52,11 @@ func TestSimulateGCEmptyRepo(t *testing.T) {
 	if result.GC.UnreachableChunks != 0 {
 		t.Errorf("UnreachableChunks = %d, want 0", result.GC.UnreachableChunks)
 	}
-	if result.GC.ReclaimableBytes != 0 {
-		t.Errorf("ReclaimableBytes = %d, want 0", result.GC.ReclaimableBytes)
+	if result.GC.LogicallyReclaimableBytes != 0 {
+		t.Errorf("LogicallyReclaimableBytes = %d, want 0", result.GC.LogicallyReclaimableBytes)
+	}
+	if result.GC.PhysicallyReclaimableBytes != 0 {
+		t.Errorf("PhysicallyReclaimableBytes = %d, want 0", result.GC.PhysicallyReclaimableBytes)
 	}
 	if len(result.GC.AffectedContainers) != 0 {
 		t.Errorf("AffectedContainers = %d, want 0", len(result.GC.AffectedContainers))

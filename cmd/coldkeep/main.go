@@ -2874,11 +2874,14 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 	fmt.Println("Simulate GC (dry run — no changes applied)")
 	fmt.Println()
 	if r.GC != nil {
-		fmt.Printf("  Total chunks:        %d\n", r.GC.TotalChunks)
-		fmt.Printf("  Reachable chunks:    %d\n", r.GC.ReachableChunks)
-		fmt.Printf("  Unreachable chunks:  %d\n", r.GC.UnreachableChunks)
-		fmt.Printf("  Reclaimable bytes:   %d\n", r.GC.ReclaimableBytes)
-		fmt.Printf("  Affected containers: %d\n", len(r.GC.AffectedContainers))
+		fmt.Printf("  Total chunks:                 %d\n", r.GC.TotalChunks)
+		fmt.Printf("  Reachable chunks:             %d\n", r.GC.ReachableChunks)
+		fmt.Printf("  Unreachable chunks:           %d\n", r.GC.UnreachableChunks)
+		fmt.Printf("  Logically reclaimable bytes:  %d\n", r.GC.LogicallyReclaimableBytes)
+		fmt.Printf("  Physically reclaimable bytes: %d\n", r.GC.PhysicallyReclaimableBytes)
+		fmt.Printf("  Fully reclaimable containers: %d\n", r.GC.FullyReclaimableContainers)
+		fmt.Printf("  Partially dead containers:    %d\n", r.GC.PartiallyDeadContainers)
+		fmt.Printf("  Affected containers:          %d\n", len(r.GC.AffectedContainers))
 	}
 	if len(deleteSnapshots) > 0 {
 		fmt.Printf("  Assumed deleted:     %s\n", strings.Join(deleteSnapshots, ", "))
@@ -2887,12 +2890,12 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 		fmt.Println()
 		fmt.Println("  Containers with reclaimable chunks:")
 		for _, c := range r.GC.AffectedContainers {
-			deleteNote := ""
-			if c.WouldDeleteFile {
-				deleteNote = " [would delete]"
+			state := "[requires compaction]"
+			if c.FullyReclaimable {
+				state = "[fully reclaimable now]"
 			}
-			fmt.Printf("    container %d (%s): %d reclaimable bytes%s\n",
-				c.ContainerID, c.Filename, c.ReclaimableBytes, deleteNote)
+			fmt.Printf("    container %d (%s): reclaimable=%d live_after_gc=%d chunks=%d/%d %s\n",
+				c.ContainerID, c.Filename, c.ReclaimableBytes, c.LiveBytesAfterGC, c.ReclaimableChunks, c.TotalChunks, state)
 		}
 	}
 	return nil

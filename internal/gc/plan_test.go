@@ -160,12 +160,18 @@ func TestBuildPlanUnreachableChunkIsReclaimable(t *testing.T) {
 	if plan.ReclaimableBytes != 512 {
 		t.Errorf("ReclaimableBytes = %d, want 512", plan.ReclaimableBytes)
 	}
+	if plan.PhysicallyReclaimableBytes != 512 {
+		t.Errorf("PhysicallyReclaimableBytes = %d, want 512", plan.PhysicallyReclaimableBytes)
+	}
 	if len(plan.AffectedContainers) != 1 {
 		t.Fatalf("AffectedContainers = %d, want 1", len(plan.AffectedContainers))
 	}
 	c := plan.AffectedContainers[0]
-	if c.WouldDeleteFile != true {
-		t.Error("WouldDeleteFile should be true when all chunks are reclaimable")
+	if !c.FullyReclaimable {
+		t.Error("FullyReclaimable should be true when all chunks are reclaimable")
+	}
+	if c.RequiresCompaction {
+		t.Error("RequiresCompaction should be false when container is fully reclaimable")
 	}
 	if c.ReclaimableBytes != 512 {
 		t.Errorf("container ReclaimableBytes = %d, want 512", c.ReclaimableBytes)
@@ -187,6 +193,9 @@ func TestBuildPlanPinnedChunkNotReclaimable(t *testing.T) {
 	// Pinned chunk is unreachable from file roots but NOT reclaimable
 	if plan.ReclaimableBytes != 0 {
 		t.Errorf("ReclaimableBytes = %d, want 0 (pinned chunk must not be reclaimed)", plan.ReclaimableBytes)
+	}
+	if plan.PhysicallyReclaimableBytes != 0 {
+		t.Errorf("PhysicallyReclaimableBytes = %d, want 0", plan.PhysicallyReclaimableBytes)
 	}
 	if len(plan.AffectedContainers) != 0 {
 		t.Errorf("AffectedContainers = %d, want 0", len(plan.AffectedContainers))
@@ -238,6 +247,9 @@ func TestBuildPlanIgnoresNonCompletedChunks(t *testing.T) {
 	if plan.ReclaimableBytes != 128 {
 		t.Errorf("ReclaimableBytes = %d, want 128", plan.ReclaimableBytes)
 	}
+	if plan.PhysicallyReclaimableBytes != 128 {
+		t.Errorf("PhysicallyReclaimableBytes = %d, want 128", plan.PhysicallyReclaimableBytes)
+	}
 }
 
 func TestBuildPlanAssumeDeletedSnapshotsMakesChunkReclaimable(t *testing.T) {
@@ -285,6 +297,52 @@ func TestBuildPlanAssumeDeletedSnapshotsMakesChunkReclaimable(t *testing.T) {
 	}
 	if plan2.ReclaimableBytes != 1024 {
 		t.Errorf("with deletion: ReclaimableBytes = %d, want 1024", plan2.ReclaimableBytes)
+	}
+	if plan2.PhysicallyReclaimableBytes != 1024 {
+		t.Errorf("with deletion: PhysicallyReclaimableBytes = %d, want 1024", plan2.PhysicallyReclaimableBytes)
+	}
+}
+
+func TestBuildPlanPartiallyDeadContainerDistinguishesLogicalVsPhysical(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	// One dead chunk + one live chunk in same sealed container.
+	deadChunkID := insertChunk(t, dbconn, "dead", 100, 0, 0)
+	liveChunkID := insertChunk(t, dbconn, "live", 100, 1, 0)
+
+	containerID := insertContainer(t, dbconn, "c-partial.bin", 200)
+	insertBlock(t, dbconn, deadChunkID, containerID, 100)
+	insertBlock(t, dbconn, liveChunkID, containerID, 100)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	if plan.ReclaimableBytes != 100 {
+		t.Errorf("ReclaimableBytes = %d, want 100", plan.ReclaimableBytes)
+	}
+	if plan.PhysicallyReclaimableBytes != 0 {
+		t.Errorf("PhysicallyReclaimableBytes = %d, want 0", plan.PhysicallyReclaimableBytes)
+	}
+	if plan.Summary.FullyReclaimableContainers != 0 {
+		t.Errorf("FullyReclaimableContainers = %d, want 0", plan.Summary.FullyReclaimableContainers)
+	}
+	if plan.Summary.PartiallyDeadContainers != 1 {
+		t.Errorf("PartiallyDeadContainers = %d, want 1", plan.Summary.PartiallyDeadContainers)
+	}
+	if len(plan.AffectedContainers) != 1 {
+		t.Fatalf("AffectedContainers = %d, want 1", len(plan.AffectedContainers))
+	}
+	c := plan.AffectedContainers[0]
+	if c.FullyReclaimable {
+		t.Error("FullyReclaimable = true, want false")
+	}
+	if !c.RequiresCompaction {
+		t.Error("RequiresCompaction = false, want true")
+	}
+	if c.LiveBytesAfterGC != 100 {
+		t.Errorf("LiveBytesAfterGC = %d, want 100", c.LiveBytesAfterGC)
 	}
 }
 

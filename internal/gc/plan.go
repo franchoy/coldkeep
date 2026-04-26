@@ -25,14 +25,23 @@ type PlanOptions struct {
 
 // ContainerImpact describes the GC impact on a single container.
 type ContainerImpact struct {
-	ContainerID       int64  `json:"container_id"`
-	Filename          string `json:"filename"`
-	TotalBytes        int64  `json:"total_bytes"`
-	ReclaimableBytes  int64  `json:"reclaimable_bytes"`
-	ReclaimableChunks int64  `json:"reclaimable_chunks"`
-	// WouldDeleteFile is true when every chunk in the container is reclaimable,
-	// meaning the container file would be fully removed by real GC.
-	WouldDeleteFile bool `json:"would_delete_file"`
+	ContainerID        int64  `json:"container_id"`
+	Filename           string `json:"filename"`
+	TotalBytes         int64  `json:"total_bytes"`
+	LiveBytesAfterGC   int64  `json:"live_bytes_after_gc"`
+	ReclaimableBytes   int64  `json:"reclaimable_bytes"`
+	ReclaimableChunks  int64  `json:"reclaimable_chunks"`
+	TotalChunks        int64  `json:"total_chunks"`
+	FullyReclaimable   bool   `json:"fully_reclaimable"`
+	RequiresCompaction bool   `json:"requires_compaction"`
+}
+
+type SimulationSummary struct {
+	UnreachableChunks          int64 `json:"unreachable_chunks"`
+	LogicallyReclaimableBytes  int64 `json:"logically_reclaimable_bytes"`
+	PhysicallyReclaimableBytes int64 `json:"physically_reclaimable_bytes"`
+	FullyReclaimableContainers int64 `json:"fully_reclaimable_containers"`
+	PartiallyDeadContainers    int64 `json:"partially_dead_containers"`
 }
 
 // Plan is the result of the GC mark phase. It describes what would be
@@ -46,10 +55,17 @@ type Plan struct {
 	ReachableChunks int64
 	// UnreachableChunks is TotalChunks - ReachableChunks.
 	UnreachableChunks int64
-	// ReclaimableBytes is the sum of stored_size for unreachable chunks.
+	// ReclaimableBytes is the logical reclaimability estimate: sum of stored_size
+	// for dead chunks, even in partially-dead containers.
 	ReclaimableBytes int64
+	// PhysicallyReclaimableBytes is what can be freed immediately with current GC
+	// behavior (whole-container deletion only).
+	PhysicallyReclaimableBytes int64
+	// Summary provides operator-facing semantics that distinguish logical vs
+	// physical reclaimability.
+	Summary SimulationSummary
 	// AffectedContainers lists containers that contain at least one reclaimable
-	// chunk. Containers where every chunk is reclaimable have WouldDeleteFile=true.
+	// chunk.
 	AffectedContainers []ContainerImpact
 }
 
@@ -149,23 +165,31 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 		unreachableChunkIDs[ch.ID] = struct{}{}
 	}
 
-	affectedContainers, reclaimableBytes, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs)
+	affectedContainers, logicalReclaimableBytes, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Plan{
-		TotalChunks:        totalChunks,
-		ReachableChunks:    reachableChunks,
-		UnreachableChunks:  int64(len(unreachable)),
-		ReclaimableBytes:   reclaimableBytes,
+		TotalChunks:                totalChunks,
+		ReachableChunks:            reachableChunks,
+		UnreachableChunks:          int64(len(unreachable)),
+		ReclaimableBytes:           logicalReclaimableBytes,
+		PhysicallyReclaimableBytes: physicalReclaimableBytes,
+		Summary: SimulationSummary{
+			UnreachableChunks:          int64(len(unreachable)),
+			LogicallyReclaimableBytes:  logicalReclaimableBytes,
+			PhysicallyReclaimableBytes: physicalReclaimableBytes,
+			FullyReclaimableContainers: fullyReclaimableContainers,
+			PartiallyDeadContainers:    partiallyDeadContainers,
+		},
 		AffectedContainers: affectedContainers,
 	}, nil
 }
 
 // planContainerImpact scans sealed non-quarantined containers and returns the
 // per-container impact summary and total reclaimable bytes.
-func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, error) {
+func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename, current_size
 		FROM container
@@ -173,7 +197,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 		ORDER BY id ASC
 	`)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, 0, err
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -186,20 +210,23 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 	for rows.Next() {
 		var c containerRow
 		if err := rows.Scan(&c.id, &c.filename, &c.size); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, 0, 0, err
 		}
 		containers = append(containers, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, 0, 0, err
 	}
 
 	var affected []ContainerImpact
-	var totalReclaimable int64
+	var totalLogicalReclaimable int64
+	var totalPhysicalReclaimable int64
+	var fullyReclaimableContainers int64
+	var partiallyDeadContainers int64
 
 	for _, c := range containers {
 		if err := ctx.Err(); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, 0, 0, err
 		}
 
 		chunkRows, err := dbconn.QueryContext(ctx, `
@@ -210,7 +237,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			AND ch.status = 'COMPLETED'
 		`, c.id)
 		if err != nil {
-			return nil, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
+			return nil, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
 		}
 
 		var totalChunks, reclaimChunks int64
@@ -222,7 +249,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			var liveRefCount, pinCount int64
 			if err := chunkRows.Scan(&chunkID, &storedSize, &liveRefCount, &pinCount); err != nil {
 				_ = chunkRows.Close()
-				return nil, 0, err
+				return nil, 0, 0, 0, 0, err
 			}
 			totalChunks++
 			_, isUnreachable := unreachableChunkIDs[chunkID]
@@ -234,24 +261,40 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 		}
 		_ = chunkRows.Close()
 		if err := chunkRows.Err(); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, 0, 0, err
 		}
 
 		if reclaimChunks == 0 {
 			continue
 		}
 
+		fullyReclaimable := totalChunks > 0 && reclaimChunks == totalChunks
+		requiresCompaction := reclaimChunks > 0 && !fullyReclaimable
+		liveBytesAfterGC := c.size - reclaimBytes
+		if liveBytesAfterGC < 0 {
+			liveBytesAfterGC = 0
+		}
+
 		impact := ContainerImpact{
-			ContainerID:       c.id,
-			Filename:          c.filename,
-			TotalBytes:        c.size,
-			ReclaimableBytes:  reclaimBytes,
-			ReclaimableChunks: reclaimChunks,
-			WouldDeleteFile:   reclaimChunks == totalChunks,
+			ContainerID:        c.id,
+			Filename:           c.filename,
+			TotalBytes:         c.size,
+			LiveBytesAfterGC:   liveBytesAfterGC,
+			ReclaimableBytes:   reclaimBytes,
+			ReclaimableChunks:  reclaimChunks,
+			TotalChunks:        totalChunks,
+			FullyReclaimable:   fullyReclaimable,
+			RequiresCompaction: requiresCompaction,
 		}
 		affected = append(affected, impact)
-		totalReclaimable += reclaimBytes
+		totalLogicalReclaimable += reclaimBytes
+		if fullyReclaimable {
+			fullyReclaimableContainers++
+			totalPhysicalReclaimable += c.size
+		} else {
+			partiallyDeadContainers++
+		}
 	}
 
-	return affected, totalReclaimable, nil
+	return affected, totalLogicalReclaimable, totalPhysicalReclaimable, fullyReclaimableContainers, partiallyDeadContainers, nil
 }

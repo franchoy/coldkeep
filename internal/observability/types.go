@@ -169,21 +169,27 @@ type SimulationResult struct {
 
 // GCSimulationResult carries the structured output of a GC dry-run plan.
 type GCSimulationResult struct {
-	TotalChunks        int64                       `json:"total_chunks"`
-	ReachableChunks    int64                       `json:"reachable_chunks"`
-	UnreachableChunks  int64                       `json:"unreachable_chunks"`
-	ReclaimableBytes   int64                       `json:"reclaimable_bytes"`
-	AffectedContainers []ContainerSimulationImpact `json:"affected_containers"`
+	TotalChunks                int64                       `json:"total_chunks"`
+	ReachableChunks            int64                       `json:"reachable_chunks"`
+	UnreachableChunks          int64                       `json:"unreachable_chunks"`
+	LogicallyReclaimableBytes  int64                       `json:"logically_reclaimable_bytes"`
+	PhysicallyReclaimableBytes int64                       `json:"physically_reclaimable_bytes"`
+	FullyReclaimableContainers int64                       `json:"fully_reclaimable_containers"`
+	PartiallyDeadContainers    int64                       `json:"partially_dead_containers"`
+	AffectedContainers         []ContainerSimulationImpact `json:"affected_containers"`
 }
 
 // ContainerSimulationImpact is the per-container summary within a GC simulation.
 type ContainerSimulationImpact struct {
-	ContainerID       int64  `json:"container_id"`
-	Filename          string `json:"filename"`
-	TotalBytes        int64  `json:"total_bytes"`
-	ReclaimableBytes  int64  `json:"reclaimable_bytes"`
-	ReclaimableChunks int64  `json:"reclaimable_chunks"`
-	WouldDeleteFile   bool   `json:"would_delete_file"`
+	ContainerID        int64  `json:"container_id"`
+	Filename           string `json:"filename"`
+	TotalBytes         int64  `json:"total_bytes"`
+	LiveBytesAfterGC   int64  `json:"live_bytes_after_gc"`
+	ReclaimableBytes   int64  `json:"reclaimable_bytes"`
+	ReclaimableChunks  int64  `json:"reclaimable_chunks"`
+	TotalChunks        int64  `json:"total_chunks"`
+	FullyReclaimable   bool   `json:"fully_reclaimable"`
+	RequiresCompaction bool   `json:"requires_compaction"`
 }
 
 type ObservationWarning struct {
