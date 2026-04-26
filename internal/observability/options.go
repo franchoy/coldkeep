@@ -9,6 +9,21 @@ import (
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
+type StatsOptions struct {
+	IncludeContainers bool
+}
+
+type InspectOptions struct {
+	Deep      bool
+	Relations bool
+	Reverse   bool
+	Limit     int
+}
+
+type SimulationOptions struct {
+	Kind string
+}
+
 type InspectTarget struct {
 	EntityType EntityType
 	EntityID   string
