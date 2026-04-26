@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 )
 
 func RenderStatsJSON(w io.Writer, r *StatsResult) error {
@@ -28,162 +30,161 @@ func RenderStatsHuman(w io.Writer, r *StatsResult) error {
 		r = &StatsResult{}
 	}
 
-	_, err := fmt.Fprintln(w, "\n====== coldkeep Stats ======")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.Repository.ActiveWriteChunker) != "" {
-		if _, err := fmt.Fprintf(w, "Active chunker (new writes):     %s\n", r.Repository.ActiveWriteChunker); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintf(w, "Generated at (UTC):              %s\n", r.GeneratedAtUTC.Format("2006-01-02T15:04:05Z")); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Logical files (total):           %d\n", r.Logical.TotalFiles); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Logical stored size (total):     %.2f MB\n", bytesToMB(r.Logical.TotalSizeBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Completed files:               %d (%.2f MB)\n", r.Logical.CompletedFiles, bytesToMB(r.Logical.CompletedSizeBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Processing files:              %d\n", r.Logical.ProcessingFiles); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Aborted files:                 %d\n", r.Logical.AbortedFiles); err != nil {
+	if _, err := fmt.Fprintln(w, "Coldkeep repository stats"); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fprintf(w, "Healthy containers:              %d\n", r.Containers.HealthyContainers); err != nil {
+	if _, err := fmt.Fprintln(w, "\nRepository"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Healthy container bytes:         %.2f MB\n", bytesToMB(r.Containers.HealthyBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Quarantined containers:          %d\n", r.Containers.QuarantineContainers); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Quarantined container bytes:     %.2f MB\n", bytesToMB(r.Containers.QuarantineBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Total containers:                %d\n", r.Containers.TotalContainers); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Total container bytes:           %.2f MB\n", bytesToMB(r.Containers.TotalBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Live block bytes (physical):     %.2f MB\n", bytesToMB(r.Containers.LiveBlockBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Dead block bytes (physical):     %.2f MB\n", bytesToMB(r.Containers.DeadBlockBytes)); err != nil {
+	if _, err := fmt.Fprintf(w, "  active write chunker: %s\n", fallbackString(r.Repository.ActiveWriteChunker, "unknown")); err != nil {
 		return err
 	}
 
-	if r.Efficiency.DedupRatioPercent > 0 {
-		if _, err := fmt.Fprintf(w, "Dedup ratio:                     %.2f%%\n", r.Efficiency.DedupRatioPercent); err != nil {
-			return err
-		}
-	}
-	if r.Containers.FragmentationRatioPct > 0 {
-		if _, err := fmt.Fprintf(w, "Fragmentation ratio:             %.2f%%\n", r.Containers.FragmentationRatioPct); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintln(w, "Snapshot retention:"); err != nil {
+	if _, err := fmt.Fprintln(w, "\nLogical data"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  Current-only logical files:    %d (%.2f MB)\n", r.Retention.CurrentOnlyLogicalFiles, bytesToMB(r.Retention.CurrentOnlyBytes)); err != nil {
+	if _, err := fmt.Fprintf(w, "  files:               %s\n", formatIntGrouped(r.Logical.TotalFiles)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  Snapshot-referenced files:     %d (%.2f MB)\n", r.Retention.SnapshotReferencedLogicalFiles, bytesToMB(r.Retention.SnapshotReferencedBytes)); err != nil {
+	if _, err := fmt.Fprintf(w, "  completed files:     %s\n", formatIntGrouped(r.Logical.CompletedFiles)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  Snapshot-only logical files:   %d (%.2f MB)\n", r.Retention.SnapshotOnlyLogicalFiles, bytesToMB(r.Retention.SnapshotOnlyBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Shared logical files:          %d (%.2f MB)\n", r.Retention.SharedLogicalFiles, bytesToMB(r.Retention.SharedBytes)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Snapshots (total):               %d\n", r.Snapshots.TotalSnapshots); err != nil {
+	if _, err := fmt.Fprintf(w, "  logical size:        %s\n", formatIECBytes(r.Logical.TotalSizeBytes)); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fprintf(w, "Graph snapshot reachable chunks: %d\n", r.Graph.SnapshotReachableChunks); err != nil {
+	if _, err := fmt.Fprintln(w, "\nPhysical data"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Graph snapshot reachable bytes:  %.2f MB\n", bytesToMB(r.Graph.SnapshotReachableBytes)); err != nil {
+	if _, err := fmt.Fprintf(w, "  physical files:      %s\n", formatIntGrouped(r.Physical.TotalPhysicalFiles)); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fprintln(w, "============================"); err != nil {
+	if _, err := fmt.Fprintln(w, "\nChunks"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Chunks (total):           %d\n", r.Chunks.TotalChunks); err != nil {
+	if _, err := fmt.Fprintf(w, "  total chunks:        %s\n", formatIntGrouped(r.Chunks.TotalChunks)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  Completed chunks:       %d (%.2f MB)\n", r.Chunks.CompletedChunks, bytesToMB(r.Chunks.CompletedBytes)); err != nil {
+	if _, err := fmt.Fprintf(w, "  completed chunks:    %s\n", formatIntGrouped(r.Chunks.CompletedChunks)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  unique chunk bytes:  %s\n", formatIECBytes(r.Chunks.CompletedBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  references:          %s\n", formatIntGrouped(r.Chunks.TotalReferences)); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(w, "\nEfficiency"); err != nil {
+		return err
+	}
+	dedupRatioX := dedupRatioX(r)
+	dedupSavingsPct := dedupSavingsPct(r)
+	if _, err := fmt.Fprintf(w, "  dedup ratio:         %.2fx\n", dedupRatioX); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  dedup savings:       %.1f%%\n", dedupSavingsPct); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  storage overhead:    %.1f%%\n", r.Efficiency.StorageOverheadPct); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(w, "\nContainers"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  total containers:    %s\n", formatIntGrouped(r.Containers.TotalContainers)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  healthy containers:  %s\n", formatIntGrouped(r.Containers.HealthyContainers)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  quarantined:         %s\n", formatIntGrouped(r.Containers.QuarantineContainers)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  container bytes:     %s\n", formatIECBytes(r.Containers.TotalBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  live block bytes:    %s\n", formatIECBytes(r.Containers.LiveBlockBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  dead block bytes:    %s\n", formatIECBytes(r.Containers.DeadBlockBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  fragmentation:       %.1f%%\n", r.Containers.FragmentationRatioPct); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(w, "\nSnapshots"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  snapshots:           %s\n", formatIntGrouped(r.Snapshots.TotalSnapshots)); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintln(w, "\nRetention"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  current-only files:  %s\n", formatIntGrouped(r.Retention.CurrentOnlyLogicalFiles)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  snapshot-only files: %s\n", formatIntGrouped(r.Retention.SnapshotOnlyLogicalFiles)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  shared files:        %s\n", formatIntGrouped(r.Retention.SharedLogicalFiles)); err != nil {
 		return err
 	}
 
 	versions := sortedVersionStats(r.Chunks.ChunkerVersions)
 	if len(versions) > 0 {
-		if _, err := fmt.Fprintln(w, "Chunker Distribution:"); err != nil {
+		if _, err := fmt.Fprintln(w, "\nChunker versions"); err != nil {
 			return err
 		}
 		for _, version := range versions {
-			if _, err := fmt.Fprintf(w, "  %-22s %d chunks\n", version.Version+":", version.Chunks); err != nil {
-				return err
-			}
-		}
-
-		if _, err := fmt.Fprintln(w, "Stored Data by Chunker:"); err != nil {
-			return err
-		}
-		for _, version := range versions {
-			if _, err := fmt.Fprintf(w, "  %-22s %.2f GB\n", version.Version+":", bytesToGB(version.Bytes)); err != nil {
-				return err
-			}
-		}
-	}
-
-	if _, err := fmt.Fprintln(w, "Dedup Signal:"); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Total chunk references:  %d\n", r.Chunks.TotalReferences); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Unique referenced chunks:%d\n", r.Chunks.UniqueReferenced); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "  Estimated dedup ratio:   %.2f%%\n", r.Logical.EstimatedDedupRatioPct); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "============================"); err != nil {
-		return err
-	}
-
-	if len(r.Containers.Records) > 0 {
-		if _, err := fmt.Fprintln(w, "\nPer-container breakdown:"); err != nil {
-			return err
-		}
-		for _, c := range r.Containers.Records {
 			if _, err := fmt.Fprintf(
 				w,
-				"Container %d (%s): quarantined=%t : total=%.2fMB live=%.2fMB dead=%.2fMB live_ratio=%.2f%%\n",
-				c.ID,
-				c.Filename,
-				c.Quarantine,
-				bytesToMB(c.TotalBytes),
-				bytesToMB(c.LiveBytes),
-				bytesToMB(c.DeadBytes),
-				c.LiveRatioPct,
+				"  %-20s %s chunks / %s\n",
+				version.Version+":",
+				formatIntGrouped(version.Chunks),
+				formatIECBytes(version.Bytes),
 			); err != nil {
 				return err
 			}
+		}
+	}
+
+	if len(r.Containers.Records) > 0 {
+		records := sortedContainerRecords(r.Containers.Records)
+		if _, err := fmt.Fprintln(w, "\nContainer details"); err != nil {
+			return err
+		}
+
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		if _, err := fmt.Fprintln(tw, "  id\tfile\tsize\tlive\tdead\tstatus"); err != nil {
+			return err
+		}
+		for _, c := range records {
+			status := "healthy"
+			if c.Quarantine {
+				status = "quarantined"
+			}
+			if _, err := fmt.Fprintf(
+				tw,
+				"  %d\t%s\t%s\t%s\t%s\t%s\n",
+				c.ID,
+				c.Filename,
+				formatIECBytes(c.TotalBytes),
+				formatIECBytes(c.LiveBytes),
+				formatIECBytes(c.DeadBytes),
+				status,
+			); err != nil {
+				return err
+			}
+		}
+		if err := tw.Flush(); err != nil {
+			return err
 		}
 	}
 
@@ -212,10 +213,108 @@ func sortedVersionStats(in []VersionStat) []VersionStat {
 	return out
 }
 
-func bytesToMB(bytes int64) float64 {
-	return float64(bytes) / (1024 * 1024)
+func sortedContainerRecords(in []ContainerStatRecord) []ContainerStatRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	out := append([]ContainerStatRecord(nil), in...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ID == out[j].ID {
+			return out[i].Filename < out[j].Filename
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
-func bytesToGB(bytes int64) float64 {
-	return float64(bytes) / (1024 * 1024 * 1024)
+func formatIECBytes(bytes int64) string {
+	abs := bytes
+	if abs < 0 {
+		abs = -abs
+	}
+
+	const (
+		ki = int64(1024)
+		mi = ki * 1024
+		gi = mi * 1024
+		ti = gi * 1024
+	)
+
+	format := func(v float64, unit string) string {
+		if unit == "B" {
+			return fmt.Sprintf("%d B", bytes)
+		}
+		return fmt.Sprintf("%.1f %s", v, unit)
+	}
+
+	switch {
+	case abs >= ti:
+		return format(float64(bytes)/float64(ti), "TiB")
+	case abs >= gi:
+		return format(float64(bytes)/float64(gi), "GiB")
+	case abs >= mi:
+		return format(float64(bytes)/float64(mi), "MiB")
+	case abs >= ki:
+		return format(float64(bytes)/float64(ki), "KiB")
+	default:
+		return format(float64(bytes), "B")
+	}
+}
+
+func formatIntGrouped(n int64) string {
+	negative := n < 0
+	if negative {
+		n = -n
+	}
+
+	s := strconv.FormatInt(n, 10)
+	if len(s) <= 3 {
+		if negative {
+			return "-" + s
+		}
+		return s
+	}
+
+	var b strings.Builder
+	if negative {
+		b.WriteByte('-')
+	}
+
+	pre := len(s) % 3
+	if pre == 0 {
+		pre = 3
+	}
+	b.WriteString(s[:pre])
+	for i := pre; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+
+	return b.String()
+}
+
+func fallbackString(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
+}
+
+func dedupRatioX(r *StatsResult) float64 {
+	if r == nil || r.Chunks.CompletedBytes <= 0 {
+		return 1.0
+	}
+	return float64(r.Logical.CompletedSizeBytes) / float64(r.Chunks.CompletedBytes)
+}
+
+func dedupSavingsPct(r *StatsResult) float64 {
+	if r == nil || r.Logical.CompletedSizeBytes <= 0 {
+		return 0
+	}
+	uniqueOverLogical := float64(r.Chunks.CompletedBytes) / float64(r.Logical.CompletedSizeBytes)
+	savings := (1.0 - uniqueOverLogical) * 100
+	if savings < 0 {
+		return 0
+	}
+	return savings
 }

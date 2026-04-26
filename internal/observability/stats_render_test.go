@@ -38,13 +38,42 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
+		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical: LogicalStats{
+			TotalFiles:         128,
+			CompletedFiles:     128,
+			TotalSizeBytes:     42 * 1024 * 1024 * 1024,
+			CompletedSizeBytes: 42 * 1024 * 1024 * 1024,
+		},
+		Physical: PhysicalStats{TotalPhysicalFiles: 140},
 		Chunks: ChunkStats{
+			TotalChunks:      892104,
+			CompletedChunks:  892104,
+			CompletedBytes:   18 * 1024 * 1024 * 1024,
+			TotalReferences:  1902220,
+			UniqueReferenced: 892104,
 			ChunkerVersions: []VersionStat{
 				{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
 				{Version: "unknown", Chunks: 1, Bytes: 9},
 				{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
 			},
 		},
+		Efficiency: EfficiencyStats{StorageOverheadPct: 3.1},
+		Containers: ContainerStats{
+			TotalContainers:       320,
+			HealthyContainers:     320,
+			QuarantineContainers:  0,
+			TotalBytes:            19 * 1024 * 1024 * 1024,
+			LiveBlockBytes:        18 * 1024 * 1024 * 1024,
+			DeadBlockBytes:        0,
+			FragmentationRatioPct: 0,
+			Records: []ContainerStatRecord{
+				{ID: 2, Filename: "container_000002.ck", TotalBytes: 64 * 1024 * 1024, LiveBytes: 64 * 1024 * 1024, DeadBytes: 0, Quarantine: false},
+				{ID: 1, Filename: "container_000001.ck", TotalBytes: 64 * 1024 * 1024, LiveBytes: 64 * 1024 * 1024, DeadBytes: 0, Quarantine: false},
+			},
+		},
+		Snapshots: SnapshotStats{TotalSnapshots: 12},
+		Retention: RetentionStats{CurrentOnlyLogicalFiles: 20, SnapshotOnlyLogicalFiles: 8, SharedLogicalFiles: 100},
 	}
 
 	if err := RenderStatsHuman(&buf, input); err != nil {
@@ -60,5 +89,41 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	}
 	if !(idxUnknown < idxV1 && idxV1 < idxV2) {
 		t.Fatalf("expected sorted order unknown < v1-simple-rolling < v2-fastcdc, got:\n%s", output)
+	}
+
+	for _, want := range []string{
+		"Coldkeep repository stats",
+		"Repository",
+		"Logical data",
+		"Physical data",
+		"Chunks",
+		"Efficiency",
+		"Containers",
+		"Snapshots",
+		"Retention",
+		"Chunker versions",
+		"Container details",
+		"active write chunker: v2-fastcdc",
+		"files:               128",
+		"completed files:     128",
+		"physical files:      140",
+		"total chunks:        892,104",
+		"references:          1,902,220",
+		"current-only files:  20",
+		"snapshot-only files: 8",
+		"shared files:        100",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+
+	firstDetail := strings.Index(output, "container_000001.ck")
+	secondDetail := strings.Index(output, "container_000002.ck")
+	if firstDetail == -1 || secondDetail == -1 {
+		t.Fatalf("expected both container detail rows, got:\n%s", output)
+	}
+	if firstDetail >= secondDetail {
+		t.Fatalf("expected deterministic container detail sort by id, got:\n%s", output)
 	}
 }
