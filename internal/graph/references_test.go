@@ -46,6 +46,38 @@ func TestGetReverseReferencesChunkToLogicalFiles(t *testing.T) {
 	}
 }
 
+func TestReverseReferencesChunkToFile(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	lfRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "a.txt", 10, "lf-a", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	lfID, _ := lfRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-1", 5, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, lfID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	refs, err := svc.GetReverseReferences(context.Background(), NodeID{Type: EntityChunk, ID: chunkID})
+	if err != nil {
+		t.Fatalf("GetReverseReferences: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 reverse reference, got %d", len(refs))
+	}
+	if refs[0] != (NodeID{Type: EntityLogicalFile, ID: lfID}) {
+		t.Fatalf("unexpected reverse ref: %+v", refs[0])
+	}
+}
+
 func TestGetReverseReferencesLogicalFileToSnapshots(t *testing.T) {
 	dbconn := openGraphTestDB(t)
 	svc := NewService(dbconn)

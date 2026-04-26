@@ -134,3 +134,74 @@ func TestGetReachableChunksDeduplicatesSharedChunks(t *testing.T) {
 		t.Fatalf("expected shared chunk %d to be reachable", sharedChunkID)
 	}
 }
+
+func TestGetReachableChunks(t *testing.T) {
+	dbconn := openGraphTestDB(t)
+	svc := NewService(dbconn)
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, CURRENT_TIMESTAMP, ?), (?, CURRENT_TIMESTAMP, ?)`, "1", "full", "2", "full"); err != nil {
+		t.Fatalf("insert snapshots: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?), (?)`, "docs/a.txt", "docs/b.txt"); err != nil {
+		t.Fatalf("insert snapshot_path rows: %v", err)
+	}
+
+	lfARes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "a.txt", 100, "lf-a", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file a: %v", err)
+	}
+	lfAID, _ := lfARes.LastInsertId()
+	lfBRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "b.txt", 100, "lf-b", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file b: %v", err)
+	}
+	lfBID, _ := lfBRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, (SELECT id FROM snapshot_path WHERE path = ?), ?), (?, (SELECT id FROM snapshot_path WHERE path = ?), ?)`, "1", "docs/a.txt", lfAID, "2", "docs/b.txt", lfBID); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
+
+	chunkARes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-a", 40, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk a: %v", err)
+	}
+	chunkAID, _ := chunkARes.LastInsertId()
+	chunkBRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-b", 50, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk b: %v", err)
+	}
+	chunkBID, _ := chunkBRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?), (?, ?, ?)`, lfAID, chunkAID, 0, lfBID, chunkBID, 0); err != nil {
+		t.Fatalf("insert file_chunk rows: %v", err)
+	}
+
+	allReachable, err := svc.GetReachableChunks(context.Background(), []int64{1, 2})
+	if err != nil {
+		t.Fatalf("GetReachableChunks (before delete): %v", err)
+	}
+	if len(allReachable) != 2 {
+		t.Fatalf("expected 2 reachable chunks before delete, got %d", len(allReachable))
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM snapshot_file WHERE snapshot_id = ?`, "2"); err != nil {
+		t.Fatalf("delete snapshot_file rows: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM snapshot WHERE id = ?`, "2"); err != nil {
+		t.Fatalf("delete snapshot row: %v", err)
+	}
+
+	reachableAfterDelete, err := svc.GetReachableChunks(context.Background(), []int64{1, 2})
+	if err != nil {
+		t.Fatalf("GetReachableChunks (after delete): %v", err)
+	}
+	if len(reachableAfterDelete) != 1 {
+		t.Fatalf("expected 1 reachable chunk after delete, got %d", len(reachableAfterDelete))
+	}
+	if _, ok := reachableAfterDelete[chunkAID]; !ok {
+		t.Fatalf("expected chunk %d to remain reachable", chunkAID)
+	}
+	if _, ok := reachableAfterDelete[chunkBID]; ok {
+		t.Fatalf("expected chunk %d to be unreachable after delete", chunkBID)
+	}
+}

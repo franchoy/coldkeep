@@ -598,6 +598,130 @@ func TestRunGCDryRunRetainsContainerWhenAnotherSnapshotStillReferences(t *testin
 	}
 }
 
+func TestGCReachabilityMatchesLegacy(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('1', NOW(), 'full'), ('2', NOW(), 'full')`); err != nil {
+		t.Fatalf("insert snapshots: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('docs/a.txt'), ('docs/b.txt')`); err != nil {
+		t.Fatalf("insert snapshot_path rows: %v", err)
+	}
+
+	var lfAID, lfBID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status, chunker_version)
+		VALUES ('a.txt', 100, 'lf-a', 0, 'COMPLETED', 'v2-fastcdc') RETURNING id
+	`).Scan(&lfAID); err != nil {
+		t.Fatalf("insert logical_file a: %v", err)
+	}
+	if err := dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status, chunker_version)
+		VALUES ('b.txt', 100, 'lf-b', 0, 'COMPLETED', 'v2-fastcdc') RETURNING id
+	`).Scan(&lfBID); err != nil {
+		t.Fatalf("insert logical_file b: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id)
+		VALUES
+		  ('1', (SELECT id FROM snapshot_path WHERE path = 'docs/a.txt'), $1),
+		  ('2', (SELECT id FROM snapshot_path WHERE path = 'docs/b.txt'), $2)
+	`, lfAID, lfBID); err != nil {
+		t.Fatalf("insert snapshot_file rows: %v", err)
+	}
+
+	var chunkAID, chunkBID, chunkSharedID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ('chunk-a', 40, 'COMPLETED', 1, 0, 'v2-fastcdc') RETURNING id
+	`).Scan(&chunkAID); err != nil {
+		t.Fatalf("insert chunk a: %v", err)
+	}
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ('chunk-b', 50, 'COMPLETED', 1, 0, 'v2-fastcdc') RETURNING id
+	`).Scan(&chunkBID); err != nil {
+		t.Fatalf("insert chunk b: %v", err)
+	}
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ('chunk-shared', 60, 'COMPLETED', 2, 0, 'v2-fastcdc') RETURNING id
+	`).Scan(&chunkSharedID); err != nil {
+		t.Fatalf("insert shared chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		VALUES
+		  ($1, $2, 0),
+		  ($1, $4, 1),
+		  ($3, $4, 0),
+		  ($3, $5, 1)
+	`, lfAID, chunkAID, lfBID, chunkSharedID, chunkBID); err != nil {
+		t.Fatalf("insert file_chunk rows: %v", err)
+	}
+
+	graphSet, err := MarkReachableChunks(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("MarkReachableChunks: %v", err)
+	}
+
+	legacySet, err := legacyMarkReachableChunksForTest(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("legacy mark reachable chunks: %v", err)
+	}
+
+	if len(graphSet) != len(legacySet) {
+		t.Fatalf("reachable set size mismatch: graph=%d legacy=%d", len(graphSet), len(legacySet))
+	}
+	for id := range legacySet {
+		if _, ok := graphSet[id]; !ok {
+			t.Fatalf("graph set missing legacy chunk id %d", id)
+		}
+	}
+	for id := range graphSet {
+		if _, ok := legacySet[id]; !ok {
+			t.Fatalf("graph set has unexpected chunk id %d", id)
+		}
+	}
+}
+
+func legacyMarkReachableChunksForTest(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT DISTINCT fc.chunk_id
+		FROM snapshot_file sf
+		JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+		ORDER BY fc.chunk_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[int64]struct{})
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			return nil, err
+		}
+		out[chunkID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete
 // verifies that removing only current-state mapping does not make content
 // collectible while snapshot retention remains.
