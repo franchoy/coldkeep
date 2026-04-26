@@ -247,6 +247,68 @@ func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
 	if !hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
 		t.Fatalf("expected non-numeric snapshot id warning, got %+v", result.Warnings)
 	}
+	if result.Graph.SnapshotReachableChunks != 0 {
+		t.Fatalf("expected graph snapshot_reachable_chunks=0 with non-numeric snapshot id, got %d", result.Graph.SnapshotReachableChunks)
+	}
+	if result.Graph.SnapshotReachableBytes != 0 {
+		t.Fatalf("expected graph snapshot_reachable_bytes=0 with non-numeric snapshot id, got %d", result.Graph.SnapshotReachableBytes)
+	}
+}
+
+func TestStatsEnrichesGraphSnapshotReachabilityForNumericSnapshotIDs(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	lfRes, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"beta.txt", 42, "hash-beta", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	logicalFileID, err := lfRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical_file last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`,
+		"101", time.Now().UTC(), "full",
+	); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "101", "snap/beta.txt", logicalFileID)
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-beta", 77, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, logicalFileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+
+	if result.Graph.SnapshotReachableChunks != 1 {
+		t.Fatalf("expected graph snapshot_reachable_chunks=1, got %d", result.Graph.SnapshotReachableChunks)
+	}
+	if result.Graph.SnapshotReachableBytes != 77 {
+		t.Fatalf("expected graph snapshot_reachable_bytes=77, got %d", result.Graph.SnapshotReachableBytes)
+	}
+	if hasWarningCode(result.Warnings, "graph_snapshot_reachable_chunks_mismatch") {
+		t.Fatalf("unexpected chunks mismatch warning: %+v", result.Warnings)
+	}
+	if hasWarningCode(result.Warnings, "graph_snapshot_reachable_bytes_mismatch") {
+		t.Fatalf("unexpected bytes mismatch warning: %+v", result.Warnings)
+	}
 }
 
 func TestObservabilityDoesNotMutateState(t *testing.T) {

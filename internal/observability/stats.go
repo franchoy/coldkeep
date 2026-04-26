@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -171,7 +172,38 @@ func (s *Service) enrichStatsWithGraph(ctx context.Context, result *StatsResult,
 	if err != nil {
 		return err
 	}
-	result.Chunks.UniqueReferenced = int64(len(reachableChunks))
+	result.Graph.SnapshotReachableChunks = int64(len(reachableChunks))
+
+	reachableBytes, err := s.sumChunkSizesByID(ctx, reachableChunks)
+	if err != nil {
+		return err
+	}
+	result.Graph.SnapshotReachableBytes = reachableBytes
+
+	checkChunks, checkBytes, err := s.snapshotReachabilityViaSQL(ctx, snapshotIDs)
+	if err != nil {
+		return err
+	}
+	if result.Graph.SnapshotReachableChunks != checkChunks {
+		result.Warnings = append(result.Warnings, ObservationWarning{
+			Code: "graph_snapshot_reachable_chunks_mismatch",
+			Message: fmt.Sprintf(
+				"graph snapshot reachable chunks=%d differs from aggregate snapshot query=%d",
+				result.Graph.SnapshotReachableChunks,
+				checkChunks,
+			),
+		})
+	}
+	if result.Graph.SnapshotReachableBytes != checkBytes {
+		result.Warnings = append(result.Warnings, ObservationWarning{
+			Code: "graph_snapshot_reachable_bytes_mismatch",
+			Message: fmt.Sprintf(
+				"graph snapshot reachable bytes=%d differs from aggregate snapshot query=%d",
+				result.Graph.SnapshotReachableBytes,
+				checkBytes,
+			),
+		})
+	}
 
 	return nil
 }
@@ -226,6 +258,73 @@ func calculateEfficiency(result *StatsResult) EfficiencyStats {
 		return EfficiencyStats{}
 	}
 	return buildEfficiencyStats(result.Logical.CompletedSizeBytes, result.Chunks.CompletedBytes, result.Containers.TotalBytes)
+}
+
+func (s *Service) sumChunkSizesByID(ctx context.Context, chunkIDs map[int64]struct{}) (int64, error) {
+	if s == nil || s.db == nil || len(chunkIDs) == 0 {
+		return 0, nil
+	}
+
+	var total int64
+	for chunkID := range chunkIDs {
+		var size int64
+		err := s.db.QueryRowContext(ctx, `SELECT size FROM chunk WHERE id = ?`, chunkID).Scan(&size)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return 0, err
+		}
+		total += size
+	}
+
+	return total, nil
+}
+
+func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []int64) (int64, int64, error) {
+	if s == nil || s.db == nil || len(snapshotIDs) == 0 {
+		return 0, 0, nil
+	}
+
+	uniqueChunkSizes := make(map[int64]int64)
+	for _, snapshotID := range snapshotIDs {
+		rows, err := s.db.QueryContext(
+			ctx,
+			`SELECT fc.chunk_id, c.size
+			 FROM snapshot_file sf
+			 JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+			 JOIN chunk c ON c.id = fc.chunk_id
+			 WHERE sf.snapshot_id = ?`,
+			strconv.FormatInt(snapshotID, 10),
+		)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		for rows.Next() {
+			var chunkID int64
+			var size int64
+			if err := rows.Scan(&chunkID, &size); err != nil {
+				_ = rows.Close()
+				return 0, 0, err
+			}
+			if _, exists := uniqueChunkSizes[chunkID]; !exists {
+				uniqueChunkSizes[chunkID] = size
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, 0, err
+		}
+		_ = rows.Close()
+	}
+
+	var totalBytes int64
+	for _, size := range uniqueChunkSizes {
+		totalBytes += size
+	}
+
+	return int64(len(uniqueChunkSizes)), totalBytes, nil
 }
 
 func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) EfficiencyStats {

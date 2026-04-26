@@ -47,6 +47,7 @@ type StatsResult struct {
 	Efficiency EfficiencyStats `json:"efficiency"`
 	Snapshots  SnapshotStats   `json:"snapshots"`
 	Retention  RetentionStats  `json:"retention"`
+	Graph      GraphStats      `json:"graph"`
 
 	Warnings []ObservationWarning `json:"warnings,omitempty"`
 }
@@ -124,6 +125,11 @@ type RetentionStats struct {
 	SnapshotOnlyBytes              int64 `json:"snapshot_only_bytes"`
 	SharedLogicalFiles             int64 `json:"shared_logical_files"`
 	SharedBytes                    int64 `json:"shared_bytes"`
+}
+
+type GraphStats struct {
+	SnapshotReachableChunks int64 `json:"snapshot_reachable_chunks"`
+	SnapshotReachableBytes  int64 `json:"snapshot_reachable_bytes"`
 }
 
 type InspectResult struct {
