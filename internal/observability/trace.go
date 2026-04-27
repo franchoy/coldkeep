@@ -15,3 +15,13 @@ type TraceEvent struct {
 type NoopTraceSink struct{}
 
 func (NoopTraceSink) Event(event TraceEvent) {}
+
+func emitTrace(trace TraceOptions, event TraceEvent) {
+	if !trace.Enabled {
+		return
+	}
+	if trace.Sink == nil {
+		return
+	}
+	trace.Sink.Event(event)
+}
