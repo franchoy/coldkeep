@@ -493,7 +493,7 @@ func TestBackwardCompatV15CLIWorkflowIntegration(t *testing.T) {
 
 	// snapshot create
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "create", "--id", "compat-snap", "--output", "json"), "snapshot create")
+		"snapshot", "create", "--id", "compat-snap", "--output", "json"), "snapshot")
 
 	// snapshot list
 	listRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "snapshot", "list", "--output", "json")
@@ -503,7 +503,7 @@ func TestBackwardCompatV15CLIWorkflowIntegration(t *testing.T) {
 
 	// snapshot show
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "show", "compat-snap", "--output", "json"), "snapshot show")
+		"snapshot", "show", "compat-snap", "--output", "json"), "snapshot")
 
 	// snapshot restore
 	snapRestoreDir := filepath.Join(tmp, "snap-restore")
@@ -511,30 +511,64 @@ func TestBackwardCompatV15CLIWorkflowIntegration(t *testing.T) {
 		t.Fatalf("mkdir snap-restore: %v", err)
 	}
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"snapshot", "restore", "compat-snap", "--mode", "prefix", "--destination", snapRestoreDir, "--output", "json"), "snapshot restore")
+		"snapshot", "restore", "compat-snap", "--mode", "prefix", "--destination", snapRestoreDir, "--output", "json"), "snapshot")
 
 	// stats
-	statsPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"stats", "--output", "json"), "stats")
+	statsRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats", "--output", "json")
+	if statsRes.ExitCode != 0 {
+		t.Fatalf("stats failed: exit=%d stderr=%s", statsRes.ExitCode, statsRes.Stderr)
+	}
+	statsPayload, ok := testutils.TryParseLastJSONLine(statsRes.Stdout)
+	if !ok {
+		statsPayload, ok = testutils.TryParseLastJSONLine(statsRes.Stdout + "\n" + statsRes.Stderr)
+	}
+	if !ok {
+		t.Fatalf("stats produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", statsRes.Stdout, statsRes.Stderr)
+	}
+	if got, _ := statsPayload["type"].(string); got != "stats" {
+		t.Fatalf("stats payload type mismatch: got=%q payload=%v", got, statsPayload)
+	}
 	statsData := testutils.JSONMap(t, statsPayload, "data")
 	if _, ok := statsData["logical"]; !ok {
 		t.Fatalf("stats JSON missing 'logical' section: %v", statsData)
 	}
 
-	// remove
+	// remove should fail while snapshot still retains the logical file
+	removeBlockedRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"remove", fmt.Sprintf("%d", fileID), "--output", "json")
+	if removeBlockedRes.ExitCode == 0 {
+		t.Fatalf("expected remove to fail while snapshot retains file_id=%d", fileID)
+	}
+
+	// delete retaining snapshot, then remove should succeed
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "delete", "compat-snap", "--force", "--output", "json"), "snapshot")
+
 	removeRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"remove", fmt.Sprintf("%d", fileID), "--output", "json")
 	if removeRes.ExitCode != 0 {
-		t.Fatalf("remove failed: exit=%d stderr=%s", removeRes.ExitCode, removeRes.Stderr)
+		t.Fatalf("remove after snapshot delete failed: exit=%d stderr=%s", removeRes.ExitCode, removeRes.Stderr)
 	}
 
 	// verify passes after remove
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"verify", "system", "--output", "json"), "verify after remove")
+		"verify", "system", "--output", "json"), "verify")
 
 	// stats --json
-	statsJSONPayload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"stats", "--json"), "stats --json")
+	statsJSONRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats", "--json")
+	if statsJSONRes.ExitCode != 0 {
+		t.Fatalf("stats --json failed: exit=%d stderr=%s", statsJSONRes.ExitCode, statsJSONRes.Stderr)
+	}
+	statsJSONPayload, ok := testutils.TryParseLastJSONLine(statsJSONRes.Stdout)
+	if !ok {
+		statsJSONPayload, ok = testutils.TryParseLastJSONLine(statsJSONRes.Stdout + "\n" + statsJSONRes.Stderr)
+	}
+	if !ok {
+		t.Fatalf("stats --json produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", statsJSONRes.Stdout, statsJSONRes.Stderr)
+	}
+	if got, _ := statsJSONPayload["type"].(string); got != "stats" {
+		t.Fatalf("stats --json payload type mismatch: got=%q payload=%v", got, statsJSONPayload)
+	}
 	if _, ok := statsJSONPayload["data"]; !ok {
 		t.Fatalf("stats --json missing 'data': %v", statsJSONPayload)
 	}
