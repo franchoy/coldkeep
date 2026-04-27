@@ -2182,23 +2182,30 @@ func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
 		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
 	}
-	if got, _ := payload["entity_type"].(string); got != "chunk" {
-		t.Fatalf("expected entity_type=chunk, got %v", payload["entity_type"])
+	if got, _ := payload["type"].(string); got != "inspect" {
+		t.Fatalf("expected type=inspect, got %v", payload["type"])
 	}
-	if got, _ := payload["entity_id"].(string); got != "123" {
-		t.Fatalf("expected entity_id=123, got %v", payload["entity_id"])
-	}
-	summary, ok := payload["summary"].(map[string]any)
+	data, ok := payload["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected summary object, got %T", payload["summary"])
+		t.Fatalf("expected data object, got %T", payload["data"])
+	}
+	if got, _ := data["entity_type"].(string); got != "chunk" {
+		t.Fatalf("expected entity_type=chunk, got %v", data["entity_type"])
+	}
+	if got, _ := data["entity_id"].(string); got != "123" {
+		t.Fatalf("expected entity_id=123, got %v", data["entity_id"])
+	}
+	summary, ok := data["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary object, got %T", data["summary"])
 	}
 	if got, _ := summary["chunker_version"].(string); got != "v2-fastcdc" {
 		t.Fatalf("expected chunker_version=v2-fastcdc, got %v", summary["chunker_version"])
 	}
 	assertJSONNumber(t, summary, "size_bytes", 4096)
-	relations, ok := payload["relations"].([]any)
+	relations, ok := data["relations"].([]any)
 	if !ok || len(relations) != 1 {
-		t.Fatalf("expected 1 relation, got %T (%v)", payload["relations"], payload["relations"])
+		t.Fatalf("expected 1 relation, got %T (%v)", data["relations"], data["relations"])
 	}
 	rel, ok := relations[0].(map[string]any)
 	if !ok {
@@ -2260,8 +2267,12 @@ func TestRunInspectCommandJSONShorthand(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
 		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
 	}
-	if got, _ := payload["entity_type"].(string); got != "chunk" {
-		t.Fatalf("expected entity_type=chunk, got %v", payload["entity_type"])
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %T", payload["data"])
+	}
+	if got, _ := data["entity_type"].(string); got != "chunk" {
+		t.Fatalf("expected entity_type=chunk, got %v", data["entity_type"])
 	}
 }
 
@@ -5817,7 +5828,13 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
 	}
-	data := payload
+	if got, _ := payload["type"].(string); got != "stats" {
+		t.Fatalf("expected type=stats, got %v", payload["type"])
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object in payload: %v", payload)
+	}
 	retentionData, ok := data["retention"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing retention object in payload: %v", data)
@@ -5944,9 +5961,16 @@ func TestStatsCommandJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		t.Fatalf("parse json payload: %v\noutput=%q", err, output)
 	}
-	repo, ok := payload["repository"].(map[string]any)
+	if got, _ := payload["type"].(string); got != "stats" {
+		t.Fatalf("expected type=stats, got %v", payload["type"])
+	}
+	data, ok := payload["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing repository object: %v", payload)
+		t.Fatalf("missing data object: %v", payload)
+	}
+	repo, ok := data["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing repository object: %v", data)
 	}
 	if got, _ := repo["active_write_chunker"].(string); got != "v2-fastcdc" {
 		t.Fatalf("active_write_chunker mismatch: got=%q", got)
@@ -7195,6 +7219,19 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOutput)), &payload); err != nil {
 		t.Fatalf("parse simulate gc JSON: %v output=%q", err, jsonOutput)
 	}
+	if got, _ := payload["type"].(string); got != "simulation" {
+		t.Fatalf("expected type=simulation, got %v", payload["type"])
+	}
+	meta, ok := payload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected meta object, got %T", payload["meta"])
+	}
+	if got, _ := meta["version"].(string); got != "v1.6" {
+		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	}
+	if got, _ := meta["exact"].(bool); !got {
+		t.Fatalf("expected meta.exact=true, got %v", meta["exact"])
+	}
 	data := payload["data"].(map[string]any)
 	gcNode := data["gc"].(map[string]any)
 	summary := gcNode["summary"].(map[string]any)
@@ -7207,8 +7244,11 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	if len(deleted) != 1 || deleted[0] != "snap-a" {
 		t.Fatalf("unexpected deleted_snapshots: %v", assumptions["deleted_snapshots"])
 	}
-	warnings := gcNode["warnings"].([]any)
+	warnings := payload["warnings"].([]any)
 	if len(warnings) != 1 {
 		t.Fatalf("expected one warning, got %v", warnings)
+	}
+	if _, exists := gcNode["warnings"]; exists {
+		t.Fatalf("expected gc.warnings to be omitted from data, got %v", gcNode["warnings"])
 	}
 }

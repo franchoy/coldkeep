@@ -154,14 +154,40 @@ func (JSONRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {
 		r = &SimulationResult{}
 	}
 
-	payload := map[string]any{
-		"status":  "ok",
-		"command": "simulate gc",
-		"data":    r,
+	data, err := toObjectMap(r)
+	if err != nil {
+		return fmt.Errorf("render simulation json: encode data: %w", err)
+	}
+	delete(data, "generated_at_utc")
+	delete(data, "warnings")
+
+	warnings := normalizeWarnings(r.Warnings)
+	if r.GC != nil {
+		if gc, ok := data["gc"].(map[string]any); ok {
+			delete(gc, "generated_at_utc")
+			delete(gc, "warnings")
+		}
+		warnings = append(warnings, normalizeWarnings(r.GC.Warnings)...)
+	}
+
+	exact := r.Exact
+	if r.GC != nil {
+		exact = r.GC.Exact
+	}
+
+	envelope := jsonEnvelope{
+		GeneratedAtUTC: normalizeGeneratedAt(r.GeneratedAtUTC),
+		Type:           "simulation",
+		Data:           data,
+		Warnings:       warnings,
+		Meta: jsonEnvelopeMeta{
+			Version: cliJSONSchemaVersion,
+			Exact:   exact,
+		},
 	}
 
 	encoder := json.NewEncoder(w)
-	return encoder.Encode(payload)
+	return encoder.Encode(envelope)
 }
 
 func formatMiB(bytes int64) string {

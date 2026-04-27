@@ -56,11 +56,24 @@ func TestRenderSimulationJSONUsesStableEnvelope(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal simulation json: %v", err)
 	}
-	if payload["status"] != "ok" {
-		t.Fatalf("unexpected status: %v", payload["status"])
+	if payload["type"] != "simulation" {
+		t.Fatalf("unexpected type: %v", payload["type"])
 	}
-	if payload["command"] != "simulate gc" {
-		t.Fatalf("unexpected command: %v", payload["command"])
+	if _, ok := payload["generated_at_utc"].(string); !ok {
+		t.Fatalf("missing generated_at_utc: %v", payload)
+	}
+	meta, ok := payload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing meta object: %v", payload)
+	}
+	if got, _ := meta["version"].(string); got != "v1.6" {
+		t.Fatalf("unexpected meta.version: %v", meta["version"])
+	}
+	if got, _ := meta["exact"].(bool); got != false {
+		t.Fatalf("unexpected meta.exact: %v", meta["exact"])
+	}
+	if warnings, ok := payload["warnings"].([]any); !ok || len(warnings) != 0 {
+		t.Fatalf("expected empty warnings array, got %v", payload["warnings"])
 	}
 	if _, ok := payload["data"].(map[string]any); !ok {
 		t.Fatalf("expected data object, got: %T", payload["data"])

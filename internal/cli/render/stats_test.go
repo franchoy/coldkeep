@@ -35,12 +35,35 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
-	if got, _ := decoded["repository"].(map[string]any)["active_write_chunker"].(string); got != "v2-fastcdc" {
+	if got, _ := decoded["type"].(string); got != "stats" {
+		t.Fatalf("unexpected type: %v", decoded["type"])
+	}
+	meta, ok := decoded["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing meta object: %+v", decoded)
+	}
+	if got, _ := meta["version"].(string); got != "v1.6" {
+		t.Fatalf("unexpected meta.version: %v", meta["version"])
+	}
+	if got, _ := meta["exact"].(bool); !got {
+		t.Fatalf("unexpected meta.exact: %v", meta["exact"])
+	}
+	if _, ok := decoded["generated_at_utc"].(string); !ok {
+		t.Fatalf("missing generated_at_utc: %+v", decoded)
+	}
+	if warnings, ok := decoded["warnings"].([]any); !ok || len(warnings) != 0 {
+		t.Fatalf("expected empty warnings array, got: %v", decoded["warnings"])
+	}
+	data, ok := decoded["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object: %+v", decoded)
+	}
+	if got, _ := data["repository"].(map[string]any)["active_write_chunker"].(string); got != "v2-fastcdc" {
 		t.Fatalf("unexpected active_write_chunker: %q", got)
 	}
-	eff, ok := decoded["efficiency"].(map[string]any)
+	eff, ok := data["efficiency"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing efficiency object: %+v", decoded)
+		t.Fatalf("missing efficiency object: %+v", data)
 	}
 	if got, ok := eff["dedup_ratio"].(float64); !ok || got != 2.5 {
 		t.Fatalf("unexpected efficiency.dedup_ratio: %v", eff["dedup_ratio"])
@@ -187,9 +210,23 @@ func TestRenderStatsJSONRoundTrips(t *testing.T) {
 		t.Fatalf("RenderStatsJSON: %v", err)
 	}
 
-	var decoded StatsResult
-	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+	var envelope map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &envelope); err != nil {
 		t.Fatalf("unmarshal roundtrip: %v", err)
+	}
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data payload: %+v", envelope)
+	}
+
+	encodedData, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal envelope data: %v", err)
+	}
+
+	var decoded StatsResult
+	if err := json.Unmarshal(encodedData, &decoded); err != nil {
+		t.Fatalf("unmarshal stats data: %v", err)
 	}
 
 	if decoded.Repository.ActiveWriteChunker != input.Repository.ActiveWriteChunker {
@@ -284,9 +321,13 @@ func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
 	if err := json.Unmarshal(jsonBuf.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode json output: %v", err)
 	}
-	eff, ok := decoded["efficiency"].(map[string]any)
+	data, ok := decoded["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing efficiency object in json output: %+v", decoded)
+		t.Fatalf("missing data object in json output: %+v", decoded)
+	}
+	eff, ok := data["efficiency"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing efficiency object in json output: %+v", data)
 	}
 	if got, _ := eff["dedup_ratio"].(float64); got != 2.29 {
 		t.Fatalf("expected dedup_ratio 2.29, got %v", eff["dedup_ratio"])

@@ -34,8 +34,26 @@ func (JSONRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 		r = &StatsResult{}
 	}
 
+	data, err := toObjectMap(r)
+	if err != nil {
+		return fmt.Errorf("render stats json: encode data: %w", err)
+	}
+	delete(data, "generated_at_utc")
+	delete(data, "warnings")
+
+	envelope := jsonEnvelope{
+		GeneratedAtUTC: normalizeGeneratedAt(r.GeneratedAtUTC),
+		Type:           "stats",
+		Data:           data,
+		Warnings:       normalizeWarnings(r.Warnings),
+		Meta: jsonEnvelopeMeta{
+			Version: cliJSONSchemaVersion,
+			Exact:   true,
+		},
+	}
+
 	encoder := json.NewEncoder(w)
-	return encoder.Encode(r)
+	return encoder.Encode(envelope)
 }
 
 func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {
