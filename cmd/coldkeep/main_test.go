@@ -2218,6 +2218,53 @@ func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
 	}
 }
 
+func TestRunInspectCommandJSONShorthand(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() {
+		runObservabilityInspectPhase = originalInspect
+	})
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   id,
+			Summary: map[string]any{
+				"chunk_hash": "c-hash",
+			},
+		}, nil
+	}
+
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "inspect",
+		flags:  map[string][]string{"json": {""}},
+	})
+	if err != nil {
+		t.Fatalf("resolveOutputMode: %v", err)
+	}
+	if mode != outputModeJSON {
+		t.Fatalf("expected outputModeJSON for --json shorthand, got %q", mode)
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"chunk", "42"},
+			flags:       map[string][]string{"json": {""}},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runInspectCommand json shorthand returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
+	}
+	if got, _ := payload["entity_type"].(string); got != "chunk" {
+		t.Fatalf("expected entity_type=chunk, got %v", payload["entity_type"])
+	}
+}
+
 func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 	// unknown entity type
 	err := runInspectCommand(parsedCommandLine{

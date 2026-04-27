@@ -1812,7 +1812,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
-		return usageErrorf("Usage: coldkeep stats [--output <human|text|json>] [--json] [--containers] [--trace|--trace-json]")
+		return usageErrorf("Usage: coldkeep stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]")
 	}
 	traceOptions, err := resolveTraceOptions(parsed)
 	if err != nil {
@@ -1833,7 +1833,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "relations", "reverse", "deep", "limit", "trace", "trace-json"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "relations", "reverse", "deep", "limit", "trace", "trace-json"); err != nil {
 		return err
 	}
 	traceOptions, err := resolveTraceOptions(parsed)
@@ -4493,8 +4493,8 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  stats [--output <human|text|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
-		{"  inspect file <fileID> [--output <text|json>] [--trace|--trace-json]", "Inspect one logical file with chunker and chunking summary"},
+		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
+		{"  inspect file <fileID> [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one logical file with chunker and chunking summary"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
@@ -4512,7 +4512,7 @@ func printHelp() {
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
 		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
-		{"  simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>] [--json] [--trace|--trace-json]", "Preview exact GC impact without mutations; use --containers for per-container detail"},
+		{"  simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]", "Preview exact GC impact without mutations; use --containers for per-container detail"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
