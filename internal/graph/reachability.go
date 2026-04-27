@@ -131,6 +131,10 @@ func (s *Service) GCRoots(ctx context.Context, opts GCRootOptions) ([]NodeID, er
 // ReachableChunksFromRoots traverses the graph from arbitrary roots and returns
 // all reachable chunk IDs.
 func (s *Service) ReachableChunksFromRoots(ctx context.Context, roots []NodeID) (map[int64]struct{}, error) {
+	return s.ReachableChunksFromRootsWithOptions(ctx, roots, TraversalOptions{})
+}
+
+func (s *Service) ReachableChunksFromRootsWithOptions(ctx context.Context, roots []NodeID, opts TraversalOptions) (map[int64]struct{}, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -140,12 +144,12 @@ func (s *Service) ReachableChunksFromRoots(ctx context.Context, roots []NodeID) 
 		return reachable, nil
 	}
 
-	err := s.Traverse(ctx, roots, func(n NodeID) error {
+	err := s.TraverseWithOptions(ctx, roots, func(n NodeID) error {
 		if n.Type == EntityChunk {
 			reachable[n.ID] = struct{}{}
 		}
 		return nil
-	})
+	}, opts)
 	if err != nil {
 		return nil, err
 	}

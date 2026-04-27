@@ -275,3 +275,67 @@ func TestTraverseNoCyclesInfiniteLoops(t *testing.T) {
 		t.Fatalf("expected traversal across repeated references, kinds=%v", kinds)
 	}
 }
+
+func TestTraverseWithOptionsEmitsTraceEvents(t *testing.T) {
+	svc := NewService(nil)
+	start := []NodeID{{Type: EntitySnapshot, ID: 1}, {Type: EntitySnapshot, ID: 1}}
+
+	steps := make([]string, 0)
+	skipped := 0
+	err := svc.TraverseWithOptions(context.Background(), start, func(NodeID) error {
+		return nil
+	}, TraversalOptions{
+		Trace: func(event TraceEvent) {
+			steps = append(steps, event.Step)
+			if event.Step == "graph.node.skip_already_visited" {
+				skipped++
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("TraverseWithOptions: %v", err)
+	}
+
+	if len(steps) == 0 {
+		t.Fatal("expected trace events")
+	}
+	if steps[0] != "graph.traverse.start" {
+		t.Fatalf("first trace step = %q, want graph.traverse.start", steps[0])
+	}
+	if steps[len(steps)-1] != "graph.traverse.complete" {
+		t.Fatalf("last trace step = %q, want graph.traverse.complete", steps[len(steps)-1])
+	}
+
+	wantPresent := []string{
+		"graph.node.visit",
+		"graph.edge.load",
+		"graph.edge.loaded",
+		"graph.node.skip_already_visited",
+	}
+	for _, want := range wantPresent {
+		found := false
+		for _, got := range steps {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing trace step %q in %v", want, steps)
+		}
+	}
+
+	if skipped != 1 {
+		t.Fatalf("skip events = %d, want 1", skipped)
+	}
+}
+
+func TestTraverseWithOptionsNilTraceIsNoop(t *testing.T) {
+	svc := NewService(nil)
+	err := svc.TraverseWithOptions(context.Background(), []NodeID{{Type: EntitySnapshot, ID: 1}}, func(NodeID) error {
+		return nil
+	}, TraversalOptions{})
+	if err != nil {
+		t.Fatalf("TraverseWithOptions with nil trace should not fail: %v", err)
+	}
+}

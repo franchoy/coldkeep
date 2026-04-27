@@ -19,9 +19,25 @@ func (s *Service) Traverse(
 	start []NodeID,
 	visit func(NodeID) error,
 ) error {
+	return s.TraverseWithOptions(ctx, start, visit, TraversalOptions{})
+}
+
+func (s *Service) TraverseWithOptions(
+	ctx context.Context,
+	start []NodeID,
+	visit func(NodeID) error,
+	opts TraversalOptions,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "graph.traverse.start",
+		Message: "starting graph traversal",
+		Metadata: map[string]any{
+			"start_nodes": len(start),
+		},
+	})
 
 	queue := make([]NodeID, len(start))
 	copy(queue, start)
@@ -37,21 +53,51 @@ func (s *Service) Traverse(
 		queue = queue[1:]
 
 		if _, ok := visited[n]; ok {
+			emitTrace(opts.Trace, TraceEvent{
+				Step:    "graph.node.skip_already_visited",
+				Node:    n,
+				Message: "skipping already visited node",
+			})
 			continue
 		}
 		visited[n] = struct{}{}
+		emitTrace(opts.Trace, TraceEvent{
+			Step:    "graph.node.visit",
+			Node:    n,
+			Message: "visiting node",
+		})
 
 		if err := visit(n); err != nil {
 			return err
 		}
+		emitTrace(opts.Trace, TraceEvent{
+			Step:    "graph.edge.load",
+			Node:    n,
+			Message: "loading outgoing edges",
+		})
 
 		neighbors, err := s.getOutgoing(ctx, n)
 		if err != nil {
 			return err
 		}
+		emitTrace(opts.Trace, TraceEvent{
+			Step:    "graph.edge.loaded",
+			Node:    n,
+			Message: "loaded outgoing edges",
+			Metadata: map[string]any{
+				"neighbors": len(neighbors),
+			},
+		})
 
 		queue = append(queue, neighbors...)
 	}
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "graph.traverse.complete",
+		Message: "completed graph traversal",
+		Metadata: map[string]any{
+			"visited_nodes": len(visited),
+		},
+	})
 
 	return nil
 }
