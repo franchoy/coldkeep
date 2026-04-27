@@ -3546,7 +3546,8 @@ func previewSharedFiles(preview *snapshotDeleteLineagePreview) int64 {
 	return preview.SharedFiles
 }
 
-// formatNumberWithCommas formats a number int64 with comma separators for readability
+// formatNumberWithCommas formats a number int64 with comma separators for readability.
+// Kept as a compatibility helper for existing CLI tests.
 func formatNumberWithCommas(n int64) string {
 	if n < 0 {
 		return "-" + formatNumberWithCommas(-n)
@@ -3567,88 +3568,12 @@ func formatNumberWithCommas(n int64) string {
 }
 
 func previewWarnings(preview *snapshotDeleteLineagePreview) []map[string]any {
-	if preview == nil || len(preview.ChildSnapshotIDs) == 0 {
-		return nil
-	}
-	return []map[string]any{
-		{
-			"type":    "lineage_breakage",
-			"message": "Deleting this snapshot will break lineage visualization for its children.",
-			"details": map[string]any{
-				"affected_snapshots": preview.ChildSnapshotIDs,
-				"note":               "Affected snapshots remain fully usable; only lineage information is affected.",
-			},
-		},
-	}
+	return clirender.SnapshotDeleteWarnings(preview)
 }
 
 // formatSnapshotDeleteDryRunOutput builds the formatted text output for dry-run delete
 func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDeleteLineagePreview) string {
-	var buf strings.Builder
-
-	// Header
-	fmt.Fprintf(&buf, "Snapshot: %s\n", snapshotID)
-	buf.WriteString("\n")
-
-	if preview != nil {
-		// Files section
-		buf.WriteString("Files:\n")
-		fmt.Fprintf(&buf, "  Total:        %s\n", formatNumberWithCommas(preview.TotalFiles))
-		fmt.Fprintf(&buf, "  Unique:       %s\n", formatNumberWithCommas(preview.UniqueFiles))
-		fmt.Fprintf(&buf, "  Shared:       %s\n", formatNumberWithCommas(preview.SharedFiles))
-		buf.WriteString("\n")
-
-		// Lineage section
-		buf.WriteString("Lineage:\n")
-		if preview.ParentID.Valid {
-			if preview.ParentMissing {
-				buf.WriteString("  Parent: (missing)\n")
-				buf.WriteString("  Parent note: parent snapshot metadata is missing; this snapshot remains usable\n")
-			} else {
-				fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
-			}
-		} else {
-			buf.WriteString("  Parent: none\n")
-		}
-		if len(preview.ChildSnapshotIDs) > 0 {
-			buf.WriteString("  Children:\n")
-			for _, childID := range preview.ChildSnapshotIDs {
-				fmt.Fprintf(&buf, "    - %s\n", childID)
-			}
-		} else {
-			buf.WriteString("  Children: none\n")
-		}
-		buf.WriteString("\n")
-
-		// Warning section (only if has children)
-		if len(preview.ChildSnapshotIDs) > 0 {
-			buf.WriteString("Warning:\n")
-			buf.WriteString("  This snapshot is parent of:\n")
-			for _, childID := range preview.ChildSnapshotIDs {
-				fmt.Fprintf(&buf, "    - %s\n", childID)
-			}
-			buf.WriteString("\n")
-			buf.WriteString("  Deleting it will break lineage visualization,\n")
-			buf.WriteString("  but snapshots remain fully usable.\n")
-			buf.WriteString("\n")
-		}
-
-		// Impact section
-		buf.WriteString("Impact:\n")
-		buf.WriteString("  Deleting this snapshot will:\n")
-		buf.WriteString("    - remove snapshot metadata\n")
-		buf.WriteString("    - NOT delete shared data\n")
-		if preview.UniqueFiles > 0 {
-			fmt.Fprintf(&buf, "    - remove %s unique snapshot file reference(s) from metadata\n", formatNumberWithCommas(preview.UniqueFiles))
-			buf.WriteString("      (reference impact only; does not guarantee reclaimed disk space)\n")
-		}
-		buf.WriteString("\n")
-	}
-
-	// Dry-run notice
-	buf.WriteString("Dry run: no changes applied.\n")
-
-	return buf.String()
+	return clirender.FormatSnapshotDeleteDryRunOutput(snapshotID, preview)
 }
 
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
