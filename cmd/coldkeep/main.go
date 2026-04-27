@@ -755,84 +755,6 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	}
 }
 
-type stderrTextTraceSink struct{}
-
-func (stderrTextTraceSink) Event(event observability.TraceEvent) {
-	line := strings.Builder{}
-	line.WriteString("TRACE ")
-	line.WriteString(strings.TrimSpace(event.Step))
-
-	entity := strings.TrimSpace(event.Entity)
-	entityID := strings.TrimSpace(event.EntityID)
-	if entity != "" {
-		line.WriteByte(' ')
-		if entityID != "" {
-			line.WriteString(entity)
-			line.WriteByte('=')
-			line.WriteString(entityID)
-		} else {
-			line.WriteString(entity)
-		}
-	}
-
-	message := strings.TrimSpace(strings.ReplaceAll(event.Message, "\n", " "))
-	if message != "" {
-		line.WriteByte(' ')
-		line.WriteString(message)
-	}
-
-	if len(event.Metadata) > 0 {
-		keys := make([]string, 0, len(event.Metadata))
-		for key := range event.Metadata {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			line.WriteByte(' ')
-			line.WriteString(key)
-			line.WriteByte('=')
-			line.WriteString(formatTraceMetadataValue(event.Metadata[key]))
-		}
-	}
-
-	_, _ = fmt.Fprintln(os.Stderr, line.String())
-}
-
-type stderrJSONTraceSink struct{}
-
-func (stderrJSONTraceSink) Event(event observability.TraceEvent) {
-	encoded, err := json.Marshal(event)
-	if err != nil {
-		fallback := map[string]any{
-			"step":    event.Step,
-			"message": "trace encoding failed",
-			"error":   err.Error(),
-		}
-		encoded, _ = json.Marshal(fallback)
-	}
-	_, _ = fmt.Fprintln(os.Stderr, string(encoded))
-}
-
-func formatTraceMetadataValue(value any) string {
-	switch v := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			return "\"\""
-		}
-		if strings.ContainsAny(trimmed, " \t\n\r") {
-			return strconv.Quote(trimmed)
-		}
-		return trimmed
-	default:
-		encoded, err := json.Marshal(v)
-		if err != nil {
-			return "\"<unserializable>\""
-		}
-		return string(encoded)
-	}
-}
-
 func resolveTraceOptions(parsed parsedCommandLine) (observability.TraceOptions, error) {
 	hasTraceText := parsed.hasFlag("trace")
 	hasTraceJSON := parsed.hasFlag("trace-json")
@@ -842,10 +764,10 @@ func resolveTraceOptions(parsed parsedCommandLine) (observability.TraceOptions, 
 	}
 
 	if hasTraceJSON {
-		return observability.TraceOptions{Enabled: true, Sink: stderrJSONTraceSink{}}, nil
+		return observability.TraceOptions{Enabled: true, Sink: observability.NewJSONTraceSink(os.Stderr)}, nil
 	}
 	if hasTraceText {
-		return observability.TraceOptions{Enabled: true, Sink: stderrTextTraceSink{}}, nil
+		return observability.TraceOptions{Enabled: true, Sink: observability.HumanTraceSink{W: os.Stderr}}, nil
 	}
 
 	return observability.TraceOptions{}, nil

@@ -1399,8 +1399,8 @@ func TestResolveTraceOptionsTextTraceSink(t *testing.T) {
 	if !opts.Enabled {
 		t.Fatal("expected trace enabled")
 	}
-	if _, ok := opts.Sink.(stderrTextTraceSink); !ok {
-		t.Fatalf("expected stderrTextTraceSink, got %T", opts.Sink)
+	if _, ok := opts.Sink.(observability.HumanTraceSink); !ok {
+		t.Fatalf("expected observability.HumanTraceSink, got %T", opts.Sink)
 	}
 }
 
@@ -1415,14 +1415,14 @@ func TestResolveTraceOptionsJSONTraceSink(t *testing.T) {
 	if !opts.Enabled {
 		t.Fatal("expected trace enabled")
 	}
-	if _, ok := opts.Sink.(stderrJSONTraceSink); !ok {
-		t.Fatalf("expected stderrJSONTraceSink, got %T", opts.Sink)
+	if _, ok := opts.Sink.(*observability.JSONTraceSink); !ok {
+		t.Fatalf("expected *observability.JSONTraceSink, got %T", opts.Sink)
 	}
 }
 
 func TestStderrTextTraceSinkWritesHumanLine(t *testing.T) {
 	output := captureStderr(t, func() {
-		(stderrTextTraceSink{}).Event(observability.TraceEvent{
+		(observability.HumanTraceSink{W: os.Stderr}).Event(observability.TraceEvent{
 			Step:     "inspect.resolve_entity",
 			Entity:   "chunk",
 			EntityID: "123",
@@ -1434,17 +1434,14 @@ func TestStderrTextTraceSinkWritesHumanLine(t *testing.T) {
 	if !strings.Contains(output, "TRACE inspect.resolve_entity chunk=123 resolving chunk metadata") {
 		t.Fatalf("expected human trace prefix, got %q", output)
 	}
-	if !strings.Contains(output, "incoming_refs=4") {
-		t.Fatalf("expected metadata value in human trace, got %q", output)
-	}
-	if !strings.Contains(output, "source=graph") {
-		t.Fatalf("expected metadata value in human trace, got %q", output)
+	if strings.Contains(output, "incoming_refs=4") || strings.Contains(output, "source=graph") {
+		t.Fatalf("expected human sink to omit metadata in output, got %q", output)
 	}
 }
 
 func TestStderrJSONTraceSinkWritesJSONLine(t *testing.T) {
 	output := captureStderr(t, func() {
-		(stderrJSONTraceSink{}).Event(observability.TraceEvent{
+		observability.NewJSONTraceSink(os.Stderr).Event(observability.TraceEvent{
 			Step:     "graph.reverse_references",
 			Entity:   "chunk",
 			EntityID: "123",
@@ -2256,8 +2253,8 @@ func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
 	if !capturedOpts.Trace.Enabled {
 		t.Fatal("expected Trace.Enabled=true from --trace")
 	}
-	if _, ok := capturedOpts.Trace.Sink.(stderrTextTraceSink); !ok {
-		t.Fatalf("expected stderrTextTraceSink, got %T", capturedOpts.Trace.Sink)
+	if _, ok := capturedOpts.Trace.Sink.(observability.HumanTraceSink); !ok {
+		t.Fatalf("expected observability.HumanTraceSink, got %T", capturedOpts.Trace.Sink)
 	}
 }
 
@@ -5784,8 +5781,8 @@ func TestStatsCommandTraceFlagsPassedThrough(t *testing.T) {
 	if !captured.Trace.Enabled {
 		t.Fatal("expected Trace.Enabled=true when --trace-json is set")
 	}
-	if _, ok := captured.Trace.Sink.(stderrJSONTraceSink); !ok {
-		t.Fatalf("expected stderrJSONTraceSink, got %T", captured.Trace.Sink)
+	if _, ok := captured.Trace.Sink.(*observability.JSONTraceSink); !ok {
+		t.Fatalf("expected *observability.JSONTraceSink, got %T", captured.Trace.Sink)
 	}
 }
 
@@ -6800,8 +6797,8 @@ func TestRunSimulateGCCommandDeleteSnapshotFlagPassThrough(t *testing.T) {
 	if !captured.Trace.Enabled {
 		t.Fatal("expected Trace.Enabled=true from --trace-json")
 	}
-	if _, ok := captured.Trace.Sink.(stderrJSONTraceSink); !ok {
-		t.Fatalf("expected stderrJSONTraceSink, got %T", captured.Trace.Sink)
+	if _, ok := captured.Trace.Sink.(*observability.JSONTraceSink); !ok {
+		t.Fatalf("expected *observability.JSONTraceSink, got %T", captured.Trace.Sink)
 	}
 }
 
