@@ -57,6 +57,7 @@ func resetDB(t *testing.T, dbconn *sql.DB) {
 	t.Helper()
 	_, err := dbconn.Exec(`
 		TRUNCATE TABLE
+			snapshot_path,
 			snapshot_file,
 			snapshot,
 			file_chunk,
