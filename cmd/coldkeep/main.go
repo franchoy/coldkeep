@@ -1876,14 +1876,15 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 
 	validEntities := map[string]observability.EntityType{
-		"file":      observability.EntityFile,
-		"snapshot":  observability.EntitySnapshot,
-		"chunk":     observability.EntityChunk,
-		"container": observability.EntityContainer,
+		"file":         observability.EntityFile,
+		"logical-file": observability.EntityFile,
+		"snapshot":     observability.EntitySnapshot,
+		"chunk":        observability.EntityChunk,
+		"container":    observability.EntityContainer,
 	}
 
 	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep inspect (file|snapshot|chunk|container) <id>")
+		return usageErrorf("Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>")
 	}
 	entityName := parsed.positionals[0]
 	entityType, ok := validEntities[entityName]

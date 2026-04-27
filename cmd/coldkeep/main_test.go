@@ -2723,7 +2723,7 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 		positionals: []string{"file"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|snapshot|chunk|container) <id>") {
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>") {
 		t.Fatalf("expected inspect usage error for missing id, got: %v", err)
 	}
 
@@ -2755,6 +2755,36 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "Invalid --limit value") {
 		t.Fatalf("expected invalid limit error, got: %v", err)
+	}
+}
+
+func TestRunInspectCommandLogicalFileAliasRoutesToEntityFile(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedEntity observability.EntityType
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedEntity = entity
+		return &observability.InspectResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 0, 0, 0, 0, time.UTC),
+			EntityType:     entity,
+			EntityID:       id,
+			Summary:        map[string]any{"chunk_count": int64(1)},
+		}, nil
+	}
+
+	captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"logical-file", "99"},
+			flags:       map[string][]string{},
+		}, outputModeText); err != nil {
+			t.Fatalf("unexpected error with logical-file alias: %v", err)
+		}
+	})
+
+	if capturedEntity != observability.EntityFile {
+		t.Fatalf("expected logical-file alias to route to EntityFile, got %v", capturedEntity)
 	}
 }
 

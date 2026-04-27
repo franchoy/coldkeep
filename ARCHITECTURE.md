@@ -688,7 +688,7 @@ Command surfaces in scope:
 - `coldkeep simulate gc --containers`
 - `--trace` / `--trace-json` diagnostics
 
-Inspect entity support currently includes `chunk`, `logical-file`, `container`, and `snapshot`.
+Inspect entity support currently includes `file` (alias `logical-file`), `chunk`, `container`, and `snapshot`.
 
 Phase 8 guarantees:
 

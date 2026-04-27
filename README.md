@@ -360,7 +360,7 @@ coldkeep inspect chunk <id> --trace-json
 coldkeep simulate gc --trace-json
 ```
 
-Supported inspect entities currently include: `chunk`, `logical-file`, `container`, and `snapshot`.
+Supported inspect entities currently include: `file` (alias: `logical-file`), `chunk`, `container`, and `snapshot`.
 
 Observability command guarantees (v1.6):
 
