@@ -1829,8 +1829,12 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "containers", "trace", "trace-json"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "containers", "trace", "trace-json", "help", "h"); err != nil {
 		return err
+	}
+	if parsed.hasFlag("help", "h") {
+		printStatsHelp()
+		return nil
 	}
 	if len(parsed.positionals) != 0 {
 		return usageErrorf("Usage: coldkeep stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]")
@@ -1851,8 +1855,12 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "relations", "reverse", "deep", "limit", "trace", "trace-json"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "relations", "reverse", "deep", "limit", "trace", "trace-json", "help", "h"); err != nil {
 		return err
+	}
+	if parsed.hasFlag("help", "h") {
+		printInspectHelp()
+		return nil
 	}
 	traceOptions, err := resolveTraceOptions(parsed)
 	if err != nil {
@@ -2587,6 +2595,11 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 }
 
 func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if parsed.hasFlag("help", "h") {
+		printSimulateHelp()
+		return nil
+	}
+
 	if len(parsed.positionals) < 1 {
 		return usageErrorf("Usage: coldkeep simulate <gc|store|store-folder> ...")
 	}
@@ -4355,6 +4368,65 @@ func printHelp() {
 	fmt.Println("  coldkeep stats --containers")
 	fmt.Println("  coldkeep simulate store myfile.bin")
 	fmt.Println("  coldkeep simulate store-folder --codec aes-gcm ./samples")
+}
+
+func printStatsHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]")
+	fmt.Println()
+	fmt.Println("Show repository statistics through the observability pipeline (read-only).")
+	fmt.Println()
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  output keys are stable for machine parsing")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Deterministic output guarantee:")
+	fmt.Println("  for identical repository state and flags, rendered output order is deterministic")
+}
+
+func printInspectHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep inspect (file|snapshot|chunk|container) <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println()
+	fmt.Println("Inspect one entity through the observability pipeline (read-only).")
+	fmt.Println()
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  output schema is stable for automation")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Deterministic output guarantee:")
+	fmt.Println("  for identical inputs and flags, sections and records are emitted deterministically")
+}
+
+func printSimulateHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println("  coldkeep simulate <store|store-folder> [--codec <codec>] <path>")
+	fmt.Println()
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  simulation payloads keep a stable schema for automation")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Deterministic output guarantee:")
+	fmt.Println("  for identical repository state, assumptions, and flags, simulation output is deterministic")
+	fmt.Println("Simulation safety guarantee:")
+	fmt.Println("  simulate commands are observational and never modify repository state")
+	fmt.Println()
+	fmt.Println("Example")
+	fmt.Println("simulate gc")
+	fmt.Println()
+	fmt.Println("Preview garbage collection effects without modifying data.")
+	fmt.Println()
+	fmt.Println("This command computes exactly what GC would consider reclaimable,")
+	fmt.Println("including optional hypothetical snapshot deletion.")
+	fmt.Println()
+	fmt.Println("No state is modified.")
 }
 
 func printHelpRows(rows [][2]string) {

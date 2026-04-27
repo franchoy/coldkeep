@@ -1694,6 +1694,32 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunSimulateCommandHelpIncludesRequiredGuaranteesAndExample(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runSimulateCommand(parsedCommandLine{method: "simulate", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runSimulateCommand --help returned error: %v", err)
+		}
+	})
+
+	required := []string{
+		"JSON support:",
+		"Trace support:",
+		"Deterministic output guarantee:",
+		"Simulation safety guarantee:",
+		"Example",
+		"simulate gc",
+		"Preview garbage collection effects without modifying data.",
+		"This command computes exactly what GC would consider reclaimable,",
+		"including optional hypothetical snapshot deletion.",
+		"No state is modified.",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected simulate help to include %q, got:\n%s", fragment, output)
+		}
+	}
+}
+
 func TestRunBenchmarkCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runBenchmarkCommand(parsedCommandLine{
 		method: "benchmark",
@@ -2352,6 +2378,24 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "Invalid --limit value") {
 		t.Fatalf("expected invalid limit error, got: %v", err)
+	}
+}
+
+func TestRunInspectCommandHelpIncludesJSONTraceAndDeterminism(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{method: "inspect", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runInspectCommand --help returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "JSON support:") {
+		t.Fatalf("expected JSON support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Trace support:") {
+		t.Fatalf("expected trace support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Deterministic output guarantee:") {
+		t.Fatalf("expected deterministic guarantee section, got:\n%s", output)
 	}
 }
 
@@ -6064,6 +6108,24 @@ func TestStatsCommandConflictingOutputFlags(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
 		t.Fatalf("expected output flag conflict error, got %v", err)
+	}
+}
+
+func TestStatsCommandHelpIncludesJSONTraceAndDeterminism(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runStatsCommand --help returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "JSON support:") {
+		t.Fatalf("expected JSON support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Trace support:") {
+		t.Fatalf("expected trace support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Deterministic output guarantee:") {
+		t.Fatalf("expected deterministic guarantee section, got:\n%s", output)
 	}
 }
 
