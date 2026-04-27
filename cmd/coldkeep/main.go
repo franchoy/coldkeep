@@ -122,7 +122,7 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
-var doctorSchemaVersionPhase = querySchemaVersion
+var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
@@ -2239,24 +2239,6 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	default:
 		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
-}
-
-func querySchemaVersion() (int64, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return 0, fmt.Errorf("connect DB for schema check: %w", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	var version sql.NullInt64
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
-		return 0, fmt.Errorf("query schema_version: %w", err)
-	}
-	if !version.Valid {
-		return 0, errors.New("schema_version table is empty")
-	}
-
-	return version.Int64, nil
 }
 
 // runDoctorCommand implements the doctor corrective recovery command.
