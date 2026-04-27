@@ -315,9 +315,13 @@ Manual spot-checks against a populated DB (run after step 1 and step 3):
 ```bash
 export COLDKEEP_CODEC=plain
 
-# store two files and confirm stored_path is in JSON output
-./coldkeep store samples/hello.txt --output json
+# store two files and capture one stored_path from JSON output
+hello_json=$(./coldkeep store samples/hello.txt --output json)
+stored_path=$(printf '%s\n' "$hello_json" | jq -r '.data.stored_path')
 ./coldkeep store samples/lorem.txt --output json
+
+# confirm stored_path is present in the store payload
+printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 
 # verify system: must include physical graph audit on success
 ./coldkeep verify system --standard --output json
@@ -328,11 +332,11 @@ export COLDKEEP_CODEC=plain
 # corrupt a ref_count and confirm verify detects it
 # (manual DB update + verify — covers GC_REFUSED_INTEGRITY and PHYSICAL_GRAPH_REFCOUNT_MISMATCH)
 
-# stored-path remove: confirm remaining_ref_count in JSON output
-./coldkeep remove --stored-path <stored-path-from-above> --output json
+# confirm restore-by-stored-path works while the mapping still exists
+./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
 
-# confirm restore-by-stored-path works
-./coldkeep restore --stored-path <stored-path> --mode override --destination ./out/restored.txt --output json
+# stored-path remove: confirm remaining_ref_count in JSON output
+./coldkeep remove --stored-path "$stored_path" --output json
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
@@ -343,6 +347,7 @@ Confirm:
 - `store --output json` contains `stored_path` field in `data`
 - `verify system --standard --output json` succeeds with no `invariant_code` in payload
 - `repair ref-counts --output json` success payload contains `updated_logical_files` and `scanned_logical_files`
+- `restore --stored-path --output json` succeeds before the stored-path mapping is removed
 - `remove --stored-path --output json` success payload contains `remaining_ref_count`
 - After all mappings are removed, `verify system --standard --output json` still passes (ref_count=0 logical_file is valid)
 - `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
