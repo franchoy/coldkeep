@@ -3648,12 +3648,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			return nil
 		}
 
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
-		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
-		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
-		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
-		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalEntryCount)
-		return nil
+		return clirender.RenderSnapshotDiffSummaryHuman(os.Stdout, baseID, targetID, *summary)
 	}
 
 	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
@@ -3719,44 +3714,20 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	if summaryMode {
-		totalChanges := summary.Added + summary.Removed + summary.Modified
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
-		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
-		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
-		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
-		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalChanges)
-		return nil
+		return clirender.RenderSnapshotDiffSummaryHuman(os.Stdout, baseID, targetID, summary)
 	}
 
-	_, _ = fmt.Fprintln(os.Stdout, "[SNAPSHOT DIFF]")
-	_, _ = fmt.Fprintf(os.Stdout, "\nBase:    %s\n", baseID)
-	_, _ = fmt.Fprintf(os.Stdout, "Target:  %s\n\n", targetID)
-	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "(no changes)")
-	} else {
-		for _, entry := range entries {
-			prefix := "?"
-			switch entry.Type {
-			case snapshot.DiffAdded:
-				prefix = "+"
-			case snapshot.DiffRemoved:
-				prefix = "-"
-			case snapshot.DiffModified:
-				prefix = "~"
-			}
-			_, _ = fmt.Fprintf(os.Stdout, "%s %s\n", prefix, entry.Path)
-		}
-	}
-
-	_, _ = fmt.Fprintln(os.Stdout, "\nSummary:")
-	_, _ = fmt.Fprintf(os.Stdout, "  entries (matched): %d\n", matchedEntryCount)
-	_, _ = fmt.Fprintf(os.Stdout, "  entries (total): %d\n", totalEntryCount)
-	_, _ = fmt.Fprintf(os.Stdout, "  added: %d\n", summary.Added)
-	_, _ = fmt.Fprintf(os.Stdout, "  removed: %d\n", summary.Removed)
-	_, _ = fmt.Fprintf(os.Stdout, "  modified: %d\n", summary.Modified)
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
-	return nil
+	return clirender.RenderSnapshotDiffDetailedHuman(
+		os.Stdout,
+		baseID,
+		targetID,
+		entries,
+		summary,
+		matchedEntryCount,
+		totalEntryCount,
+		time.Since(startedAt).Milliseconds(),
+		doctorOperationalHint,
+	)
 }
 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
