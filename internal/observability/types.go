@@ -206,6 +206,19 @@ type ContainerSimulationImpact struct {
 	RequiresCompaction bool   `json:"requires_compaction"`
 }
 
+// SimulateStoreReport summarizes repository state after a simulated store/store-folder run.
+// It is read-only and intended for CLI rendering only.
+type SimulateStoreReport struct {
+	Subcommand        string  `json:"subcommand"`
+	Path              string  `json:"path"`
+	Files             int64   `json:"files"`
+	Chunks            int64   `json:"chunks"`
+	Containers        int64   `json:"containers"`
+	LogicalSizeBytes  int64   `json:"logical_size_bytes"`
+	PhysicalSizeBytes int64   `json:"physical_size_bytes"`
+	DedupRatioPct     float64 `json:"dedup_ratio_pct"`
+}
+
 type ObservationWarning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

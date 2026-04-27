@@ -2405,18 +2405,6 @@ func parseDoctorVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error
 	return parseVerifyLevel(parsed)
 }
 
-// SimulateReport holds the result of a dry-run simulation.
-type SimulateReport struct {
-	Subcommand        string  `json:"subcommand"`
-	Path              string  `json:"path"`
-	Files             int64   `json:"files"`
-	Chunks            int64   `json:"chunks"`
-	Containers        int64   `json:"containers"`
-	LogicalSizeBytes  int64   `json:"logical_size_bytes"`
-	PhysicalSizeBytes int64   `json:"physical_size_bytes"`
-	DedupRatioPct     float64 `json:"dedup_ratio_pct"`
-}
-
 // BenchmarkChunkersReport is the deterministic output payload for
 // `coldkeep benchmark chunkers`.
 type BenchmarkChunkersReport struct {
@@ -2731,6 +2719,15 @@ var runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions)
 	return svc.Simulate(context.Background(), opts)
 }
 
+var runObservabilitySimulateStoreReportPhase = func(dbconn *sql.DB, subcommand, path string) (*observability.SimulateStoreReport, error) {
+	svc, err := newObservabilityServicePhase(dbconn)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.SimulateStoreReport(context.Background(), subcommand, path)
+}
+
 // suppressStdoutDuring redirects os.Stdout to /dev/null for the duration of fn.
 func suppressStdoutDuring(fn func() error) error {
 	restore, err := suppressStdout()
@@ -2760,32 +2757,9 @@ func suppressStdout() (func(), error) {
 }
 
 func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, outputMode cliOutputMode) error {
-	r := &SimulateReport{
-		Subcommand: subcommand,
-		Path:       path,
-	}
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
-
-	queries := []struct {
-		dest  interface{}
-		query string
-		args  []any
-	}{
-		{&r.Files, `SELECT COUNT(*) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
-		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
-		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status = $1`, []any{filestate.ChunkCompleted}},
-		{&r.Containers, `SELECT COUNT(DISTINCT b.container_id) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.status = $1`, []any{filestate.ChunkCompleted}},
-		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.live_ref_count > 0 OR c.pin_count > 0`, nil},
-	}
-	for _, q := range queries {
-		if err := sgctx.DB.QueryRowContext(ctx, q.query, q.args...).Scan(q.dest); err != nil {
-			return fmt.Errorf("query simulate stats: %w", err)
-		}
-	}
-
-	if r.LogicalSizeBytes > 0 {
-		r.DedupRatioPct = (1.0 - float64(r.PhysicalSizeBytes)/float64(r.LogicalSizeBytes)) * 100
+	r, err := runObservabilitySimulateStoreReportPhase(sgctx.DB, subcommand, path)
+	if err != nil {
+		return fmt.Errorf("query simulate stats: %w", err)
 	}
 
 	if outputMode == outputModeJSON {
