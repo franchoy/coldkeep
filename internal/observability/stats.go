@@ -16,6 +16,13 @@ func (s *Service) Stats(ctx context.Context, opts StatsOptions) (*StatsResult, e
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.start",
+		Message: "collecting observability stats",
+		Metadata: map[string]any{
+			"include_containers": opts.IncludeContainers,
+		},
+	})
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("collect observability stats: observability service requires non-nil db")
 	}
@@ -26,11 +33,58 @@ func (s *Service) Stats(ctx context.Context, opts StatsOptions) (*StatsResult, e
 	}
 
 	result := s.mapMaintenanceStats(raw, opts)
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.repository",
+		Message: "collected repository stats",
+		Metadata: map[string]any{
+			"active_write_chunker": result.Repository.ActiveWriteChunker,
+		},
+	})
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.logical",
+		Message: "collected logical file stats",
+		Metadata: map[string]any{
+			"total_files":     result.Logical.TotalFiles,
+			"completed_files": result.Logical.CompletedFiles,
+		},
+	})
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.chunks",
+		Message: "collected chunk counts and chunker-version distribution",
+		Metadata: map[string]any{
+			"total_chunks": result.Chunks.TotalChunks,
+		},
+	})
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.containers",
+		Message: "collected container stats",
+		Metadata: map[string]any{
+			"total_containers": result.Containers.TotalContainers,
+		},
+	})
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.retention",
+		Message: "collected retention classification stats",
+		Metadata: map[string]any{
+			"snapshot_referenced_logical_files": result.Retention.SnapshotReferencedLogicalFiles,
+		},
+	})
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.graph.enrich",
+		Message: "enriching stats with graph reachability",
+	})
 	if err := s.enrichStatsWithGraph(ctx, result, opts); err != nil {
 		return nil, fmt.Errorf("collect observability stats: enrich with graph: %w", err)
 	}
 
 	result.Efficiency = calculateEfficiency(result)
+	emitTrace(opts.Trace, TraceEvent{
+		Step:    "stats.collect.complete",
+		Message: "completed observability stats collection",
+		Metadata: map[string]any{
+			"warnings": len(result.Warnings),
+		},
+	})
 	return result, nil
 }
 

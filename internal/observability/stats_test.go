@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,14 @@ import (
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/tests/testdb"
 )
+
+type traceCollectorSink struct {
+	events []TraceEvent
+}
+
+func (s *traceCollectorSink) Event(event TraceEvent) {
+	s.events = append(s.events, event)
+}
 
 func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	fixedNow := time.Date(2026, time.April, 26, 10, 0, 0, 0, time.UTC)
@@ -619,5 +628,58 @@ func TestStatsDoesNotMutateState(t *testing.T) {
 	}
 	if beforeContainers != afterContainers {
 		t.Fatalf("container count mutated: before=%d after=%d", beforeContainers, afterContainers)
+	}
+}
+
+func TestStatsTraceEmitsHighLevelCollectionEvents(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+	sink := &traceCollectorSink{}
+
+	_, err := svc.Stats(context.Background(), StatsOptions{
+		Trace: TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+
+	steps := make([]string, 0, len(sink.events))
+	for _, event := range sink.events {
+		steps = append(steps, event.Step)
+	}
+
+	want := []string{
+		"stats.collect.start",
+		"stats.collect.repository",
+		"stats.collect.logical",
+		"stats.collect.chunks",
+		"stats.collect.containers",
+		"stats.collect.retention",
+		"stats.graph.enrich",
+		"stats.collect.complete",
+	}
+
+	if len(steps) != len(want) {
+		t.Fatalf("unexpected trace step count: got=%d want=%d steps=%v", len(steps), len(want), steps)
+	}
+	if !slices.Equal(steps, want) {
+		t.Fatalf("unexpected trace steps:\n got=%v\nwant=%v", steps, want)
+	}
+}
+
+func TestStatsTraceDisabledDoesNotEmitEvents(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+	sink := &traceCollectorSink{}
+
+	_, err := svc.Stats(context.Background(), StatsOptions{
+		Trace: TraceOptions{Enabled: false, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no trace events when trace is disabled, got %d", len(sink.events))
 	}
 }
