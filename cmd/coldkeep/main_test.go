@@ -2117,13 +2117,13 @@ func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Logical file 42",
+		"Inspect logical file 42",
 		"Summary",
 		"name:",
 		"photo.jpg",
 		"chunks:",
 		"142",
-		"chunker version:",
+		"chunker_version:",
 		"v2-fastcdc",
 	} {
 		if !strings.Contains(output, want) {
@@ -2364,7 +2364,7 @@ func TestRunInspectCommandSnapshotTextNewEntity(t *testing.T) {
 		}
 	})
 
-	for _, want := range []string{"Snapshot snap-99", "Summary"} {
+	for _, want := range []string{"Inspect snapshot snap-99", "Summary"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
 		}
@@ -2403,7 +2403,7 @@ func TestRunInspectCommandChunkTextNewEntity(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Chunk 77") {
+	if !strings.Contains(output, "Inspect chunk 77") {
 		t.Fatalf("expected output to contain chunk header, got:\n%s", output)
 	}
 }
@@ -2441,7 +2441,7 @@ func TestRunInspectCommandContainerTextNewEntity(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Container 5") {
+	if !strings.Contains(output, "Inspect container 5") {
 		t.Fatalf("expected output to contain container header, got:\n%s", output)
 	}
 }
@@ -5935,7 +5935,7 @@ func TestStatsCommandHuman(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Coldkeep repository stats") {
+	if !strings.Contains(output, "Coldkeep stats") {
 		t.Fatalf("expected human stats output header, got:\n%s", output)
 	}
 }
@@ -6924,28 +6924,28 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 	if !strings.Contains(output, "GC simulation") {
 		t.Fatalf("expected gc simulation header, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Mode") || !strings.Contains(output, "exact:       true") || !strings.Contains(output, "mutated:     false") {
+	if !strings.Contains(output, "Mode") || !strings.Contains(output, "exact: true") || !strings.Contains(output, "mutated: false") {
 		t.Fatalf("expected mode section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Reachability") || !strings.Contains(output, "reachable chunks:       3") || !strings.Contains(output, "unreachable chunks:     2") {
+	if !strings.Contains(output, "Reachability") || !strings.Contains(output, "reachable_chunks: 3") || !strings.Contains(output, "unreachable_chunks: 2") {
 		t.Fatalf("expected reachability section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Reclaimable") || !strings.Contains(output, "logical bytes:          150 MiB") || !strings.Contains(output, "physical bytes now:     100 MiB") {
+	if !strings.Contains(output, "Reclaimable") || !strings.Contains(output, "logical_bytes: 150 MiB") || !strings.Contains(output, "physical_bytes_now: 100 MiB") {
 		t.Fatalf("expected reclaimable section with MiB formatting, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Containers") || !strings.Contains(output, "fully reclaimable:      1") || !strings.Contains(output, "partially dead:         1") {
+	if !strings.Contains(output, "Containers") || !strings.Contains(output, "fully_reclaimable: 1") || !strings.Contains(output, "partially_dead: 1") {
 		t.Fatalf("expected containers summary section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Assumptions") || !strings.Contains(output, "snapshot treated as deleted: s1") || !strings.Contains(output, "snapshot treated as deleted: s2") {
+	if !strings.Contains(output, "Assumptions") || !strings.Contains(output, "deleted_snapshot: s1") || !strings.Contains(output, "deleted_snapshot: s2") {
 		t.Fatalf("expected assumptions section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "[fully reclaimable now]") {
-		t.Fatalf("expected fully reclaimable container marker, got:\n%s", output)
+	if !strings.Contains(output, "status: fully_reclaimable_now") {
+		t.Fatalf("expected fully reclaimable container status, got:\n%s", output)
 	}
-	if !strings.Contains(output, "[requires compaction]") {
-		t.Fatalf("expected requires compaction marker, got:\n%s", output)
+	if !strings.Contains(output, "status: requires_compaction") {
+		t.Fatalf("expected requires compaction status, got:\n%s", output)
 	}
-	if !strings.Contains(output, "No state was changed.") {
+	if !strings.Contains(output, "Result") || !strings.Contains(output, "changed: false") {
 		t.Fatalf("expected no state changed footer, got:\n%s", output)
 	}
 }
@@ -7102,10 +7102,10 @@ func TestRunSimulateGCCommandTextOutputIncludesWarnings(t *testing.T) {
 	if !strings.Contains(output, "Warnings") {
 		t.Fatalf("expected warnings section, got:\n%s", output)
 	}
-	if !strings.Contains(output, "[QUARANTINED_CONTAINER] quarantined containers are excluded from physical reclaim calculation") {
+	if !strings.Contains(output, "warning: [QUARANTINED_CONTAINER] quarantined containers are excluded from physical reclaim calculation") {
 		t.Fatalf("expected warning message, got:\n%s", output)
 	}
-	if !strings.Contains(output, "No state was changed.") {
+	if !strings.Contains(output, "Result") || !strings.Contains(output, "changed: false") {
 		t.Fatalf("expected no state changed footer, got:\n%s", output)
 	}
 }
@@ -7202,16 +7202,16 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(textOutput, "reachable chunks:       11") || !strings.Contains(textOutput, "unreachable chunks:     2") {
+	if !strings.Contains(textOutput, "reachable_chunks: 11") || !strings.Contains(textOutput, "unreachable_chunks: 2") {
 		t.Fatalf("text output missing reachability summary: %s", textOutput)
 	}
-	if !strings.Contains(textOutput, "logical bytes:          200 MiB") || !strings.Contains(textOutput, "physical bytes now:     100 MiB") {
+	if !strings.Contains(textOutput, "logical_bytes: 200 MiB") || !strings.Contains(textOutput, "physical_bytes_now: 100 MiB") {
 		t.Fatalf("text output missing reclaimable summary: %s", textOutput)
 	}
-	if !strings.Contains(textOutput, "snapshot treated as deleted: snap-a") {
+	if !strings.Contains(textOutput, "deleted_snapshot: snap-a") {
 		t.Fatalf("text output missing assumptions: %s", textOutput)
 	}
-	if !strings.Contains(textOutput, "[PARTIAL_RECLAIM_REQUIRES_COMPACTION] some dead bytes are in partially live containers and are not physically reclaimable yet") {
+	if !strings.Contains(textOutput, "warning: [PARTIAL_RECLAIM_REQUIRES_COMPACTION] some dead bytes are in partially live containers and are not physically reclaimable yet") {
 		t.Fatalf("text output missing warning: %s", textOutput)
 	}
 

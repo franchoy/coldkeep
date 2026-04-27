@@ -31,7 +31,7 @@ func TestRenderSimulationHumanIncludesNoMutationFooter(t *testing.T) {
 	if !strings.Contains(out, "GC simulation") {
 		t.Fatalf("expected simulation title, got: %s", out)
 	}
-	if !strings.Contains(out, "No state was changed.") {
+	if !strings.Contains(out, "Result") || !strings.Contains(out, "changed: false") {
 		t.Fatalf("expected read-only footer, got: %s", out)
 	}
 }

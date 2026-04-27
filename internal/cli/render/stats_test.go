@@ -125,9 +125,9 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	}
 
 	output := buf.String()
-	idxUnknown := strings.Index(output, "unknown:")
-	idxV1 := strings.Index(output, "v1-simple-rolling:")
-	idxV2 := strings.Index(output, "v2-fastcdc:")
+	idxUnknown := strings.Index(output, "version: unknown")
+	idxV1 := strings.Index(output, "version: v1-simple-rolling")
+	idxV2 := strings.Index(output, "version: v2-fastcdc")
 	if idxUnknown == -1 || idxV1 == -1 || idxV2 == -1 {
 		t.Fatalf("expected all chunker version labels in output, got:\n%s", output)
 	}
@@ -136,7 +136,7 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"Coldkeep repository stats",
+		"Coldkeep stats",
 		"Repository",
 		"Logical data",
 		"Physical data",
@@ -147,16 +147,16 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 		"Retention",
 		"Chunker versions",
 		"Container details",
-		"active write chunker: v2-fastcdc",
-		"files:               128",
-		"completed files:     128",
-		"physical files:      140",
-		"total chunks:        892,104",
-		"references:          1,902,220",
-		"container overhead:  3.1%",
-		"current-only files:  20",
-		"snapshot-only files: 8",
-		"shared files:        100",
+		"active_write_chunker: v2-fastcdc",
+		"files: 128",
+		"completed_files: 128",
+		"physical_files: 140",
+		"total_chunks: 892,104",
+		"references: 1,902,220",
+		"container_overhead: 3.1%",
+		"current_only_files: 20",
+		"snapshot_only_files: 8",
+		"shared_files: 100",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
@@ -251,9 +251,9 @@ func TestRenderStatsHumanSortsChunkerVersions(t *testing.T) {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 	out := buf.String()
-	idxUnknown := strings.Index(out, "unknown:")
-	idxV1 := strings.Index(out, "v1-simple-rolling:")
-	idxV2 := strings.Index(out, "v2-fastcdc:")
+	idxUnknown := strings.Index(out, "version: unknown")
+	idxV1 := strings.Index(out, "version: v1-simple-rolling")
+	idxV2 := strings.Index(out, "version: v2-fastcdc")
 	if !(idxUnknown < idxV1 && idxV1 < idxV2) {
 		t.Fatalf("expected sorted chunker version order, got:\n%s", out)
 	}
@@ -306,7 +306,7 @@ func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 	humanOut := human.String()
-	for _, want := range []string{"dedup ratio:         2.29x", "dedup savings:       56.3%", "container overhead:  3.1%"} {
+	for _, want := range []string{"dedup_ratio: 2.29x", "dedup_savings: 56.3%", "container_overhead: 3.1%"} {
 		if !strings.Contains(humanOut, want) {
 			t.Fatalf("expected human output to contain %q, got:\n%s", want, humanOut)
 		}

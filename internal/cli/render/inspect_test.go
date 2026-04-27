@@ -34,16 +34,16 @@ func TestRenderInspectHumanChunkExampleLayout(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		"Chunk 123",
+		"Inspect chunk 123",
 		"Summary",
 		"size:",
 		"4.0 KiB",
-		"chunker version:",
+		"chunker_version:",
 		"v2-fastcdc",
 		"container:",
 		"2",
 		"Referenced by",
-		"Logical file:",
+		"relation: logical file 45",
 		"45",
 	} {
 		if !strings.Contains(out, want) {
@@ -77,20 +77,20 @@ func TestRenderInspectHumanLogicalFileExampleLayout(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		"Logical file 45",
+		"Inspect logical file 45",
 		"Summary",
 		"name:",
 		"photo.jpg",
 		"chunks:",
 		"12",
-		"chunker version:",
+		"chunker_version:",
 		"v2-fastcdc",
 		"References",
-		"Chunk:",
+		"relation: chunk 123",
 		"123",
 		"124",
 		"Referenced by",
-		"Snapshot:",
+		"relation: snapshot 10",
 		"10",
 		"11",
 	} {

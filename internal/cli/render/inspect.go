@@ -19,10 +19,10 @@ func (HumanRenderer) RenderInspect(w io.Writer, r *InspectResult) error {
 		r = &InspectResult{}
 	}
 
-	title := fmt.Sprintf("%s %s", humanizeEntityType(r.EntityType), strings.TrimSpace(r.EntityID))
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Inspect"
+	entityLabel := strings.TrimSpace(fmt.Sprintf("%s %s", strings.ToLower(humanizeEntityType(r.EntityType)), strings.TrimSpace(r.EntityID)))
+	title := strings.TrimSpace("Inspect " + entityLabel)
+	if title == "Inspect" {
+		title = "Inspect entity"
 	}
 	if _, err := fmt.Fprintln(w, title); err != nil {
 		return err
@@ -32,30 +32,30 @@ func (HumanRenderer) RenderInspect(w io.Writer, r *InspectResult) error {
 		return err
 	}
 	for _, row := range orderedSummaryRows(r.EntityType, r.Summary) {
-		if _, err := fmt.Fprintf(w, "  %-18s %s\n", row.label+":", row.value); err != nil {
+		if _, err := fmt.Fprintf(w, "  %s: %s\n", strings.ReplaceAll(strings.ToLower(row.label), " ", "_"), row.value); err != nil {
 			return err
 		}
 	}
 
-	references := filterRelationsByDirection(r.Relations, observability.RelationOutgoing)
+	references := sortedRelations(filterRelationsByDirection(r.Relations, observability.RelationOutgoing))
 	if len(references) > 0 {
 		if _, err := fmt.Fprintln(w, "\nReferences"); err != nil {
 			return err
 		}
 		for _, rel := range references {
-			if _, err := fmt.Fprintf(w, "  %-18s %s\n", humanizeEntityType(rel.TargetType)+":", rel.TargetID); err != nil {
+			if _, err := fmt.Fprintf(w, "  relation: %s %s\n", strings.ToLower(humanizeEntityType(rel.TargetType)), rel.TargetID); err != nil {
 				return err
 			}
 		}
 	}
 
-	referencedBy := filterRelationsByDirection(r.Relations, observability.RelationIncoming)
+	referencedBy := sortedRelations(filterRelationsByDirection(r.Relations, observability.RelationIncoming))
 	if len(referencedBy) > 0 {
 		if _, err := fmt.Fprintln(w, "\nReferenced by"); err != nil {
 			return err
 		}
 		for _, rel := range referencedBy {
-			if _, err := fmt.Fprintf(w, "  %-18s %s\n", humanizeEntityType(rel.TargetType)+":", rel.TargetID); err != nil {
+			if _, err := fmt.Fprintf(w, "  relation: %s %s\n", strings.ToLower(humanizeEntityType(rel.TargetType)), rel.TargetID); err != nil {
 				return err
 			}
 		}
@@ -209,6 +209,23 @@ func filterRelationsByDirection(relations []observability.Relation, direction ob
 			out = append(out, rel)
 		}
 	}
+	return out
+}
+
+func sortedRelations(in []observability.Relation) []observability.Relation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := append([]observability.Relation(nil), in...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TargetType == out[j].TargetType {
+			if out[i].TargetID == out[j].TargetID {
+				return out[i].Type < out[j].Type
+			}
+			return out[i].TargetID < out[j].TargetID
+		}
+		return out[i].TargetType < out[j].TargetType
+	})
 	return out
 }
 
