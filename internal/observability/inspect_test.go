@@ -906,3 +906,126 @@ func dirEntries(t *testing.T, dir string) []string {
 	}
 	return names
 }
+
+func TestInspectTraceEmitsLifecycleAndRelationEvents(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "trace-lf.txt", 18, "h-trace-lf", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-trace", 18, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	sink := &traceCollectorSink{}
+	svc := newServiceForTest(dbconn, nil)
+	_, err = svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{
+		Relations: true,
+		Reverse:   true,
+		Limit:     10,
+		Trace:     TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Inspect with trace: %v", err)
+	}
+
+	required := []string{
+		"inspect.start",
+		"inspect.resolve_entity",
+		"inspect.summary.loaded",
+		"inspect.forward_relations.load",
+		"inspect.reverse_relations.load",
+		"inspect.complete",
+	}
+	for _, step := range required {
+		if !traceEventsContainStep(sink.events, step) {
+			t.Fatalf("expected trace step %q, got steps=%v", step, traceSteps(sink.events))
+		}
+	}
+}
+
+func TestInspectTraceEmitsDeepTraversalEvents(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "trace-deep.txt", 60, "h-trace-deep", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-trace-deep", 60, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_trace_deep.bin", 256, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 60, 60, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "9", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "trace-deep.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, ?, ?)`, "9", 1, fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	sink := &traceCollectorSink{}
+	svc := newServiceForTest(dbconn, nil)
+	_, err = svc.Inspect(context.Background(), EntitySnapshot, "9", InspectOptions{
+		Deep:  true,
+		Limit: 2,
+		Trace: TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Inspect deep with trace: %v", err)
+	}
+
+	if !traceEventsContainStep(sink.events, "inspect.deep_traversal.start") {
+		t.Fatalf("expected inspect.deep_traversal.start, got steps=%v", traceSteps(sink.events))
+	}
+	if !traceEventsContainStep(sink.events, "inspect.deep_traversal.limit_reached") {
+		t.Fatalf("expected inspect.deep_traversal.limit_reached, got steps=%v", traceSteps(sink.events))
+	}
+}
+
+func traceEventsContainStep(events []TraceEvent, step string) bool {
+	for _, event := range events {
+		if event.Step == step {
+			return true
+		}
+	}
+	return false
+}
+
+func traceSteps(events []TraceEvent) []string {
+	steps := make([]string, 0, len(events))
+	for _, event := range events {
+		steps = append(steps, event.Step)
+	}
+	return steps
+}

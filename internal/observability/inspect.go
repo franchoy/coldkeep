@@ -18,6 +18,24 @@ func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opt
 		ctx = context.Background()
 	}
 	opts = normalizeInspectOptions(opts)
+	emitTrace(opts.Trace, TraceEvent{
+		Step:     "inspect.start",
+		Entity:   string(entity),
+		EntityID: strings.TrimSpace(id),
+		Message:  "starting inspect request",
+		Metadata: map[string]any{
+			"relations": opts.Relations,
+			"reverse":   opts.Reverse,
+			"deep":      opts.Deep,
+			"limit":     opts.Limit,
+		},
+	})
+	emitTrace(opts.Trace, TraceEvent{
+		Step:     "inspect.resolve_entity",
+		Entity:   string(entity),
+		EntityID: strings.TrimSpace(id),
+		Message:  "resolving inspect target",
+	})
 
 	var result *InspectResult
 	var err error
@@ -40,7 +58,26 @@ func (s *Service) Inspect(ctx context.Context, entity EntityType, id string, opt
 	if err != nil {
 		return nil, err
 	}
+	emitTrace(opts.Trace, TraceEvent{
+		Step:     "inspect.summary.loaded",
+		Entity:   string(result.EntityType),
+		EntityID: result.EntityID,
+		Message:  "loaded inspect summary",
+		Metadata: map[string]any{
+			"summary_fields": len(result.Summary),
+		},
+	})
 	sortRelations(result.Relations)
+	emitTrace(opts.Trace, TraceEvent{
+		Step:     "inspect.complete",
+		Entity:   string(result.EntityType),
+		EntityID: result.EntityID,
+		Message:  "completed inspect request",
+		Metadata: map[string]any{
+			"relations": len(result.Relations),
+			"warnings":  len(result.Warnings),
+		},
+	})
 	return result, nil
 }
 
@@ -81,6 +118,12 @@ func (s *Service) inspectRepository(ctx context.Context, opts InspectOptions) (*
 	}
 
 	if opts.Relations {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.forward_relations.load",
+			Entity:   string(EntityRepository),
+			EntityID: "repository",
+			Message:  "loading outgoing relations",
+		})
 		snapshotRelations, err := s.inspectRepositorySnapshotRelations(ctx, opts.Limit)
 		if err != nil {
 			return nil, err
@@ -180,6 +223,12 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 	}
 
 	if opts.Relations {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.forward_relations.load",
+			Entity:   string(EntitySnapshot),
+			EntityID: snapshotID,
+			Message:  "loading outgoing relations",
+		})
 		relations, err := s.getSnapshotRelations(ctx, snapshotID, opts)
 		if err != nil {
 			return nil, err
@@ -231,6 +280,12 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, opts Inspec
 	}
 
 	if opts.Relations {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.forward_relations.load",
+			Entity:   string(EntityLogicalFile),
+			EntityID: strconv.FormatInt(fileID, 10),
+			Message:  "loading outgoing relations",
+		})
 		relations, err := s.getLogicalFileRelations(ctx, fileID, opts)
 		if err != nil {
 			return nil, fmt.Errorf("inspect logical file %d forward relations: %w", fileID, err)
@@ -238,6 +293,12 @@ func (s *Service) inspectLogicalFile(ctx context.Context, id string, opts Inspec
 		result.Relations = append(result.Relations, relations...)
 	}
 	if opts.Reverse {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.reverse_relations.load",
+			Entity:   string(EntityLogicalFile),
+			EntityID: strconv.FormatInt(fileID, 10),
+			Message:  "loading incoming references",
+		})
 		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityLogicalFile, ID: fileID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect logical file %d reverse relations: %w", fileID, err)
@@ -300,6 +361,12 @@ func (s *Service) inspectChunk(ctx context.Context, id string, opts InspectOptio
 	}
 
 	if opts.Relations {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.forward_relations.load",
+			Entity:   string(EntityChunk),
+			EntityID: strconv.FormatInt(chunkID, 10),
+			Message:  "loading outgoing relations",
+		})
 		relations, err := s.getChunkRelations(ctx, chunkID, opts)
 		if err != nil {
 			return nil, fmt.Errorf("inspect chunk %d forward relations: %w", chunkID, err)
@@ -307,6 +374,12 @@ func (s *Service) inspectChunk(ctx context.Context, id string, opts InspectOptio
 		result.Relations = append(result.Relations, relations...)
 	}
 	if opts.Reverse {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.reverse_relations.load",
+			Entity:   string(EntityChunk),
+			EntityID: strconv.FormatInt(chunkID, 10),
+			Message:  "loading incoming references",
+		})
 		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityChunk, ID: chunkID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect chunk %d reverse relations: %w", chunkID, err)
@@ -369,6 +442,12 @@ func (s *Service) inspectContainer(ctx context.Context, id string, opts InspectO
 	}
 
 	if opts.Reverse {
+		emitTrace(opts.Trace, TraceEvent{
+			Step:     "inspect.reverse_relations.load",
+			Entity:   string(EntityContainer),
+			EntityID: strconv.FormatInt(containerID, 10),
+			Message:  "loading incoming references",
+		})
 		reverse, err := s.getGraphReverseRelations(ctx, graph.NodeID{Type: graph.EntityContainer, ID: containerID}, opts.Limit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %d reverse relations: %w", containerID, err)
@@ -484,6 +563,16 @@ func (s *Service) expandDeep(ctx context.Context, root graph.NodeID, opts Inspec
 	if opts.Limit <= 0 {
 		return nil, nil
 	}
+	emitTrace(opts.Trace, TraceEvent{
+		Step:     "inspect.deep_traversal.start",
+		Entity:   string(root.Type),
+		EntityID: strconv.FormatInt(root.ID, 10),
+		Message:  "starting deep traversal",
+		Metadata: map[string]any{
+			"limit":     opts.Limit,
+			"max_depth": maxDepth,
+		},
+	})
 
 	type queuedNode struct {
 		node  graph.NodeID
@@ -515,6 +604,15 @@ func (s *Service) expandDeep(ctx context.Context, root graph.NodeID, opts Inspec
 				continue
 			}
 			if len(relations) >= opts.Limit {
+				emitTrace(opts.Trace, TraceEvent{
+					Step:     "inspect.deep_traversal.limit_reached",
+					Entity:   string(root.Type),
+					EntityID: strconv.FormatInt(root.ID, 10),
+					Message:  "stopping deep traversal at relation limit",
+					Metadata: map[string]any{
+						"limit": opts.Limit,
+					},
+				})
 				return relations, nil
 			}
 
