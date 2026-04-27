@@ -83,3 +83,8 @@ temp/
 _smoke_*/
 .pre_release_smoke/
 out/
+
+# =========================
+# test output
+# =========================
+cmd/coldkeep/testdata/

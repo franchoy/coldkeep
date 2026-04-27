@@ -101,6 +101,158 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func runCLIWithCapturedIO(t *testing.T, args []string) (stdout string, stderr string, code int) {
+	t.Helper()
+
+	stderr = captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			code = runCLI(args)
+		})
+	})
+
+	return stdout, stderr, code
+}
+
+func assertGoldenBytes(t *testing.T, name string, got string) {
+	t.Helper()
+
+	path := filepath.Join("testdata", name)
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatalf("create testdata dir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("write golden file %s: %v", name, err)
+		}
+	}
+
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden file %s: %v", name, err)
+	}
+
+	if !bytes.Equal([]byte(got), want) {
+		t.Fatalf("golden mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", name, got, string(want))
+	}
+}
+
+func installStep9CLIStubs(t *testing.T) {
+	t.Helper()
+
+	originalStartupRecovery := startupRecoveryPhase
+	originalRunStats := runObservabilityStatsPhase
+	originalRunInspect := runObservabilityInspectPhase
+	originalRunSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilityStatsPhase = originalRunStats
+		runObservabilityInspectPhase = originalRunInspect
+		runObservabilitySimulateGCPhase = originalRunSimulate
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect", Message: "collect"})
+		}
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical: observability.LogicalStats{
+				TotalFiles:         3,
+				CompletedFiles:     3,
+				TotalSizeBytes:     3072,
+				CompletedSizeBytes: 3072,
+			},
+			Chunks: observability.ChunkStats{
+				TotalChunks:      6,
+				CompletedChunks:  6,
+				CompletedBytes:   1536,
+				TotalReferences:  9,
+				UniqueReferenced: 6,
+				ChunkerVersions: []observability.VersionStat{
+					{Version: "v1-simple-rolling", Chunks: 2, Bytes: 512},
+					{Version: "v2-fastcdc", Chunks: 4, Bytes: 1024},
+				},
+			},
+			Containers: observability.ContainerStats{
+				TotalContainers: 2,
+				TotalBytes:      3072,
+				Records: []observability.ContainerStatRecord{
+					{ID: 1, Filename: "cont-1.bin", TotalBytes: 1024, LiveBytes: 1024, DeadBytes: 0, Quarantine: false, LiveRatioPct: 100},
+					{ID: 2, Filename: "cont-2.bin", TotalBytes: 2048, LiveBytes: 1024, DeadBytes: 1024, Quarantine: false, LiveRatioPct: 50},
+				},
+			},
+			Retention: observability.RetentionStats{
+				CurrentOnlyLogicalFiles:        2,
+				SnapshotReferencedLogicalFiles: 1,
+				SnapshotOnlyLogicalFiles:       0,
+				SharedLogicalFiles:             1,
+				CurrentOnlyBytes:               2048,
+				SnapshotReferencedBytes:        1024,
+				SnapshotOnlyBytes:              0,
+				SharedBytes:                    512,
+			},
+		}, nil
+	}
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "inspect.lookup", Message: "lookup"})
+		}
+		if entity != observability.EntityChunk {
+			return nil, fmt.Errorf("unexpected entity %s", entity)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   id,
+			Summary: map[string]any{
+				"chunk_hash":      "abc123",
+				"size_bytes":      int64(256),
+				"chunker_version": "v2-fastcdc",
+			},
+			Relations: []observability.Relation{
+				{Type: "stored_in", Direction: observability.RelationOutgoing, TargetType: observability.EntityContainer, TargetID: "2", Metadata: map[string]any{"note": "stored in container 2"}},
+			},
+		}, nil
+	}
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "simulate.gc.plan", Message: "plan"})
+		}
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Assumptions: observability.GCSimulationAssumptions{
+					DeletedSnapshots: []string{"snap-old"},
+				},
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            10,
+					UnreachableChunks:          3,
+					LogicallyReclaimableBytes:  3145728,
+					PhysicallyReclaimableBytes: 2097152,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    2,
+				},
+				Containers: []observability.ContainerSimulationImpact{
+					{ContainerID: 2, Filename: "cont-2.bin", TotalBytes: 2048, LiveBytesAfterGC: 1024, ReclaimableBytes: 1024, ReclaimableChunks: 1, TotalChunks: 2, FullyReclaimable: false, RequiresCompaction: true},
+				},
+				Warnings: []observability.ObservationWarning{
+					{Code: "PARTIAL_RECLAIM_REQUIRES_COMPACTION", Message: "dead bytes in partially live containers require compaction"},
+				},
+			},
+		}, nil
+	}
+}
+
 func TestEmitStartupRecoveryReportJSONSuccessSchema(t *testing.T) {
 	report := recovery.Report{
 		AbortedLogicalFiles:    2,
@@ -7252,5 +7404,162 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	}
 	if _, exists := gcNode["warnings"]; exists {
 		t.Fatalf("expected gc.warnings to be omitted from data, got %v", gcNode["warnings"])
+	}
+}
+
+func TestStatsCLIHuman(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"stats"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+
+	assertGoldenBytes(t, "stats.txt", stdout)
+}
+
+func TestStatsCLIJSON(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"stats", "--json"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatal("expected startup recovery JSON event on stderr for stats command")
+	}
+
+	assertGoldenBytes(t, "stats.json", stdout)
+}
+
+func TestInspectCLIHuman(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"inspect", "chunk", "7"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+
+	assertGoldenBytes(t, "inspect_chunk.txt", stdout)
+}
+
+func TestInspectCLIJSON(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"inspect", "chunk", "7", "--output", "json"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatal("expected startup recovery JSON event on stderr for inspect command")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); err != nil {
+		t.Fatalf("parse inspect JSON payload: %v output=%q", err, stdout)
+	}
+	if got, _ := payload["type"].(string); got != "inspect" {
+		t.Fatalf("expected type=inspect, got %v", payload["type"])
+	}
+}
+
+func TestSimulateCLIHuman(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"simulate", "gc", "--delete-snapshot", "snap-old"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+
+	assertGoldenBytes(t, "simulate_gc.txt", stdout)
+}
+
+func TestSimulateCLIJSON(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("expected no stderr output for simulate command, got %q", stderr)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); err != nil {
+		t.Fatalf("parse simulate JSON payload: %v output=%q", err, stdout)
+	}
+	if got, _ := payload["type"].(string); got != "simulation" {
+		t.Fatalf("expected type=simulation, got %v", payload["type"])
+	}
+}
+
+func TestTraceDoesNotAffectOutput(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	tests := []struct {
+		name         string
+		withoutTrace []string
+		withTrace    []string
+	}{
+		{
+			name:         "stats",
+			withoutTrace: []string{"stats", "--json"},
+			withTrace:    []string{"stats", "--json", "--trace-json"},
+		},
+		{
+			name:         "inspect",
+			withoutTrace: []string{"inspect", "chunk", "7", "--output", "json"},
+			withTrace:    []string{"inspect", "chunk", "7", "--output", "json", "--trace-json"},
+		},
+		{
+			name:         "simulate",
+			withoutTrace: []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"},
+			withTrace:    []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old", "--trace-json"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withoutTraceStdout, _, withoutCode := runCLIWithCapturedIO(t, tc.withoutTrace)
+			withTraceStdout, _, withCode := runCLIWithCapturedIO(t, tc.withTrace)
+
+			if withoutCode != exitSuccess {
+				t.Fatalf("without trace exit code mismatch: got %d", withoutCode)
+			}
+			if withCode != exitSuccess {
+				t.Fatalf("with trace exit code mismatch: got %d", withCode)
+			}
+			if withoutTraceStdout != withTraceStdout {
+				t.Fatalf("stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+			}
+		})
+	}
+}
+
+func TestJSONIsStable(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "stats", args: []string{"stats", "--json"}},
+		{name: "inspect", args: []string{"inspect", "chunk", "7", "--output", "json"}},
+		{name: "simulate", args: []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			first, _, firstCode := runCLIWithCapturedIO(t, tc.args)
+			second, _, secondCode := runCLIWithCapturedIO(t, tc.args)
+
+			if firstCode != exitSuccess || secondCode != exitSuccess {
+				t.Fatalf("expected success exit code, got first=%d second=%d", firstCode, secondCode)
+			}
+			if first != second {
+				t.Fatalf("JSON output is not stable\nfirst=%q\nsecond=%q", first, second)
+			}
+		})
 	}
 }
