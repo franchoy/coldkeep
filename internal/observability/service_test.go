@@ -648,3 +648,58 @@ func TestNewServiceWithDB(t *testing.T) {
 		t.Fatal("expected service with injected db")
 	}
 }
+
+func TestSimulateGCTraceEmitsExpectedLifecycleEvents(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	fileID := insertSimLogicalFile(t, dbconn, "trace-gc.txt")
+	chunkID := insertSimChunk(t, dbconn, "trace-gc-chunk", 64, 0, 0, "v2-fastcdc")
+	linkSimFileChunk(t, dbconn, fileID, chunkID, 0)
+	containerID := insertSimContainer(t, dbconn, "trace-gc.bin", 64, true, false)
+	insertSimBlock(t, dbconn, chunkID, containerID, 64)
+	insertSimSnapshot(t, dbconn, "snap-trace")
+
+	sink := &traceCollectorSink{}
+	_, err := svc.Simulate(context.Background(), SimulationOptions{
+		Kind:                   SimulationKindGC,
+		AssumeDeletedSnapshots: []string{"snap-trace"},
+		Trace:                  TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Simulate with trace: %v", err)
+	}
+
+	required := []string{
+		"simulate.gc.start",
+		"simulate.gc.roots.load",
+		"simulate.gc.assumption.exclude_snapshot",
+		"simulate.gc.mark.start",
+		"simulate.gc.mark.complete",
+		"simulate.gc.unreachable.compute",
+		"simulate.gc.container_impact.compute",
+		"simulate.gc.complete",
+	}
+	for _, step := range required {
+		if !traceEventsContainStep(sink.events, step) {
+			t.Fatalf("expected trace step %q, got steps=%v", step, traceSteps(sink.events))
+		}
+	}
+}
+
+func TestSimulateGCTraceDisabledEmitsNoEvents(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	sink := &traceCollectorSink{}
+	_, err := svc.Simulate(context.Background(), SimulationOptions{
+		Kind:  SimulationKindGC,
+		Trace: TraceOptions{Enabled: false, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no trace events when disabled, got %d", len(sink.events))
+	}
+}
