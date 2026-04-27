@@ -27,13 +27,15 @@ The architecture composes:
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
 
-Correctness has five explicit layers:
+Correctness has seven explicit layers:
 
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
 - v1.2 physical-graph coherence: audited physical roots, explicit repair, invariant taxonomy, batch maintenance semantics
 - v1.3 snapshot-based retention: immutable point-in-time captures, snapshot-protected GC, reachability audits
 - v1.4 snapshot clarity hardening: lineage metadata is explicit and non-dependency by contract
+- v1.5 chunker-evolution compatibility clarity: mixed-version repositories are first-class, write-default policy is explicit and new-writes-only
+- v1.6 observability and simulation contract hardening: read-only introspection, exact GC simulation parity, tooling-safe trace channel behavior
 
 Migration philosophy:
 
@@ -668,6 +670,34 @@ CLI error payloads now include optional advisory metadata when an invariant code
 - Text mode: `INVARIANT_CODE: ...` and `Recommended action: ...`
 
 This improves operator guidance while keeping doctor detect-only for physical-layer drift and preserving the explicit repair boundary.
+
+### Phase 8 — Observability and simulation tooling contract
+
+Phase 8 formalizes the operator/tooling command contract for read-only observability.
+
+Command surfaces in scope:
+
+- `coldkeep stats`
+- `coldkeep stats --json`
+- `coldkeep inspect <entity> <id>`
+- `coldkeep inspect ... --relations`
+- `coldkeep inspect ... --reverse`
+- `coldkeep inspect ... --deep --limit N`
+- `coldkeep simulate gc`
+- `coldkeep simulate gc --delete-snapshot <id>`
+- `coldkeep simulate gc --containers`
+- `--trace` / `--trace-json` diagnostics
+
+Inspect entity support currently includes `chunk`, `logical-file`, `container`, and `snapshot`.
+
+Phase 8 guarantees:
+
+- observability commands are read-only (`stats`, `inspect`, `simulate gc`)
+- GC simulation is exact relative to GC reclaimability decisions under the same integrity gates
+- simulation does not mutate repository state (no DB writes, no filesystem writes)
+- JSON output is intended for tooling/automation pipelines
+- deep inspect traversals can be large and should be bounded with `--limit N`
+- trace diagnostics are emitted on stderr (`--trace`, `--trace-json`) so stdout payloads remain stable for piping and automation
 
 ### Dry-run Support (Deferred beyond v1.2)
 
