@@ -2197,7 +2197,7 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot"}
 
 	for _, command := range commands {
-		if !shouldRunStartupRecovery(command) {
+		if !shouldRunStartupRecovery([]string{command}) {
 			t.Fatalf("expected startup recovery to run for command %q", command)
 		}
 	}
@@ -2207,7 +2207,7 @@ func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
 	commands := []string{"help", "version", "init", "simulate", "benchmark", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
 
 	for _, command := range commands {
-		if shouldRunStartupRecovery(command) {
+		if shouldRunStartupRecovery([]string{command}) {
 			t.Fatalf("expected startup recovery to be skipped for command %q", command)
 		}
 	}

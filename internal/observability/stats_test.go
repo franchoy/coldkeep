@@ -174,7 +174,7 @@ func TestBuildVersionStatsSortedAndComplete(t *testing.T) {
 func TestStatsReturnsErrorWhenDBIsMissing(t *testing.T) {
 	svc := newServiceForTest(nil, func() time.Time { return time.Now().UTC() })
 
-	_, err := svc.Stats(nil, StatsOptions{})
+	_, err := svc.Stats(context.TODO(), StatsOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -265,7 +265,7 @@ func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
 	if result.Logical.TotalFiles != 1 {
 		t.Fatalf("expected total logical files=1, got %d", result.Logical.TotalFiles)
 	}
-	if result.Chunks.CountsByVersion == nil || len(result.Chunks.CountsByVersion) == 0 {
+	if len(result.Chunks.CountsByVersion) == 0 {
 		t.Fatalf("expected non-empty chunker version map, got %+v", result.Chunks.CountsByVersion)
 	}
 	if got := result.Chunks.CountsByVersion["v2-fastcdc"]; got != 1 {

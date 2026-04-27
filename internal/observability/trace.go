@@ -29,17 +29,17 @@ type HumanTraceSink struct {
 }
 
 func (s HumanTraceSink) Event(e TraceEvent) {
-	fmt.Fprintf(s.W, "TRACE %s", e.Step)
+	_, _ = fmt.Fprintf(s.W, "TRACE %s", e.Step)
 
 	if e.Entity != "" {
-		fmt.Fprintf(s.W, " %s=%s", e.Entity, e.EntityID)
+		_, _ = fmt.Fprintf(s.W, " %s=%s", e.Entity, e.EntityID)
 	}
 
 	if e.Message != "" {
-		fmt.Fprintf(s.W, " %s", e.Message)
+		_, _ = fmt.Fprintf(s.W, " %s", e.Message)
 	}
 
-	fmt.Fprintln(s.W)
+	_, _ = fmt.Fprintln(s.W)
 }
 
 type JSONTraceSink struct {
@@ -214,8 +214,5 @@ func looksLikeKeyMaterial(value string) bool {
 		return true
 	}
 	lower := strings.ToLower(value)
-	if strings.Contains(lower, "private key") {
-		return true
-	}
-	return false
+	return strings.Contains(lower, "private key")
 }

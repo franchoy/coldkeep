@@ -18,40 +18,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/gc"
 )
 
-// buildCrossConsistencyDB creates a shared in-memory DB with:
-//   - 2 logical files, each referencing some chunks
-//   - 1 dead chunk (no live logical file references it)
-//   - 2 containers, one fully dead (only dead chunks), one live
-//   - 1 snapshot covering the live file
-func buildCrossConsistencyDB(t *testing.T) (dbconn interface{ Close() error }, fileID, deadChunkID, liveChunkID, liveContainerID, deadContainerID int64) {
-	t.Helper()
-	conn := openSimulateTestDB(t)
-
-	// Live logical file
-	liveFileID := insertSimLogicalFile(t, conn, "live.txt")
-
-	// Live chunk (referenced by live file)
-	lc := insertSimChunk(t, conn, "live-chunk-hash", 64, 1, 0, "v2-fastcdc")
-	linkSimFileChunk(t, conn, liveFileID, lc, 0)
-
-	// Dead chunk (not referenced by any live file)
-	dc := insertSimChunk(t, conn, "dead-chunk-hash", 90, 0, 0, "v2-fastcdc")
-
-	// Containers
-	lctr := insertSimContainer(t, conn, "live-ctr.ck", 128, true, false)
-	dctr := insertSimContainer(t, conn, "dead-ctr.ck", 90, true, false)
-
-	// Blocks
-	insertSimBlock(t, conn, lc, lctr, 64)
-	insertSimBlock(t, conn, dc, dctr, 90)
-
-	// Snapshot referencing the live file
-	insertSimSnapshot(t, conn, "snap-1")
-	insertSimSnapshotFile(t, conn, "snap-1", "live.txt", liveFileID)
-
-	return conn, liveFileID, dc, lc, lctr, dctr
-}
-
 // TestCrossConsistency_StatsAndInspectAgreeOnChunkCount verifies that
 // stats.total_chunks equals what enumerate-by-container reveals via inspect.
 func TestCrossConsistency_StatsAndInspectAgreeOnChunkCount(t *testing.T) {

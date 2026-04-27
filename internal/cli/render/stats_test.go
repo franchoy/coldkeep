@@ -131,7 +131,7 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	if idxUnknown == -1 || idxV1 == -1 || idxV2 == -1 {
 		t.Fatalf("expected all chunker version labels in output, got:\n%s", output)
 	}
-	if !(idxUnknown < idxV1 && idxV1 < idxV2) {
+	if idxUnknown >= idxV1 || idxV1 >= idxV2 {
 		t.Fatalf("expected sorted order unknown < v1-simple-rolling < v2-fastcdc, got:\n%s", output)
 	}
 
@@ -254,7 +254,7 @@ func TestRenderStatsHumanSortsChunkerVersions(t *testing.T) {
 	idxUnknown := strings.Index(out, "version: unknown")
 	idxV1 := strings.Index(out, "version: v1-simple-rolling")
 	idxV2 := strings.Index(out, "version: v2-fastcdc")
-	if !(idxUnknown < idxV1 && idxV1 < idxV2) {
+	if idxUnknown >= idxV1 || idxV1 >= idxV2 {
 		t.Fatalf("expected sorted chunker version order, got:\n%s", out)
 	}
 }
