@@ -1,4 +1,4 @@
-package observability
+package render
 
 import (
 	"bytes"
@@ -6,26 +6,28 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/franchoy/coldkeep/internal/observability"
 )
 
 func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
-		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
-		Logical:    LogicalStats{TotalFiles: 3, CompletedSizeBytes: 1000},
-		Chunks: ChunkStats{
+		Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical:    observability.LogicalStats{TotalFiles: 3, CompletedSizeBytes: 1000},
+		Chunks: observability.ChunkStats{
 			CompletedBytes:   400,
 			TotalReferences:  10,
 			UniqueReferenced: 7,
-			ChunkerVersions: []VersionStat{
+			ChunkerVersions: []observability.VersionStat{
 				{Version: "unknown", Chunks: 1, Bytes: 9},
 				{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
 			},
 		},
-		Efficiency: EfficiencyStats{DedupRatio: 2.5, DedupRatioPercent: 60.0, ContainerOverheadPct: 5.0, StorageOverheadPct: 5.0},
+		Efficiency: observability.EfficiencyStats{DedupRatio: 2.5, DedupRatioPercent: 60.0, ContainerOverheadPct: 5.0, StorageOverheadPct: 5.0},
 	}
 
-	if err := RenderStatsJSON(&buf, input); err != nil {
+	if err := (JSONRenderer{}).RenderStats(&buf, input); err != nil {
 		t.Fatalf("RenderStatsJSON: %v", err)
 	}
 
@@ -57,28 +59,28 @@ func TestRenderStatsJSONWritesResultPayload(t *testing.T) {
 func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
-		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
-		Logical: LogicalStats{
+		Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical: observability.LogicalStats{
 			TotalFiles:         128,
 			CompletedFiles:     128,
 			TotalSizeBytes:     42 * 1024 * 1024 * 1024,
 			CompletedSizeBytes: 42 * 1024 * 1024 * 1024,
 		},
-		Physical: PhysicalStats{TotalPhysicalFiles: 140},
-		Chunks: ChunkStats{
+		Physical: observability.PhysicalStats{TotalPhysicalFiles: 140},
+		Chunks: observability.ChunkStats{
 			TotalChunks:      892104,
 			CompletedChunks:  892104,
 			CompletedBytes:   18 * 1024 * 1024 * 1024,
 			TotalReferences:  1902220,
 			UniqueReferenced: 892104,
-			ChunkerVersions: []VersionStat{
+			ChunkerVersions: []observability.VersionStat{
 				{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
 				{Version: "unknown", Chunks: 1, Bytes: 9},
 				{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
 			},
 		},
-		Efficiency: EfficiencyStats{ContainerOverheadPct: 3.1, StorageOverheadPct: 3.1},
-		Containers: ContainerStats{
+		Efficiency: observability.EfficiencyStats{ContainerOverheadPct: 3.1, StorageOverheadPct: 3.1},
+		Containers: observability.ContainerStats{
 			TotalContainers:       320,
 			HealthyContainers:     320,
 			QuarantineContainers:  0,
@@ -86,16 +88,16 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 			LiveBlockBytes:        18 * 1024 * 1024 * 1024,
 			DeadBlockBytes:        0,
 			FragmentationRatioPct: 0,
-			Records: []ContainerStatRecord{
+			Records: []observability.ContainerStatRecord{
 				{ID: 2, Filename: "container_000002.ck", TotalBytes: 64 * 1024 * 1024, LiveBytes: 64 * 1024 * 1024, DeadBytes: 0, Quarantine: false},
 				{ID: 1, Filename: "container_000001.ck", TotalBytes: 64 * 1024 * 1024, LiveBytes: 64 * 1024 * 1024, DeadBytes: 0, Quarantine: false},
 			},
 		},
-		Snapshots: SnapshotStats{TotalSnapshots: 12},
-		Retention: RetentionStats{CurrentOnlyLogicalFiles: 20, SnapshotOnlyLogicalFiles: 8, SharedLogicalFiles: 100},
+		Snapshots: observability.SnapshotStats{TotalSnapshots: 12},
+		Retention: observability.RetentionStats{CurrentOnlyLogicalFiles: 20, SnapshotOnlyLogicalFiles: 8, SharedLogicalFiles: 100},
 	}
 
-	if err := RenderStatsHuman(&buf, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&buf, input); err != nil {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 
@@ -150,20 +152,20 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 
 func TestRenderStatsHumanIsDeterministic(t *testing.T) {
 	input := &StatsResult{
-		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
-		Logical:    LogicalStats{TotalFiles: 10, CompletedFiles: 10, TotalSizeBytes: 1024},
-		Chunks: ChunkStats{TotalChunks: 3, CompletedChunks: 3, CompletedBytes: 512, ChunkerVersions: []VersionStat{
+		Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical:    observability.LogicalStats{TotalFiles: 10, CompletedFiles: 10, TotalSizeBytes: 1024},
+		Chunks: observability.ChunkStats{TotalChunks: 3, CompletedChunks: 3, CompletedBytes: 512, ChunkerVersions: []observability.VersionStat{
 			{Version: "v2-fastcdc", Chunks: 2, Bytes: 200},
 			{Version: "unknown", Chunks: 1, Bytes: 50},
 		}},
 	}
 
 	var first bytes.Buffer
-	if err := RenderStatsHuman(&first, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&first, input); err != nil {
 		t.Fatalf("RenderStatsHuman first: %v", err)
 	}
 	var second bytes.Buffer
-	if err := RenderStatsHuman(&second, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&second, input); err != nil {
 		t.Fatalf("RenderStatsHuman second: %v", err)
 	}
 
@@ -174,14 +176,14 @@ func TestRenderStatsHumanIsDeterministic(t *testing.T) {
 
 func TestRenderStatsJSONRoundTrips(t *testing.T) {
 	input := &StatsResult{
-		Repository: RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
-		Logical:    LogicalStats{TotalFiles: 5, CompletedFiles: 5, CompletedSizeBytes: 1000},
-		Chunks:     ChunkStats{ChunkerVersions: []VersionStat{{Version: "v2-fastcdc", Chunks: 5, Bytes: 1000}}},
-		Efficiency: EfficiencyStats{DedupRatio: 2.0, DedupRatioPercent: 50.0, ContainerOverheadPct: 3.0, StorageOverheadPct: 3.0},
+		Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Logical:    observability.LogicalStats{TotalFiles: 5, CompletedFiles: 5, CompletedSizeBytes: 1000},
+		Chunks:     observability.ChunkStats{ChunkerVersions: []observability.VersionStat{{Version: "v2-fastcdc", Chunks: 5, Bytes: 1000}}},
+		Efficiency: observability.EfficiencyStats{DedupRatio: 2.0, DedupRatioPercent: 50.0, ContainerOverheadPct: 3.0, StorageOverheadPct: 3.0},
 	}
 
 	var buf bytes.Buffer
-	if err := RenderStatsJSON(&buf, input); err != nil {
+	if err := (JSONRenderer{}).RenderStats(&buf, input); err != nil {
 		t.Fatalf("RenderStatsJSON: %v", err)
 	}
 
@@ -201,14 +203,14 @@ func TestRenderStatsJSONRoundTrips(t *testing.T) {
 func TestRenderStatsHumanSortsChunkerVersions(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
-		Chunks: ChunkStats{ChunkerVersions: []VersionStat{
+		Chunks: observability.ChunkStats{ChunkerVersions: []observability.VersionStat{
 			{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
 			{Version: "unknown", Chunks: 1, Bytes: 9},
 			{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
 		}},
 	}
 
-	if err := RenderStatsHuman(&buf, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&buf, input); err != nil {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 	out := buf.String()
@@ -223,10 +225,10 @@ func TestRenderStatsHumanSortsChunkerVersions(t *testing.T) {
 func TestRenderStatsHumanHidesContainerDetailsByDefault(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
-		Containers: ContainerStats{Records: nil},
+		Containers: observability.ContainerStats{Records: nil},
 	}
 
-	if err := RenderStatsHuman(&buf, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&buf, input); err != nil {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 	if strings.Contains(buf.String(), "Container details") {
@@ -237,10 +239,10 @@ func TestRenderStatsHumanHidesContainerDetailsByDefault(t *testing.T) {
 func TestRenderStatsHumanShowsContainerDetailsWhenRequested(t *testing.T) {
 	var buf bytes.Buffer
 	input := &StatsResult{
-		Containers: ContainerStats{Records: []ContainerStatRecord{{ID: 1, Filename: "container_000001.ck", TotalBytes: 64, LiveBytes: 64, DeadBytes: 0, Quarantine: false}}},
+		Containers: observability.ContainerStats{Records: []observability.ContainerStatRecord{{ID: 1, Filename: "container_000001.ck", TotalBytes: 64, LiveBytes: 64, DeadBytes: 0, Quarantine: false}}},
 	}
 
-	if err := RenderStatsHuman(&buf, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&buf, input); err != nil {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 	out := buf.String()
@@ -254,7 +256,7 @@ func TestRenderStatsHumanShowsContainerDetailsWhenRequested(t *testing.T) {
 
 func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
 	input := &StatsResult{
-		Efficiency: EfficiencyStats{
+		Efficiency: observability.EfficiencyStats{
 			DedupRatio:           2.29,
 			DedupRatioPercent:    56.3,
 			ContainerOverheadPct: 3.1,
@@ -263,7 +265,7 @@ func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
 	}
 
 	var human bytes.Buffer
-	if err := RenderStatsHuman(&human, input); err != nil {
+	if err := (HumanRenderer{}).RenderStats(&human, input); err != nil {
 		t.Fatalf("RenderStatsHuman: %v", err)
 	}
 	humanOut := human.String()
@@ -274,7 +276,7 @@ func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
 	}
 
 	var jsonBuf bytes.Buffer
-	if err := RenderStatsJSON(&jsonBuf, input); err != nil {
+	if err := (JSONRenderer{}).RenderStats(&jsonBuf, input); err != nil {
 		t.Fatalf("RenderStatsJSON: %v", err)
 	}
 

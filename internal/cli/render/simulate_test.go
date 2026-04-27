@@ -1,0 +1,68 @@
+package render
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/franchoy/coldkeep/internal/observability"
+)
+
+func TestRenderSimulationHumanIncludesNoMutationFooter(t *testing.T) {
+	r := &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Summary: observability.GCSimulationSummary{
+				ReachableChunks:            10,
+				UnreachableChunks:          2,
+				LogicallyReclaimableBytes:  1024,
+				PhysicallyReclaimableBytes: 2048,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := (HumanRenderer{}).RenderSimulation(&buf, r); err != nil {
+		t.Fatalf("RenderSimulation human: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "GC simulation") {
+		t.Fatalf("expected simulation title, got: %s", out)
+	}
+	if !strings.Contains(out, "No state was changed.") {
+		t.Fatalf("expected read-only footer, got: %s", out)
+	}
+}
+
+func TestRenderSimulationJSONUsesStableEnvelope(t *testing.T) {
+	r := &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Summary: observability.GCSimulationSummary{
+				ReachableChunks: 7,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := (JSONRenderer{}).RenderSimulation(&buf, r); err != nil {
+		t.Fatalf("RenderSimulation json: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal simulation json: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected status: %v", payload["status"])
+	}
+	if payload["command"] != "simulate gc" {
+		t.Fatalf("unexpected command: %v", payload["command"])
+	}
+	if _, ok := payload["data"].(map[string]any); !ok {
+		t.Fatalf("expected data object, got: %T", payload["data"])
+	}
+}

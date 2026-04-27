@@ -1,14 +1,17 @@
-package observability
+package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/franchoy/coldkeep/internal/observability"
 )
 
-func RenderInspectHuman(w io.Writer, r *InspectResult) error {
+func (HumanRenderer) RenderInspect(w io.Writer, r *InspectResult) error {
 	if w == nil {
 		return fmt.Errorf("render inspect human: nil writer")
 	}
@@ -34,7 +37,7 @@ func RenderInspectHuman(w io.Writer, r *InspectResult) error {
 		}
 	}
 
-	references := filterRelationsByDirection(r.Relations, RelationOutgoing)
+	references := filterRelationsByDirection(r.Relations, observability.RelationOutgoing)
 	if len(references) > 0 {
 		if _, err := fmt.Fprintln(w, "\nReferences"); err != nil {
 			return err
@@ -46,7 +49,7 @@ func RenderInspectHuman(w io.Writer, r *InspectResult) error {
 		}
 	}
 
-	referencedBy := filterRelationsByDirection(r.Relations, RelationIncoming)
+	referencedBy := filterRelationsByDirection(r.Relations, observability.RelationIncoming)
 	if len(referencedBy) > 0 {
 		if _, err := fmt.Fprintln(w, "\nReferenced by"); err != nil {
 			return err
@@ -61,12 +64,24 @@ func RenderInspectHuman(w io.Writer, r *InspectResult) error {
 	return nil
 }
 
+func (JSONRenderer) RenderInspect(w io.Writer, r *InspectResult) error {
+	if w == nil {
+		return fmt.Errorf("render inspect json: nil writer")
+	}
+	if r == nil {
+		r = &InspectResult{}
+	}
+
+	encoder := json.NewEncoder(w)
+	return encoder.Encode(r)
+}
+
 type inspectSummaryRow struct {
 	label string
 	value string
 }
 
-func orderedSummaryRows(entityType EntityType, summary map[string]any) []inspectSummaryRow {
+func orderedSummaryRows(entityType observability.EntityType, summary map[string]any) []inspectSummaryRow {
 	if len(summary) == 0 {
 		return nil
 	}
@@ -98,11 +113,11 @@ func orderedSummaryRows(entityType EntityType, summary map[string]any) []inspect
 	return out
 }
 
-func preferredSummaryOrder(entityType EntityType) []string {
+func preferredSummaryOrder(entityType observability.EntityType) []string {
 	switch entityType {
-	case EntityChunk:
+	case observability.EntityChunk:
 		return []string{"size_bytes", "chunker_version", "container_id"}
-	case EntityLogicalFile, EntityFile:
+	case observability.EntityLogicalFile, observability.EntityFile:
 		return []string{"original_name", "chunk_count", "chunker_version"}
 	default:
 		return nil
@@ -160,7 +175,7 @@ func summaryValueString(key string, value any) string {
 	return fmt.Sprintf("%v", value)
 }
 
-func humanizeEntityType(entityType EntityType) string {
+func humanizeEntityType(entityType observability.EntityType) string {
 	label := strings.ReplaceAll(string(entityType), "_", " ")
 	label = strings.TrimSpace(label)
 	if label == "" {
@@ -169,8 +184,8 @@ func humanizeEntityType(entityType EntityType) string {
 	return strings.ToUpper(label[:1]) + label[1:]
 }
 
-func filterRelationsByDirection(relations []Relation, direction RelationDirection) []Relation {
-	out := make([]Relation, 0, len(relations))
+func filterRelationsByDirection(relations []observability.Relation, direction observability.RelationDirection) []observability.Relation {
+	out := make([]observability.Relation, 0, len(relations))
 	for _, rel := range relations {
 		if rel.Direction == direction {
 			out = append(out, rel)

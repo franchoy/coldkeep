@@ -29,6 +29,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk/benchmark"
 	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
+	clirender "github.com/franchoy/coldkeep/internal/cli/render"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -1825,11 +1826,8 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return err
 	}
 
-	if outputMode == outputModeJSON {
-		return observability.RenderStatsJSON(os.Stdout, r)
-	}
-
-	return observability.RenderStatsHuman(os.Stdout, r)
+	renderer := resolveRenderer(outputMode)
+	return renderer.RenderStats(os.Stdout, r)
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -1891,12 +1889,8 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
-	if outputMode == outputModeJSON {
-		enc := json.NewEncoder(os.Stdout)
-		return enc.Encode(r)
-	}
-
-	return observability.RenderInspectHuman(os.Stdout, r)
+	renderer := resolveRenderer(outputMode)
+	return renderer.RenderInspect(os.Stdout, r)
 }
 
 func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -2896,87 +2890,25 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 		return fmt.Errorf("simulate gc: %w", err)
 	}
 
+	renderResult := clirender.CloneSimulationResult(r)
+	if renderResult.GC != nil {
+		if !includeContainers {
+			renderResult.GC.Containers = nil
+		}
+		if len(renderResult.GC.Assumptions.DeletedSnapshots) == 0 && len(deleteSnapshots) > 0 {
+			renderResult.GC.Assumptions.DeletedSnapshots = append([]string(nil), deleteSnapshots...)
+		}
+	}
+
+	renderer := resolveRenderer(outputMode)
+	return renderer.RenderSimulation(os.Stdout, renderResult)
+}
+
+func resolveRenderer(outputMode cliOutputMode) clirender.Renderer {
 	if outputMode == outputModeJSON {
-		if r.GC != nil && !includeContainers {
-			trimmed := *r.GC
-			trimmed.Containers = nil
-			r.GC = &trimmed
-		}
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "simulate gc",
-			"data":    r,
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
+		return clirender.JSONRenderer{}
 	}
-
-	// Human text output
-	fmt.Println("GC simulation")
-	fmt.Println()
-
-	modeExact := r.Exact
-	modeMutated := r.Mutated
-	if r.GC != nil {
-		modeExact = r.GC.Exact
-		modeMutated = r.GC.Mutated
-	}
-	fmt.Println("Mode")
-	fmt.Printf("  exact:       %t\n", modeExact)
-	fmt.Printf("  mutated:     %t\n", modeMutated)
-	fmt.Println()
-
-	if r.GC != nil {
-		fmt.Println("Reachability")
-		fmt.Printf("  reachable chunks:       %d\n", r.GC.Summary.ReachableChunks)
-		fmt.Printf("  unreachable chunks:     %d\n", r.GC.Summary.UnreachableChunks)
-		fmt.Println()
-
-		fmt.Println("Reclaimable")
-		fmt.Printf("  logical bytes:          %s\n", formatMiB(r.GC.Summary.LogicallyReclaimableBytes))
-		fmt.Printf("  physical bytes now:     %s\n", formatMiB(r.GC.Summary.PhysicallyReclaimableBytes))
-		fmt.Println()
-
-		fmt.Println("Containers")
-		fmt.Printf("  fully reclaimable:      %d\n", r.GC.Summary.FullyReclaimableContainers)
-		fmt.Printf("  partially dead:         %d\n", r.GC.Summary.PartiallyDeadContainers)
-	}
-
-	assumedDeleted := deleteSnapshots
-	if r.GC != nil && len(r.GC.Assumptions.DeletedSnapshots) > 0 {
-		assumedDeleted = r.GC.Assumptions.DeletedSnapshots
-	}
-	if len(assumedDeleted) > 0 {
-		fmt.Println()
-		fmt.Println("Assumptions")
-		for _, snapshotID := range assumedDeleted {
-			fmt.Printf("  snapshot treated as deleted: %s\n", snapshotID)
-		}
-	}
-	if includeContainers && r.GC != nil && len(r.GC.Containers) > 0 {
-		fmt.Println()
-		fmt.Println("  Containers with reclaimable chunks:")
-		for _, c := range r.GC.Containers {
-			state := "[requires compaction]"
-			if c.FullyReclaimable {
-				state = "[fully reclaimable now]"
-			}
-			fmt.Printf("    container %d (%s): reclaimable=%d live_after_gc=%d chunks=%d/%d %s\n",
-				c.ContainerID, c.Filename, c.ReclaimableBytes, c.LiveBytesAfterGC, c.ReclaimableChunks, c.TotalChunks, state)
-		}
-	}
-	if r.GC != nil && len(r.GC.Warnings) > 0 {
-		fmt.Println()
-		fmt.Println("Warnings")
-		for _, warning := range r.GC.Warnings {
-			fmt.Printf("  [%s] %s\n", warning.Code, warning.Message)
-		}
-	}
-
-	fmt.Println()
-	fmt.Println("No state was changed.")
-	return nil
+	return clirender.HumanRenderer{}
 }
 
 var runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {

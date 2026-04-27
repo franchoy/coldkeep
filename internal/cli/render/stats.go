@@ -1,4 +1,4 @@
-package observability
+package render
 
 import (
 	"encoding/json"
@@ -8,9 +8,25 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/franchoy/coldkeep/internal/observability"
 )
 
-func RenderStatsJSON(w io.Writer, r *StatsResult) error {
+type StatsResult = observability.StatsResult
+type InspectResult = observability.InspectResult
+type SimulationResult = observability.SimulationResult
+
+type Renderer interface {
+	RenderStats(io.Writer, *StatsResult) error
+	RenderInspect(io.Writer, *InspectResult) error
+	RenderSimulation(io.Writer, *SimulationResult) error
+}
+
+type HumanRenderer struct{}
+
+type JSONRenderer struct{}
+
+func (JSONRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 	if w == nil {
 		return fmt.Errorf("render stats json: nil writer")
 	}
@@ -22,7 +38,7 @@ func RenderStatsJSON(w io.Writer, r *StatsResult) error {
 	return encoder.Encode(r)
 }
 
-func RenderStatsHuman(w io.Writer, r *StatsResult) error {
+func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 	if w == nil {
 		return fmt.Errorf("render stats human: nil writer")
 	}
@@ -200,22 +216,22 @@ func RenderStatsHuman(w io.Writer, r *StatsResult) error {
 	return nil
 }
 
-func sortedVersionStats(in []VersionStat) []VersionStat {
+func sortedVersionStats(in []observability.VersionStat) []observability.VersionStat {
 	if len(in) == 0 {
 		return nil
 	}
-	out := append([]VersionStat(nil), in...)
+	out := append([]observability.VersionStat(nil), in...)
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Version < out[j].Version
 	})
 	return out
 }
 
-func sortedContainerRecords(in []ContainerStatRecord) []ContainerStatRecord {
+func sortedContainerRecords(in []observability.ContainerStatRecord) []observability.ContainerStatRecord {
 	if len(in) == 0 {
 		return nil
 	}
-	out := append([]ContainerStatRecord(nil), in...)
+	out := append([]observability.ContainerStatRecord(nil), in...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].ID == out[j].ID {
 			return out[i].Filename < out[j].Filename
