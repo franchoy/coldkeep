@@ -689,6 +689,102 @@ func TestStatsTraceEmitsExpectedHighLevelEvents(t *testing.T) {
 	TestStatsTraceEmitsHighLevelCollectionEvents(t)
 }
 
+func TestTraceDoesNotMutateState(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	// Seed minimal state: one logical file, one chunk, one container, one snapshot.
+	fileRes, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"trace-mut.txt", 50, "h-trace-mut", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"chunk-trace-mut", 50, "COMPLETED", 1, "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	ctrRes, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`,
+		"ctr_trace_mut.bin", 256, 1024, 0,
+	)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := ctrRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 50, 50, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, CURRENT_TIMESTAMP, 'full')`, "trace-mut-snap"); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES (?)`, "trace-mut.txt"); err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id) VALUES (?, 1, ?)`, "trace-mut-snap", fileID); err != nil {
+		t.Fatalf("insert snapshot_file: %v", err)
+	}
+
+	countTables := []string{"logical_file", "chunk", "container", "file_chunk", "blocks", "snapshot", "snapshot_file", "snapshot_path"}
+	snapshot := func() map[string]int64 {
+		m := make(map[string]int64, len(countTables))
+		for _, table := range countTables {
+			var c int64
+			if err := dbconn.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&c); err != nil {
+				t.Fatalf("count %s: %v", table, err)
+			}
+			m[table] = c
+		}
+		return m
+	}
+
+	before := snapshot()
+	sink := &traceCollectorSink{}
+	traceOpts := TraceOptions{Enabled: true, Sink: sink}
+	svc := newServiceForTest(dbconn, nil)
+
+	// Stats with trace.
+	if _, err := svc.Stats(context.Background(), StatsOptions{IncludeContainers: true, Trace: traceOpts}); err != nil {
+		t.Fatalf("Stats with trace: %v", err)
+	}
+	// Inspect with trace: logical file, chunk, and snapshot entity types.
+	if _, err := svc.Inspect(context.Background(), EntityLogicalFile, strconv.FormatInt(fileID, 10), InspectOptions{Relations: true, Deep: true, Trace: traceOpts}); err != nil {
+		t.Fatalf("Inspect(logical_file) with trace: %v", err)
+	}
+	if _, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Relations: true, Reverse: true, Trace: traceOpts}); err != nil {
+		t.Fatalf("Inspect(chunk) with trace: %v", err)
+	}
+	if _, err := svc.Inspect(context.Background(), EntitySnapshot, "trace-mut-snap", InspectOptions{Relations: true, Trace: traceOpts}); err != nil {
+		t.Fatalf("Inspect(snapshot) with trace: %v", err)
+	}
+	// Simulate GC with trace.
+	if _, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC, Trace: traceOpts}); err != nil {
+		t.Fatalf("Simulate with trace: %v", err)
+	}
+
+	after := snapshot()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("trace-enabled calls mutated repository state\nbefore: %+v\nafter:  %+v", before, after)
+	}
+	if len(sink.events) == 0 {
+		t.Fatal("expected trace events to be emitted but sink is empty")
+	}
+}
+
 func TestTraceDoesNotChangeStatsResult(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 	fixedNow := time.Date(2026, time.April, 27, 10, 0, 0, 0, time.UTC)
