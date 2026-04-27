@@ -193,6 +193,24 @@ database. If you continue from those steps without resetting `DB_NAME` and
 `COLDKEEP_STORAGE_DIR`, doctor/stats/verify may legitimately report missing
 containers from an earlier storage path rather than a product defect.
 
+Recommended newcomer-safe reset before steps 5-11:
+
+```bash
+export DB_NAME=coldkeep_manual
+export COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/manual-checks"
+rm -rf "$COLDKEEP_STORAGE_DIR"
+mkdir -p "$COLDKEEP_STORAGE_DIR"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_manual;"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_manual;"
+
+# Bootstrap the fresh manual-check database once.
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+./coldkeep stats >/dev/null
+```
+
+Use this reset whenever you want steps 5-11 to validate the CLI against a fresh,
+known-good manual sandbox instead of the DB/storage state left behind by the CI-parity loop.
+
 ```bash
 unset COLDKEEP_CODEC
 ./coldkeep doctor
