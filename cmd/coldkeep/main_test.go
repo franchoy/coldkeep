@@ -1375,6 +1375,99 @@ func TestResolveOutputModeRejectsJSONConflictWithHumanOutput(t *testing.T) {
 	}
 }
 
+func TestResolveTraceOptionsRejectsConflictingTraceFlags(t *testing.T) {
+	_, err := resolveTraceOptions(parsedCommandLine{
+		method: "inspect",
+		flags: map[string][]string{
+			"trace":      {""},
+			"trace-json": {""},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --trace with --trace-json") {
+		t.Fatalf("expected trace flag conflict error, got %v", err)
+	}
+}
+
+func TestResolveTraceOptionsTextTraceSink(t *testing.T) {
+	opts, err := resolveTraceOptions(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"trace": {""}},
+	})
+	if err != nil {
+		t.Fatalf("resolveTraceOptions returned error: %v", err)
+	}
+	if !opts.Enabled {
+		t.Fatal("expected trace enabled")
+	}
+	if _, ok := opts.Sink.(stderrTextTraceSink); !ok {
+		t.Fatalf("expected stderrTextTraceSink, got %T", opts.Sink)
+	}
+}
+
+func TestResolveTraceOptionsJSONTraceSink(t *testing.T) {
+	opts, err := resolveTraceOptions(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"trace-json": {""}},
+	})
+	if err != nil {
+		t.Fatalf("resolveTraceOptions returned error: %v", err)
+	}
+	if !opts.Enabled {
+		t.Fatal("expected trace enabled")
+	}
+	if _, ok := opts.Sink.(stderrJSONTraceSink); !ok {
+		t.Fatalf("expected stderrJSONTraceSink, got %T", opts.Sink)
+	}
+}
+
+func TestStderrTextTraceSinkWritesHumanLine(t *testing.T) {
+	output := captureStderr(t, func() {
+		(stderrTextTraceSink{}).Event(observability.TraceEvent{
+			Step:     "inspect.resolve_entity",
+			Entity:   "chunk",
+			EntityID: "123",
+			Message:  "resolving chunk metadata",
+			Metadata: map[string]any{"incoming_refs": 4, "source": "graph"},
+		})
+	})
+
+	if !strings.Contains(output, "TRACE inspect.resolve_entity chunk=123 resolving chunk metadata") {
+		t.Fatalf("expected human trace prefix, got %q", output)
+	}
+	if !strings.Contains(output, "incoming_refs=4") {
+		t.Fatalf("expected metadata value in human trace, got %q", output)
+	}
+	if !strings.Contains(output, "source=graph") {
+		t.Fatalf("expected metadata value in human trace, got %q", output)
+	}
+}
+
+func TestStderrJSONTraceSinkWritesJSONLine(t *testing.T) {
+	output := captureStderr(t, func() {
+		(stderrJSONTraceSink{}).Event(observability.TraceEvent{
+			Step:     "graph.reverse_references",
+			Entity:   "chunk",
+			EntityID: "123",
+			Message:  "found incoming references",
+			Metadata: map[string]any{"count": 4},
+		})
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse json trace line: %v output=%q", err, output)
+	}
+	if got, _ := payload["step"].(string); got != "graph.reverse_references" {
+		t.Fatalf("expected step=graph.reverse_references, got %v", payload["step"])
+	}
+	if got, _ := payload["entity"].(string); got != "chunk" {
+		t.Fatalf("expected entity=chunk, got %v", payload["entity"])
+	}
+	if got, _ := payload["entity_id"].(string); got != "123" {
+		t.Fatalf("expected entity_id=123, got %v", payload["entity_id"])
+	}
+}
+
 func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runSimulateCommand(parsedCommandLine{
 		method:      "simulate",
@@ -2145,7 +2238,7 @@ func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
 	_ = runInspectCommand(parsedCommandLine{
 		method:      "inspect",
 		positionals: []string{"file", "1"},
-		flags:       map[string][]string{"relations": {""}, "reverse": {""}, "deep": {""}, "limit": {"7"}},
+		flags:       map[string][]string{"relations": {""}, "reverse": {""}, "deep": {""}, "limit": {"7"}, "trace": {""}},
 	}, outputModeText)
 
 	if !capturedOpts.Relations {
@@ -2159,6 +2252,12 @@ func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
 	}
 	if capturedOpts.Limit != 7 {
 		t.Fatalf("expected Limit=7 from --limit 7, got %d", capturedOpts.Limit)
+	}
+	if !capturedOpts.Trace.Enabled {
+		t.Fatal("expected Trace.Enabled=true from --trace")
+	}
+	if _, ok := capturedOpts.Trace.Sink.(stderrTextTraceSink); !ok {
+		t.Fatalf("expected stderrTextTraceSink, got %T", capturedOpts.Trace.Sink)
 	}
 }
 
@@ -5669,6 +5768,27 @@ func TestStatsCommandContainers(t *testing.T) {
 	}
 }
 
+func TestStatsCommandTraceFlagsPassedThrough(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	var captured observability.StatsOptions
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		captured = opts
+		return &observability.StatsResult{}, nil
+	}
+
+	if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"trace-json": {""}}}, outputModeText); err != nil {
+		t.Fatalf("runStatsCommand with --trace-json returned error: %v", err)
+	}
+	if !captured.Trace.Enabled {
+		t.Fatal("expected Trace.Enabled=true when --trace-json is set")
+	}
+	if _, ok := captured.Trace.Sink.(stderrJSONTraceSink); !ok {
+		t.Fatalf("expected stderrJSONTraceSink, got %T", captured.Trace.Sink)
+	}
+}
+
 func TestStatsCommandConflictingOutputFlags(t *testing.T) {
 	_, err := resolveOutputMode(parsedCommandLine{
 		method: "stats",
@@ -6664,6 +6784,7 @@ func TestRunSimulateGCCommandDeleteSnapshotFlagPassThrough(t *testing.T) {
 		positionals: []string{"gc"},
 		flags: map[string][]string{
 			"delete-snapshot": {"s3", "s4"},
+			"trace-json":      {""},
 		},
 	}, outputModeText)
 	if err != nil {
@@ -6675,6 +6796,12 @@ func TestRunSimulateGCCommandDeleteSnapshotFlagPassThrough(t *testing.T) {
 	}
 	if len(captured.AssumeDeletedSnapshots) != 2 || captured.AssumeDeletedSnapshots[0] != "s3" || captured.AssumeDeletedSnapshots[1] != "s4" {
 		t.Fatalf("captured.AssumeDeletedSnapshots = %v, want [s3 s4]", captured.AssumeDeletedSnapshots)
+	}
+	if !captured.Trace.Enabled {
+		t.Fatal("expected Trace.Enabled=true from --trace-json")
+	}
+	if _, ok := captured.Trace.Sink.(stderrJSONTraceSink); !ok {
+		t.Fatalf("expected stderrJSONTraceSink, got %T", captured.Trace.Sink)
 	}
 }
 

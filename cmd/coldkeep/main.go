@@ -755,6 +755,102 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	}
 }
 
+type stderrTextTraceSink struct{}
+
+func (stderrTextTraceSink) Event(event observability.TraceEvent) {
+	line := strings.Builder{}
+	line.WriteString("TRACE ")
+	line.WriteString(strings.TrimSpace(event.Step))
+
+	entity := strings.TrimSpace(event.Entity)
+	entityID := strings.TrimSpace(event.EntityID)
+	if entity != "" {
+		line.WriteByte(' ')
+		if entityID != "" {
+			line.WriteString(entity)
+			line.WriteByte('=')
+			line.WriteString(entityID)
+		} else {
+			line.WriteString(entity)
+		}
+	}
+
+	message := strings.TrimSpace(strings.ReplaceAll(event.Message, "\n", " "))
+	if message != "" {
+		line.WriteByte(' ')
+		line.WriteString(message)
+	}
+
+	if len(event.Metadata) > 0 {
+		keys := make([]string, 0, len(event.Metadata))
+		for key := range event.Metadata {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			line.WriteByte(' ')
+			line.WriteString(key)
+			line.WriteByte('=')
+			line.WriteString(formatTraceMetadataValue(event.Metadata[key]))
+		}
+	}
+
+	_, _ = fmt.Fprintln(os.Stderr, line.String())
+}
+
+type stderrJSONTraceSink struct{}
+
+func (stderrJSONTraceSink) Event(event observability.TraceEvent) {
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		fallback := map[string]any{
+			"step":    event.Step,
+			"message": "trace encoding failed",
+			"error":   err.Error(),
+		}
+		encoded, _ = json.Marshal(fallback)
+	}
+	_, _ = fmt.Fprintln(os.Stderr, string(encoded))
+}
+
+func formatTraceMetadataValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return "\"\""
+		}
+		if strings.ContainsAny(trimmed, " \t\n\r") {
+			return strconv.Quote(trimmed)
+		}
+		return trimmed
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return "\"<unserializable>\""
+		}
+		return string(encoded)
+	}
+}
+
+func resolveTraceOptions(parsed parsedCommandLine) (observability.TraceOptions, error) {
+	hasTraceText := parsed.hasFlag("trace")
+	hasTraceJSON := parsed.hasFlag("trace-json")
+
+	if hasTraceText && hasTraceJSON {
+		return observability.TraceOptions{}, usageErrorf("cannot combine --trace with --trace-json")
+	}
+
+	if hasTraceJSON {
+		return observability.TraceOptions{Enabled: true, Sink: stderrJSONTraceSink{}}, nil
+	}
+	if hasTraceText {
+		return observability.TraceOptions{Enabled: true, Sink: stderrTextTraceSink{}}, nil
+	}
+
+	return observability.TraceOptions{}, nil
+}
+
 var outputSupportedCommands = map[string]bool{
 	"config":       true,
 	"doctor":       true,
@@ -1790,15 +1886,19 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "containers"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "containers", "trace", "trace-json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
-		return usageErrorf("Usage: coldkeep stats [--output <human|text|json>] [--json] [--containers]")
+		return usageErrorf("Usage: coldkeep stats [--output <human|text|json>] [--json] [--containers] [--trace|--trace-json]")
+	}
+	traceOptions, err := resolveTraceOptions(parsed)
+	if err != nil {
+		return err
 	}
 
 	includeContainers := parsed.hasFlag("containers")
-	r, err := runObservabilityStatsPhase(observability.StatsOptions{IncludeContainers: includeContainers})
+	r, err := runObservabilityStatsPhase(observability.StatsOptions{IncludeContainers: includeContainers, Trace: traceOptions})
 	if err != nil {
 		return err
 	}
@@ -1811,7 +1911,11 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "relations", "reverse", "deep", "limit"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "relations", "reverse", "deep", "limit", "trace", "trace-json"); err != nil {
+		return err
+	}
+	traceOptions, err := resolveTraceOptions(parsed)
+	if err != nil {
 		return err
 	}
 
@@ -1847,6 +1951,7 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		Relations: parsed.hasFlag("relations"),
 		Reverse:   parsed.hasFlag("reverse"),
 		Deep:      parsed.hasFlag("deep"),
+		Trace:     traceOptions,
 	}
 	if limitStr, hasLimit := parsed.lastFlagValue("limit"); hasLimit {
 		n, err := strconv.Atoi(limitStr)
@@ -2849,7 +2954,11 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 // It is a pure read-only operation: it calls BuildPlan and reports what would
 // be reclaimable, without deleting anything.
 func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "json", "delete-snapshot", "containers"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "delete-snapshot", "containers", "trace", "trace-json"); err != nil {
+		return err
+	}
+	traceOptions, err := resolveTraceOptions(parsed)
+	if err != nil {
 		return err
 	}
 
@@ -2858,6 +2967,7 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 
 	r, err := runObservabilitySimulateGCPhase(observability.SimulationOptions{
 		Kind:                   observability.SimulationKindGC,
+		Trace:                  traceOptions,
 		AssumeDeletedSnapshots: deleteSnapshots,
 	})
 	if err != nil {
@@ -4461,8 +4571,8 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  stats [--output <human|text|json>] [--json] [--containers]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
-		{"  inspect file <fileID> [--output <text|json>]", "Inspect one logical file with chunker and chunking summary"},
+		{"  stats [--output <human|text|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
+		{"  inspect file <fileID> [--output <text|json>] [--trace|--trace-json]", "Inspect one logical file with chunker and chunking summary"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
@@ -4480,7 +4590,7 @@ func printHelp() {
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
 		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
-		{"  simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>] [--json]", "Preview exact GC impact without mutations; use --containers for per-container detail"},
+		{"  simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>] [--json] [--trace|--trace-json]", "Preview exact GC impact without mutations; use --containers for per-container detail"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
