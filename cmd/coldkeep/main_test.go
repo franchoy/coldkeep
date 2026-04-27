@@ -7563,3 +7563,91 @@ func TestJSONIsStable(t *testing.T) {
 		})
 	}
 }
+
+func TestBackwardCompatibilityStatsCLI(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilityStatsPhase = originalRunStats
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:    observability.LogicalStats{TotalFiles: 1, CompletedFiles: 1, TotalSizeBytes: 1024, CompletedSizeBytes: 1024},
+			Chunks:     observability.ChunkStats{TotalChunks: 1, CompletedChunks: 1, CompletedBytes: 512},
+		}, nil
+	}
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"stats"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for coldkeep stats, got %d", code)
+	}
+	if !strings.Contains(stdout, "Coldkeep stats") {
+		t.Fatalf("expected stats header in output, got:\n%s", stdout)
+	}
+}
+
+func TestBackwardCompatibilityInspectFileCLI(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilityInspectPhase = originalInspect
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityFile {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "42" {
+			t.Fatalf("unexpected file id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   id,
+			Summary: map[string]any{
+				"original_name":   "compat.txt",
+				"chunk_count":     int64(3),
+				"chunker_version": "v2-fastcdc",
+			},
+		}, nil
+	}
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"inspect", "file", "42"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for coldkeep inspect file <id>, got %d", code)
+	}
+	for _, want := range []string{"Inspect logical file 42", "compat.txt", "chunker_version:", "v2-fastcdc"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected inspect file output to contain %q, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestBackwardCompatibilitySimulateStoreCLI(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+
+	inPath := filepath.Join(t.TempDir(), "simulate-store-compat.txt")
+	if err := os.WriteFile(inPath, []byte("simulate-store-compat-payload"), 0o600); err != nil {
+		t.Fatalf("write simulated input file: %v", err)
+	}
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"simulate", "store", inPath})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for coldkeep simulate store, got %d (stderr=%q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "[SIMULATE] subcommand=store") {
+		t.Fatalf("expected simulate store report header, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "dry run") {
+		t.Fatalf("expected dry-run wording in simulate store output, got:\n%s", stdout)
+	}
+}
