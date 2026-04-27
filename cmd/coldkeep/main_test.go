@@ -345,6 +345,81 @@ func assertJSONNumber(t *testing.T, payload map[string]any, key string, expected
 	}
 }
 
+func assertRFC3339UTCString(t *testing.T, payload map[string]any, key string) string {
+	t.Helper()
+
+	raw, ok := payload[key].(string)
+	if !ok {
+		t.Fatalf("key %s has non-string value: %T (%v)", key, payload[key], payload[key])
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("key %s is not RFC3339: %v value=%q", key, err, raw)
+	}
+	if raw != parsed.UTC().Format(time.RFC3339) || !strings.HasSuffix(raw, "Z") {
+		t.Fatalf("key %s is not normalized UTC RFC3339: %q", key, raw)
+	}
+	return raw
+}
+
+func assertJSONEnvelopeShape(t *testing.T, payload map[string]any, wantType string) map[string]any {
+	t.Helper()
+
+	if len(payload) != 5 {
+		t.Fatalf("unexpected top-level key count: got=%d payload=%v", len(payload), payload)
+	}
+	if got, _ := payload["type"].(string); got != wantType {
+		t.Fatalf("expected type=%s, got %v", wantType, payload["type"])
+	}
+	assertRFC3339UTCString(t, payload, "generated_at_utc")
+	if _, ok := payload["warnings"].([]any); !ok {
+		t.Fatalf("expected warnings array, got %T", payload["warnings"])
+	}
+	meta, ok := payload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected meta object, got %T", payload["meta"])
+	}
+	if got, _ := meta["version"].(string); got != "v1.6" {
+		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	}
+	if _, ok := meta["exact"].(bool); !ok {
+		t.Fatalf("expected meta.exact bool, got %T", meta["exact"])
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %T", payload["data"])
+	}
+	if _, exists := payload["status"]; exists {
+		t.Fatalf("unexpected status key in envelope payload: %v", payload)
+	}
+	return data
+}
+
+func assertStructuredWarnings(t *testing.T, payload map[string]any, wantLen int) []any {
+	t.Helper()
+
+	warnings, ok := payload["warnings"].([]any)
+	if !ok {
+		t.Fatalf("expected warnings array, got %T", payload["warnings"])
+	}
+	if len(warnings) != wantLen {
+		t.Fatalf("unexpected warnings length: got=%d want=%d warnings=%v", len(warnings), wantLen, warnings)
+	}
+	for i, raw := range warnings {
+		warning, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("warning %d is not an object: %T (%v)", i, raw, raw)
+		}
+		if _, ok := warning["code"].(string); !ok {
+			t.Fatalf("warning %d missing string code: %v", i, warning)
+		}
+		if _, ok := warning["message"].(string); !ok {
+			t.Fatalf("warning %d missing string message: %v", i, warning)
+		}
+	}
+	return warnings
+}
+
 func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
 	err := verifyError(errors.New("doctor verify phase failed: chunk mismatch"))
 
@@ -2478,6 +2553,131 @@ func TestRunInspectCommandJSONShorthand(t *testing.T) {
 	}
 	if got, _ := data["entity_type"].(string); got != "chunk" {
 		t.Fatalf("expected entity_type=chunk, got %v", data["entity_type"])
+	}
+}
+
+func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	tests := []struct {
+		name          string
+		entityArg     string
+		inputID       string
+		resultType    observability.EntityType
+		summary       map[string]any
+		relations     []observability.Relation
+		assertSummary func(t *testing.T, summary map[string]any)
+	}{
+		{
+			name:       "snapshot",
+			entityArg:  "snapshot",
+			inputID:    "snap-42",
+			resultType: observability.EntitySnapshot,
+			summary:    map[string]any{"total_size_bytes": int64(8192), "logical_file_count": int64(3)},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "total_size_bytes", 8192)
+				assertJSONNumber(t, summary, "logical_file_count", 3)
+			},
+		},
+		{
+			name:       "logical-file",
+			entityArg:  "file",
+			inputID:    "42",
+			resultType: observability.EntityLogicalFile,
+			summary:    map[string]any{"chunk_count": int64(12), "avg_chunk_size_bytes": float64(2048), "original_name": "photo.jpg"},
+			relations:  []observability.Relation{{Type: "references", Direction: observability.RelationOutgoing, TargetType: observability.EntityChunk, TargetID: "77"}},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "chunk_count", 12)
+				if _, ok := summary["avg_chunk_size_bytes"].(float64); !ok {
+					t.Fatalf("expected avg_chunk_size_bytes float64, got %T", summary["avg_chunk_size_bytes"])
+				}
+			},
+		},
+		{
+			name:       "chunk",
+			entityArg:  "chunk",
+			inputID:    "77",
+			resultType: observability.EntityChunk,
+			summary:    map[string]any{"size_bytes": int64(2048), "container_id": int64(5)},
+			relations:  []observability.Relation{{Type: "referenced_by", Direction: observability.RelationIncoming, TargetType: observability.EntityLogicalFile, TargetID: "42"}},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "size_bytes", 2048)
+				assertJSONNumber(t, summary, "container_id", 5)
+			},
+		},
+		{
+			name:       "container",
+			entityArg:  "container",
+			inputID:    "5",
+			resultType: observability.EntityContainer,
+			summary:    map[string]any{"size_bytes": int64(4096), "chunk_count": int64(9), "filename": "ctr_5.bin"},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "size_bytes", 4096)
+				assertJSONNumber(t, summary, "chunk_count", 9)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+				return &observability.InspectResult{
+					GeneratedAtUTC: time.Date(2026, time.April, 27, 13, 14, 15, 0, time.UTC),
+					EntityType:     tc.resultType,
+					EntityID:       tc.inputID,
+					Summary:        tc.summary,
+					Relations:      tc.relations,
+					Warnings:       []observability.ObservationWarning{{Code: "INSPECT_WARNING", Message: "inspect warning"}},
+				}, nil
+			}
+
+			output := captureStdout(t, func() {
+				err := runInspectCommand(parsedCommandLine{
+					method:      "inspect",
+					positionals: []string{tc.entityArg, tc.inputID},
+					flags:       map[string][]string{"json": {""}},
+				}, outputModeJSON)
+				if err != nil {
+					t.Fatalf("runInspectCommand JSON returned error: %v", err)
+				}
+			})
+
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+				t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
+			}
+			data := assertJSONEnvelopeShape(t, payload, "inspect")
+			assertStructuredWarnings(t, payload, 1)
+
+			if got, _ := data["entity_type"].(string); got != string(tc.resultType) {
+				t.Fatalf("entity_type mismatch: got=%v want=%s", data["entity_type"], tc.resultType)
+			}
+			if got, _ := data["entity_id"].(string); got != tc.inputID {
+				t.Fatalf("entity_id mismatch: got=%v want=%s", data["entity_id"], tc.inputID)
+			}
+			summary, ok := data["summary"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected summary object, got %T", data["summary"])
+			}
+			tc.assertSummary(t, summary)
+			if size, ok := summary["size_bytes"].(string); ok && strings.Contains(size, "KiB") {
+				t.Fatalf("expected numeric size_bytes, got formatted string %q", size)
+			}
+			if len(tc.relations) > 0 {
+				relations, ok := data["relations"].([]any)
+				if !ok || len(relations) == 0 {
+					t.Fatalf("expected relations array, got %v", data["relations"])
+				}
+				relation, ok := relations[0].(map[string]any)
+				if !ok {
+					t.Fatalf("expected relation object, got %T", relations[0])
+				}
+				if _, ok := relation["target_id"].(string); !ok {
+					t.Fatalf("expected relation target_id string, got %T", relation["target_id"])
+				}
+			}
+		})
 	}
 }
 
@@ -6200,6 +6400,64 @@ func TestStatsCommandJSON(t *testing.T) {
 	}
 }
 
+func TestRunStatsCommandJSONContract(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 12, 34, 56, 0, time.UTC),
+			Repository:     observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:        observability.LogicalStats{TotalFiles: 2, CompletedSizeBytes: 4096},
+			Chunks: observability.ChunkStats{
+				TotalChunks:      3,
+				CompletedBytes:   1024,
+				TotalReferences:  5,
+				UniqueReferenced: 3,
+				ChunkerVersions:  []observability.VersionStat{{Version: "v2-fastcdc", Chunks: 3, Bytes: 1024}},
+			},
+			Containers: observability.ContainerStats{TotalBytes: 2048},
+			Warnings:   []observability.ObservationWarning{{Code: "STATS_WARNING", Message: "stats warning"}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand JSON contract returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse stats JSON output: %v output=%q", err, output)
+	}
+	data := assertJSONEnvelopeShape(t, payload, "stats")
+	assertStructuredWarnings(t, payload, 1)
+
+	repository, ok := data["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected repository object, got %T", data["repository"])
+	}
+	if got, _ := repository["active_write_chunker"].(string); got != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%v", repository["active_write_chunker"])
+	}
+	logical, ok := data["logical"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logical object, got %T", data["logical"])
+	}
+	assertJSONNumber(t, logical, "total_files", 2)
+	assertJSONNumber(t, logical, "completed_size_bytes", 4096)
+	chunks, ok := data["chunks"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected chunks object, got %T", data["chunks"])
+	}
+	assertJSONNumber(t, chunks, "total_chunks", 3)
+	assertJSONNumber(t, chunks, "completed_bytes", 1024)
+	if human, ok := chunks["completed_bytes"].(string); ok && strings.Contains(human, "KiB") {
+		t.Fatalf("expected numeric completed_bytes, got formatted string %q", human)
+	}
+}
+
 func TestStatsCommandJSONShorthand(t *testing.T) {
 	parsed := parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}
 	mode, err := resolveOutputMode(parsed)
@@ -7148,6 +7406,175 @@ func TestRunSimulateGCCommandJSONIncludesContainersWhenRequested(t *testing.T) {
 	containers, ok := gcNode["containers"].([]any)
 	if !ok || len(containers) != 1 {
 		t.Fatalf("expected one container in gc.containers when --containers is set, got %v", gcNode["containers"])
+	}
+}
+
+func TestRunSimulateGCCommandJSONContractAndWarnings(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 16, 0, 0, 0, time.UTC),
+			Kind:           observability.SimulationKindGC,
+			Exact:          true,
+			Mutated:        false,
+			Warnings:       []observability.ObservationWarning{{Code: "TOP_LEVEL_WARNING", Message: "top level warning"}},
+			GC: &observability.GCSimulationResult{
+				GeneratedAtUTC: time.Date(2026, time.April, 27, 16, 0, 0, 0, time.UTC),
+				Kind:           observability.SimulationKindGC,
+				Exact:          true,
+				Mutated:        false,
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            10,
+					UnreachableChunks:          2,
+					LogicallyReclaimableBytes:  200,
+					PhysicallyReclaimableBytes: 100,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    1,
+				},
+				Containers: []observability.ContainerSimulationImpact{{
+					ContainerID:        7,
+					Filename:           "c007.bin",
+					TotalBytes:         100,
+					LiveBytesAfterGC:   0,
+					ReclaimableBytes:   100,
+					ReclaimableChunks:  1,
+					TotalChunks:        1,
+					FullyReclaimable:   true,
+					RequiresCompaction: false,
+				}},
+				Warnings: []observability.ObservationWarning{{Code: "GC_WARNING", Message: "gc warning"}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags:       map[string][]string{"json": {""}, "containers": {""}},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand JSON contract returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, output)
+	}
+	data := assertJSONEnvelopeShape(t, payload, "simulation")
+	assertStructuredWarnings(t, payload, 2)
+	gcNode, ok := data["gc"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gc object, got %T", data["gc"])
+	}
+	if got, _ := gcNode["kind"].(string); got != "gc" {
+		t.Fatalf("gc.kind mismatch: got=%v", gcNode["kind"])
+	}
+	summary, ok := gcNode["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gc.summary object, got %T", gcNode["summary"])
+	}
+	assertJSONNumber(t, summary, "reachable_chunks", 10)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
+	containers, ok := gcNode["containers"].([]any)
+	if !ok || len(containers) != 1 {
+		t.Fatalf("expected one gc.containers entry, got %v", gcNode["containers"])
+	}
+	containerNode, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected container object, got %T", containers[0])
+	}
+	assertJSONNumber(t, containerNode, "container_id", 7)
+	assertJSONNumber(t, containerNode, "reclaimable_bytes", 100)
+	if human, ok := containerNode["reclaimable_bytes"].(string); ok && strings.Contains(human, "MiB") {
+		t.Fatalf("expected numeric reclaimable_bytes, got formatted string %q", human)
+	}
+}
+
+func TestCommandJSONModeErrorsAreStructured(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	originalInspect := runObservabilityInspectPhase
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() {
+		runObservabilityStatsPhase = originalRunStats
+		runObservabilityInspectPhase = originalInspect
+		runObservabilitySimulateGCPhase = originalSimulate
+	})
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "stats",
+			run: func() error {
+				runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+					return nil, observabilityErrorf(exitGeneral, "NOT_FOUND", "stats source missing")
+				}
+				return runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}, outputModeJSON)
+			},
+		},
+		{
+			name: "inspect",
+			run: func() error {
+				runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+					return nil, observabilityErrorf(exitGeneral, "NOT_FOUND", "logical file 45 not found")
+				}
+				return runInspectCommand(parsedCommandLine{method: "inspect", positionals: []string{"file", "45"}, flags: map[string][]string{"json": {""}}}, outputModeJSON)
+			},
+		},
+		{
+			name: "simulate-gc",
+			run: func() error {
+				runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+					return nil, observabilityErrorf(exitGeneral, "INVALID_ARGUMENT", "snapshot s9 does not exist")
+				}
+				return runSimulateGCCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}}}, outputModeJSON)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := captureStderr(t, func() {
+				err := tc.run()
+				if err == nil {
+					t.Fatal("expected non-nil command error")
+				}
+				printCLIError(err, outputModeJSON)
+			})
+
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+				t.Fatalf("parse JSON error output: %v output=%q", err, output)
+			}
+			if got, _ := payload["status"].(string); got != "error" {
+				t.Fatalf("expected status=error, got %v", payload["status"])
+			}
+			if got, _ := payload["message"].(string); strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty message, got %v", payload["message"])
+			}
+			if _, ok := payload["error_class"].(string); !ok {
+				t.Fatalf("expected error_class string, got %T", payload["error_class"])
+			}
+			if _, ok := payload["exit_code"].(float64); !ok {
+				t.Fatalf("expected exit_code number, got %T", payload["exit_code"])
+			}
+			errorNode, ok := payload["error"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected structured error object, got %T", payload["error"])
+			}
+			if got, _ := errorNode["code"].(string); strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty error.code, got %v payload=%v", errorNode["code"], payload)
+			}
+			if got, _ := errorNode["message"].(string); strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty error.message, got %v payload=%v", errorNode["message"], payload)
+			}
+		})
 	}
 }
 
