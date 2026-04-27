@@ -304,7 +304,7 @@ func runCLI(args []string) int {
 		return exitSuccess
 	}
 
-	if shouldRunStartupRecovery(args[0]) {
+	if shouldRunStartupRecovery(args) {
 		recoveryReport, recoveryErr := runStartupRecoveryWithOptionalLogBuffering(startupMode)
 		if recoveryErr != nil {
 			log.Printf("System recovery failed: %v\n", recoveryErr)
@@ -841,8 +841,16 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	return outputModeText
 }
 
-func shouldRunStartupRecovery(command string) bool {
-	switch command {
+func shouldRunStartupRecovery(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--help" || arg == "-h" {
+			return false
+		}
+	}
+	switch args[0] {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
 	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot":
@@ -2566,6 +2574,10 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 
 func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	if parsed.hasFlag("help", "h") {
+		if len(parsed.positionals) > 0 && parsed.positionals[0] == "gc" {
+			printSimulateGCHelp()
+			return nil
+		}
 		printSimulateHelp()
 		return nil
 	}
@@ -3955,7 +3967,7 @@ func printHelp() {
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
 		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
-		{"  inspect file <fileID> [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one logical file with chunker and chunking summary"},
+		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
@@ -4112,10 +4124,16 @@ func printStatsHelp() {
 
 func printInspectHelp() {
 	fmt.Println("Usage:")
-	fmt.Println("  coldkeep inspect (file|snapshot|chunk|container) <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println("  coldkeep inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
 	fmt.Println()
 	fmt.Println("Inspect one entity through the observability pipeline (read-only).")
+	fmt.Println("Supported entities: file, snapshot, chunk, container")
 	fmt.Println()
+	fmt.Println("Traversal options:")
+	fmt.Println("  --relations includes forward linked records")
+	fmt.Println("  --reverse includes reverse references where available")
+	fmt.Println("  --deep enables deeper traversal/detail output")
+	fmt.Println("  --limit bounds deep traversal output; use it with --deep to keep output manageable")
 	fmt.Println("JSON support:")
 	fmt.Println("  --json is shorthand for --output json")
 	fmt.Println("  output schema is stable for automation")
@@ -4151,6 +4169,25 @@ func printSimulateHelp() {
 	fmt.Println("including optional hypothetical snapshot deletion.")
 	fmt.Println()
 	fmt.Println("No state is modified.")
+}
+
+func printSimulateGCHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println()
+	fmt.Println("Preview exact GC impact without modifying repository state (read-only).")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --delete-snapshot <id> simulates GC after excluding the given snapshot from simulated roots")
+	fmt.Println("  --containers includes per-container detail in the rendered result")
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  simulation payloads keep a stable schema for automation")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Safety guarantee:")
+	fmt.Println("  simulate gc is exact for GC reclaimability decisions and never mutates repository state")
 }
 
 func printHelpRows(rows [][2]string) {

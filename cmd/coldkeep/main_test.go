@@ -1947,6 +1947,31 @@ func TestRunSimulateCommandHelpIncludesRequiredGuaranteesAndExample(t *testing.T
 	}
 }
 
+func TestRunSimulateCommandGCHelpIsSpecificToGC(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runSimulateCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runSimulateCommand gc --help returned error: %v", err)
+		}
+	})
+
+	required := []string{
+		"Preview exact GC impact without modifying repository state (read-only).",
+		"--delete-snapshot <id>",
+		"--containers includes per-container detail",
+		"--json is shorthand for --output json",
+		"--trace or --trace-json emits diagnostics to stderr only",
+		"simulate gc is exact for GC reclaimability decisions and never mutates repository state",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected simulate gc help to include %q, got:\n%s", fragment, output)
+		}
+	}
+	if strings.Contains(output, "coldkeep simulate <store|store-folder>") {
+		t.Fatalf("expected simulate gc help to omit generic simulate store usage, got:\n%s", output)
+	}
+}
+
 func TestRunBenchmarkCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runBenchmarkCommand(parsedCommandLine{
 		method: "benchmark",
@@ -2748,6 +2773,37 @@ func TestRunInspectCommandHelpIncludesJSONTraceAndDeterminism(t *testing.T) {
 	}
 	if !strings.Contains(output, "Deterministic output guarantee:") {
 		t.Fatalf("expected deterministic guarantee section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "--limit bounds deep traversal output") {
+		t.Fatalf("expected --limit guidance in inspect help, got:\n%s", output)
+	}
+}
+
+func TestRunCLIHelpSubcommandsDoNotRunStartupRecovery(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	t.Cleanup(func() { startupRecoveryPhase = originalStartupRecovery })
+
+	called := 0
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		called++
+		return recovery.Report{}, nil
+	}
+
+	for _, args := range [][]string{{"stats", "--help"}, {"inspect", "--help"}} {
+		stdout, stderr, code := runCLIWithCapturedIO(t, args)
+		if code != exitSuccess {
+			t.Fatalf("expected success for %v, got %d", args, code)
+		}
+		if strings.TrimSpace(stderr) != "" {
+			t.Fatalf("expected no stderr for %v, got:\n%s", args, stderr)
+		}
+		if !strings.Contains(stdout, "Usage:") {
+			t.Fatalf("expected help usage for %v, got:\n%s", args, stdout)
+		}
+	}
+
+	if called != 0 {
+		t.Fatalf("expected startup recovery to be skipped for help-only invocations, called=%d", called)
 	}
 }
 
