@@ -27,10 +27,10 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.4%20snapshot%20clarity%20%26%20hardening-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.6%20observability%20%26%20tooling-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.4 hardens snapshot operator clarity and release-readiness on top of the v1.3 snapshot layer. Snapshots remain self-contained immutable captures; lineage (`--from`) is metadata for analysis only.
+> Status: v1.6 adds read-only observability and exact GC simulation tooling (`stats`, `inspect`, `simulate gc`) while preserving the v1.3/v1.4 snapshot-retention safety model.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -57,18 +57,22 @@ The goal is confidence and recoverability over maximum throughput.
 - Snapshot diff summaries
 - Snapshot tree visualization
 - Safe deletion preview (`--dry-run`)
+- Read-only observability (`stats`, `inspect`)
+- Exact GC simulation with trace support
 - Built-in deduplication
 - Deterministic restore
 
 ## Status
 
-Coldkeep has five explicit correctness layers:
+Coldkeep has seven explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
 - v1.2: physical-file graph coherence, explicit repair semantics, audited GC refusal, and invariant-aware batch maintenance reporting
 - v1.3: snapshot-based retention as a correctness layer (immutable point-in-time captures, snapshot-protected GC, reachability audits)
 - v1.4: snapshot clarity and lifecycle hardening (explicit lineage semantics, safer dry-run wording, stricter pre-release verification guidance)
+- v1.5: chunker-evolution compatibility contract clarity (mixed-version repositories, explicit new-writes-only chunker policy)
+- v1.6: observability and simulation contract hardening (read-only introspection, exact GC simulation parity, trace channel behavior)
 
 Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
 
@@ -334,6 +338,38 @@ Simulation (no physical writes):
 coldkeep simulate store-folder ./data
 coldkeep simulate store file.txt --output json
 ```
+
+Observability and GC simulation (read-only):
+
+```bash
+coldkeep stats
+coldkeep stats --json
+
+coldkeep inspect <entity> <id>
+coldkeep inspect <entity> <id> --relations
+coldkeep inspect <entity> <id> --reverse
+coldkeep inspect <entity> <id> --deep --limit N
+
+coldkeep simulate gc
+coldkeep simulate gc --delete-snapshot <id>
+coldkeep simulate gc --containers
+
+# trace diagnostics are emitted on stderr
+coldkeep stats --trace
+coldkeep inspect chunk <id> --trace-json
+coldkeep simulate gc --trace-json
+```
+
+Supported inspect entities currently include: `chunk`, `logical-file`, `container`, and `snapshot`.
+
+Observability command guarantees (v1.6):
+
+- `stats`, `inspect`, and `simulate gc` are read-only command surfaces.
+- `simulate gc` is an exact simulation of GC reclaimability under the same integrity gates.
+- GC simulation does not mutate repository state (no database writes and no filesystem writes).
+- JSON output is intended for tooling/automation contracts.
+- Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.
+- `--trace` and `--trace-json` are diagnostics channels; traces are emitted to stderr so stdout data remains stable for piping.
 
 Chunker benchmark and interpretation:
 
@@ -771,9 +807,16 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Current-state path identity policy: [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
 - Milestone history: [CHANGELOG.md](CHANGELOG.md)
 
-## Roadmap note (v1.4 and beyond)
+## Roadmap note (v1.6 and beyond)
 
-v1.2 now includes the `physical_file` to `logical_file` mapping layer, explicit `repair ref-counts`, audited GC refusal on drifted roots, and deterministic batch maintenance semantics. Future work is expected to focus on performance, broader repair scopes, and higher-level orchestration rather than changing the core correctness model.
+Current status:
+
+- v1.2 physical mapping/repair and audited GC root gates are complete.
+- v1.3/v1.4 snapshot-retention correctness and lifecycle clarity are complete.
+- v1.5 chunker-evolution compatibility contract is complete.
+- v1.6 read-only observability and exact GC simulation tooling are complete.
+
+Near-term focus remains performance profiling, broader repair scopes, and higher-level orchestration while preserving the existing correctness model and CLI contracts.
 
 ## Contributing
 

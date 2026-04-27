@@ -462,18 +462,19 @@ go test ./internal/chunk/fastcdc -run 'TestDeterministicChunkBoundariesAndData' 
 
 ### H. Documentation and release artifacts
 
-- [ ] `README.md` reflects v1.5 chunker-evolution behavior
-- [ ] `ARCHITECTURE.md` reflects v1.5 chunker model and cross-version reuse semantics
-- [ ] `COMPATIBILITY.md` exists and matches implementation behavior
-- [ ] CLI help for `config set default-chunker` includes new-writes-only safety wording
+- [ ] `README.md` documents `stats`, `inspect`, and `simulate gc` observability surfaces
+- [ ] `README.md` includes JSON/trace contract guidance (`--json`, `--trace`, `--trace-json`)
+- [ ] `README.md` explicitly states read-only / non-mutation guarantees for observability commands
+- [ ] `README.md` warns that deep inspect output can be large and recommends `--limit`
+- [ ] `ARCHITECTURE.md` and `COMPATIBILITY.md` remain aligned with current behavior
 - [ ] Release notes are drafted and aligned with behavior
 
 Suggested quick checks:
 
 ```bash
-rg -n 'v2-fastcdc|v1-simple-rolling|chunks may be reused across chunker versions|cross-version reuse is opportunistic' README.md ARCHITECTURE.md COMPATIBILITY.md
-rg -n 'config set default-chunker <value>|Affects only new stored data\. Existing data is not modified\.' cmd/coldkeep/main.go
-rg -n 'v1\.5 introduces CDC evolution through chunker versioning|Release highlights \(1\.5\.0\)' CHANGELOG.md
+rg -n 'coldkeep stats|coldkeep inspect <entity> <id>|coldkeep simulate gc|--trace-json|read-only|exact simulation|does not mutate' README.md
+rg -n 'deep inspect output can be large|--deep --limit N|JSON output is intended for tooling' README.md
+rg -n 'Release highlights \(1\.6\.0\)|observability|simulate gc|trace-json' CHANGELOG.md
 ```
 
 ### I. Final CI commands (explicit rerun)
