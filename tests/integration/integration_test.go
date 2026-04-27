@@ -154,8 +154,20 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 		t.Fatalf("expected positive file_id, got %d", fileID)
 	}
 
-	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"stats", "--output", "json"), "stats")
+	statsRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats", "--output", "json")
+	if statsRes.ExitCode != 0 {
+		t.Fatalf("stats failed: exit=%d stderr=%s", statsRes.ExitCode, statsRes.Stderr)
+	}
+	statsPayload, ok := testutils.TryParseLastJSONLine(statsRes.Stdout)
+	if !ok {
+		statsPayload, ok = testutils.TryParseLastJSONLine(statsRes.Stdout + "\n" + statsRes.Stderr)
+	}
+	if !ok {
+		t.Fatalf("stats produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", statsRes.Stdout, statsRes.Stderr)
+	}
+	if got, _ := statsPayload["type"].(string); got != "stats" {
+		t.Fatalf("stats payload type mismatch: got=%q payload=%v", got, statsPayload)
+	}
 
 	list := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"list", "--output", "json"), "list")
@@ -3363,12 +3375,27 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 		"store-folder", "--codec", "plain", inputDir, "--output", "json"), "store-folder")
 
-	stats := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
-		"stats", "--output", "json"), "stats")
-	statsData := testutils.JSONMap(t, stats, "data")
-	realFiles := testutils.JSONInt64(t, statsData, "completed_files")
-	realLogical := testutils.JSONInt64(t, statsData, "completed_size_bytes")
-	realPhysical := testutils.JSONInt64(t, statsData, "live_block_bytes")
+	statsRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats", "--output", "json")
+	if statsRes.ExitCode != 0 {
+		t.Fatalf("stats failed: exit=%d stderr=%s", statsRes.ExitCode, statsRes.Stderr)
+	}
+	statsPayload, ok := testutils.TryParseLastJSONLine(statsRes.Stdout)
+	if !ok {
+		statsPayload, ok = testutils.TryParseLastJSONLine(statsRes.Stdout + "\n" + statsRes.Stderr)
+	}
+	if !ok {
+		t.Fatalf("stats produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", statsRes.Stdout, statsRes.Stderr)
+	}
+	if got, _ := statsPayload["type"].(string); got != "stats" {
+		t.Fatalf("stats payload type mismatch: got=%q payload=%v", got, statsPayload)
+	}
+
+	statsData := testutils.JSONMap(t, statsPayload, "data")
+	logical := testutils.JSONMap(t, statsData, "logical")
+	containers := testutils.JSONMap(t, statsData, "containers")
+	realFiles := testutils.JSONInt64(t, logical, "completed_files")
+	realLogical := testutils.JSONInt64(t, logical, "completed_size_bytes")
+	realPhysical := testutils.JSONInt64(t, containers, "live_block_bytes")
 
 	if simFiles != realFiles {
 		t.Fatalf("simulation files mismatch: simulated=%d real=%d", simFiles, realFiles)
