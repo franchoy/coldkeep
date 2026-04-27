@@ -4128,7 +4128,7 @@ func printInspectHelp() {
 	fmt.Println("  coldkeep inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
 	fmt.Println()
 	fmt.Println("Inspect one entity through the observability pipeline (read-only).")
-	fmt.Println("Supported entities: file, snapshot, chunk, container")
+	fmt.Println("Supported entities: file (alias: logical-file), snapshot, chunk, container")
 	fmt.Println()
 	fmt.Println("Traversal options:")
 	fmt.Println("  --relations includes forward linked records")

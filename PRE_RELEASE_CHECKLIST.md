@@ -651,10 +651,11 @@ do
     exit 1;
   }
 done
-echo "G14-G17 evidence names: OK"
+
+## 14) Snapshot sign-off checklist (Phases 1-7)
 ```
 
-## 15) Snapshot CLI/contract checklist
+## 16) Snapshot CLI/contract checklist
 
 Commands in scope:
 
@@ -681,7 +682,7 @@ Additional CLI validation and policy checks:
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
 - [ ] `snapshot delete` requires `--force`
 
-## 16) Verify snapshot / retention contract (manual gate)
+## 17) Verify snapshot / retention contract (manual gate)
 
 Run this manual lifecycle gate after core CI/test gates pass.
 
@@ -724,7 +725,7 @@ Confirm:
 - [ ] Snapshot delete succeeds only with `--force`
 - [ ] GC eligibility changes only after all retaining snapshots are deleted
 
-## 17) Final global sign-off
+## 18) Final global sign-off
 
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
