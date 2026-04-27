@@ -32,6 +32,7 @@ func (JSONRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 	if r == nil {
 		r = &StatsResult{}
 	}
+	r = normalizedStatsForOutput(r)
 
 	data, err := toObjectMap(r)
 	if err != nil {
@@ -53,6 +54,17 @@ func (JSONRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 
 	encoder := json.NewEncoder(w)
 	return encoder.Encode(envelope)
+}
+
+func normalizedStatsForOutput(input *StatsResult) *StatsResult {
+	if input == nil {
+		return &StatsResult{}
+	}
+	out := *input
+	out.Chunks.ChunkerVersions = sortedVersionStats(input.Chunks.ChunkerVersions)
+	out.Containers.Records = sortedContainerRecords(input.Containers.Records)
+	out.Warnings = normalizeWarnings(input.Warnings)
+	return &out
 }
 
 func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {

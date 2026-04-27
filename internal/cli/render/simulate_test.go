@@ -79,3 +79,53 @@ func TestRenderSimulationJSONUsesStableEnvelope(t *testing.T) {
 		t.Fatalf("expected data object, got: %T", payload["data"])
 	}
 }
+
+func TestRenderSimulationJSONIsDeterministic(t *testing.T) {
+	r := &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Assumptions: observability.GCSimulationAssumptions{
+				DeletedSnapshots: []string{"s2", "s1"},
+			},
+			Containers: []observability.ContainerSimulationImpact{
+				{ContainerID: 2, Filename: "b"},
+				{ContainerID: 1, Filename: "a"},
+			},
+			Warnings: []observability.ObservationWarning{
+				{Code: "B", Message: "b"},
+				{Code: "A", Message: "a"},
+			},
+		},
+	}
+
+	var first bytes.Buffer
+	if err := (JSONRenderer{}).RenderSimulation(&first, r); err != nil {
+		t.Fatalf("RenderSimulationJSON first: %v", err)
+	}
+	var second bytes.Buffer
+	if err := (JSONRenderer{}).RenderSimulation(&second, r); err != nil {
+		t.Fatalf("RenderSimulationJSON second: %v", err)
+	}
+
+	if first.String() != second.String() {
+		t.Fatalf("expected deterministic simulation JSON output\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(first.Bytes(), &payload); err != nil {
+		t.Fatalf("decode simulation json: %v", err)
+	}
+	data := payload["data"].(map[string]any)
+	gc := data["gc"].(map[string]any)
+	assumptions := gc["assumptions"].(map[string]any)
+	deleted := assumptions["deleted_snapshots"].([]any)
+	if len(deleted) != 2 || deleted[0] != "s1" || deleted[1] != "s2" {
+		t.Fatalf("expected sorted deleted snapshots, got %v", deleted)
+	}
+	containers := gc["containers"].([]any)
+	firstContainer := containers[0].(map[string]any)
+	if got, _ := firstContainer["container_id"].(float64); int(got) != 1 {
+		t.Fatalf("expected sorted containers by id, got %v", firstContainer["container_id"])
+	}
+}

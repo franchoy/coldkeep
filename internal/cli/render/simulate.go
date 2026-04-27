@@ -167,6 +167,7 @@ func (JSONRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {
 	if r == nil {
 		r = &SimulationResult{}
 	}
+	r = normalizedSimulationForOutput(r)
 
 	data, err := toObjectMap(r)
 	if err != nil {
@@ -183,6 +184,7 @@ func (JSONRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {
 		}
 		warnings = append(warnings, normalizeWarnings(r.GC.Warnings)...)
 	}
+	warnings = normalizeWarnings(warnings)
 
 	exact := r.Exact
 	if r.GC != nil {
@@ -258,5 +260,28 @@ func sortedSimulationWarnings(in []observability.ObservationWarning) []observabi
 		}
 		return out[i].Code < out[j].Code
 	})
+	return out
+}
+
+func normalizedSimulationForOutput(input *SimulationResult) *SimulationResult {
+	if input == nil {
+		return &SimulationResult{}
+	}
+	out := CloneSimulationResult(input)
+	out.Warnings = normalizeWarnings(out.Warnings)
+	if out.GC != nil {
+		out.GC.Assumptions.DeletedSnapshots = sortedStrings(out.GC.Assumptions.DeletedSnapshots)
+		out.GC.Containers = sortedContainerImpact(out.GC.Containers)
+		out.GC.Warnings = normalizeWarnings(out.GC.Warnings)
+	}
+	return out
+}
+
+func sortedStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := append([]string(nil), in...)
+	sort.Strings(out)
 	return out
 }

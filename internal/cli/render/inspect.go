@@ -71,6 +71,7 @@ func (JSONRenderer) RenderInspect(w io.Writer, r *InspectResult) error {
 	if r == nil {
 		r = &InspectResult{}
 	}
+	r = normalizedInspectForOutput(r)
 
 	data, err := toObjectMap(r)
 	if err != nil {
@@ -92,6 +93,16 @@ func (JSONRenderer) RenderInspect(w io.Writer, r *InspectResult) error {
 
 	encoder := json.NewEncoder(w)
 	return encoder.Encode(envelope)
+}
+
+func normalizedInspectForOutput(input *InspectResult) *InspectResult {
+	if input == nil {
+		return &InspectResult{}
+	}
+	out := *input
+	out.Relations = sortedRelations(input.Relations)
+	out.Warnings = normalizeWarnings(input.Warnings)
+	return &out
 }
 
 type inspectSummaryRow struct {

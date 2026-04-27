@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -24,7 +25,7 @@ type jsonEnvelopeMeta struct {
 
 func normalizeGeneratedAt(ts time.Time) string {
 	if ts.IsZero() {
-		ts = time.Now().UTC()
+		return time.Time{}.UTC().Format(time.RFC3339)
 	}
 	return ts.UTC().Format(time.RFC3339)
 }
@@ -33,7 +34,14 @@ func normalizeWarnings(in []observability.ObservationWarning) []observability.Ob
 	if len(in) == 0 {
 		return []observability.ObservationWarning{}
 	}
-	return append([]observability.ObservationWarning(nil), in...)
+	out := append([]observability.ObservationWarning(nil), in...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Code == out[j].Code {
+			return out[i].Message < out[j].Message
+		}
+		return out[i].Code < out[j].Code
+	})
+	return out
 }
 
 func toObjectMap(v any) (map[string]any, error) {

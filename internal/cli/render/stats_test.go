@@ -339,3 +339,42 @@ func TestRenderStatsHumanAndJSONUseSameEfficiencyFields(t *testing.T) {
 		t.Fatalf("expected container_overhead_pct 3.1, got %v", eff["container_overhead_pct"])
 	}
 }
+
+func TestRenderStatsJSONIsDeterministic(t *testing.T) {
+	input := &StatsResult{
+		Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+		Chunks: observability.ChunkStats{ChunkerVersions: []observability.VersionStat{
+			{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
+			{Version: "unknown", Chunks: 1, Bytes: 9},
+		}},
+		Containers: observability.ContainerStats{Records: []observability.ContainerStatRecord{
+			{ID: 2, Filename: "c2"},
+			{ID: 1, Filename: "c1"},
+		}},
+		Warnings: []observability.ObservationWarning{
+			{Code: "B", Message: "b"},
+			{Code: "A", Message: "a"},
+		},
+	}
+
+	var first bytes.Buffer
+	if err := (JSONRenderer{}).RenderStats(&first, input); err != nil {
+		t.Fatalf("RenderStatsJSON first: %v", err)
+	}
+	var second bytes.Buffer
+	if err := (JSONRenderer{}).RenderStats(&second, input); err != nil {
+		t.Fatalf("RenderStatsJSON second: %v", err)
+	}
+
+	if first.String() != second.String() {
+		t.Fatalf("expected deterministic JSON output\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(first.Bytes(), &payload); err != nil {
+		t.Fatalf("decode json output: %v", err)
+	}
+	if got, _ := payload["generated_at_utc"].(string); got != "0001-01-01T00:00:00Z" {
+		t.Fatalf("expected deterministic zero generated_at_utc, got %q", got)
+	}
+}
