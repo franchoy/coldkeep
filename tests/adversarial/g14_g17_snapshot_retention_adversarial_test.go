@@ -39,8 +39,10 @@ func setupAdversarialG14Env(t *testing.T) (*sql.DB, map[string]string, string, s
 	testutils.ApplySchema(t, dbconn)
 	if _, err := dbconn.Exec(`
 		TRUNCATE TABLE
+			snapshot_path,
 			snapshot_file,
 			snapshot,
+			blocks,
 			physical_file,
 			file_chunk,
 			chunk,
