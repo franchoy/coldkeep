@@ -334,6 +334,33 @@ func TestPrintCLIErrorJSONDoesNotAddDBHintFields(t *testing.T) {
 	}
 }
 
+func TestPrintCLIErrorJSONIncludesStructuredErrorObject(t *testing.T) {
+	err := observabilityErrorf(exitGeneral, "NOT_FOUND", "logical file 45 not found")
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	errorNode, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing error object: %v", payload)
+	}
+	if got, _ := errorNode["code"].(string); got != "NOT_FOUND" {
+		t.Fatalf("error.code mismatch: got=%v payload=%v", errorNode["code"], payload)
+	}
+	if got, _ := errorNode["message"].(string); got != "logical file 45 not found" {
+		t.Fatalf("error.message mismatch: got=%v payload=%v", errorNode["message"], payload)
+	}
+}
+
 func TestRunCLIRepairJSONFailureIncludesInvariantMetadata(t *testing.T) {
 	originalRepairPhase := repairLogicalRefCountsPhase
 	t.Cleanup(func() { repairLogicalRefCountsPhase = originalRepairPhase })
@@ -2283,8 +2310,8 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 		positionals: []string{"blob", "1"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|snapshot|chunk|container) <id>") {
-		t.Fatalf("expected inspect usage error for unknown entity, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), `unsupported inspect entity "blob"`) {
+		t.Fatalf("expected unsupported-entity error, got: %v", err)
 	}
 
 	// wrong number of positional args
@@ -2303,7 +2330,7 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 		positionals: []string{"file", "notanumber"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Invalid file id") {
+	if err == nil || !strings.Contains(err.Error(), `invalid logical file id "notanumber"`) {
 		t.Fatalf("expected invalid file id error, got: %v", err)
 	}
 
@@ -2313,7 +2340,7 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 		positionals: []string{"chunk", "abc"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Invalid chunk id") {
+	if err == nil || !strings.Contains(err.Error(), `invalid chunk id "abc"`) {
 		t.Fatalf("expected invalid chunk id error, got: %v", err)
 	}
 
@@ -7061,7 +7088,7 @@ func TestRunSimulateGCCommandRejectsMissingSnapshot(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), `simulate gc: gc simulation: build plan: gc.BuildPlan: validate assumed-deleted snapshots: snapshot "missing-snapshot" does not exist`) {
+	if !strings.Contains(err.Error(), `snapshot missing-snapshot not found`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

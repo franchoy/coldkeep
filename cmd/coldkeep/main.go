@@ -228,9 +228,10 @@ var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 }
 
 type cliError struct {
-	code int
-	msg  string
-	err  error
+	code       int
+	msg        string
+	err        error
+	publicCode string
 }
 
 func (e *cliError) Error() string {
@@ -249,6 +250,62 @@ func (e *cliError) Unwrap() error {
 
 func usageErrorf(format string, args ...any) error {
 	return &cliError{code: exitUsage, msg: fmt.Sprintf(format, args...)}
+}
+
+func observabilityErrorf(exitCode int, publicCode, format string, args ...any) error {
+	return &cliError{code: exitCode, msg: fmt.Sprintf(format, args...), publicCode: publicCode}
+}
+
+func observabilityWrappedError(exitCode int, publicCode, publicMessage string, cause error) error {
+	return &cliError{code: exitCode, msg: publicMessage, err: cause, publicCode: publicCode}
+}
+
+func publicErrorCode(err error, exitCode int) string {
+	var ce *cliError
+	if errors.As(err, &ce) && strings.TrimSpace(ce.publicCode) != "" {
+		return strings.TrimSpace(ce.publicCode)
+	}
+
+	if exitCode == exitUsage {
+		return "INVALID_ARGUMENT"
+	}
+
+	return "INTERNAL"
+}
+
+func inspectEntityLabel(entityName string) string {
+	switch strings.TrimSpace(strings.ToLower(entityName)) {
+	case "file":
+		return "logical file"
+	case "chunk":
+		return "chunk"
+	case "container":
+		return "container"
+	case "snapshot":
+		return "snapshot"
+	default:
+		return strings.TrimSpace(strings.ToLower(entityName))
+	}
+}
+
+var missingSnapshotPattern = regexp.MustCompile(`snapshot\s+"([^"]+)"\s+does\s+not\s+exist|snapshot\s+(\S+)\s+does\s+not\s+exist`)
+
+func missingSnapshotFromError(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+
+	matches := missingSnapshotPattern.FindStringSubmatch(err.Error())
+	if len(matches) < 3 {
+		return "", false
+	}
+	if strings.TrimSpace(matches[1]) != "" {
+		return strings.TrimSpace(matches[1]), true
+	}
+	if strings.TrimSpace(matches[2]) != "" {
+		return strings.TrimSpace(matches[2]), true
+	}
+	return "", false
 }
 
 func verifyError(err error) error {
@@ -476,6 +533,8 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 
 func printCLIError(err error, mode cliOutputMode) int {
 	code := classifyExitCode(err)
+	message := strings.TrimSpace(err.Error())
+	publicCode := publicErrorCode(err, code)
 	invariantCode, hasInvariantCode := invariants.Code(err)
 	recommendedAction := invariants.RecommendedActionForError(err)
 	dbHint := localDBSetupHint(err)
@@ -484,7 +543,11 @@ func printCLIError(err error, mode cliOutputMode) int {
 			"status":      "error",
 			"error_class": exitErrorClassLabel(code),
 			"exit_code":   code,
-			"message":     strings.TrimSpace(err.Error()),
+			"message":     message,
+			"error": map[string]any{
+				"code":    publicCode,
+				"message": message,
+			},
 		}
 		if hasInvariantCode {
 			payload["invariant_code"] = invariantCode
@@ -497,7 +560,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 		return code
 	}
 
-	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), strings.TrimSpace(err.Error()))
+	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), message)
 	if hasInvariantCode {
 		fmt.Fprintf(os.Stderr, "INVARIANT_CODE: %s\n", invariantCode)
 	}
@@ -1823,7 +1886,7 @@ func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	includeContainers := parsed.hasFlag("containers")
 	r, err := runObservabilityStatsPhase(observability.StatsOptions{IncludeContainers: includeContainers, Trace: traceOptions})
 	if err != nil {
-		return err
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "stats collection failed", err)
 	}
 
 	renderer := resolveRenderer(outputMode)
@@ -1852,18 +1915,19 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	entityName := parsed.positionals[0]
 	entityType, ok := validEntities[entityName]
 	if !ok {
-		return usageErrorf("Usage: coldkeep inspect (file|snapshot|chunk|container) <id>")
+		return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "unsupported inspect entity %q", entityName)
 	}
+	entityLabel := inspectEntityLabel(entityName)
 
 	entityID := strings.TrimSpace(parsed.positionals[1])
 	if entityID == "" {
-		return usageErrorf("Invalid %s id: %q", entityName, parsed.positionals[1])
+		return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "invalid %s id %q", entityLabel, parsed.positionals[1])
 	}
 
 	// For file/chunk/container a numeric id is required; validate early for a clear error.
 	if entityType == observability.EntityFile || entityType == observability.EntityChunk || entityType == observability.EntityContainer {
 		if n, err := strconv.ParseInt(entityID, 10, 64); err != nil || n <= 0 {
-			return usageErrorf("Invalid %s id: %s", entityName, entityID)
+			return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "invalid %s id %q", entityLabel, entityID)
 		}
 	}
 
@@ -1884,9 +1948,9 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	r, err := runObservabilityInspectPhase(entityType, entityID, opts)
 	if err != nil {
 		if errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%s %s not found", entityName, entityID)
+			return observabilityErrorf(exitGeneral, "NOT_FOUND", "%s %s not found", entityLabel, entityID)
 		}
-		return err
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "inspect failed", err)
 	}
 
 	renderer := resolveRenderer(outputMode)
@@ -2887,7 +2951,10 @@ func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) er
 		AssumeDeletedSnapshots: deleteSnapshots,
 	})
 	if err != nil {
-		return fmt.Errorf("simulate gc: %w", err)
+		if snapshotID, ok := missingSnapshotFromError(err); ok {
+			return observabilityErrorf(exitGeneral, "NOT_FOUND", "snapshot %s not found", snapshotID)
+		}
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "gc simulation failed", err)
 	}
 
 	renderResult := clirender.CloneSimulationResult(r)
