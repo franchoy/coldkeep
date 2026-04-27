@@ -2,6 +2,12 @@ package observability
 
 type StatsOptions struct {
 	IncludeContainers bool
+	Trace             TraceOptions
+}
+
+type TraceOptions struct {
+	Enabled bool
+	Sink    TraceSink
 }
 
 const (
@@ -14,6 +20,7 @@ type InspectOptions struct {
 	Relations bool
 	Reverse   bool
 	Limit     int
+	Trace     TraceOptions
 }
 
 func normalizeInspectOptions(opts InspectOptions) InspectOptions {
@@ -34,6 +41,7 @@ func normalizeInspectOptions(opts InspectOptions) InspectOptions {
 
 type SimulationOptions struct {
 	Kind string
+	Trace TraceOptions
 	// AssumeDeletedSnapshots lists snapshot IDs to exclude from reachability
 	// roots before running the GC plan. Allows hypothetical impact preview.
 	AssumeDeletedSnapshots []string
