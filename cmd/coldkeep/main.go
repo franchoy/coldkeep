@@ -3205,30 +3205,10 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	if treeMode {
 		lines := renderSnapshotTreeLines(items)
-		if len(lines) == 0 {
-			_, _ = fmt.Fprintln(os.Stdout, "no snapshots found")
-		} else {
-			for _, line := range lines {
-				_, _ = fmt.Fprintln(os.Stdout, line)
-			}
-		}
-	} else {
-		_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
-		if len(items) == 0 {
-			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
-		} else {
-			for _, item := range items {
-				label := ""
-				if item.Label.Valid {
-					label = "  label=" + item.Label.String
-				}
-				_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
-			}
-		}
+		return clirender.RenderSnapshotListHuman(os.Stdout, items, true, lines, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
-	return nil
+
+	return clirender.RenderSnapshotListHuman(os.Stdout, items, false, nil, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
 }
 
 func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -3300,25 +3280,15 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return nil
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Snapshot: %s\n", item.ID)
-	_, _ = fmt.Fprintf(os.Stdout, "  Type: %s\n", item.Type)
-	_, _ = fmt.Fprintf(os.Stdout, "  Created: %s\n", item.CreatedAt.UTC().Format(time.RFC3339))
-	if item.Label.Valid {
-		_, _ = fmt.Fprintf(os.Stdout, "  Label: %s\n", item.Label.String)
-	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Files (matched): %d\n", matchedFileCount)
-	_, _ = fmt.Fprintf(os.Stdout, "  Files (total): %d\n", stats.SnapshotFileCount)
-	_, _ = fmt.Fprintln(os.Stdout)
-	if len(files) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "  (no files)")
-	} else {
-		for _, file := range files {
-			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", file.Path)
-		}
-	}
-	_, _ = fmt.Fprintf(os.Stdout, "\n  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
-	return nil
+	return clirender.RenderSnapshotShowHuman(
+		os.Stdout,
+		*item,
+		files,
+		matchedFileCount,
+		stats.SnapshotFileCount,
+		time.Since(startedAt).Milliseconds(),
+		doctorOperationalHint,
+	)
 }
 
 func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
