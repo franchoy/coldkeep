@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"math"
 	"reflect"
 	"slices"
@@ -805,5 +806,39 @@ func TestTraceDoesNotChangeStatsResult(t *testing.T) {
 
 	if !reflect.DeepEqual(withoutTrace, withTrace) {
 		t.Fatalf("stats result changed with trace enabled\nwithout=%+v\nwith=%+v", withoutTrace, withTrace)
+	}
+}
+
+func TestStatsDeterministicAcrossCalls(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	fixedNow := time.Date(2026, time.April, 27, 12, 0, 0, 0, time.UTC)
+	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
+
+	opts := StatsOptions{IncludeContainers: true}
+
+	first, err := svc.Stats(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("first Stats: %v", err)
+	}
+	second, err := svc.Stats(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("second Stats: %v", err)
+	}
+
+	// Normalize GeneratedAtUTC before byte comparison so the test remains
+	// deterministic even if the system clock advances between calls.
+	first.GeneratedAtUTC = time.Time{}
+	second.GeneratedAtUTC = time.Time{}
+
+	b1, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal first: %v", err)
+	}
+	b2, err := json.Marshal(second)
+	if err != nil {
+		t.Fatalf("marshal second: %v", err)
+	}
+	if string(b1) != string(b2) {
+		t.Fatalf("stats output not deterministic across calls\nfirst:  %s\nsecond: %s", string(b1), string(b2))
 	}
 }
