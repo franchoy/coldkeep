@@ -2763,27 +2763,10 @@ func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, o
 	}
 
 	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":    "ok",
-			"command":   "simulate",
-			"simulated": true,
-			"data":      r,
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
+		return clirender.RenderSimulateStoreJSON(os.Stdout, r)
 	}
 
-	fmt.Printf("[SIMULATE] subcommand=%s path=%s (dry run — no data written to storage)\n", subcommand, path)
-	fmt.Printf("  Files:          %d\n", r.Files)
-	fmt.Printf("  Chunks:         %d\n", r.Chunks)
-	fmt.Printf("  Containers:     %d\n", r.Containers)
-	fmt.Printf("  Logical size:   %d bytes (%.2f MB)\n", r.LogicalSizeBytes, float64(r.LogicalSizeBytes)/(1024*1024))
-	fmt.Printf("  Physical size:  %d bytes (%.2f MB)\n", r.PhysicalSizeBytes, float64(r.PhysicalSizeBytes)/(1024*1024))
-	if r.DedupRatioPct > 0 {
-		fmt.Printf("  Dedup savings:  %.2f%%\n", r.DedupRatioPct)
-	}
-	return nil
+	return clirender.RenderSimulateStoreHuman(os.Stdout, r)
 }
 
 func generateSnapshotID() (string, error) {
