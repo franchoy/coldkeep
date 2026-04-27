@@ -175,7 +175,7 @@ func validateAssumeDeletedSnapshots(ctx context.Context, dbconn *sql.DB, snapsho
 		seen[snapshotID] = struct{}{}
 
 		var exists bool
-		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = ?)`, snapshotID).Scan(&exists); err != nil {
+		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = $1)`, snapshotID).Scan(&exists); err != nil {
 			return err
 		}
 		if !exists {
@@ -268,7 +268,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename, current_size
 		FROM container
-		WHERE sealed = 1 AND quarantine = 0
+		WHERE sealed = TRUE AND quarantine = FALSE
 		ORDER BY id ASC
 	`)
 	if err != nil {
@@ -309,7 +309,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			SELECT b.chunk_id, b.stored_size, ch.live_ref_count, ch.pin_count
 			FROM blocks b
 			JOIN chunk ch ON ch.id = b.chunk_id
-			WHERE b.container_id = ?
+			WHERE b.container_id = $1
 			AND ch.status = 'COMPLETED'
 		`, c.id)
 		if err != nil {
@@ -418,7 +418,7 @@ func countQuarantinedContainersWithDeadChunks(ctx context.Context, dbconn *sql.D
 		FROM container c
 		JOIN blocks b ON b.container_id = c.id
 		JOIN chunk ch ON ch.id = b.chunk_id
-		WHERE c.quarantine = 1
+		WHERE c.quarantine = TRUE
 		AND ch.status = 'COMPLETED'
 	`)
 	if err != nil {

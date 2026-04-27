@@ -324,7 +324,7 @@ func (s *Service) sumChunkSizesByID(ctx context.Context, chunkIDs map[int64]stru
 	var total int64
 	for chunkID := range chunkIDs {
 		var size int64
-		err := s.db.QueryRowContext(ctx, `SELECT size FROM chunk WHERE id = ?`, chunkID).Scan(&size)
+		err := s.db.QueryRowContext(ctx, `SELECT size FROM chunk WHERE id = $1`, chunkID).Scan(&size)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				continue
@@ -350,7 +350,7 @@ func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []
 			 FROM snapshot_file sf
 			 JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
 			 JOIN chunk c ON c.id = fc.chunk_id
-			 WHERE sf.snapshot_id = ?`,
+			 WHERE sf.snapshot_id = $1`,
 			strconv.FormatInt(snapshotID, 10),
 		)
 		if err != nil {

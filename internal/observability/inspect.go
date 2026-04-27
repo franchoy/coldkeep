@@ -180,7 +180,7 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 	var parentID sql.NullString
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT CAST(created_at AS TEXT), type, label, parent_id FROM snapshot WHERE id = ?`,
+		`SELECT CAST(created_at AS TEXT), type, label, parent_id FROM snapshot WHERE id = $1`,
 		snapshotID,
 	).Scan(&createdAt, &snapshotType, &label, &parentID)
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 	}
 
 	var fileCount int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, snapshotID).Scan(&fileCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&fileCount); err != nil {
 		return nil, fmt.Errorf("inspect snapshot %s file count: %w", snapshotID, err)
 	}
 
@@ -201,7 +201,7 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 		`SELECT COALESCE(SUM(lf.total_size), 0)
 		 FROM snapshot_file sf
 		 JOIN logical_file lf ON lf.id = sf.logical_file_id
-		 WHERE sf.snapshot_id = ?`,
+		 WHERE sf.snapshot_id = $1`,
 		snapshotID,
 	).Scan(&totalSizeBytes); err != nil {
 		return nil, fmt.Errorf("inspect snapshot %s total size: %w", snapshotID, err)
@@ -332,7 +332,7 @@ func (s *Service) inspectChunk(ctx context.Context, id string, opts InspectOptio
 		`SELECT c.chunk_hash, c.size, c.status, c.live_ref_count, c.pin_count, c.retry_count, c.chunker_version, b.container_id, b.stored_size
 		 FROM chunk c
 		 LEFT JOIN blocks b ON b.chunk_id = c.id
-		 WHERE c.id = ?`,
+		 WHERE c.id = $1`,
 		chunkID,
 	).Scan(&chunkHash, &size, &status, &liveRefCount, &pinCount, &retryCount, &chunkerVersion, &containerID, &storedSize)
 	if err != nil {
@@ -407,9 +407,9 @@ func (s *Service) inspectContainer(ctx context.Context, id string, opts InspectO
 	var maxSize int64
 	err = s.db.QueryRowContext(
 		ctx,
-		`SELECT filename, sealed, sealing, quarantine, current_size, max_size
+		`SELECT filename, CAST(sealed AS INTEGER), CAST(sealing AS INTEGER), CAST(quarantine AS INTEGER), current_size, max_size
 		 FROM container
-		 WHERE id = ?`,
+		 WHERE id = $1`,
 		containerID,
 	).Scan(&filename, &sealed, &sealing, &quarantine, &currentSize, &maxSize)
 	if err != nil {
@@ -420,7 +420,7 @@ func (s *Service) inspectContainer(ctx context.Context, id string, opts InspectO
 	}
 
 	var chunkCount int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM blocks WHERE container_id = ?`, containerID).Scan(&chunkCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM blocks WHERE container_id = $1`, containerID).Scan(&chunkCount); err != nil {
 		return nil, fmt.Errorf("inspect container %d chunk count: %w", containerID, err)
 	}
 
@@ -464,7 +464,7 @@ func (s *Service) inspectRepositorySnapshotRelations(ctx context.Context, limit 
 		`SELECT id
 		 FROM snapshot
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT ?`,
+		 LIMIT $1`,
 		limit,
 	)
 	if err != nil {
@@ -502,9 +502,9 @@ func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID s
 		ctx,
 		`SELECT logical_file_id
 		 FROM snapshot_file
-		 WHERE snapshot_id = ?
+		 WHERE snapshot_id = $1
 		 ORDER BY id
-		 LIMIT ?`,
+		 LIMIT $2`,
 		snapshotID,
 		limit,
 	)
