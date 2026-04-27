@@ -112,10 +112,10 @@ func (HumanRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {
 			if _, err := fmt.Fprintf(w, "  container: %d (%s)\n", c.ContainerID, c.Filename); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(w, "  reclaimable_bytes: %d\n", c.ReclaimableBytes); err != nil {
+			if _, err := fmt.Fprintf(w, "  reclaimable_bytes: %s\n", formatIECBytes(c.ReclaimableBytes)); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(w, "  live_bytes_after_gc: %d\n", c.LiveBytesAfterGC); err != nil {
+			if _, err := fmt.Fprintf(w, "  live_bytes_after_gc: %s\n", formatIECBytes(c.LiveBytesAfterGC)); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintf(w, "  reclaimable_chunks: %d\n", c.ReclaimableChunks); err != nil {
@@ -154,6 +154,12 @@ func (HumanRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, "  changed: false"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "  state_change: none"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "  note: no repository state changed"); err != nil {
 		return err
 	}
 

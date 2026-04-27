@@ -7357,7 +7357,10 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 	if !strings.Contains(output, "status: requires_compaction") {
 		t.Fatalf("expected requires compaction status, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Result") || !strings.Contains(output, "changed: false") {
+	if !strings.Contains(output, "reclaimable_bytes: 100 B") || !strings.Contains(output, "live_bytes_after_gc: 50 B") {
+		t.Fatalf("expected human-readable container byte sizes, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Result") || !strings.Contains(output, "changed: false") || !strings.Contains(output, "state_change: none") || !strings.Contains(output, "note: no repository state changed") {
 		t.Fatalf("expected no state changed footer, got:\n%s", output)
 	}
 }

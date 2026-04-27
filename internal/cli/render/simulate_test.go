@@ -31,8 +31,37 @@ func TestRenderSimulationHumanIncludesNoMutationFooter(t *testing.T) {
 	if !strings.Contains(out, "GC simulation") {
 		t.Fatalf("expected simulation title, got: %s", out)
 	}
-	if !strings.Contains(out, "Result") || !strings.Contains(out, "changed: false") {
+	if !strings.Contains(out, "Result") || !strings.Contains(out, "changed: false") || !strings.Contains(out, "state_change: none") || !strings.Contains(out, "note: no repository state changed") {
 		t.Fatalf("expected read-only footer, got: %s", out)
+	}
+}
+
+func TestRenderSimulationHumanFormatsContainerImpactBytes(t *testing.T) {
+	r := &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Containers: []observability.ContainerSimulationImpact{{
+				ContainerID:       7,
+				Filename:          "c007.bin",
+				ReclaimableBytes:  1536,
+				LiveBytesAfterGC:  512,
+				ReclaimableChunks: 2,
+				TotalChunks:       4,
+			}},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := (HumanRenderer{}).RenderSimulation(&buf, r); err != nil {
+		t.Fatalf("RenderSimulation human: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "reclaimable_bytes: 1.5 KiB") {
+		t.Fatalf("expected human-readable reclaimable bytes, got: %s", out)
+	}
+	if !strings.Contains(out, "live_bytes_after_gc: 512 B") {
+		t.Fatalf("expected human-readable live bytes after gc, got: %s", out)
 	}
 }
 
