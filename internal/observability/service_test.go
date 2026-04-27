@@ -703,3 +703,34 @@ func TestSimulateGCTraceDisabledEmitsNoEvents(t *testing.T) {
 		t.Fatalf("expected no trace events when disabled, got %d", len(sink.events))
 	}
 }
+
+func TestSimulateGCTraceEmitsMarkAndPlanEvents(t *testing.T) {
+	TestSimulateGCTraceEmitsExpectedLifecycleEvents(t)
+}
+
+func TestTraceDoesNotChangeSimulationResult(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	deadChunkID := insertSimChunk(t, dbconn, "dead-invariant", 90, 0, 0, "v2-fastcdc")
+	deadContainerID := insertSimContainer(t, dbconn, "c-invariant.bin", 90, true, false)
+	insertSimBlock(t, dbconn, deadChunkID, deadContainerID, 90)
+
+	withoutTrace, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("Simulate without trace: %v", err)
+	}
+
+	sink := &traceCollectorSink{}
+	withTrace, err := svc.Simulate(context.Background(), SimulationOptions{
+		Kind:  SimulationKindGC,
+		Trace: TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Simulate with trace: %v", err)
+	}
+
+	if !reflect.DeepEqual(withoutTrace, withTrace) {
+		t.Fatalf("simulation result changed with trace enabled\nwithout=%+v\nwith=%+v", withoutTrace, withTrace)
+	}
+}

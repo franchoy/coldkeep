@@ -59,3 +59,7 @@ func TestEmitTraceDisabledSkipsEvent(t *testing.T) {
 		t.Fatalf("expected no events when disabled, got %d", len(sink.events))
 	}
 }
+
+func TestTraceDisabledProducesNoEvents(t *testing.T) {
+	TestEmitTraceDisabledSkipsEvent(t)
+}

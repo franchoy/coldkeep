@@ -1465,6 +1465,176 @@ func TestStderrJSONTraceSinkWritesJSONLine(t *testing.T) {
 	}
 }
 
+func TestTraceHumanWritesToStderr(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{
+				Step:    "stats.collect.start",
+				Message: "collecting stats",
+			})
+		}
+		return &observability.StatsResult{}, nil
+	}
+
+	stderrOut := captureStderr(t, func() {
+		_ = runStatsCommand(parsedCommandLine{
+			method: "stats",
+			flags:  map[string][]string{"trace": {""}},
+		}, outputModeJSON)
+	})
+
+	if !strings.Contains(stderrOut, "TRACE stats.collect.start collecting stats") {
+		t.Fatalf("expected human trace in stderr, got %q", stderrOut)
+	}
+}
+
+func TestTraceJSONIsValidJSONLines(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect.start", Message: "start"})
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect.complete", Message: "complete"})
+		}
+		return &observability.StatsResult{}, nil
+	}
+
+	stderrOut := captureStderr(t, func() {
+		_ = runStatsCommand(parsedCommandLine{
+			method: "stats",
+			flags:  map[string][]string{"trace-json": {""}},
+		}, outputModeJSON)
+	})
+
+	lines := strings.Split(strings.TrimSpace(stderrOut), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 json trace lines, got %d output=%q", len(lines), stderrOut)
+	}
+	for i, line := range lines {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("line %d is not valid JSON: %v line=%q", i, err, line)
+		}
+		if _, ok := payload["step"].(string); !ok {
+			t.Fatalf("line %d missing step field: %v", i, payload)
+		}
+	}
+}
+
+func TestStatsCommandStdoutIdenticalWithAndWithoutTrace(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect.start", Message: "start"})
+		}
+		return &observability.StatsResult{Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"}}, nil
+	}
+
+	withoutTraceStdout := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand without trace: %v", err)
+		}
+	})
+
+	withTraceStdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"trace": {""}}}, outputModeJSON); err != nil {
+				t.Fatalf("runStatsCommand with trace: %v", err)
+			}
+		})
+	})
+
+	if withoutTraceStdout != withTraceStdout {
+		t.Fatalf("stats stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+	}
+}
+
+func TestInspectCommandStdoutIdenticalWithAndWithoutTrace(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "inspect.start", Entity: string(entity), EntityID: id, Message: "start"})
+		}
+		return &observability.InspectResult{
+			EntityType: entity,
+			EntityID:   id,
+			Summary:    map[string]any{"chunk_hash": "hash"},
+		}, nil
+	}
+
+	parsedNoTrace := parsedCommandLine{method: "inspect", positionals: []string{"chunk", "7"}, flags: map[string][]string{"output": {"json"}}}
+	parsedTrace := parsedCommandLine{method: "inspect", positionals: []string{"chunk", "7"}, flags: map[string][]string{"output": {"json"}, "trace": {""}}}
+
+	withoutTraceStdout := captureStdout(t, func() {
+		if err := runInspectCommand(parsedNoTrace, outputModeJSON); err != nil {
+			t.Fatalf("runInspectCommand without trace: %v", err)
+		}
+	})
+
+	withTraceStdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := runInspectCommand(parsedTrace, outputModeJSON); err != nil {
+				t.Fatalf("runInspectCommand with trace: %v", err)
+			}
+		})
+	})
+
+	if withoutTraceStdout != withTraceStdout {
+		t.Fatalf("inspect stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+	}
+}
+
+func TestSimulateGCCommandStdoutIdenticalWithAndWithoutTrace(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "simulate.gc.start", Message: "start"})
+		}
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{ReachableChunks: 1},
+			},
+		}, nil
+	}
+
+	parsedNoTrace := parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}}}
+	parsedTrace := parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}, "trace": {""}}}
+
+	withoutTraceStdout := captureStdout(t, func() {
+		if err := runSimulateGCCommand(parsedNoTrace, outputModeJSON); err != nil {
+			t.Fatalf("runSimulateGCCommand without trace: %v", err)
+		}
+	})
+
+	withTraceStdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := runSimulateGCCommand(parsedTrace, outputModeJSON); err != nil {
+				t.Fatalf("runSimulateGCCommand with trace: %v", err)
+			}
+		})
+	})
+
+	if withoutTraceStdout != withTraceStdout {
+		t.Fatalf("simulate gc stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+	}
+}
+
 func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runSimulateCommand(parsedCommandLine{
 		method:      "simulate",

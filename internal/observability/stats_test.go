@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -681,5 +682,32 @@ func TestStatsTraceDisabledDoesNotEmitEvents(t *testing.T) {
 
 	if len(sink.events) != 0 {
 		t.Fatalf("expected no trace events when trace is disabled, got %d", len(sink.events))
+	}
+}
+
+func TestStatsTraceEmitsExpectedHighLevelEvents(t *testing.T) {
+	TestStatsTraceEmitsHighLevelCollectionEvents(t)
+}
+
+func TestTraceDoesNotChangeStatsResult(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	fixedNow := time.Date(2026, time.April, 27, 10, 0, 0, 0, time.UTC)
+	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
+
+	withoutTrace, err := svc.Stats(context.Background(), StatsOptions{})
+	if err != nil {
+		t.Fatalf("Stats without trace: %v", err)
+	}
+
+	sink := &traceCollectorSink{}
+	withTrace, err := svc.Stats(context.Background(), StatsOptions{
+		Trace: TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Stats with trace: %v", err)
+	}
+
+	if !reflect.DeepEqual(withoutTrace, withTrace) {
+		t.Fatalf("stats result changed with trace enabled\nwithout=%+v\nwith=%+v", withoutTrace, withTrace)
 	}
 }

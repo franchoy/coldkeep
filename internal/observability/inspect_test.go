@@ -1029,3 +1029,51 @@ func traceSteps(events []TraceEvent) []string {
 	}
 	return steps
 }
+
+func TestInspectTraceEmitsRelationEvents(t *testing.T) {
+	TestInspectTraceEmitsLifecycleAndRelationEvents(t)
+}
+
+func TestTraceDoesNotChangeInspectResult(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	fileRes, err := dbconn.Exec(`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`, "invariant.txt", 42, "h-invariant", "COMPLETED", "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+	fileID, _ := fileRes.LastInsertId()
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-invariant", 42, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, _ := chunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?)`, fileID, chunkID, 0); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	fixedNow := time.Date(2026, time.April, 27, 10, 0, 0, 0, time.UTC)
+	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
+	id := strconv.FormatInt(chunkID, 10)
+
+	withoutTrace, err := svc.Inspect(context.Background(), EntityChunk, id, InspectOptions{Relations: true, Reverse: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("Inspect without trace: %v", err)
+	}
+
+	sink := &traceCollectorSink{}
+	withTrace, err := svc.Inspect(context.Background(), EntityChunk, id, InspectOptions{
+		Relations: true,
+		Reverse:   true,
+		Limit:     10,
+		Trace:     TraceOptions{Enabled: true, Sink: sink},
+	})
+	if err != nil {
+		t.Fatalf("Inspect with trace: %v", err)
+	}
+
+	if !reflect.DeepEqual(withoutTrace, withTrace) {
+		t.Fatalf("inspect result changed with trace enabled\nwithout=%+v\nwith=%+v", withoutTrace, withTrace)
+	}
+}
