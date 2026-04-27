@@ -264,6 +264,10 @@ Expected: no manual local state is required beyond documented setup, and basic c
 If another local PostgreSQL container already binds host port `5432`, this step
 will fail until that container is stopped or reconfigured.
 
+Important: `docker compose down -v` destroys the PostgreSQL volume used by any
+earlier manual sandbox database (for example `coldkeep_manual`). After Step 8,
+rerun the newcomer-safe reset block from Step 5 before continuing with Steps 9-11.
+
 ## 9) Verify CLI contract stability
 
 Run core command paths in JSON mode and validate both success and failure envelopes.
