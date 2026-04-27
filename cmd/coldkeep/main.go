@@ -3516,91 +3516,10 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	return nil
 }
 
-type snapshotDeleteLineagePreview struct {
-	SnapshotID       string
-	ParentID         sql.NullString
-	ParentMissing    bool
-	ChildSnapshotIDs []string
-	TotalFiles       int64
-	UniqueFiles      int64
-	SharedFiles      int64
-}
+type snapshotDeleteLineagePreview = snapshot.DeleteLineagePreview
 
 func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-	if dbconn == nil {
-		return nil, errors.New("snapshot db cannot be nil")
-	}
-	trimmedID := strings.TrimSpace(snapshotID)
-	if trimmedID == "" {
-		return nil, errors.New("snapshot id cannot be empty")
-	}
-
-	preview := &snapshotDeleteLineagePreview{}
-	if err := dbconn.QueryRowContext(ctx, `SELECT id, parent_id FROM snapshot WHERE id = $1`, trimmedID).Scan(&preview.SnapshotID, &preview.ParentID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("snapshot %q not found", trimmedID)
-		}
-		return nil, fmt.Errorf("load snapshot delete preview snapshot_id=%s: %w", trimmedID, err)
-	}
-	if preview.ParentID.Valid {
-		var parentExists bool
-		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = $1)`, preview.ParentID.String).Scan(&parentExists); err != nil {
-			return nil, fmt.Errorf("load snapshot delete preview parent existence snapshot_id=%s parent_id=%s: %w", trimmedID, preview.ParentID.String, err)
-		}
-		preview.ParentMissing = !parentExists
-	}
-
-	rows, err := dbconn.QueryContext(ctx, `SELECT id FROM snapshot WHERE parent_id = $1 ORDER BY id`, trimmedID)
-	if err != nil {
-		return nil, fmt.Errorf("load snapshot delete preview children snapshot_id=%s: %w", trimmedID, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var childID string
-		if err := rows.Scan(&childID); err != nil {
-			return nil, fmt.Errorf("scan snapshot delete preview child row snapshot_id=%s: %w", trimmedID, err)
-		}
-		preview.ChildSnapshotIDs = append(preview.ChildSnapshotIDs, childID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate snapshot delete preview child rows snapshot_id=%s: %w", trimmedID, err)
-	}
-
-	// Query total files referenced by this snapshot
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, trimmedID).Scan(&preview.TotalFiles); err != nil {
-		return nil, fmt.Errorf("load snapshot delete preview count total files snapshot_id=%s: %w", trimmedID, err)
-	}
-
-	// Query unique files (only referenced by this snapshot).
-	// A file is shared only when BOTH path_id and logical_file_id match another snapshot row.
-	// Same path_id with different logical_file_id is intentionally treated as unique.
-	//
-	// Performance note:
-	// - This NOT EXISTS anti-join relies on snapshot_file indexes for acceptable latency:
-	//   idx_snapshot_file_unique (snapshot_id, path_id), idx_snapshot_file_path_id (path_id),
-	//   and idx_snapshot_file_logical_file (logical_file_id).
-	// - This runs in a dry-run operator path for cold-storage workflows where snapshot counts are
-	//   expected to remain much smaller than file counts, so current cost is acceptable.
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM snapshot_file sf
-		WHERE sf.snapshot_id = $1
-		AND NOT EXISTS (
-			SELECT 1
-			FROM snapshot_file sf2
-			WHERE sf2.path_id = sf.path_id
-			  AND sf2.logical_file_id = sf.logical_file_id
-			  AND sf2.snapshot_id != sf.snapshot_id
-		)
-	`, trimmedID).Scan(&preview.UniqueFiles); err != nil {
-		return nil, fmt.Errorf("load snapshot delete preview count unique files snapshot_id=%s: %w", trimmedID, err)
-	}
-
-	// Calculate shared files
-	preview.SharedFiles = preview.TotalFiles - preview.UniqueFiles
-
-	return preview, nil
+	return snapshot.LoadDeleteLineagePreview(ctx, dbconn, snapshotID)
 }
 
 func previewParentID(preview *snapshotDeleteLineagePreview) sql.NullString {
