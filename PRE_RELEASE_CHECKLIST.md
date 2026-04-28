@@ -471,7 +471,7 @@ Suggested evidence commands:
 
 ```bash
 go test ./internal/maintenance -run 'TestRunStatsResultIncludesChunkCountsByVersion|TestRunStatsResultPureV1RepositoryReportsOnlyV1|TestRunStatsResultPureV2RepositoryReportsOnlyV2|TestRunStatsResultMixedRepositoryReportsBothVersions|TestRunStatsResultVersionTotalsMatchDatabaseReality' -count=1
-go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONIncludesSnapshotRetention|TestPrintStatsReportIncludesSnapshotRetention|TestPrintStatsReportOmitsMixedChunkerWarningWhenSingleKnownVersion' -count=1
+go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONIncludesSnapshotRetention|TestStatsCommandHuman|TestStatsCommandHelpIncludesJSONTraceAndDeterminism' -count=1
 ```
 
 ### G. Benchmark and determinism validation
@@ -509,7 +509,7 @@ Suggested evidence commands:
 
 ```bash
 go test ./internal/observability -run 'TestStatsIncludesRepositoryAndChunkMetrics|TestStatsContainersOptional|TestStatsDeterministicOrdering|TestStatsResultCarriesChunkerBreakdown' -count=1
-go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONContract|TestRunStatsCommandJSONIncludesSnapshotRetention|TestPrintStatsReportIncludesSnapshotRetention|TestPrintStatsHelpIncludesJSONTraceAndDeterminism' -count=1
+go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONContract|TestRunStatsCommandJSONIncludesSnapshotRetention|TestStatsCommandHuman|TestStatsCommandHelpIncludesJSONTraceAndDeterminism' -count=1
 ```
 
 ### B. Storage-relationship inspection (`inspect`)
@@ -724,7 +724,6 @@ for t in \
   TestAdversarialG17RetentionRootTransitionChurn \
   TestRunStatsResultIncludesSnapshotRetentionVisibility \
   TestRunStatsCommandJSONIncludesSnapshotRetention \
-  TestPrintStatsReportIncludesSnapshotRetention \
   TestAdversarialG16SnapshotQueryContractChaos \
   TestVerifySystemStandardPassesWithConsistentSnapshotReachability \
   TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference \
