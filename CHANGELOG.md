@@ -26,6 +26,10 @@ Observability and simulation contract hardening milestone.
 v1.6 formalizes read-only observability commands, exact GC simulation behavior,
 and trace output channel conventions for both human operators and tooling.
 
+Validation note: release sign-off included v1.6 observability/simulation
+checklist execution, CI-parity quality checks, full tests/integration runs, and
+smoke matrix verification across plain and aes-gcm codecs.
+
 ### Release highlights (1.6.0)
 
 - **Read-only observability command surface** — `coldkeep stats`,
@@ -35,6 +39,9 @@ and trace output channel conventions for both human operators and tooling.
   decisions as GC preflight/liveness evaluation without executing deletion.
 - **Tooling-oriented output contracts** — JSON output and trace channels are
   documented for automation use, including `--trace-json` JSONL diagnostics.
+- **Stable diagnostics channel routing** — trace diagnostics (`--trace`,
+  `--trace-json`) are emitted on stderr so stdout payloads remain stable for
+  piping and tooling.
 - **Operator safety wording** — docs now explicitly state that simulation does
   not mutate database state or filesystem state.
 
@@ -47,6 +54,7 @@ and trace output channel conventions for both human operators and tooling.
   - `coldkeep inspect ... --relations`
   - `coldkeep inspect ... --reverse`
   - `coldkeep inspect ... --deep --limit N`
+  - inspect entity coverage: `file` (`logical-file` alias), `chunk`, `container`, `snapshot`
   - `coldkeep simulate gc`
   - `coldkeep simulate gc --delete-snapshot <id>`
   - `coldkeep simulate gc --containers`
@@ -65,6 +73,8 @@ and trace output channel conventions for both human operators and tooling.
   alignment criteria.
 - Updated [README.md](README.md) roadmap note to reflect v1.6 completion status
   and post-v1.6 focus areas.
+- Updated [ARCHITECTURE.md](ARCHITECTURE.md) contract framing to formalize
+  Phase 8 observability/simulation guarantees and stderr trace-channel behavior.
 
 ### Scope alignment (v1.6)
 
