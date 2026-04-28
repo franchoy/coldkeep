@@ -87,4 +87,4 @@ out/
 # =========================
 # test output
 # =========================
-cmd/coldkeep/testdata/
+# cmd/coldkeep/testdata/ — golden files are tracked; do not ignore

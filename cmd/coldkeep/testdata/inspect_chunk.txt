@@ -1,0 +1,9 @@
+Inspect chunk 7
+
+Summary
+  size: 256 B
+  chunker_version: v2-fastcdc
+  chunk_hash: abc123
+
+References
+  relation: container 2

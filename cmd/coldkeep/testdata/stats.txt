@@ -1,0 +1,60 @@
+Coldkeep stats
+
+Repository
+  active_write_chunker: v2-fastcdc
+
+Logical data
+  files: 3
+  completed_files: 3
+  logical_size: 3.0 KiB
+
+Physical data
+  physical_files: 0
+
+Chunks
+  total_chunks: 6
+  completed_chunks: 6
+  unique_chunk_bytes: 1.5 KiB
+  references: 9
+
+Efficiency
+  dedup_ratio: 0.00x
+  dedup_savings: 0.0%
+  container_overhead: 0.0%
+
+Containers
+  total_containers: 2
+  healthy_containers: 0
+  quarantined_containers: 0
+  container_bytes: 3.0 KiB
+  live_block_bytes: 0 B
+  dead_block_bytes: 0 B
+  fragmentation: 0.0%
+
+Snapshots
+  snapshots: 0
+
+Retention
+  current_only_files: 2
+  snapshot_only_files: 0
+  shared_files: 1
+
+Chunker versions
+  version: v1-simple-rolling (2 chunks / 512 B)
+  version: v2-fastcdc (4 chunks / 1.0 KiB)
+
+Container details
+  container_id: 1
+  file: cont-1.bin
+  size: 1.0 KiB
+  live: 1.0 KiB
+  dead: 0 B
+  status: healthy
+
+  container_id: 2
+  file: cont-2.bin
+  size: 2.0 KiB
+  live: 1.0 KiB
+  dead: 1.0 KiB
+  status: healthy
+
