@@ -1021,6 +1021,117 @@ echo "[smoke]   ok: delete --dry-run JSON contract works"
 echo "[smoke] v1.4 snapshot feature gate PASSED"
 
 echo ""
+echo "[smoke] === V1.6 OBSERVABILITY GATE ==="
+
+V16_FILE_ID=$(coldkeep list --output json | jq -r '.files[0].id // empty' 2>/dev/null)
+if [[ -z "$V16_FILE_ID" ]]; then
+  echo "[smoke] ERROR: v1.6 observability gate requires at least one stored file"
+  exit 1
+fi
+
+V16_STATS_BEFORE=$(coldkeep stats --output json)
+V16_STATS_BEFORE_PAYLOAD=$(echo "$V16_STATS_BEFORE" | grep -E '^\{.*\}$' | tail -n1)
+
+V16_INSPECT_1=$(coldkeep inspect file "$V16_FILE_ID" --output json)
+V16_INSPECT_1_PAYLOAD=$(echo "$V16_INSPECT_1" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$V16_INSPECT_1_PAYLOAD" | jq -e '
+  .type == "inspect"
+  and .data != null
+  and .data.entity_type != null
+  and .data.summary != null
+  and .meta.version == "v1.6"
+  and .meta.exact == true
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.6 inspect JSON contract failed"
+  echo "$V16_INSPECT_1"
+  exit 1
+fi
+
+V16_INSPECT_2=$(coldkeep inspect file "$V16_FILE_ID" --output json)
+V16_INSPECT_2_PAYLOAD=$(echo "$V16_INSPECT_2" | grep -E '^\{.*\}$' | tail -n1)
+V16_INSPECT_1_DATA=$(echo "$V16_INSPECT_1_PAYLOAD" | jq -c '.data')
+V16_INSPECT_2_DATA=$(echo "$V16_INSPECT_2_PAYLOAD" | jq -c '.data')
+if [[ "$V16_INSPECT_1_DATA" != "$V16_INSPECT_2_DATA" ]]; then
+  echo "[smoke] ERROR: v1.6 inspect data is not deterministic for identical input"
+  exit 1
+fi
+echo "[smoke]   ok: inspect JSON contract + deterministic data"
+
+V16_SIM_GC=$(coldkeep simulate gc --output json)
+V16_SIM_GC_PAYLOAD=$(echo "$V16_SIM_GC" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$V16_SIM_GC_PAYLOAD" | jq -e '
+  .type == "simulation"
+  and .data.kind == "gc"
+  and .data.mutated == false
+  and .meta.version == "v1.6"
+  and .meta.exact == true
+' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: v1.6 simulate gc JSON contract failed"
+  echo "$V16_SIM_GC"
+  exit 1
+fi
+
+V16_STATS_AFTER=$(coldkeep stats --output json)
+V16_STATS_AFTER_PAYLOAD=$(echo "$V16_STATS_AFTER" | grep -E '^\{.*\}$' | tail -n1)
+
+V16_BEFORE_FILES=$(echo "$V16_STATS_BEFORE_PAYLOAD" | jq -r '.data.logical.total_files // .data.total_files // 0')
+V16_AFTER_FILES=$(echo "$V16_STATS_AFTER_PAYLOAD" | jq -r '.data.logical.total_files // .data.total_files // 0')
+V16_BEFORE_CHUNKS=$(echo "$V16_STATS_BEFORE_PAYLOAD" | jq -r '.data.chunks.total_chunks // .data.total_chunks // 0')
+V16_AFTER_CHUNKS=$(echo "$V16_STATS_AFTER_PAYLOAD" | jq -r '.data.chunks.total_chunks // .data.total_chunks // 0')
+V16_BEFORE_LIVE=$(echo "$V16_STATS_BEFORE_PAYLOAD" | jq -r '.data.containers.live_block_bytes // .data.live_block_bytes // 0')
+V16_AFTER_LIVE=$(echo "$V16_STATS_AFTER_PAYLOAD" | jq -r '.data.containers.live_block_bytes // .data.live_block_bytes // 0')
+
+if [[ "$V16_BEFORE_FILES" != "$V16_AFTER_FILES" || "$V16_BEFORE_CHUNKS" != "$V16_AFTER_CHUNKS" || "$V16_BEFORE_LIVE" != "$V16_AFTER_LIVE" ]]; then
+  echo "[smoke] ERROR: v1.6 simulate gc mutated repository-visible stats"
+  echo "[smoke] files: ${V16_BEFORE_FILES} -> ${V16_AFTER_FILES}"
+  echo "[smoke] chunks: ${V16_BEFORE_CHUNKS} -> ${V16_AFTER_CHUNKS}"
+  echo "[smoke] live_block_bytes: ${V16_BEFORE_LIVE} -> ${V16_AFTER_LIVE}"
+  exit 1
+fi
+echo "[smoke]   ok: simulate gc is read-only (no stats drift)"
+
+V16_STATS_TRACE_OUT=$(mktemp)
+V16_STATS_TRACE_ERR=$(mktemp)
+V16_SIM_TRACE_OUT=$(mktemp)
+V16_SIM_TRACE_ERR=$(mktemp)
+
+coldkeep stats --trace-json --output json >"$V16_STATS_TRACE_OUT" 2>"$V16_STATS_TRACE_ERR"
+V16_STATS_TRACE_PAYLOAD=$(grep -E '^\{.*\}$' "$V16_STATS_TRACE_OUT" | tail -n1)
+V16_STATS_TRACE_LINE=$(grep -E '^\{.*\}$' "$V16_STATS_TRACE_ERR" | tail -n1)
+if ! echo "$V16_STATS_TRACE_PAYLOAD" | jq -e '.type == "stats" and .meta.version == "v1.6"' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: stats --trace-json did not keep stats payload on stdout"
+  exit 1
+fi
+if ! echo "$V16_STATS_TRACE_LINE" | jq -e '.step != null' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: stats --trace-json did not emit trace JSON on stderr"
+  exit 1
+fi
+if grep -q '"step"' "$V16_STATS_TRACE_OUT"; then
+  echo "[smoke] ERROR: stats --trace-json leaked trace events to stdout"
+  exit 1
+fi
+
+coldkeep simulate gc --trace-json --output json >"$V16_SIM_TRACE_OUT" 2>"$V16_SIM_TRACE_ERR"
+V16_SIM_TRACE_PAYLOAD=$(grep -E '^\{.*\}$' "$V16_SIM_TRACE_OUT" | tail -n1)
+V16_SIM_TRACE_LINE=$(grep -E '^\{.*\}$' "$V16_SIM_TRACE_ERR" | tail -n1)
+if ! echo "$V16_SIM_TRACE_PAYLOAD" | jq -e '.type == "simulation" and .data.kind == "gc" and .data.mutated == false' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: simulate gc --trace-json did not keep simulation payload on stdout"
+  exit 1
+fi
+if ! echo "$V16_SIM_TRACE_LINE" | jq -e '.step != null' > /dev/null 2>&1; then
+  echo "[smoke] ERROR: simulate gc --trace-json did not emit trace JSON on stderr"
+  exit 1
+fi
+if grep -q '"step"' "$V16_SIM_TRACE_OUT"; then
+  echo "[smoke] ERROR: simulate gc --trace-json leaked trace events to stdout"
+  exit 1
+fi
+
+rm -f "$V16_STATS_TRACE_OUT" "$V16_STATS_TRACE_ERR" "$V16_SIM_TRACE_OUT" "$V16_SIM_TRACE_ERR"
+echo "[smoke]   ok: trace-json channel contract validated for stats/simulate"
+echo "[smoke] v1.6 observability gate PASSED"
+
+echo ""
 echo "[smoke] === GC DRY-RUN ACCURACY TEST ==="
 
 # Test GC dry-run prediction vs actual container deletion count.
