@@ -167,7 +167,7 @@ type SimulationResult struct {
 	Warnings []ObservationWarning `json:"warnings,omitempty"`
 }
 
-// GCSimulationResult carries the structured output of a GC dry-run plan.
+// GCSimulationResult carries the structured output of a GC simulation plan.
 type GCSimulationResult struct {
 	GeneratedAtUTC time.Time `json:"generated_at_utc,omitempty"`
 	Kind           string    `json:"kind"`

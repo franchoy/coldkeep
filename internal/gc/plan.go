@@ -112,7 +112,7 @@ type warningInputs struct {
 //   - Unreachable (not descended from any root)
 //   - AND has no live references (live_ref_count == 0 AND pin_count == 0)
 //
-// BuildPlan is SQLite-compatible (uses ? placeholders). It does not acquire
+// BuildPlan uses PostgreSQL-compatible $N placeholders. It does not acquire
 // advisory locks — it is a read-only snapshot of reachability at one instant.
 func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, error) {
 	if ctx == nil {
