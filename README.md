@@ -366,6 +366,7 @@ Observability command guarantees (v1.6):
 
 - `stats`, `inspect`, and `simulate gc` are read-only command surfaces.
 - `simulate gc` is an exact simulation of GC reclaimability under the same integrity gates.
+- `simulate gc` previews real GC reclaimability semantics (including fully-dead active containers); it is not legacy `gc --dry-run` behavior.
 - GC simulation does not mutate repository state (no database writes and no filesystem writes).
 - JSON output is intended for tooling/automation contracts.
 - Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.
