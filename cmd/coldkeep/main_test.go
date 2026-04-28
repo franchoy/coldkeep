@@ -2590,15 +2590,30 @@ func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
 		entityArg     string
 		inputID       string
 		resultType    observability.EntityType
+		args          []string
 		summary       map[string]any
 		relations     []observability.Relation
 		assertSummary func(t *testing.T, summary map[string]any)
 	}{
 		{
+			name:       "repository",
+			entityArg:  "repository",
+			inputID:    "repository",
+			resultType: observability.EntityRepository,
+			args:       []string{"repository"},
+			summary:    map[string]any{"total_files": int64(3), "total_chunks": int64(7), "total_snapshots": int64(2)},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "total_files", 3)
+				assertJSONNumber(t, summary, "total_chunks", 7)
+				assertJSONNumber(t, summary, "total_snapshots", 2)
+			},
+		},
+		{
 			name:       "snapshot",
 			entityArg:  "snapshot",
 			inputID:    "snap-42",
 			resultType: observability.EntitySnapshot,
+			args:       []string{"snapshot", "snap-42"},
 			summary:    map[string]any{"total_size_bytes": int64(8192), "logical_file_count": int64(3)},
 			assertSummary: func(t *testing.T, summary map[string]any) {
 				assertJSONNumber(t, summary, "total_size_bytes", 8192)
@@ -2610,6 +2625,7 @@ func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
 			entityArg:  "file",
 			inputID:    "42",
 			resultType: observability.EntityLogicalFile,
+			args:       []string{"file", "42"},
 			summary:    map[string]any{"chunk_count": int64(12), "avg_chunk_size_bytes": float64(2048), "original_name": "photo.jpg"},
 			relations:  []observability.Relation{{Type: "references", Direction: observability.RelationOutgoing, TargetType: observability.EntityChunk, TargetID: "77"}},
 			assertSummary: func(t *testing.T, summary map[string]any) {
@@ -2624,6 +2640,7 @@ func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
 			entityArg:  "chunk",
 			inputID:    "77",
 			resultType: observability.EntityChunk,
+			args:       []string{"chunk", "77"},
 			summary:    map[string]any{"size_bytes": int64(2048), "container_id": int64(5)},
 			relations:  []observability.Relation{{Type: "referenced_by", Direction: observability.RelationIncoming, TargetType: observability.EntityLogicalFile, TargetID: "42"}},
 			assertSummary: func(t *testing.T, summary map[string]any) {
@@ -2636,6 +2653,7 @@ func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
 			entityArg:  "container",
 			inputID:    "5",
 			resultType: observability.EntityContainer,
+			args:       []string{"container", "5"},
 			summary:    map[string]any{"size_bytes": int64(4096), "chunk_count": int64(9), "filename": "ctr_5.bin"},
 			assertSummary: func(t *testing.T, summary map[string]any) {
 				assertJSONNumber(t, summary, "size_bytes", 4096)
@@ -2660,7 +2678,7 @@ func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
 			output := captureStdout(t, func() {
 				err := runInspectCommand(parsedCommandLine{
 					method:      "inspect",
-					positionals: []string{tc.entityArg, tc.inputID},
+					positionals: tc.args,
 					flags:       map[string][]string{"json": {""}},
 				}, outputModeJSON)
 				if err != nil {
@@ -2725,6 +2743,16 @@ func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>") {
 		t.Fatalf("expected inspect usage error for missing id, got: %v", err)
+	}
+
+	// repository does not accept an id positional
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"repository", "repository"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect repository") {
+		t.Fatalf("expected repository inspect usage error when id provided, got: %v", err)
 	}
 
 	// invalid numeric id for file
@@ -2806,6 +2834,44 @@ func TestRunInspectCommandHelpIncludesJSONTraceAndDeterminism(t *testing.T) {
 	}
 	if !strings.Contains(output, "--limit bounds deep traversal output") {
 		t.Fatalf("expected --limit guidance in inspect help, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Supported entities: repository") {
+		t.Fatalf("expected repository entity in inspect help, got:\n%s", output)
+	}
+}
+
+func TestRunInspectCommandRepositoryEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedEntity observability.EntityType
+	var capturedID string
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedEntity = entity
+		capturedID = id
+		return &observability.InspectResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 0, 0, 0, 0, time.UTC),
+			EntityType:     observability.EntityRepository,
+			EntityID:       "repository",
+			Summary:        map[string]any{"total_files": int64(0), "total_chunks": int64(0), "total_snapshots": int64(0)},
+		}, nil
+	}
+
+	captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"repository"},
+			flags:       map[string][]string{},
+		}, outputModeText); err != nil {
+			t.Fatalf("unexpected error with repository entity: %v", err)
+		}
+	})
+
+	if capturedEntity != observability.EntityRepository {
+		t.Fatalf("expected repository entity, got %v", capturedEntity)
+	}
+	if capturedID != "" {
+		t.Fatalf("expected empty id for repository inspect, got %q", capturedID)
 	}
 }
 

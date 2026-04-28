@@ -232,6 +232,8 @@ func publicErrorCode(err error, exitCode int) string {
 
 func inspectEntityLabel(entityName string) string {
 	switch strings.TrimSpace(strings.ToLower(entityName)) {
+	case "repository":
+		return "repository"
 	case "file":
 		return "logical file"
 	case "chunk":
@@ -1876,6 +1878,7 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 
 	validEntities := map[string]observability.EntityType{
+		"repository":   observability.EntityRepository,
 		"file":         observability.EntityFile,
 		"logical-file": observability.EntityFile,
 		"snapshot":     observability.EntitySnapshot,
@@ -1883,8 +1886,8 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		"container":    observability.EntityContainer,
 	}
 
-	if len(parsed.positionals) != 2 {
-		return usageErrorf("Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>")
+	if len(parsed.positionals) == 0 || len(parsed.positionals) > 2 {
+		return usageErrorf("Usage: coldkeep inspect repository\n       coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>")
 	}
 	entityName := parsed.positionals[0]
 	entityType, ok := validEntities[entityName]
@@ -1893,9 +1896,19 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 	entityLabel := inspectEntityLabel(entityName)
 
-	entityID := strings.TrimSpace(parsed.positionals[1])
-	if entityID == "" {
-		return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "invalid %s id %q", entityLabel, parsed.positionals[1])
+	entityID := ""
+	if entityType == observability.EntityRepository {
+		if len(parsed.positionals) == 2 {
+			return usageErrorf("Usage: coldkeep inspect repository")
+		}
+	} else {
+		if len(parsed.positionals) != 2 {
+			return usageErrorf("Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>")
+		}
+		entityID = strings.TrimSpace(parsed.positionals[1])
+		if entityID == "" {
+			return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "invalid %s id %q", entityLabel, parsed.positionals[1])
+		}
 	}
 
 	// For file/chunk/container a numeric id is required; validate early for a clear error.
@@ -4125,10 +4138,11 @@ func printStatsHelp() {
 
 func printInspectHelp() {
 	fmt.Println("Usage:")
+	fmt.Println("  coldkeep inspect repository [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
 	fmt.Println("  coldkeep inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
 	fmt.Println()
 	fmt.Println("Inspect one entity through the observability pipeline (read-only).")
-	fmt.Println("Supported entities: file (alias: logical-file), snapshot, chunk, container")
+	fmt.Println("Supported entities: repository, file (alias: logical-file), snapshot, chunk, container")
 	fmt.Println()
 	fmt.Println("Traversal options:")
 	fmt.Println("  --relations includes forward linked records")
