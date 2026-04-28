@@ -1119,11 +1119,12 @@ echo "[smoke] === JSON OUTPUT VALIDATION ==="
 # Validate JSON contracts for key commands
 echo "[smoke] validating stats JSON output contract"
 STATS_JSON=$(coldkeep stats --output json)
-if ! validate_json_output "$STATS_JSON" "status data"; then
+STATS_PAYLOAD=$(echo "$STATS_JSON" | grep -E '^\{.*\}$' | tail -n1)
+if ! echo "$STATS_PAYLOAD" | jq -e '((.type == "stats" and .data != null and .meta != null) or (.status != null and .data != null))' > /dev/null 2>&1; then
   echo "[smoke] ERROR: stats JSON output has invalid structure"
   exit 1
 fi
-echo "[smoke]   ok: stats JSON has required fields"
+echo "[smoke]   ok: stats JSON contract validated"
 
 echo "[smoke] validating list JSON output contract"
 LIST_JSON=$(coldkeep list --output json)
