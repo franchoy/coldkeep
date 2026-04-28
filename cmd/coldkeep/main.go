@@ -29,11 +29,13 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk/benchmark"
 	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
+	clirender "github.com/franchoy/coldkeep/internal/cli/render"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -75,6 +77,7 @@ var flagsWithValues = map[string]bool{
 	"prefix":          true,
 	"pattern":         true,
 	"regex":           true,
+	"delete-snapshot": true,
 	"modified-after":  true,
 	"modified-before": true,
 }
@@ -120,7 +123,7 @@ const doctorDefaultVerifyLevel = verify.VerifyStandard
 const doctorOperationalHint = "After significant operations, run coldkeep doctor to validate system health."
 
 var doctorRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
-var doctorSchemaVersionPhase = querySchemaVersion
+var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
@@ -137,8 +140,45 @@ var deleteSnapshotPhase = snapshot.DeleteSnapshot
 var snapshotDeleteLineagePreviewPhase = loadSnapshotDeleteLineagePreview
 var diffSnapshotsPhase = snapshot.DiffSnapshots
 var diffSnapshotSummaryPhase = snapshot.DiffSnapshotsSummarySQL
-var runStatsPhase = maintenance.RunStatsResult
-var inspectLogicalFilePhase = storage.GetLogicalFileInspectInfoWithDB
+var newObservabilityServicePhase = observability.NewService
+var runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	svc, err := newObservabilityServicePhase(sgctx.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := svc.Stats(context.Background(), opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+var runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	svc, err := newObservabilityServicePhase(sgctx.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := svc.Inspect(context.Background(), entity, id, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
@@ -146,9 +186,10 @@ var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 }
 
 type cliError struct {
-	code int
-	msg  string
-	err  error
+	code       int
+	msg        string
+	err        error
+	publicCode string
 }
 
 func (e *cliError) Error() string {
@@ -167,6 +208,64 @@ func (e *cliError) Unwrap() error {
 
 func usageErrorf(format string, args ...any) error {
 	return &cliError{code: exitUsage, msg: fmt.Sprintf(format, args...)}
+}
+
+func observabilityErrorf(exitCode int, publicCode, format string, args ...any) error {
+	return &cliError{code: exitCode, msg: fmt.Sprintf(format, args...), publicCode: publicCode}
+}
+
+func observabilityWrappedError(exitCode int, publicCode, publicMessage string, cause error) error {
+	return &cliError{code: exitCode, msg: publicMessage, err: cause, publicCode: publicCode}
+}
+
+func publicErrorCode(err error, exitCode int) string {
+	var ce *cliError
+	if errors.As(err, &ce) && strings.TrimSpace(ce.publicCode) != "" {
+		return strings.TrimSpace(ce.publicCode)
+	}
+
+	if exitCode == exitUsage {
+		return "INVALID_ARGUMENT"
+	}
+
+	return "INTERNAL"
+}
+
+func inspectEntityLabel(entityName string) string {
+	switch strings.TrimSpace(strings.ToLower(entityName)) {
+	case "repository":
+		return "repository"
+	case "file":
+		return "logical file"
+	case "chunk":
+		return "chunk"
+	case "container":
+		return "container"
+	case "snapshot":
+		return "snapshot"
+	default:
+		return strings.TrimSpace(strings.ToLower(entityName))
+	}
+}
+
+var missingSnapshotPattern = regexp.MustCompile(`snapshot\s+"([^"]+)"\s+does\s+not\s+exist|snapshot\s+(\S+)\s+does\s+not\s+exist`)
+
+func missingSnapshotFromError(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+
+	matches := missingSnapshotPattern.FindStringSubmatch(err.Error())
+	if len(matches) < 3 {
+		return "", false
+	}
+	if strings.TrimSpace(matches[1]) != "" {
+		return strings.TrimSpace(matches[1]), true
+	}
+	if strings.TrimSpace(matches[2]) != "" {
+		return strings.TrimSpace(matches[2]), true
+	}
+	return "", false
 }
 
 func verifyError(err error) error {
@@ -208,7 +307,7 @@ func runCLI(args []string) int {
 		return exitSuccess
 	}
 
-	if shouldRunStartupRecovery(args[0]) {
+	if shouldRunStartupRecovery(args) {
 		recoveryReport, recoveryErr := runStartupRecoveryWithOptionalLogBuffering(startupMode)
 		if recoveryErr != nil {
 			log.Printf("System recovery failed: %v\n", recoveryErr)
@@ -394,6 +493,8 @@ func emitStartupRecoveryReport(mode cliOutputMode, report recovery.Report, err e
 
 func printCLIError(err error, mode cliOutputMode) int {
 	code := classifyExitCode(err)
+	message := strings.TrimSpace(err.Error())
+	publicCode := publicErrorCode(err, code)
 	invariantCode, hasInvariantCode := invariants.Code(err)
 	recommendedAction := invariants.RecommendedActionForError(err)
 	dbHint := localDBSetupHint(err)
@@ -402,7 +503,11 @@ func printCLIError(err error, mode cliOutputMode) int {
 			"status":      "error",
 			"error_class": exitErrorClassLabel(code),
 			"exit_code":   code,
-			"message":     strings.TrimSpace(err.Error()),
+			"message":     message,
+			"error": map[string]any{
+				"code":    publicCode,
+				"message": message,
+			},
 		}
 		if hasInvariantCode {
 			payload["invariant_code"] = invariantCode
@@ -415,7 +520,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 		return code
 	}
 
-	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), strings.TrimSpace(err.Error()))
+	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), message)
 	if hasInvariantCode {
 		fmt.Fprintf(os.Stderr, "INVARIANT_CODE: %s\n", invariantCode)
 	}
@@ -645,18 +750,51 @@ func verifyLevelToString(level verify.VerifyLevel) string {
 
 func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	value, hasValue := parsed.lastFlagValue("output")
+	hasJSONFlag := parsed.hasFlag("json")
+	normalized := strings.ToLower(strings.TrimSpace(value))
+
+	if hasJSONFlag && hasValue && normalized != "" && normalized != "json" {
+		return outputModeText, usageErrorf("cannot combine --json with --output %s", normalized)
+	}
+	if hasJSONFlag {
+		if !hasValue {
+			return outputModeJSON, nil
+		}
+		if normalized == "json" {
+			return outputModeJSON, nil
+		}
+	}
+
 	if !hasValue {
 		return outputModeText, nil
 	}
 
-	switch strings.ToLower(value) {
-	case "", "text":
+	switch normalized {
+	case "", "text", "human":
 		return outputModeText, nil
 	case "json":
 		return outputModeJSON, nil
 	default:
-		return outputModeText, usageErrorf("invalid --output value %q (allowed: text, json)", value)
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	}
+}
+
+func resolveTraceOptions(parsed parsedCommandLine) (observability.TraceOptions, error) {
+	hasTraceText := parsed.hasFlag("trace")
+	hasTraceJSON := parsed.hasFlag("trace-json")
+
+	if hasTraceText && hasTraceJSON {
+		return observability.TraceOptions{}, usageErrorf("cannot combine --trace with --trace-json")
+	}
+
+	if hasTraceJSON {
+		return observability.TraceOptions{Enabled: true, Sink: observability.NewJSONTraceSink(os.Stderr)}, nil
+	}
+	if hasTraceText {
+		return observability.TraceOptions{Enabled: true, Sink: observability.HumanTraceSink{W: os.Stderr}}, nil
+	}
+
+	return observability.TraceOptions{}, nil
 }
 
 var outputSupportedCommands = map[string]bool{
@@ -681,6 +819,13 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	if len(args) < 1 || !outputSupportedCommands[args[0]] {
 		return outputModeText
 	}
+	if args[0] == "stats" {
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--json" {
+				return outputModeJSON
+			}
+		}
+	}
 
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
@@ -699,8 +844,16 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	return outputModeText
 }
 
-func shouldRunStartupRecovery(command string) bool {
-	switch command {
+func shouldRunStartupRecovery(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--help" || arg == "-h" {
+			return false
+		}
+	}
+	switch args[0] {
 	// doctor runs its own corrective recovery phase inside runDoctorCommand so it can
 	// report corrective recovery/verify/schema in a single command-specific payload.
 	case "store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot":
@@ -1687,89 +1840,109 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "containers", "trace", "trace-json", "help", "h"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) != 0 {
-		return usageErrorf("Usage: coldkeep stats")
-	}
-
-	if outputMode == outputModeJSON {
-		r, err := runStatsPhase()
-		if err != nil {
-			return err
-		}
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "stats",
-			"data":    r,
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
+	if parsed.hasFlag("help", "h") {
+		printStatsHelp()
 		return nil
 	}
-
-	r, err := runStatsPhase()
+	if len(parsed.positionals) != 0 {
+		return usageErrorf("Usage: coldkeep stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]")
+	}
+	traceOptions, err := resolveTraceOptions(parsed)
 	if err != nil {
 		return err
 	}
-	printStatsReport(r)
-	return nil
+
+	includeContainers := parsed.hasFlag("containers")
+	r, err := runObservabilityStatsPhase(observability.StatsOptions{IncludeContainers: includeContainers, Trace: traceOptions})
+	if err != nil {
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "stats collection failed", err)
+	}
+
+	renderer := resolveRenderer(outputMode)
+	return renderer.RenderStats(os.Stdout, r)
 }
 
 func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "relations", "reverse", "deep", "limit", "trace", "trace-json", "help", "h"); err != nil {
 		return err
 	}
-
-	if len(parsed.positionals) != 2 || parsed.positionals[0] != "file" {
-		return usageErrorf("Usage: coldkeep inspect file <fileID>")
-	}
-
-	fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
-	if err != nil || fileID <= 0 {
-		return usageErrorf("Invalid fileID: %s", parsed.positionals[1])
-	}
-
-	sgctx, err := loadDefaultStorageContextPhase()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = sgctx.DB.Close() }()
-
-	info, err := inspectLogicalFilePhase(sgctx.DB, fileID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("file ID %d not found", fileID)
-		}
-		return err
-	}
-
-	avgChunkSizeKB := int64(math.Round(info.AvgChunkSizeBytes / 1024.0))
-
-	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "inspect",
-			"data": map[string]any{
-				"target":               "file",
-				"file_id":              info.FileID,
-				"chunker":              string(info.ChunkerVersion),
-				"chunks":               info.ChunkCount,
-				"avg_chunk_size_bytes": info.AvgChunkSizeBytes,
-				"avg_chunk_size_kb":    avgChunkSizeKB,
-			},
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
+	if parsed.hasFlag("help", "h") {
+		printInspectHelp()
 		return nil
 	}
+	traceOptions, err := resolveTraceOptions(parsed)
+	if err != nil {
+		return err
+	}
 
-	fmt.Printf("Chunker: %s\n", info.ChunkerVersion)
-	fmt.Printf("Chunks: %d\n", info.ChunkCount)
-	fmt.Printf("Avg chunk size: %dKB\n", avgChunkSizeKB)
+	validEntities := map[string]observability.EntityType{
+		"repository":   observability.EntityRepository,
+		"file":         observability.EntityFile,
+		"logical-file": observability.EntityFile,
+		"snapshot":     observability.EntitySnapshot,
+		"chunk":        observability.EntityChunk,
+		"container":    observability.EntityContainer,
+	}
 
-	return nil
+	if len(parsed.positionals) == 0 || len(parsed.positionals) > 2 {
+		return usageErrorf("Usage: coldkeep inspect repository\n       coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>")
+	}
+	entityName := parsed.positionals[0]
+	entityType, ok := validEntities[entityName]
+	if !ok {
+		return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "unsupported inspect entity %q", entityName)
+	}
+	entityLabel := inspectEntityLabel(entityName)
+
+	entityID := ""
+	if entityType == observability.EntityRepository {
+		if len(parsed.positionals) == 2 {
+			return usageErrorf("Usage: coldkeep inspect repository")
+		}
+	} else {
+		if len(parsed.positionals) != 2 {
+			return usageErrorf("Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>")
+		}
+		entityID = strings.TrimSpace(parsed.positionals[1])
+		if entityID == "" {
+			return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "invalid %s id %q", entityLabel, parsed.positionals[1])
+		}
+	}
+
+	// For file/chunk/container a numeric id is required; validate early for a clear error.
+	if entityType == observability.EntityFile || entityType == observability.EntityChunk || entityType == observability.EntityContainer {
+		if n, err := strconv.ParseInt(entityID, 10, 64); err != nil || n <= 0 {
+			return observabilityErrorf(exitUsage, "INVALID_ARGUMENT", "invalid %s id %q", entityLabel, entityID)
+		}
+	}
+
+	opts := observability.InspectOptions{
+		Relations: parsed.hasFlag("relations"),
+		Reverse:   parsed.hasFlag("reverse"),
+		Deep:      parsed.hasFlag("deep"),
+		Trace:     traceOptions,
+	}
+	if limitStr, hasLimit := parsed.lastFlagValue("limit"); hasLimit {
+		n, err := strconv.Atoi(limitStr)
+		if err != nil || n <= 0 {
+			return usageErrorf("Invalid --limit value: %s", limitStr)
+		}
+		opts.Limit = n
+	}
+
+	r, err := runObservabilityInspectPhase(entityType, entityID, opts)
+	if err != nil {
+		if errors.Is(err, observability.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+			return observabilityErrorf(exitGeneral, "NOT_FOUND", "%s %s not found", entityLabel, entityID)
+		}
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "inspect failed", err)
+	}
+
+	renderer := resolveRenderer(outputMode)
+	return renderer.RenderInspect(os.Stdout, r)
 }
 
 func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -2036,124 +2209,6 @@ func printFileRecordsTable(records []listing.FileRecord) {
 	}
 }
 
-func bytesToMB(bytes int64) float64 {
-	return float64(bytes) / (1024 * 1024)
-}
-
-func bytesToGB(bytes int64) float64 {
-	return float64(bytes) / (1024 * 1024 * 1024)
-}
-
-func hasMixedRepositoryChunkerVersions(r *maintenance.StatsResult) bool {
-	if r == nil {
-		return false
-	}
-
-	versions := make(map[string]struct{})
-	collect := func(input map[string]int64) {
-		for version := range input {
-			trimmed := strings.TrimSpace(version)
-			if trimmed == "" || trimmed == "unknown" {
-				continue
-			}
-			versions[trimmed] = struct{}{}
-		}
-	}
-
-	collect(r.ChunkCountsByVersion)
-	collect(r.LogicalFileCountsByVersion)
-
-	return len(versions) > 1
-}
-
-func printStatsReport(r *maintenance.StatsResult) {
-	fmt.Println("\n====== coldkeep Stats ======")
-	if strings.TrimSpace(r.ActiveWriteChunker) != "" {
-		fmt.Printf("Active chunker (new writes):     %s\n", r.ActiveWriteChunker)
-	}
-	fmt.Printf("Logical files (total):           %d\n", r.TotalFiles)
-	fmt.Printf("Logical stored size (total):     %.2f MB\n", bytesToMB(r.TotalLogicalSizeBytes))
-	fmt.Printf("  Completed files:               %d (%.2f MB)\n", r.CompletedFiles, bytesToMB(r.CompletedSizeBytes))
-	fmt.Printf("  Processing files:              %d (%.2f MB)\n", r.ProcessingFiles, bytesToMB(r.ProcessingSizeBytes))
-	fmt.Printf("  Aborted files:                 %d (%.2f MB)\n", r.AbortedFiles, bytesToMB(r.AbortedSizeBytes))
-	fmt.Printf("Healthy containers:              %d\n", r.HealthyContainers)
-	fmt.Printf("Healthy container bytes:         %.2f MB\n", bytesToMB(r.HealthyContainerBytes))
-	fmt.Printf("Quarantined containers:          %d\n", r.QuarantineContainers)
-	fmt.Printf("Quarantined container bytes:     %.2f MB\n", bytesToMB(r.QuarantineContainerBytes))
-	fmt.Printf("Total containers:                %d\n", r.TotalContainers)
-	fmt.Printf("Total container bytes:           %.2f MB\n", bytesToMB(r.TotalContainerBytes))
-	fmt.Printf("Live block bytes (physical):     %.2f MB\n", bytesToMB(r.LiveBlockBytes))
-	fmt.Printf("Dead block bytes (physical):     %.2f MB\n", bytesToMB(r.DeadBlockBytes))
-	if r.GlobalDedupRatioPct > 0 {
-		fmt.Printf("Global dedup ratio:              %.2f%%\n", r.GlobalDedupRatioPct)
-	}
-	if r.FragmentationRatioPct > 0 {
-		fmt.Printf("Fragmentation ratio:             %.2f%%\n", r.FragmentationRatioPct)
-	}
-	fmt.Println("Snapshot retention:")
-	fmt.Printf("  Current-only logical files:    %d (%.2f MB)\n", r.SnapshotRetention.CurrentOnlyLogicalFiles, bytesToMB(r.SnapshotRetention.CurrentOnlyBytes))
-	fmt.Printf("  Snapshot-referenced files:     %d (%.2f MB)\n", r.SnapshotRetention.SnapshotReferencedLogicalFiles, bytesToMB(r.SnapshotRetention.SnapshotReferencedBytes))
-	fmt.Printf("  Snapshot-only logical files:   %d (%.2f MB)\n", r.SnapshotRetention.SnapshotOnlyLogicalFiles, bytesToMB(r.SnapshotRetention.SnapshotOnlyBytes))
-	fmt.Printf("  Shared logical files:          %d (%.2f MB)\n", r.SnapshotRetention.SharedLogicalFiles, bytesToMB(r.SnapshotRetention.SharedBytes))
-	fmt.Printf("File retry stats:                total=%d, avg=%.2f, max=%d\n", r.TotalFileRetries, r.AvgFileRetries, r.MaxFileRetries)
-	fmt.Printf("Chunk retry stats:               total=%d, avg=%.2f, max=%d\n", r.TotalChunkRetries, r.AvgChunkRetries, r.MaxChunkRetries)
-	fmt.Println("============================")
-	fmt.Printf("Chunks (total):           %d\n", r.TotalChunks)
-	fmt.Printf("  Completed chunks:       %d (%.2f MB)\n", r.CompletedChunks, bytesToMB(r.CompletedChunkBytes))
-	fmt.Printf("  Processing chunks:      %d\n", r.ProcessingChunks)
-	fmt.Printf("  Aborted chunks:         %d\n", r.AbortedChunks)
-	if len(r.ChunkCountsByVersion) > 0 {
-		fmt.Printf("Chunker Distribution:\n")
-		versions := make([]string, 0, len(r.ChunkCountsByVersion))
-		for version := range r.ChunkCountsByVersion {
-			versions = append(versions, version)
-		}
-		sort.Strings(versions)
-		for _, version := range versions {
-			fmt.Printf("  %-22s %d chunks\n", version+":", r.ChunkCountsByVersion[version])
-		}
-	}
-	if len(r.ChunkBytesByVersion) > 0 {
-		fmt.Printf("Stored Data by Chunker:\n")
-		versions := make([]string, 0, len(r.ChunkBytesByVersion))
-		for version := range r.ChunkBytesByVersion {
-			versions = append(versions, version)
-		}
-		sort.Strings(versions)
-		for _, version := range versions {
-			fmt.Printf("  %-22s %.2f GB\n", version+":", bytesToGB(r.ChunkBytesByVersion[version]))
-		}
-	}
-	if len(r.LogicalFileCountsByVersion) > 0 {
-		fmt.Printf("Logical Files by Chunker:\n")
-		versions := make([]string, 0, len(r.LogicalFileCountsByVersion))
-		for version := range r.LogicalFileCountsByVersion {
-			versions = append(versions, version)
-		}
-		sort.Strings(versions)
-		for _, version := range versions {
-			fmt.Printf("  %-22s %d files\n", version+":", r.LogicalFileCountsByVersion[version])
-		}
-	}
-	if hasMixedRepositoryChunkerVersions(r) {
-		fmt.Println("⚠ Repository contains multiple chunker versions.")
-		fmt.Println("  This is expected after upgrades or configuration changes.")
-	}
-	fmt.Printf("Dedup Signal:\n")
-	fmt.Printf("  Total chunk references:  %d\n", r.TotalChunkReferences)
-	fmt.Printf("  Unique referenced chunks:%d\n", r.UniqueReferencedChunks)
-	fmt.Printf("  Estimated dedup ratio:   %.2f%%\n", r.EstimatedDedupRatioPct)
-	fmt.Println("============================")
-	fmt.Println("\nPer-container breakdown:")
-	for _, c := range r.Containers {
-		fmt.Printf("Container %d (%s): quarantined=%t : total=%.2fMB live=%.2fMB dead=%.2fMB live_ratio=%.2f%%\n",
-			c.ID, c.Filename, c.Quarantine,
-			bytesToMB(c.TotalBytes), bytesToMB(c.LiveBytes), bytesToMB(c.DeadBytes),
-			c.LiveRatioPct,
-		)
-	}
-}
-
 // runVerifyCommand executes recovered-state verification. The verification phase
 // itself is read-only; any corrective mutation happens earlier via automatic
 // startup recovery before this function is called. It is not intended to be an
@@ -2207,24 +2262,6 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	default:
 		return usageErrorf("Unknown target for verify: %s (expected 'system' or 'file <fileID>')", target)
 	}
-}
-
-func querySchemaVersion() (int64, error) {
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		return 0, fmt.Errorf("connect DB for schema check: %w", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	var version sql.NullInt64
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
-		return 0, fmt.Errorf("query schema_version: %w", err)
-	}
-	if !version.Valid {
-		return 0, errors.New("schema_version table is empty")
-	}
-
-	return version.Int64, nil
 }
 
 // runDoctorCommand implements the doctor corrective recovery command.
@@ -2371,18 +2408,6 @@ func parseDoctorVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error
 	}
 
 	return parseVerifyLevel(parsed)
-}
-
-// SimulateReport holds the result of a dry-run simulation.
-type SimulateReport struct {
-	Subcommand        string  `json:"subcommand"`
-	Path              string  `json:"path"`
-	Files             int64   `json:"files"`
-	Chunks            int64   `json:"chunks"`
-	Containers        int64   `json:"containers"`
-	LogicalSizeBytes  int64   `json:"logical_size_bytes"`
-	PhysicalSizeBytes int64   `json:"physical_size_bytes"`
-	DedupRatioPct     float64 `json:"dedup_ratio_pct"`
 }
 
 // BenchmarkChunkersReport is the deterministic output payload for
@@ -2563,6 +2588,25 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 }
 
 func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if parsed.hasFlag("help", "h") {
+		if len(parsed.positionals) > 0 && parsed.positionals[0] == "gc" {
+			printSimulateGCHelp()
+			return nil
+		}
+		printSimulateHelp()
+		return nil
+	}
+
+	if len(parsed.positionals) < 1 {
+		return usageErrorf("Usage: coldkeep simulate <gc|store|store-folder> ...")
+	}
+
+	subcommand := parsed.positionals[0]
+
+	if subcommand == "gc" {
+		return runSimulateGCCommand(parsed, outputMode)
+	}
+
 	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
 		return err
 	}
@@ -2570,14 +2614,13 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 		return usageErrorf("Usage: coldkeep simulate <store|store-folder> [--codec <codec>] <path>")
 	}
 
-	subcommand := parsed.positionals[0]
 	path := parsed.positionals[1]
 	codecName, _ := parsed.lastFlagValue("codec")
 
 	switch subcommand {
 	case "store", "store-folder":
 	default:
-		return usageErrorf("unknown simulate subcommand %q (expected: store, store-folder)", subcommand)
+		return usageErrorf("unknown simulate subcommand %q (expected: gc, store, store-folder)", subcommand)
 	}
 
 	var codec blocks.Codec
@@ -2622,6 +2665,78 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	return emitSimulateReport(sgctx, subcommand, path, outputMode)
 }
 
+// runSimulateGCCommand implements `coldkeep simulate gc [--delete-snapshot <id>]*`.
+// It is a pure read-only operation: it calls BuildPlan and reports what would
+// be reclaimable, without deleting anything.
+func runSimulateGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	if err := ensureAllowedFlags(parsed, "output", "json", "delete-snapshot", "containers", "trace", "trace-json"); err != nil {
+		return err
+	}
+	traceOptions, err := resolveTraceOptions(parsed)
+	if err != nil {
+		return err
+	}
+
+	deleteSnapshots := parsed.flagValues("delete-snapshot")
+	includeContainers := parsed.hasFlag("containers")
+
+	r, err := runObservabilitySimulateGCPhase(observability.SimulationOptions{
+		Kind:                   observability.SimulationKindGC,
+		Trace:                  traceOptions,
+		AssumeDeletedSnapshots: deleteSnapshots,
+	})
+	if err != nil {
+		if snapshotID, ok := missingSnapshotFromError(err); ok {
+			return observabilityErrorf(exitGeneral, "NOT_FOUND", "snapshot %s not found", snapshotID)
+		}
+		return observabilityWrappedError(exitGeneral, "INTERNAL", "gc simulation failed", err)
+	}
+
+	renderResult := clirender.CloneSimulationResult(r)
+	if renderResult.GC != nil {
+		if !includeContainers {
+			renderResult.GC.Containers = nil
+		}
+		if len(renderResult.GC.Assumptions.DeletedSnapshots) == 0 && len(deleteSnapshots) > 0 {
+			renderResult.GC.Assumptions.DeletedSnapshots = append([]string(nil), deleteSnapshots...)
+		}
+	}
+
+	renderer := resolveRenderer(outputMode)
+	return renderer.RenderSimulation(os.Stdout, renderResult)
+}
+
+func resolveRenderer(outputMode cliOutputMode) clirender.Renderer {
+	if outputMode == outputModeJSON {
+		return clirender.JSONRenderer{}
+	}
+	return clirender.HumanRenderer{}
+}
+
+var runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+	sgctx, err := loadDefaultStorageContextPhase()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sgctx.DB.Close() }()
+
+	svc, err := newObservabilityServicePhase(sgctx.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.Simulate(context.Background(), opts)
+}
+
+var runObservabilitySimulateStoreReportPhase = func(dbconn *sql.DB, subcommand, path string) (*observability.SimulateStoreReport, error) {
+	svc, err := newObservabilityServicePhase(dbconn)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.SimulateStoreReport(context.Background(), subcommand, path)
+}
+
 // suppressStdoutDuring redirects os.Stdout to /dev/null for the duration of fn.
 func suppressStdoutDuring(fn func() error) error {
 	restore, err := suppressStdout()
@@ -2651,56 +2766,16 @@ func suppressStdout() (func(), error) {
 }
 
 func emitSimulateReport(sgctx storage.StorageContext, subcommand, path string, outputMode cliOutputMode) error {
-	r := &SimulateReport{
-		Subcommand: subcommand,
-		Path:       path,
-	}
-	ctx, cancel := db.NewOperationContext(context.Background())
-	defer cancel()
-
-	queries := []struct {
-		dest  interface{}
-		query string
-		args  []any
-	}{
-		{&r.Files, `SELECT COUNT(*) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
-		{&r.LogicalSizeBytes, `SELECT COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, []any{filestate.LogicalFileCompleted}},
-		{&r.Chunks, `SELECT COUNT(*) FROM chunk WHERE status = $1`, []any{filestate.ChunkCompleted}},
-		{&r.Containers, `SELECT COUNT(DISTINCT b.container_id) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.status = $1`, []any{filestate.ChunkCompleted}},
-		{&r.PhysicalSizeBytes, `SELECT COALESCE(SUM(b.stored_size),0) FROM blocks b JOIN chunk c ON c.id = b.chunk_id WHERE c.live_ref_count > 0 OR c.pin_count > 0`, nil},
-	}
-	for _, q := range queries {
-		if err := sgctx.DB.QueryRowContext(ctx, q.query, q.args...).Scan(q.dest); err != nil {
-			return fmt.Errorf("query simulate stats: %w", err)
-		}
-	}
-
-	if r.LogicalSizeBytes > 0 {
-		r.DedupRatioPct = (1.0 - float64(r.PhysicalSizeBytes)/float64(r.LogicalSizeBytes)) * 100
+	r, err := runObservabilitySimulateStoreReportPhase(sgctx.DB, subcommand, path)
+	if err != nil {
+		return fmt.Errorf("query simulate stats: %w", err)
 	}
 
 	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":    "ok",
-			"command":   "simulate",
-			"simulated": true,
-			"data":      r,
-		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
+		return clirender.RenderSimulateStoreJSON(os.Stdout, r)
 	}
 
-	fmt.Printf("[SIMULATE] subcommand=%s path=%s (dry run — no data written to storage)\n", subcommand, path)
-	fmt.Printf("  Files:          %d\n", r.Files)
-	fmt.Printf("  Chunks:         %d\n", r.Chunks)
-	fmt.Printf("  Containers:     %d\n", r.Containers)
-	fmt.Printf("  Logical size:   %d bytes (%.2f MB)\n", r.LogicalSizeBytes, float64(r.LogicalSizeBytes)/(1024*1024))
-	fmt.Printf("  Physical size:  %d bytes (%.2f MB)\n", r.PhysicalSizeBytes, float64(r.PhysicalSizeBytes)/(1024*1024))
-	if r.DedupRatioPct > 0 {
-		fmt.Printf("  Dedup savings:  %.2f%%\n", r.DedupRatioPct)
-	}
-	return nil
+	return clirender.RenderSimulateStoreHuman(os.Stdout, r)
 }
 
 func generateSnapshotID() (string, error) {
@@ -3157,30 +3232,10 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 	if treeMode {
 		lines := renderSnapshotTreeLines(items)
-		if len(lines) == 0 {
-			_, _ = fmt.Fprintln(os.Stdout, "no snapshots found")
-		} else {
-			for _, line := range lines {
-				_, _ = fmt.Fprintln(os.Stdout, line)
-			}
-		}
-	} else {
-		_, _ = fmt.Fprintln(os.Stdout, "Snapshots:")
-		if len(items) == 0 {
-			_, _ = fmt.Fprintln(os.Stdout, "  (none)")
-		} else {
-			for _, item := range items {
-				label := ""
-				if item.Label.Valid {
-					label = "  label=" + item.Label.String
-				}
-				_, _ = fmt.Fprintf(os.Stdout, "  %s  %s  %s%s\n", item.ID, item.Type, item.CreatedAt.UTC().Format(time.RFC3339), label)
-			}
-		}
+		return clirender.RenderSnapshotListHuman(os.Stdout, items, true, lines, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
-	return nil
+
+	return clirender.RenderSnapshotListHuman(os.Stdout, items, false, nil, time.Since(startedAt).Milliseconds(), doctorOperationalHint)
 }
 
 func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -3252,25 +3307,15 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return nil
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Snapshot: %s\n", item.ID)
-	_, _ = fmt.Fprintf(os.Stdout, "  Type: %s\n", item.Type)
-	_, _ = fmt.Fprintf(os.Stdout, "  Created: %s\n", item.CreatedAt.UTC().Format(time.RFC3339))
-	if item.Label.Valid {
-		_, _ = fmt.Fprintf(os.Stdout, "  Label: %s\n", item.Label.String)
-	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Files (matched): %d\n", matchedFileCount)
-	_, _ = fmt.Fprintf(os.Stdout, "  Files (total): %d\n", stats.SnapshotFileCount)
-	_, _ = fmt.Fprintln(os.Stdout)
-	if len(files) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "  (no files)")
-	} else {
-		for _, file := range files {
-			_, _ = fmt.Fprintf(os.Stdout, "  %s\n", file.Path)
-		}
-	}
-	_, _ = fmt.Fprintf(os.Stdout, "\n  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
-	return nil
+	return clirender.RenderSnapshotShowHuman(
+		os.Stdout,
+		*item,
+		files,
+		matchedFileCount,
+		stats.SnapshotFileCount,
+		time.Since(startedAt).Milliseconds(),
+		doctorOperationalHint,
+	)
 }
 
 func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -3450,91 +3495,10 @@ func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	return nil
 }
 
-type snapshotDeleteLineagePreview struct {
-	SnapshotID       string
-	ParentID         sql.NullString
-	ParentMissing    bool
-	ChildSnapshotIDs []string
-	TotalFiles       int64
-	UniqueFiles      int64
-	SharedFiles      int64
-}
+type snapshotDeleteLineagePreview = snapshot.DeleteLineagePreview
 
 func loadSnapshotDeleteLineagePreview(ctx context.Context, dbconn *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
-	if dbconn == nil {
-		return nil, errors.New("snapshot db cannot be nil")
-	}
-	trimmedID := strings.TrimSpace(snapshotID)
-	if trimmedID == "" {
-		return nil, errors.New("snapshot id cannot be empty")
-	}
-
-	preview := &snapshotDeleteLineagePreview{}
-	if err := dbconn.QueryRowContext(ctx, `SELECT id, parent_id FROM snapshot WHERE id = $1`, trimmedID).Scan(&preview.SnapshotID, &preview.ParentID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("snapshot %q not found", trimmedID)
-		}
-		return nil, fmt.Errorf("load snapshot delete preview snapshot_id=%s: %w", trimmedID, err)
-	}
-	if preview.ParentID.Valid {
-		var parentExists bool
-		if err := dbconn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM snapshot WHERE id = $1)`, preview.ParentID.String).Scan(&parentExists); err != nil {
-			return nil, fmt.Errorf("load snapshot delete preview parent existence snapshot_id=%s parent_id=%s: %w", trimmedID, preview.ParentID.String, err)
-		}
-		preview.ParentMissing = !parentExists
-	}
-
-	rows, err := dbconn.QueryContext(ctx, `SELECT id FROM snapshot WHERE parent_id = $1 ORDER BY id`, trimmedID)
-	if err != nil {
-		return nil, fmt.Errorf("load snapshot delete preview children snapshot_id=%s: %w", trimmedID, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var childID string
-		if err := rows.Scan(&childID); err != nil {
-			return nil, fmt.Errorf("scan snapshot delete preview child row snapshot_id=%s: %w", trimmedID, err)
-		}
-		preview.ChildSnapshotIDs = append(preview.ChildSnapshotIDs, childID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate snapshot delete preview child rows snapshot_id=%s: %w", trimmedID, err)
-	}
-
-	// Query total files referenced by this snapshot
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, trimmedID).Scan(&preview.TotalFiles); err != nil {
-		return nil, fmt.Errorf("load snapshot delete preview count total files snapshot_id=%s: %w", trimmedID, err)
-	}
-
-	// Query unique files (only referenced by this snapshot).
-	// A file is shared only when BOTH path_id and logical_file_id match another snapshot row.
-	// Same path_id with different logical_file_id is intentionally treated as unique.
-	//
-	// Performance note:
-	// - This NOT EXISTS anti-join relies on snapshot_file indexes for acceptable latency:
-	//   idx_snapshot_file_unique (snapshot_id, path_id), idx_snapshot_file_path_id (path_id),
-	//   and idx_snapshot_file_logical_file (logical_file_id).
-	// - This runs in a dry-run operator path for cold-storage workflows where snapshot counts are
-	//   expected to remain much smaller than file counts, so current cost is acceptable.
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM snapshot_file sf
-		WHERE sf.snapshot_id = $1
-		AND NOT EXISTS (
-			SELECT 1
-			FROM snapshot_file sf2
-			WHERE sf2.path_id = sf.path_id
-			  AND sf2.logical_file_id = sf.logical_file_id
-			  AND sf2.snapshot_id != sf.snapshot_id
-		)
-	`, trimmedID).Scan(&preview.UniqueFiles); err != nil {
-		return nil, fmt.Errorf("load snapshot delete preview count unique files snapshot_id=%s: %w", trimmedID, err)
-	}
-
-	// Calculate shared files
-	preview.SharedFiles = preview.TotalFiles - preview.UniqueFiles
-
-	return preview, nil
+	return snapshot.LoadDeleteLineagePreview(ctx, dbconn, snapshotID)
 }
 
 func previewParentID(preview *snapshotDeleteLineagePreview) sql.NullString {
@@ -3579,7 +3543,8 @@ func previewSharedFiles(preview *snapshotDeleteLineagePreview) int64 {
 	return preview.SharedFiles
 }
 
-// formatNumberWithCommas formats a number int64 with comma separators for readability
+// formatNumberWithCommas formats a number int64 with comma separators for readability.
+// Kept as a compatibility helper for existing CLI tests.
 func formatNumberWithCommas(n int64) string {
 	if n < 0 {
 		return "-" + formatNumberWithCommas(-n)
@@ -3600,88 +3565,12 @@ func formatNumberWithCommas(n int64) string {
 }
 
 func previewWarnings(preview *snapshotDeleteLineagePreview) []map[string]any {
-	if preview == nil || len(preview.ChildSnapshotIDs) == 0 {
-		return nil
-	}
-	return []map[string]any{
-		{
-			"type":    "lineage_breakage",
-			"message": "Deleting this snapshot will break lineage visualization for its children.",
-			"details": map[string]any{
-				"affected_snapshots": preview.ChildSnapshotIDs,
-				"note":               "Affected snapshots remain fully usable; only lineage information is affected.",
-			},
-		},
-	}
+	return clirender.SnapshotDeleteWarnings(preview)
 }
 
 // formatSnapshotDeleteDryRunOutput builds the formatted text output for dry-run delete
 func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDeleteLineagePreview) string {
-	var buf strings.Builder
-
-	// Header
-	fmt.Fprintf(&buf, "Snapshot: %s\n", snapshotID)
-	buf.WriteString("\n")
-
-	if preview != nil {
-		// Files section
-		buf.WriteString("Files:\n")
-		fmt.Fprintf(&buf, "  Total:        %s\n", formatNumberWithCommas(preview.TotalFiles))
-		fmt.Fprintf(&buf, "  Unique:       %s\n", formatNumberWithCommas(preview.UniqueFiles))
-		fmt.Fprintf(&buf, "  Shared:       %s\n", formatNumberWithCommas(preview.SharedFiles))
-		buf.WriteString("\n")
-
-		// Lineage section
-		buf.WriteString("Lineage:\n")
-		if preview.ParentID.Valid {
-			if preview.ParentMissing {
-				buf.WriteString("  Parent: (missing)\n")
-				buf.WriteString("  Parent note: parent snapshot metadata is missing; this snapshot remains usable\n")
-			} else {
-				fmt.Fprintf(&buf, "  Parent: %s\n", preview.ParentID.String)
-			}
-		} else {
-			buf.WriteString("  Parent: none\n")
-		}
-		if len(preview.ChildSnapshotIDs) > 0 {
-			buf.WriteString("  Children:\n")
-			for _, childID := range preview.ChildSnapshotIDs {
-				fmt.Fprintf(&buf, "    - %s\n", childID)
-			}
-		} else {
-			buf.WriteString("  Children: none\n")
-		}
-		buf.WriteString("\n")
-
-		// Warning section (only if has children)
-		if len(preview.ChildSnapshotIDs) > 0 {
-			buf.WriteString("Warning:\n")
-			buf.WriteString("  This snapshot is parent of:\n")
-			for _, childID := range preview.ChildSnapshotIDs {
-				fmt.Fprintf(&buf, "    - %s\n", childID)
-			}
-			buf.WriteString("\n")
-			buf.WriteString("  Deleting it will break lineage visualization,\n")
-			buf.WriteString("  but snapshots remain fully usable.\n")
-			buf.WriteString("\n")
-		}
-
-		// Impact section
-		buf.WriteString("Impact:\n")
-		buf.WriteString("  Deleting this snapshot will:\n")
-		buf.WriteString("    - remove snapshot metadata\n")
-		buf.WriteString("    - NOT delete shared data\n")
-		if preview.UniqueFiles > 0 {
-			fmt.Fprintf(&buf, "    - remove %s unique snapshot file reference(s) from metadata\n", formatNumberWithCommas(preview.UniqueFiles))
-			buf.WriteString("      (reference impact only; does not guarantee reclaimed disk space)\n")
-		}
-		buf.WriteString("\n")
-	}
-
-	// Dry-run notice
-	buf.WriteString("Dry run: no changes applied.\n")
-
-	return buf.String()
+	return clirender.FormatSnapshotDeleteDryRunOutput(snapshotID, preview)
 }
 
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -3756,12 +3645,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 			return nil
 		}
 
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
-		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
-		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
-		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
-		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalEntryCount)
-		return nil
+		return clirender.RenderSnapshotDiffSummaryHuman(os.Stdout, baseID, targetID, *summary)
 	}
 
 	result, err := diffSnapshotsPhase(ctx, sgctx.DB, baseID, targetID, query)
@@ -3827,44 +3711,20 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	if summaryMode {
-		totalChanges := summary.Added + summary.Removed + summary.Modified
-		_, _ = fmt.Fprintf(os.Stdout, "Snapshot diff: %s -> %s\n\n", baseID, targetID)
-		_, _ = fmt.Fprintf(os.Stdout, "Added:     %d files\n", summary.Added)
-		_, _ = fmt.Fprintf(os.Stdout, "Removed:   %d files\n", summary.Removed)
-		_, _ = fmt.Fprintf(os.Stdout, "Modified:  %d files\n", summary.Modified)
-		_, _ = fmt.Fprintf(os.Stdout, "Total changes: %d\n", totalChanges)
-		return nil
+		return clirender.RenderSnapshotDiffSummaryHuman(os.Stdout, baseID, targetID, summary)
 	}
 
-	_, _ = fmt.Fprintln(os.Stdout, "[SNAPSHOT DIFF]")
-	_, _ = fmt.Fprintf(os.Stdout, "\nBase:    %s\n", baseID)
-	_, _ = fmt.Fprintf(os.Stdout, "Target:  %s\n\n", targetID)
-	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(os.Stdout, "(no changes)")
-	} else {
-		for _, entry := range entries {
-			prefix := "?"
-			switch entry.Type {
-			case snapshot.DiffAdded:
-				prefix = "+"
-			case snapshot.DiffRemoved:
-				prefix = "-"
-			case snapshot.DiffModified:
-				prefix = "~"
-			}
-			_, _ = fmt.Fprintf(os.Stdout, "%s %s\n", prefix, entry.Path)
-		}
-	}
-
-	_, _ = fmt.Fprintln(os.Stdout, "\nSummary:")
-	_, _ = fmt.Fprintf(os.Stdout, "  entries (matched): %d\n", matchedEntryCount)
-	_, _ = fmt.Fprintf(os.Stdout, "  entries (total): %d\n", totalEntryCount)
-	_, _ = fmt.Fprintf(os.Stdout, "  added: %d\n", summary.Added)
-	_, _ = fmt.Fprintf(os.Stdout, "  removed: %d\n", summary.Removed)
-	_, _ = fmt.Fprintf(os.Stdout, "  modified: %d\n", summary.Modified)
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", time.Since(startedAt).Milliseconds())
-	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
-	return nil
+	return clirender.RenderSnapshotDiffDetailedHuman(
+		os.Stdout,
+		baseID,
+		targetID,
+		entries,
+		summary,
+		matchedEntryCount,
+		totalEntryCount,
+		time.Since(startedAt).Milliseconds(),
+		doctorOperationalHint,
+	)
 }
 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -4121,8 +3981,8 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  stats", "Show storage statistics"},
-		{"  inspect file <fileID> [--output <text|json>]", "Inspect one logical file with chunker and chunking summary"},
+		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
+		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
 		{"    [target] can be 'system' or 'file'", ""},
 		{"    [options] can be '--standard', '--full', or '--deep'", ""},
@@ -4140,6 +4000,7 @@ func printHelp() {
 		{"  snapshot stats [<snapshotID>] [--output <text|json>]", "Show global or per-snapshot statistics"},
 		{"  snapshot delete <snapshotID> (--force|--dry-run) [--output <text|json>]", "Delete snapshot metadata; --dry-run shows a read-only impact preview"},
 		{"  snapshot diff <baseSnapshotID> <targetSnapshotID> [--summary] [--filter <added|removed|modified>] [--path <exact>] [--prefix <dir/>] [--pattern <glob>] [--regex <re>] [--min-size <bytes>] [--max-size <bytes>] [--modified-after <ts>] [--modified-before <ts>] [--output <text|json>]", "Compare snapshots by path and logical_file_id; --summary returns counts only"},
+		{"  simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]", "Preview actual GC reclaimability without mutations; use --containers for per-container detail"},
 		{"  simulate <store|store-folder> <path>", "Dry-run store estimate without writing to storage (not proof of physical durability)"},
 	})
 	fmt.Println("    Filters:")
@@ -4159,6 +4020,9 @@ func printHelp() {
 	fmt.Println("      --tree renders metadata lineage only")
 	fmt.Println("      --summary returns count-only diff output (no entry list)")
 	fmt.Println("      --dry-run performs a read-only preview and never writes data")
+	fmt.Println("    Tracing:")
+	fmt.Println("      --trace and --trace-json emit diagnostic events to stderr only")
+	fmt.Println("      tracing never changes command results on stdout")
 	fmt.Println("      missing lineage parent metadata is shown as Parent: (missing); snapshot data remains usable")
 	fmt.Println("    Store codecs:")
 	fmt.Println("      plain")
@@ -4251,8 +4115,98 @@ func printHelp() {
 	fmt.Println("  coldkeep snapshot diff snap-1 snap-2 --regex \"\\.log$\"")
 	fmt.Println("  coldkeep gc --dry-run")
 	fmt.Println("  coldkeep stats")
+	fmt.Println("  coldkeep stats --json")
+	fmt.Println("  coldkeep stats --containers")
 	fmt.Println("  coldkeep simulate store myfile.bin")
 	fmt.Println("  coldkeep simulate store-folder --codec aes-gcm ./samples")
+}
+
+func printStatsHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]")
+	fmt.Println()
+	fmt.Println("Show repository statistics through the observability pipeline (read-only).")
+	fmt.Println()
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  output keys are stable for machine parsing")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Deterministic output guarantee:")
+	fmt.Println("  for identical repository state and flags, rendered output order is deterministic")
+}
+
+func printInspectHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep inspect repository [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println("  coldkeep inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println()
+	fmt.Println("Inspect one entity through the observability pipeline (read-only).")
+	fmt.Println("Supported entities: repository, file (alias: logical-file), snapshot, chunk, container")
+	fmt.Println()
+	fmt.Println("Traversal options:")
+	fmt.Println("  --relations includes forward linked records")
+	fmt.Println("  --reverse includes reverse references where available")
+	fmt.Println("  --deep enables deeper traversal/detail output")
+	fmt.Println("  --limit bounds deep traversal output; use it with --deep to keep output manageable")
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  output schema is stable for automation")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Deterministic output guarantee:")
+	fmt.Println("  for identical inputs and flags, sections and records are emitted deterministically")
+}
+
+func printSimulateHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println("  coldkeep simulate <store|store-folder> [--codec <codec>] <path>")
+	fmt.Println()
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  simulation payloads keep a stable schema for automation")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Deterministic output guarantee:")
+	fmt.Println("  for identical repository state, assumptions, and flags, simulation output is deterministic")
+	fmt.Println("Simulation safety guarantee:")
+	fmt.Println("  simulate commands are observational and never modify repository state")
+	fmt.Println()
+	fmt.Println("Example")
+	fmt.Println("simulate gc")
+	fmt.Println()
+	fmt.Println("Preview garbage collection effects without modifying data.")
+	fmt.Println()
+	fmt.Println("This command computes exactly what GC would consider reclaimable,")
+	fmt.Println("including optional hypothetical snapshot deletion.")
+	fmt.Println()
+	fmt.Println("No state is modified.")
+}
+
+func printSimulateGCHelp() {
+	fmt.Println("Usage:")
+	fmt.Println("  coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]")
+	fmt.Println()
+	fmt.Println("Preview actual GC reclaimability without modifying repository state (read-only).")
+	fmt.Println("It uses the shared GC planning layer (gc.BuildPlan) to compute exact reclaimability.")
+	fmt.Println("This reflects real GC behavior, including fully-dead active containers that real GC")
+	fmt.Println("would also reclaim. It is not equivalent to 'gc --dry-run', which uses a lighter path.")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --delete-snapshot <id> simulates GC after excluding the given snapshot from simulated roots")
+	fmt.Println("  --containers includes per-container detail in the rendered result")
+	fmt.Println("JSON support:")
+	fmt.Println("  --json is shorthand for --output json")
+	fmt.Println("  simulation payloads keep a stable schema for automation")
+	fmt.Println("Trace support:")
+	fmt.Println("  --trace or --trace-json emits diagnostics to stderr only")
+	fmt.Println("  trace output never changes command stdout")
+	fmt.Println("Safety guarantee:")
+	fmt.Println("  simulate gc is exact for GC reclaimability decisions and never mutates repository state")
 }
 
 func printHelpRows(rows [][2]string) {

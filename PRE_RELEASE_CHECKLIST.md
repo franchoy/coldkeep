@@ -193,6 +193,24 @@ database. If you continue from those steps without resetting `DB_NAME` and
 `COLDKEEP_STORAGE_DIR`, doctor/stats/verify may legitimately report missing
 containers from an earlier storage path rather than a product defect.
 
+Recommended newcomer-safe reset before steps 5-11:
+
+```bash
+export DB_NAME=coldkeep_manual
+export COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/manual-checks"
+rm -rf "$COLDKEEP_STORAGE_DIR"
+mkdir -p "$COLDKEEP_STORAGE_DIR"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_manual;"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_manual;"
+
+# Bootstrap the fresh manual-check database once.
+export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+./coldkeep stats >/dev/null
+```
+
+Use this reset whenever you want steps 5-11 to validate the CLI against a fresh,
+known-good manual sandbox instead of the DB/storage state left behind by the CI-parity loop.
+
 ```bash
 unset COLDKEEP_CODEC
 ./coldkeep doctor
@@ -245,6 +263,10 @@ Expected: no manual local state is required beyond documented setup, and basic c
 
 If another local PostgreSQL container already binds host port `5432`, this step
 will fail until that container is stopped or reconfigured.
+
+Important: `docker compose down -v` destroys the PostgreSQL volume used by any
+earlier manual sandbox database (for example `coldkeep_manual`). After Step 8,
+rerun the newcomer-safe reset block from Step 5 before continuing with Steps 9-11.
 
 ## 9) Verify CLI contract stability
 
@@ -315,9 +337,13 @@ Manual spot-checks against a populated DB (run after step 1 and step 3):
 ```bash
 export COLDKEEP_CODEC=plain
 
-# store two files and confirm stored_path is in JSON output
-./coldkeep store samples/hello.txt --output json
+# store two files and capture one stored_path from JSON output
+hello_json=$(./coldkeep store samples/hello.txt --output json)
+stored_path=$(printf '%s\n' "$hello_json" | jq -r '.data.stored_path')
 ./coldkeep store samples/lorem.txt --output json
+
+# confirm stored_path is present in the store payload
+printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 
 # verify system: must include physical graph audit on success
 ./coldkeep verify system --standard --output json
@@ -327,6 +353,9 @@ export COLDKEEP_CODEC=plain
 
 # corrupt a ref_count and confirm verify detects it
 # (manual DB update + verify — covers GC_REFUSED_INTEGRITY and PHYSICAL_GRAPH_REFCOUNT_MISMATCH)
+
+# confirm restore-by-stored-path works while the mapping still exists
+./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
 
 # stored-path remove: confirm remaining_ref_count in JSON output
 ./coldkeep remove --stored-path <stored-path-from-above> --output json
@@ -343,6 +372,7 @@ Confirm:
 - `store --output json` contains `stored_path` field in `data`
 - `verify system --standard --output json` succeeds with no `invariant_code` in payload
 - `repair ref-counts --output json` success payload contains `updated_logical_files` and `scanned_logical_files`
+- `restore --stored-path --output json` succeeds before the stored-path mapping is removed
 - `remove --stored-path --output json` success payload contains `remaining_ref_count`
 - After all mappings are removed, `verify system --standard --output json` still passes (ref_count=0 logical_file is valid)
 - `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
@@ -441,7 +471,7 @@ Suggested evidence commands:
 
 ```bash
 go test ./internal/maintenance -run 'TestRunStatsResultIncludesChunkCountsByVersion|TestRunStatsResultPureV1RepositoryReportsOnlyV1|TestRunStatsResultPureV2RepositoryReportsOnlyV2|TestRunStatsResultMixedRepositoryReportsBothVersions|TestRunStatsResultVersionTotalsMatchDatabaseReality' -count=1
-go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONIncludesSnapshotRetention|TestPrintStatsReportIncludesSnapshotRetention|TestPrintStatsReportOmitsMixedChunkerWarningWhenSingleKnownVersion' -count=1
+go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONIncludesSnapshotRetention|TestStatsCommandHuman|TestStatsCommandHelpIncludesJSONTraceAndDeterminism' -count=1
 ```
 
 ### G. Benchmark and determinism validation
@@ -460,38 +490,97 @@ go test ./internal/chunk -run 'TestBothChunkersDeterministic|TestBothChunkersRec
 go test ./internal/chunk/fastcdc -run 'TestDeterministicChunkBoundariesAndData' -count=1
 ```
 
-### H. Documentation and release artifacts
+## 13) Verify v1.6 observability / simulation contract
 
-- [ ] `README.md` reflects v1.5 chunker-evolution behavior
-- [ ] `ARCHITECTURE.md` reflects v1.5 chunker model and cross-version reuse semantics
-- [ ] `COMPATIBILITY.md` exists and matches implementation behavior
-- [ ] CLI help for `config set default-chunker` includes new-writes-only safety wording
+Release-ready definition:
+
+v1.6 is ready when Coldkeep can explain repository state, inspect storage relationships,
+and exactly simulate GC impact through deterministic, read-only commands, with clean
+human output and stable JSON output.
+
+### A. Repository-state explanation (`stats`)
+
+- [ ] `coldkeep stats` explains repository state in human-readable form
+- [ ] `coldkeep stats --json` emits stable tooling-oriented JSON
+- [ ] Container detail remains opt-in via `--containers`
+- [ ] Output remains deterministic for identical repository state and flags
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/observability -run 'TestStatsIncludesRepositoryAndChunkMetrics|TestStatsContainersOptional|TestStatsDeterministicOrdering|TestStatsResultCarriesChunkerBreakdown' -count=1
+go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONContract|TestRunStatsCommandJSONIncludesSnapshotRetention|TestStatsCommandHuman|TestStatsCommandHelpIncludesJSONTraceAndDeterminism' -count=1
+```
+
+### B. Storage-relationship inspection (`inspect`)
+
+- [ ] `coldkeep inspect <entity> <id>` supports `file`, `logical-file`, `snapshot`, `chunk`, and `container`
+- [ ] `--relations`, `--reverse`, and `--deep` behavior is documented and tested
+- [ ] `--limit` bounds deep traversal output
+- [ ] Human and JSON output remain deterministic for identical inputs
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/observability -run 'TestInspectLogicalFileIncludesChunkRelations|TestInspectChunkIncludesIncomingFileReferences|TestInspectSnapshotIncludesRetainedFileCounts|TestInspectDeterministicOrdering' -count=1
+go test ./cmd/coldkeep -run 'TestRunInspectCommandJSONContractByEntity|TestRunInspectCommandLogicalFileAliasRoutesToEntityFile|TestRunInspectCommandRejectsInvalidUsage|TestRunInspectCommandHelpIncludesJSONTraceAndDeterminism' -count=1
+```
+
+### C. Exact GC simulation (`simulate gc`)
+
+- [ ] `coldkeep simulate gc` is read-only
+- [ ] `coldkeep simulate gc --delete-snapshot <id>` reflects post-delete reclaimability exactly
+- [ ] `coldkeep simulate gc --containers` reports per-container detail when requested
+- [ ] Simulation matches GC reclaimability decisions under the same integrity gates
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/observability -run 'TestSimulateGCMatchesBuildPlan|TestSimulateGCDeleteSnapshotAffectsReclaimability|TestSimulateGCDeterministicOrdering|TestSimulateGCDoesNotMutateState' -count=1
+go test ./cmd/coldkeep -run 'TestRunSimulateGCCommandJSONContract|TestRunSimulateGCCommandTextMatchesGolden|TestRunSimulateGCCommandRejectsInvalidUsage|TestPrintSimulateGCHelpIncludesReadOnlyGuarantee' -count=1
+```
+
+### D. Output-channel and contract checks
+
+- [ ] `--json` remains suitable for automation
+- [ ] `--trace` and `--trace-json` emit diagnostics to stderr only
+- [ ] Human output is understandable and JSON output keeps stable envelope structure
+- [ ] Observability commands perform zero repository mutations
+
+### E. Documentation and release artifacts
+
+- [ ] `README.md` documents `stats`, `inspect`, and `simulate gc` observability surfaces
+- [ ] `README.md` includes JSON/trace contract guidance (`--json`, `--trace`, `--trace-json`)
+- [ ] `README.md` explicitly states read-only / non-mutation guarantees for observability commands
+- [ ] `README.md` warns that deep inspect output can be large and recommends `--limit`
+- [ ] `ARCHITECTURE.md` and `COMPATIBILITY.md` remain aligned with current behavior
 - [ ] Release notes are drafted and aligned with behavior
 
 Suggested quick checks:
 
 ```bash
-rg -n 'v2-fastcdc|v1-simple-rolling|chunks may be reused across chunker versions|cross-version reuse is opportunistic' README.md ARCHITECTURE.md COMPATIBILITY.md
-rg -n 'config set default-chunker <value>|Affects only new stored data\. Existing data is not modified\.' cmd/coldkeep/main.go
-rg -n 'v1\.5 introduces CDC evolution through chunker versioning|Release highlights \(1\.5\.0\)' CHANGELOG.md
+rg -n 'coldkeep stats|coldkeep inspect <entity> <id>|coldkeep simulate gc|--trace-json|read-only|exact simulation|does not mutate' README.md
+rg -n 'deep inspect output can be large|--deep --limit N|JSON output is intended for tooling' README.md
+rg -n 'Release highlights \(1\.6\.0\)|observability|simulate gc|trace-json' CHANGELOG.md
 ```
 
-### I. Final CI commands (explicit rerun)
+### F. Final CI commands (explicit rerun)
 
 - [ ] `go test ./...` passes
 - [ ] `go test -race ./...` passes
 - [ ] `go vet ./...` passes
 - [ ] Integration suite passes (`go test ./tests/integration/...`)
 
-## 13) Sign-off
+## 14) Sign-off
 
 - [ ] Quality parity checks passed
 - [ ] Full local CI matrix simulation passed (both codecs)
 - [ ] Smoke passed
 - [ ] Integration suite passed
+- [ ] v1.6 observability / simulation checklist passed
 - Note: Step 4 integration umbrella suite is optional (non-gating) and was triaged separately.
 
-## 14) Snapshot sign-off checklist (Phases 1-7)
+## 15) Snapshot sign-off checklist (Phases 1-7)
 
 Use this as the final snapshot gate before tagging a release.
 
@@ -635,7 +724,6 @@ for t in \
   TestAdversarialG17RetentionRootTransitionChurn \
   TestRunStatsResultIncludesSnapshotRetentionVisibility \
   TestRunStatsCommandJSONIncludesSnapshotRetention \
-  TestPrintStatsReportIncludesSnapshotRetention \
   TestAdversarialG16SnapshotQueryContractChaos \
   TestVerifySystemStandardPassesWithConsistentSnapshotReachability \
   TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference \
@@ -653,7 +741,7 @@ done
 echo "G14-G17 evidence names: OK"
 ```
 
-## 15) Snapshot CLI/contract checklist
+## 16) Snapshot CLI/contract checklist
 
 Commands in scope:
 
@@ -680,7 +768,7 @@ Additional CLI validation and policy checks:
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
 - [ ] `snapshot delete` requires `--force`
 
-## 16) Verify snapshot / retention contract (manual gate)
+## 17) Verify snapshot / retention contract (manual gate)
 
 Run this manual lifecycle gate after core CI/test gates pass.
 
@@ -723,7 +811,7 @@ Confirm:
 - [ ] Snapshot delete succeeds only with `--force`
 - [ ] GC eligibility changes only after all retaining snapshots are deleted
 
-## 17) Final global sign-off
+## 18) Final global sign-off
 
 - [ ] Doctor checks passed
 - [ ] Validation matrix audit passed
@@ -732,6 +820,7 @@ Confirm:
 - [ ] CLI contract stability verified
 - [ ] Batch CLI contract stability verified
 - [ ] v1.2 physical-file contract verified (G10–G13)
+- [ ] v1.6 observability / simulation contract verified
 - [ ] Snapshot phase checklist verified (Phases 1-7)
 - [ ] Snapshot C. test surface checklist verified
 - [ ] Snapshot D. documentation/release checklist verified

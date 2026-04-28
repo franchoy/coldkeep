@@ -104,6 +104,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  adversarial:$' 'adversarial job exists' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Run adversarial validation \(G1.*G17\)' 'adversarial workflow step names batch coverage through G17' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'go test -race -count=1 ./tests/adversarial/\.\.\.' 'adversarial job targets adversarial suite' || check_status=1
+  require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14\\|TestAdversarialG15\\|TestAdversarialG16\\|TestAdversarialG17'" 'explicit G14-G17 adversarial gate command' || check_status=1
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only' || check_status=1
@@ -131,6 +132,10 @@ check_local_workflow() {
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G11 \|' 'validation matrix audited GC root gate row (G11)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G12 \|' 'validation matrix invariant classification row (G12)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G13 \|' 'validation matrix batch maintenance semantics row (G13)' || check_status=1
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| G14 \|' 'validation matrix snapshot-retained GC safety row (G14)' || check_status=1
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| G15 \|' 'validation matrix snapshot delete semantics row (G15)' || check_status=1
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| G16 \|' 'validation matrix snapshot-retention observability row (G16)' || check_status=1
+  require_pattern "$VALIDATION_MATRIX_FILE" '^\| G17 \|' 'validation matrix snapshot reachability integrity row (G17)' || check_status=1
 
   return "$check_status"
 }

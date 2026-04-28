@@ -23,13 +23,15 @@ func setupAdversarialG14Env(t *testing.T) (*sql.DB, map[string]string, string, s
 	t.Helper()
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 	for k, v := range env {
-		_ = os.Setenv(k, v)
+		t.Setenv(k, v)
 	}
 
 	dbconn, err := db.ConnectDB()
@@ -39,8 +41,10 @@ func setupAdversarialG14Env(t *testing.T) (*sql.DB, map[string]string, string, s
 	testutils.ApplySchema(t, dbconn)
 	if _, err := dbconn.Exec(`
 		TRUNCATE TABLE
+			snapshot_path,
 			snapshot_file,
 			snapshot,
+			blocks,
 			physical_file,
 			file_chunk,
 			chunk,

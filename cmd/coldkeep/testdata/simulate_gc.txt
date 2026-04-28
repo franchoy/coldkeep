@@ -1,0 +1,28 @@
+GC simulation
+
+Mode
+  exact: true
+  mutated: false
+
+Reachability
+  reachable_chunks: 10
+  unreachable_chunks: 3
+
+Reclaimable
+  logical_bytes: 3 MiB
+  physical_bytes_now: 2 MiB
+
+Containers
+  fully_reclaimable: 1
+  partially_dead: 2
+
+Assumptions
+  deleted_snapshot: snap-old
+
+Warnings
+  warning: [PARTIAL_RECLAIM_REQUIRES_COMPACTION] dead bytes in partially live containers require compaction
+
+Result
+  changed: false
+  state_change: none
+  note: no repository state changed

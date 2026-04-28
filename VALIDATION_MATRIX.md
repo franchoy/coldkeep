@@ -17,6 +17,7 @@ first and only drill into evidence rows relevant to the behavior you are changin
 Guarantee IDs (G1–G17+) are part of the public validation contract.
 
 - IDs are stable across v0.10, v1.0, v1.1, v1.2, v1.3, and v1.4+
+- v1.5 (chunker-evolution) and v1.6 (observability/simulation) do not introduce new guarantee IDs
 - Guarantees may be reworded, but IDs must not change
 - New guarantees must use new IDs (G18, G19, ...)
 
@@ -28,11 +29,13 @@ This document originated from the v0.9/v0.10 trust-validation work and is now
 the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
 guarantees (G1-G8), v1.1 interface-correctness extensions (G9), v1.2 physical-file
 graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G14-G17),
-with v1.4 clarifying lineage semantics without introducing new guarantee IDs.
+with v1.4 clarifying lineage semantics, v1.5 adding chunker-evolution compatibility
+contract clarity, and v1.6 adding observability and simulation contract hardening -
+none of which introduce new guarantee IDs.
 
 ## Scope
 
-- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+/v1.4+ interface contracts
+- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+/v1.4+/v1.5+/v1.6+ interface and observability contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 
@@ -75,7 +78,7 @@ physical-file graph coherence, and snapshot-based retention.
 | G13 | Batch maintenance commands expose deterministic execution semantics and invariant-aware per-item reporting | Batch restore/remove/repair payloads clearly separate overall `status` from per-item result `status`, explicitly report `execution_mode` as `continue_on_error` or `fail_fast`, preserve deterministic ordering, and include `invariant_code` / `recommended_action` on invariant-related item failures when available | `TestEmitBatchCommandReportJSONSchema`, `TestEmitBatchCommandReportJSONIncludesNonFailureMessages`, `TestRunRepairCommandBatchJSONPartialFailure`, `TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata`, `TestBatchFlagsEndToEnd` | covered |
 | G14 | Snapshot-retained content is GC-safe | Logical-file liveness is computed from the union of current-state roots (`physical_file`) and snapshot roots (`snapshot_file`); delete-by-ID is refused when the logical file is snapshot-retained; GC pre-flight computes `ReachabilitySummary` and skips containers whose chunks are reachable from any retained logical file | `TestListRetainedLogicalFileIDs`, `TestIsLogicalFileReferencedBySnapshot`, `TestComputeReachabilitySummary`, `TestRemoveFailsWhenLogicalFileIsRetainedBySnapshot`, `TestRunGCDoesNotDeleteSnapshotRetainedContainer`, `TestRunGCDryRunDoesNotCountSnapshotRetainedContainerAsReclaimable`, `TestAdversarialG14SnapshotRetainedGCGuardUnderChurn` | covered |
 | G15 | Snapshot deletion only changes metadata and future GC eligibility | Deleting a snapshot removes only `snapshot` and `snapshot_file` rows; logical content remains intact immediately after delete, while the retained-logical set is recomputed so newly unreferenced content becomes eligible only for a later GC pass | `TestDeleteSnapshotRemovesSnapshotRowsOnly`, `TestAdversarialG17RetentionRootTransitionChurn` | covered |
-| G16 | Stats expose snapshot-retention pressure to operators | Global stats report how many logical files and bytes are retained only by current state, only by snapshots, shared by both, and retained by snapshots overall so operators can explain why GC is not reclaiming content | `TestRunStatsResultIncludesSnapshotRetentionVisibility`, `TestRunStatsCommandJSONIncludesSnapshotRetention`, `TestPrintStatsReportIncludesSnapshotRetention`, `TestAdversarialG16SnapshotQueryContractChaos` | covered |
+| G16 | Stats expose snapshot-retention pressure to operators | Global stats report how many logical files and bytes are retained only by current state, only by snapshots, shared by both, and retained by snapshots overall so operators can explain why GC is not reclaiming content | `TestRunStatsResultIncludesSnapshotRetentionVisibility`, `TestRunStatsCommandJSONIncludesSnapshotRetention`, `TestStatsCommandHuman`, `TestAdversarialG16SnapshotQueryContractChaos` | covered |
 | G17 | Verify and doctor audit persisted snapshot reachability integrity | Standard verify rejects persisted snapshot anomalies (`snapshot_file` orphan logical references, invalid referenced logical lifecycle states, and retained non-empty files with missing chunk graph) using stable invariant codes; doctor text report surfaces snapshot-retention integrity counters alongside physical mapping counters | `TestVerifySystemStandardPassesWithConsistentSnapshotReachability`, `TestVerifySystemStandardDetectsOrphanSnapshotLogicalReference`, `TestVerifySystemStandardDetectsSnapshotInvalidLifecycleState`, `TestVerifySystemStandardDetectsSnapshotRetainedMissingChunkGraph`, `TestFormatDoctorTextReportGoldenHealthy`, `TestFormatDoctorTextReportGoldenDegraded`, `TestAdversarialG15CorruptedSnapshotMetadataDetectionConservativeGC` | covered |
 
 ## Open Work Tracking

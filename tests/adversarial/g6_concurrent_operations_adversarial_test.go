@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -47,13 +48,15 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	t.Helper()
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 	for k, v := range env {
-		_ = os.Setenv(k, v)
+		t.Setenv(k, v)
 	}
 
 	dbconn, err := db.ConnectDB()
@@ -80,6 +83,31 @@ func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[str
 	)
 	data := testutils.JSONMap(t, payload, "data")
 	return testutils.JSONInt64(t, data, "file_id")
+}
+
+// storeFileWithCodecCLIG6Async is safe to call from goroutines because it
+// returns an error instead of calling t.Fatal/t.FailNow.
+func storeFileWithCodecCLIG6Async(repoRoot, binPath string, env map[string]string, codec, path string) (int64, error) {
+	cmd := exec.Command(binPath, "store", "--codec", codec, path, "--output", "json")
+	cmd.Dir = repoRoot
+	cmd.Env = testutils.BuildCommandEnv(env)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("store command: %w", err)
+	}
+	payload, ok := testutils.TryParseLastJSONLine(string(out))
+	if !ok {
+		return 0, fmt.Errorf("no JSON in store output: %s", out)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		return 0, fmt.Errorf("store payload missing data: %v", payload)
+	}
+	idF, ok := data["file_id"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("store payload missing file_id: %v", data)
+	}
+	return int64(idF), nil
 }
 
 func restoreMustMatchHashG6(t *testing.T, dbconn *sql.DB, fileID int64, outPath, wantHash string) {
@@ -147,29 +175,26 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 			wantHash := testutils.SHA256File(t, inPath)
 
 			const workers = 6
-			ids := make([]int64, workers)
-			errs := make([]error, workers)
-
-			var wg sync.WaitGroup
-			wg.Add(workers)
+			type g6storeResult struct {
+				idx int
+				id  int64
+				err error
+			}
+			resultCh := make(chan g6storeResult, workers)
 			for i := 0; i < workers; i++ {
 				i := i
 				go func() {
-					defer wg.Done()
-					defer func() {
-						if r := recover(); r != nil {
-							errs[i] = fmt.Errorf("panic: %v", r)
-						}
-					}()
-					ids[i] = storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, inPath)
+					id, err := storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, inPath)
+					resultCh <- g6storeResult{idx: i, id: id, err: err}
 				}()
 			}
-			wg.Wait()
-
-			for i, err := range errs {
-				if err != nil {
-					t.Fatalf("worker %d failed: %v", i, err)
+			ids := make([]int64, workers)
+			for i := 0; i < workers; i++ {
+				res := <-resultCh
+				if res.err != nil {
+					t.Fatalf("concurrent store worker %d failed: %v", res.idx, res.err)
 				}
+				ids[res.idx] = res.id
 			}
 
 			verifyConcurrentInvariantsG6(t, dbconn)
@@ -224,34 +249,23 @@ func TestAdversarialG6ConcurrentStoresSharedChunkInputsPreserveHealthyRestores(t
 			hashA := testutils.SHA256File(t, hybridA)
 			hashB := testutils.SHA256File(t, hybridB)
 
+			resultACh := make(chan error, 1)
+			resultBCh := make(chan error, 1)
 			var fileAID, fileBID int64
-			var errA, errB error
-			var wg sync.WaitGroup
-			wg.Add(2)
 			go func() {
-				defer wg.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						errA = fmt.Errorf("panic: %v", r)
-					}
-				}()
-				fileAID = storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, hybridA)
+				var err error
+				fileAID, err = storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, hybridA)
+				resultACh <- err
 			}()
 			go func() {
-				defer wg.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						errB = fmt.Errorf("panic: %v", r)
-					}
-				}()
-				fileBID = storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, hybridB)
+				var err error
+				fileBID, err = storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, hybridB)
+				resultBCh <- err
 			}()
-			wg.Wait()
-
-			if errA != nil {
+			if errA := <-resultACh; errA != nil {
 				t.Fatalf("concurrent store hybrid_a failed: %v", errA)
 			}
-			if errB != nil {
+			if errB := <-resultBCh; errB != nil {
 				t.Fatalf("concurrent store hybrid_b failed: %v", errB)
 			}
 
@@ -299,28 +313,20 @@ func TestAdversarialG6ConcurrentStoreAndGCDoNotLoseReachableData(t *testing.T) {
 			newHash := testutils.SHA256File(t, newPath)
 
 			var newID int64
-			var storeErr, gcErr error
-			var wg sync.WaitGroup
-			wg.Add(2)
+			storeCh := make(chan error, 1)
+			gcErrCh := make(chan error, 1)
 			go func() {
-				defer wg.Done()
-				defer func() {
-					if r := recover(); r != nil {
-						storeErr = fmt.Errorf("panic: %v", r)
-					}
-				}()
-				newID = storeFileWithCodecCLIG6(t, repoRoot, binPath, env, codec, newPath)
+				var err error
+				newID, err = storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, newPath)
+				storeCh <- err
 			}()
 			go func() {
-				defer wg.Done()
-				gcErr = maintenance.RunGCWithContainersDir(false, container.ContainersDir)
+				gcErrCh <- maintenance.RunGCWithContainersDir(false, container.ContainersDir)
 			}()
-			wg.Wait()
-
-			if storeErr != nil {
+			if storeErr := <-storeCh; storeErr != nil {
 				t.Fatalf("concurrent store failed: %v", storeErr)
 			}
-			if gcErr != nil {
+			if gcErr := <-gcErrCh; gcErr != nil {
 				t.Fatalf("concurrent gc failed: %v", gcErr)
 			}
 

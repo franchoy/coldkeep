@@ -8,7 +8,7 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
-v1.4 clarifies snapshot lineage semantics and release-gate guidance.
+v1.6 adds observability and tooling contract hardening.
 
 For the current operator-facing contract, see [README.md](README.md).
 For guarantee-to-evidence mapping, see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
@@ -16,6 +16,80 @@ For release-gate execution, see [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST
 
 Use this file for milestone history and release deltas. If you are new to the
 project, do not start here; start with [README.md](README.md).
+
+------------------------------------------------------------------------
+
+## [1.6.0] - 2026-04-28
+
+Observability and simulation contract hardening milestone.
+
+v1.6 formalizes read-only observability commands, exact GC simulation behavior,
+and trace output channel conventions for both human operators and tooling.
+
+Validation note: release sign-off included v1.6 observability/simulation
+checklist execution, CI-parity quality checks, full tests/integration runs, and
+smoke matrix verification across plain and aes-gcm codecs.
+
+### Release highlights (1.6.0)
+
+- **Read-only observability command surface** — `coldkeep stats`,
+  `coldkeep inspect <entity> <id>`, and `coldkeep simulate gc` are documented
+  as read-only operations.
+- **Exact GC simulation parity** — `simulate gc` reflects the same reclaimability
+  decisions as GC preflight/liveness evaluation without executing deletion.
+  It uses the shared GC planning layer (`gc.BuildPlan`) to preview actual GC
+  reclaimability semantics (including fully-dead active containers), not legacy
+  `gc --dry-run` behavior.
+- **Known v1.7 optimization follow-up** — stats graph byte aggregation currently
+  uses per-chunk lookup (`sumChunkSizesByID`) and is slated for batched
+  optimization in v1.7.
+- **Tooling-oriented output contracts** — JSON output and trace channels are
+  documented for automation use, including `--trace-json` JSONL diagnostics.
+- **Stable diagnostics channel routing** — trace diagnostics (`--trace`,
+  `--trace-json`) are emitted on stderr so stdout payloads remain stable for
+  piping and tooling.
+- **Operator safety wording** — docs now explicitly state that simulation does
+  not mutate database state or filesystem state.
+
+### Added (1.6.0)
+
+- **Observability command documentation** in [README.md](README.md):
+  - `coldkeep stats`
+  - `coldkeep stats --json`
+  - `coldkeep inspect <entity> <id>`
+  - `coldkeep inspect ... --relations`
+  - `coldkeep inspect ... --reverse`
+  - `coldkeep inspect ... --deep --limit N`
+  - inspect entity coverage: `file` (`logical-file` alias), `chunk`, `container`, `snapshot`
+  - `coldkeep simulate gc`
+  - `coldkeep simulate gc --delete-snapshot <id>`
+  - `coldkeep simulate gc --containers`
+  - `--trace` / `--trace-json`
+- **Observability guarantees section** documenting:
+  - read-only command behavior
+  - exact simulation semantics
+  - explicit non-mutation during simulation
+  - JSON output intended for tooling
+  - deep inspect sizing guidance (`--limit`)
+
+### Changed (1.6.0)
+
+- Updated [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) documentation
+  checklist to include v1.6 observability/trace contract checks and release-note
+  alignment criteria.
+- Updated [README.md](README.md) roadmap note to reflect v1.6 completion status
+  and post-v1.6 focus areas.
+- Updated [ARCHITECTURE.md](ARCHITECTURE.md) contract framing to formalize
+  Phase 8 observability/simulation guarantees and stderr trace-channel behavior.
+
+### Scope alignment (v1.6)
+
+- Observability commands are contractually read-only.
+- GC simulation is exact and non-mutating.
+- Trace diagnostics are emitted on stderr to preserve stdout stability.
+- JSON output is designed for machine tooling and automation pipelines.
+- Deep inspect traversal may be large; bounded output via `--limit` is the
+  recommended operator pattern.
 
 ------------------------------------------------------------------------
 

@@ -23,6 +23,7 @@ import (
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/observability"
 	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
@@ -98,6 +99,158 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 
 	return buf.String()
+}
+
+func runCLIWithCapturedIO(t *testing.T, args []string) (stdout string, stderr string, code int) {
+	t.Helper()
+
+	stderr = captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			code = runCLI(args)
+		})
+	})
+
+	return stdout, stderr, code
+}
+
+func assertGoldenBytes(t *testing.T, name string, got string) {
+	t.Helper()
+
+	path := filepath.Join("testdata", name)
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatalf("create testdata dir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("write golden file %s: %v", name, err)
+		}
+	}
+
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden file %s: %v", name, err)
+	}
+
+	if !bytes.Equal([]byte(got), want) {
+		t.Fatalf("golden mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", name, got, string(want))
+	}
+}
+
+func installStep9CLIStubs(t *testing.T) {
+	t.Helper()
+
+	originalStartupRecovery := startupRecoveryPhase
+	originalRunStats := runObservabilityStatsPhase
+	originalRunInspect := runObservabilityInspectPhase
+	originalRunSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilityStatsPhase = originalRunStats
+		runObservabilityInspectPhase = originalRunInspect
+		runObservabilitySimulateGCPhase = originalRunSimulate
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect", Message: "collect"})
+		}
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical: observability.LogicalStats{
+				TotalFiles:         3,
+				CompletedFiles:     3,
+				TotalSizeBytes:     3072,
+				CompletedSizeBytes: 3072,
+			},
+			Chunks: observability.ChunkStats{
+				TotalChunks:      6,
+				CompletedChunks:  6,
+				CompletedBytes:   1536,
+				TotalReferences:  9,
+				UniqueReferenced: 6,
+				ChunkerVersions: []observability.VersionStat{
+					{Version: "v1-simple-rolling", Chunks: 2, Bytes: 512},
+					{Version: "v2-fastcdc", Chunks: 4, Bytes: 1024},
+				},
+			},
+			Containers: observability.ContainerStats{
+				TotalContainers: 2,
+				TotalBytes:      3072,
+				Records: []observability.ContainerStatRecord{
+					{ID: 1, Filename: "cont-1.bin", TotalBytes: 1024, LiveBytes: 1024, DeadBytes: 0, Quarantine: false, LiveRatioPct: 100},
+					{ID: 2, Filename: "cont-2.bin", TotalBytes: 2048, LiveBytes: 1024, DeadBytes: 1024, Quarantine: false, LiveRatioPct: 50},
+				},
+			},
+			Retention: observability.RetentionStats{
+				CurrentOnlyLogicalFiles:        2,
+				SnapshotReferencedLogicalFiles: 1,
+				SnapshotOnlyLogicalFiles:       0,
+				SharedLogicalFiles:             1,
+				CurrentOnlyBytes:               2048,
+				SnapshotReferencedBytes:        1024,
+				SnapshotOnlyBytes:              0,
+				SharedBytes:                    512,
+			},
+		}, nil
+	}
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "inspect.lookup", Message: "lookup"})
+		}
+		if entity != observability.EntityChunk {
+			return nil, fmt.Errorf("unexpected entity %s", entity)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   id,
+			Summary: map[string]any{
+				"chunk_hash":      "abc123",
+				"size_bytes":      int64(256),
+				"chunker_version": "v2-fastcdc",
+			},
+			Relations: []observability.Relation{
+				{Type: "stored_in", Direction: observability.RelationOutgoing, TargetType: observability.EntityContainer, TargetID: "2", Metadata: map[string]any{"note": "stored in container 2"}},
+			},
+		}, nil
+	}
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "simulate.gc.plan", Message: "plan"})
+		}
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Assumptions: observability.GCSimulationAssumptions{
+					DeletedSnapshots: []string{"snap-old"},
+				},
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            10,
+					UnreachableChunks:          3,
+					LogicallyReclaimableBytes:  3145728,
+					PhysicallyReclaimableBytes: 2097152,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    2,
+				},
+				Containers: []observability.ContainerSimulationImpact{
+					{ContainerID: 2, Filename: "cont-2.bin", TotalBytes: 2048, LiveBytesAfterGC: 1024, ReclaimableBytes: 1024, ReclaimableChunks: 1, TotalChunks: 2, FullyReclaimable: false, RequiresCompaction: true},
+				},
+				Warnings: []observability.ObservationWarning{
+					{Code: "PARTIAL_RECLAIM_REQUIRES_COMPACTION", Message: "dead bytes in partially live containers require compaction"},
+				},
+			},
+		}, nil
+	}
 }
 
 func TestEmitStartupRecoveryReportJSONSuccessSchema(t *testing.T) {
@@ -190,6 +343,81 @@ func assertJSONNumber(t *testing.T, payload map[string]any, key string, expected
 	if int64(got) != expected {
 		t.Fatalf("key %s mismatch: got=%d expected=%d", key, int64(got), expected)
 	}
+}
+
+func assertRFC3339UTCString(t *testing.T, payload map[string]any, key string) string {
+	t.Helper()
+
+	raw, ok := payload[key].(string)
+	if !ok {
+		t.Fatalf("key %s has non-string value: %T (%v)", key, payload[key], payload[key])
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("key %s is not RFC3339: %v value=%q", key, err, raw)
+	}
+	if raw != parsed.UTC().Format(time.RFC3339) || !strings.HasSuffix(raw, "Z") {
+		t.Fatalf("key %s is not normalized UTC RFC3339: %q", key, raw)
+	}
+	return raw
+}
+
+func assertJSONEnvelopeShape(t *testing.T, payload map[string]any, wantType string) map[string]any {
+	t.Helper()
+
+	if len(payload) != 5 {
+		t.Fatalf("unexpected top-level key count: got=%d payload=%v", len(payload), payload)
+	}
+	if got, _ := payload["type"].(string); got != wantType {
+		t.Fatalf("expected type=%s, got %v", wantType, payload["type"])
+	}
+	assertRFC3339UTCString(t, payload, "generated_at_utc")
+	if _, ok := payload["warnings"].([]any); !ok {
+		t.Fatalf("expected warnings array, got %T", payload["warnings"])
+	}
+	meta, ok := payload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected meta object, got %T", payload["meta"])
+	}
+	if got, _ := meta["version"].(string); got != "v1.6" {
+		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	}
+	if _, ok := meta["exact"].(bool); !ok {
+		t.Fatalf("expected meta.exact bool, got %T", meta["exact"])
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %T", payload["data"])
+	}
+	if _, exists := payload["status"]; exists {
+		t.Fatalf("unexpected status key in envelope payload: %v", payload)
+	}
+	return data
+}
+
+func assertStructuredWarnings(t *testing.T, payload map[string]any, wantLen int) []any {
+	t.Helper()
+
+	warnings, ok := payload["warnings"].([]any)
+	if !ok {
+		t.Fatalf("expected warnings array, got %T", payload["warnings"])
+	}
+	if len(warnings) != wantLen {
+		t.Fatalf("unexpected warnings length: got=%d want=%d warnings=%v", len(warnings), wantLen, warnings)
+	}
+	for i, raw := range warnings {
+		warning, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("warning %d is not an object: %T (%v)", i, raw, raw)
+		}
+		if _, ok := warning["code"].(string); !ok {
+			t.Fatalf("warning %d missing string code: %v", i, warning)
+		}
+		if _, ok := warning["message"].(string); !ok {
+			t.Fatalf("warning %d missing string message: %v", i, warning)
+		}
+	}
+	return warnings
 }
 
 func TestDoctorJSONFailureUsesGenericCLIErrorPayload(t *testing.T) {
@@ -330,6 +558,33 @@ func TestPrintCLIErrorJSONDoesNotAddDBHintFields(t *testing.T) {
 	}
 	if _, exists := payload["hint"]; exists {
 		t.Fatalf("unexpected hint field in JSON payload: %v", payload)
+	}
+}
+
+func TestPrintCLIErrorJSONIncludesStructuredErrorObject(t *testing.T) {
+	err := observabilityErrorf(exitGeneral, "NOT_FOUND", "logical file 45 not found")
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitGeneral {
+			t.Fatalf("expected general exit code %d, got %d", exitGeneral, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	errorNode, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing error object: %v", payload)
+	}
+	if got, _ := errorNode["code"].(string); got != "NOT_FOUND" {
+		t.Fatalf("error.code mismatch: got=%v payload=%v", errorNode["code"], payload)
+	}
+	if got, _ := errorNode["message"].(string); got != "logical file 45 not found" {
+		t.Fatalf("error.message mismatch: got=%v payload=%v", errorNode["message"], payload)
 	}
 }
 
@@ -1335,6 +1590,305 @@ func TestResolveOutputModeInvalidValueClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestResolveOutputModeSupportsJSONShorthand(t *testing.T) {
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"json": {""}},
+	})
+	if err != nil {
+		t.Fatalf("expected no error for --json shorthand, got %v", err)
+	}
+	if mode != outputModeJSON {
+		t.Fatalf("expected json output mode for --json shorthand, got %q", mode)
+	}
+}
+
+func TestResolveOutputModeSupportsHumanAlias(t *testing.T) {
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"output": {"human"}},
+	})
+	if err != nil {
+		t.Fatalf("expected no error for --output human, got %v", err)
+	}
+	if mode != outputModeText {
+		t.Fatalf("expected text output mode for --output human, got %q", mode)
+	}
+}
+
+func TestResolveOutputModeRejectsJSONConflictWithHumanOutput(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"json":   {""},
+			"output": {"human"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+		t.Fatalf("expected conflict error for --json with --output human, got %v", err)
+	}
+}
+
+func TestResolveTraceOptionsRejectsConflictingTraceFlags(t *testing.T) {
+	_, err := resolveTraceOptions(parsedCommandLine{
+		method: "inspect",
+		flags: map[string][]string{
+			"trace":      {""},
+			"trace-json": {""},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --trace with --trace-json") {
+		t.Fatalf("expected trace flag conflict error, got %v", err)
+	}
+}
+
+func TestResolveTraceOptionsTextTraceSink(t *testing.T) {
+	opts, err := resolveTraceOptions(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"trace": {""}},
+	})
+	if err != nil {
+		t.Fatalf("resolveTraceOptions returned error: %v", err)
+	}
+	if !opts.Enabled {
+		t.Fatal("expected trace enabled")
+	}
+	if _, ok := opts.Sink.(observability.HumanTraceSink); !ok {
+		t.Fatalf("expected observability.HumanTraceSink, got %T", opts.Sink)
+	}
+}
+
+func TestResolveTraceOptionsJSONTraceSink(t *testing.T) {
+	opts, err := resolveTraceOptions(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"trace-json": {""}},
+	})
+	if err != nil {
+		t.Fatalf("resolveTraceOptions returned error: %v", err)
+	}
+	if !opts.Enabled {
+		t.Fatal("expected trace enabled")
+	}
+	if _, ok := opts.Sink.(*observability.JSONTraceSink); !ok {
+		t.Fatalf("expected *observability.JSONTraceSink, got %T", opts.Sink)
+	}
+}
+
+func TestStderrTextTraceSinkWritesHumanLine(t *testing.T) {
+	output := captureStderr(t, func() {
+		(observability.HumanTraceSink{W: os.Stderr}).Event(observability.TraceEvent{
+			Step:     "inspect.resolve_entity",
+			Entity:   "chunk",
+			EntityID: "123",
+			Message:  "resolving chunk metadata",
+			Metadata: map[string]any{"incoming_refs": 4, "source": "graph"},
+		})
+	})
+
+	if !strings.Contains(output, "TRACE inspect.resolve_entity chunk=123 resolving chunk metadata") {
+		t.Fatalf("expected human trace prefix, got %q", output)
+	}
+	if strings.Contains(output, "incoming_refs=4") || strings.Contains(output, "source=graph") {
+		t.Fatalf("expected human sink to omit metadata in output, got %q", output)
+	}
+}
+
+func TestStderrJSONTraceSinkWritesJSONLine(t *testing.T) {
+	output := captureStderr(t, func() {
+		observability.NewJSONTraceSink(os.Stderr).Event(observability.TraceEvent{
+			Step:     "graph.reverse_references",
+			Entity:   "chunk",
+			EntityID: "123",
+			Message:  "found incoming references",
+			Metadata: map[string]any{"count": 4},
+		})
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse json trace line: %v output=%q", err, output)
+	}
+	if got, _ := payload["step"].(string); got != "graph.reverse_references" {
+		t.Fatalf("expected step=graph.reverse_references, got %v", payload["step"])
+	}
+	if got, _ := payload["entity"].(string); got != "chunk" {
+		t.Fatalf("expected entity=chunk, got %v", payload["entity"])
+	}
+	if got, _ := payload["entity_id"].(string); got != "123" {
+		t.Fatalf("expected entity_id=123, got %v", payload["entity_id"])
+	}
+}
+
+func TestTraceHumanWritesToStderr(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{
+				Step:    "stats.collect.start",
+				Message: "collecting stats",
+			})
+		}
+		return &observability.StatsResult{}, nil
+	}
+
+	stderrOut := captureStderr(t, func() {
+		_ = runStatsCommand(parsedCommandLine{
+			method: "stats",
+			flags:  map[string][]string{"trace": {""}},
+		}, outputModeJSON)
+	})
+
+	if !strings.Contains(stderrOut, "TRACE stats.collect.start collecting stats") {
+		t.Fatalf("expected human trace in stderr, got %q", stderrOut)
+	}
+}
+
+func TestTraceJSONIsValidJSONLines(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect.start", Message: "start"})
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect.complete", Message: "complete"})
+		}
+		return &observability.StatsResult{}, nil
+	}
+
+	stderrOut := captureStderr(t, func() {
+		_ = runStatsCommand(parsedCommandLine{
+			method: "stats",
+			flags:  map[string][]string{"trace-json": {""}},
+		}, outputModeJSON)
+	})
+
+	lines := strings.Split(strings.TrimSpace(stderrOut), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 json trace lines, got %d output=%q", len(lines), stderrOut)
+	}
+	for i, line := range lines {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("line %d is not valid JSON: %v line=%q", i, err, line)
+		}
+		if _, ok := payload["step"].(string); !ok {
+			t.Fatalf("line %d missing step field: %v", i, payload)
+		}
+	}
+}
+
+func TestStatsCommandStdoutIdenticalWithAndWithoutTrace(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "stats.collect.start", Message: "start"})
+		}
+		return &observability.StatsResult{Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"}}, nil
+	}
+
+	withoutTraceStdout := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand without trace: %v", err)
+		}
+	})
+
+	withTraceStdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"trace": {""}}}, outputModeJSON); err != nil {
+				t.Fatalf("runStatsCommand with trace: %v", err)
+			}
+		})
+	})
+
+	if withoutTraceStdout != withTraceStdout {
+		t.Fatalf("stats stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+	}
+}
+
+func TestInspectCommandStdoutIdenticalWithAndWithoutTrace(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "inspect.start", Entity: string(entity), EntityID: id, Message: "start"})
+		}
+		return &observability.InspectResult{
+			EntityType: entity,
+			EntityID:   id,
+			Summary:    map[string]any{"chunk_hash": "hash"},
+		}, nil
+	}
+
+	parsedNoTrace := parsedCommandLine{method: "inspect", positionals: []string{"chunk", "7"}, flags: map[string][]string{"output": {"json"}}}
+	parsedTrace := parsedCommandLine{method: "inspect", positionals: []string{"chunk", "7"}, flags: map[string][]string{"output": {"json"}, "trace": {""}}}
+
+	withoutTraceStdout := captureStdout(t, func() {
+		if err := runInspectCommand(parsedNoTrace, outputModeJSON); err != nil {
+			t.Fatalf("runInspectCommand without trace: %v", err)
+		}
+	})
+
+	withTraceStdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := runInspectCommand(parsedTrace, outputModeJSON); err != nil {
+				t.Fatalf("runInspectCommand with trace: %v", err)
+			}
+		})
+	})
+
+	if withoutTraceStdout != withTraceStdout {
+		t.Fatalf("inspect stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+	}
+}
+
+func TestSimulateGCCommandStdoutIdenticalWithAndWithoutTrace(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		if opts.Trace.Enabled && opts.Trace.Sink != nil {
+			opts.Trace.Sink.Event(observability.TraceEvent{Step: "simulate.gc.start", Message: "start"})
+		}
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{ReachableChunks: 1},
+			},
+		}, nil
+	}
+
+	parsedNoTrace := parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}}}
+	parsedTrace := parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}, "trace": {""}}}
+
+	withoutTraceStdout := captureStdout(t, func() {
+		if err := runSimulateGCCommand(parsedNoTrace, outputModeJSON); err != nil {
+			t.Fatalf("runSimulateGCCommand without trace: %v", err)
+		}
+	})
+
+	withTraceStdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() {
+			if err := runSimulateGCCommand(parsedTrace, outputModeJSON); err != nil {
+				t.Fatalf("runSimulateGCCommand with trace: %v", err)
+			}
+		})
+	})
+
+	if withoutTraceStdout != withTraceStdout {
+		t.Fatalf("simulate gc stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+	}
+}
+
 func TestRunSimulateCommandMissingArgsClassifiesAsUsage(t *testing.T) {
 	err := runSimulateCommand(parsedCommandLine{
 		method:      "simulate",
@@ -1364,6 +1918,57 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSimulateCommandHelpIncludesRequiredGuaranteesAndExample(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runSimulateCommand(parsedCommandLine{method: "simulate", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runSimulateCommand --help returned error: %v", err)
+		}
+	})
+
+	required := []string{
+		"JSON support:",
+		"Trace support:",
+		"Deterministic output guarantee:",
+		"Simulation safety guarantee:",
+		"Example",
+		"simulate gc",
+		"Preview garbage collection effects without modifying data.",
+		"This command computes exactly what GC would consider reclaimable,",
+		"including optional hypothetical snapshot deletion.",
+		"No state is modified.",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected simulate help to include %q, got:\n%s", fragment, output)
+		}
+	}
+}
+
+func TestRunSimulateCommandGCHelpIsSpecificToGC(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runSimulateCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runSimulateCommand gc --help returned error: %v", err)
+		}
+	})
+
+	required := []string{
+		"Preview actual GC reclaimability without modifying repository state (read-only).",
+		"--delete-snapshot <id>",
+		"--containers includes per-container detail",
+		"--json is shorthand for --output json",
+		"--trace or --trace-json emits diagnostics to stderr only",
+		"simulate gc is exact for GC reclaimability decisions and never mutates repository state",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("expected simulate gc help to include %q, got:\n%s", fragment, output)
+		}
+	}
+	if strings.Contains(output, "coldkeep simulate <store|store-folder>") {
+		t.Fatalf("expected simulate gc help to omit generic simulate store usage, got:\n%s", output)
 	}
 }
 
@@ -1592,7 +2197,7 @@ func TestShouldRunStartupRecoveryForStorageCommands(t *testing.T) {
 	commands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "stats", "inspect", "list", "search", "verify", "snapshot"}
 
 	for _, command := range commands {
-		if !shouldRunStartupRecovery(command) {
+		if !shouldRunStartupRecovery([]string{command}) {
 			t.Fatalf("expected startup recovery to run for command %q", command)
 		}
 	}
@@ -1602,7 +2207,7 @@ func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
 	commands := []string{"help", "version", "init", "simulate", "benchmark", "doctor", "config", "-h", "--help", "-v", "--version", "unknown"}
 
 	for _, command := range commands {
-		if shouldRunStartupRecovery(command) {
+		if shouldRunStartupRecovery([]string{command}) {
 			t.Fatalf("expected startup recovery to be skipped for command %q", command)
 		}
 	}
@@ -1641,6 +2246,13 @@ func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsStatsJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"stats", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected stats --json to infer json mode, got %q", mode)
 	}
 }
 
@@ -1774,27 +2386,27 @@ func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
 }
 
 func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalInspect := inspectLogicalFilePhase
+	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		inspectLogicalFilePhase = originalInspect
+		runObservabilityInspectPhase = originalInspect
 	})
 
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityFile {
+			t.Fatalf("unexpected entity: %s", entity)
 		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
-		return storage.LogicalFileInspectInfo{
-			FileID:            fileID,
-			ChunkerVersion:    chunk.VersionV2FastCDC,
-			ChunkCount:        142,
-			AvgChunkSizeBytes: 58 * 1024,
+		if id != "42" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   "42",
+			Summary: map[string]any{
+				"original_name":        "photo.jpg",
+				"chunker_version":      "v2-fastcdc",
+				"chunk_count":          int64(142),
+				"avg_chunk_size_bytes": 58 * 1024.0,
+			},
 		}, nil
 	}
 
@@ -1810,9 +2422,14 @@ func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Chunker: v2-fastcdc",
-		"Chunks: 142",
-		"Avg chunk size: 58KB",
+		"Inspect logical file 42",
+		"Summary",
+		"name:",
+		"photo.jpg",
+		"chunks:",
+		"142",
+		"chunker_version:",
+		"v2-fastcdc",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected inspect text output to contain %q, got output:\n%s", want, output)
@@ -1821,27 +2438,35 @@ func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 }
 
 func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
-	originalLoad := loadDefaultStorageContextPhase
-	originalInspect := inspectLogicalFilePhase
+	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() {
-		loadDefaultStorageContextPhase = originalLoad
-		inspectLogicalFilePhase = originalInspect
+		runObservabilityInspectPhase = originalInspect
 	})
 
-	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
-		dbconn, err := sql.Open("sqlite3", ":memory:")
-		if err != nil {
-			return storage.StorageContext{}, err
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityFile {
+			t.Fatalf("unexpected entity: %s", entity)
 		}
-		return storage.StorageContext{DB: dbconn}, nil
-	}
-
-	inspectLogicalFilePhase = func(_ *sql.DB, fileID int64) (storage.LogicalFileInspectInfo, error) {
-		return storage.LogicalFileInspectInfo{
-			FileID:            fileID,
-			ChunkerVersion:    chunk.VersionV2FastCDC,
-			ChunkCount:        142,
-			AvgChunkSizeBytes: 58 * 1024,
+		if id != "42" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   "123",
+			Summary: map[string]any{
+				"size_bytes":           int64(4096),
+				"chunker_version":      "v2-fastcdc",
+				"chunk_count":          int64(142),
+				"avg_chunk_size_bytes": 58 * 1024.0,
+			},
+			Relations: []observability.Relation{
+				{
+					Type:       "referenced_by",
+					Direction:  observability.RelationIncoming,
+					TargetType: observability.EntityLogicalFile,
+					TargetID:   "45",
+				},
+			},
 		}, nil
 	}
 
@@ -1862,31 +2487,595 @@ func TestRunInspectCommandFileJSONShowsChunkerAndChunkSummary(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
 		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
 	}
-	data := payload["data"].(map[string]any)
-	if got, _ := data["chunker"].(string); got != "v2-fastcdc" {
-		t.Fatalf("expected chunker=v2-fastcdc, got %v", data["chunker"])
+	if got, _ := payload["type"].(string); got != "inspect" {
+		t.Fatalf("expected type=inspect, got %v", payload["type"])
 	}
-	assertJSONNumber(t, data, "chunks", 142)
-	assertJSONNumber(t, data, "avg_chunk_size_kb", 58)
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %T", payload["data"])
+	}
+	if got, _ := data["entity_type"].(string); got != "chunk" {
+		t.Fatalf("expected entity_type=chunk, got %v", data["entity_type"])
+	}
+	if got, _ := data["entity_id"].(string); got != "123" {
+		t.Fatalf("expected entity_id=123, got %v", data["entity_id"])
+	}
+	summary, ok := data["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary object, got %T", data["summary"])
+	}
+	if got, _ := summary["chunker_version"].(string); got != "v2-fastcdc" {
+		t.Fatalf("expected chunker_version=v2-fastcdc, got %v", summary["chunker_version"])
+	}
+	assertJSONNumber(t, summary, "size_bytes", 4096)
+	relations, ok := data["relations"].([]any)
+	if !ok || len(relations) != 1 {
+		t.Fatalf("expected 1 relation, got %T (%v)", data["relations"], data["relations"])
+	}
+	rel, ok := relations[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected relation object, got %T", relations[0])
+	}
+	if got, _ := rel["type"].(string); got != "referenced_by" {
+		t.Fatalf("expected relation type referenced_by, got %v", rel["type"])
+	}
+	if got, _ := rel["direction"].(string); got != "incoming" {
+		t.Fatalf("expected relation direction incoming, got %v", rel["direction"])
+	}
+	if got, _ := rel["target_type"].(string); got != "logical_file" {
+		t.Fatalf("expected relation target_type logical_file, got %v", rel["target_type"])
+	}
+	if got, _ := rel["target_id"].(string); got != "45" {
+		t.Fatalf("expected relation target_id 45, got %v", rel["target_id"])
+	}
+}
+
+func TestRunInspectCommandJSONShorthand(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() {
+		runObservabilityInspectPhase = originalInspect
+	})
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   id,
+			Summary: map[string]any{
+				"chunk_hash": "c-hash",
+			},
+		}, nil
+	}
+
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "inspect",
+		flags:  map[string][]string{"json": {""}},
+	})
+	if err != nil {
+		t.Fatalf("resolveOutputMode: %v", err)
+	}
+	if mode != outputModeJSON {
+		t.Fatalf("expected outputModeJSON for --json shorthand, got %q", mode)
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"chunk", "42"},
+			flags:       map[string][]string{"json": {""}},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runInspectCommand json shorthand returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got %T", payload["data"])
+	}
+	if got, _ := data["entity_type"].(string); got != "chunk" {
+		t.Fatalf("expected entity_type=chunk, got %v", data["entity_type"])
+	}
+}
+
+func TestRunInspectCommandJSONContractByEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	tests := []struct {
+		name          string
+		entityArg     string
+		inputID       string
+		resultType    observability.EntityType
+		args          []string
+		summary       map[string]any
+		relations     []observability.Relation
+		assertSummary func(t *testing.T, summary map[string]any)
+	}{
+		{
+			name:       "repository",
+			entityArg:  "repository",
+			inputID:    "repository",
+			resultType: observability.EntityRepository,
+			args:       []string{"repository"},
+			summary:    map[string]any{"total_files": int64(3), "total_chunks": int64(7), "total_snapshots": int64(2)},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "total_files", 3)
+				assertJSONNumber(t, summary, "total_chunks", 7)
+				assertJSONNumber(t, summary, "total_snapshots", 2)
+			},
+		},
+		{
+			name:       "snapshot",
+			entityArg:  "snapshot",
+			inputID:    "snap-42",
+			resultType: observability.EntitySnapshot,
+			args:       []string{"snapshot", "snap-42"},
+			summary:    map[string]any{"total_size_bytes": int64(8192), "logical_file_count": int64(3)},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "total_size_bytes", 8192)
+				assertJSONNumber(t, summary, "logical_file_count", 3)
+			},
+		},
+		{
+			name:       "logical-file",
+			entityArg:  "file",
+			inputID:    "42",
+			resultType: observability.EntityLogicalFile,
+			args:       []string{"file", "42"},
+			summary:    map[string]any{"chunk_count": int64(12), "avg_chunk_size_bytes": float64(2048), "original_name": "photo.jpg"},
+			relations:  []observability.Relation{{Type: "references", Direction: observability.RelationOutgoing, TargetType: observability.EntityChunk, TargetID: "77"}},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "chunk_count", 12)
+				if _, ok := summary["avg_chunk_size_bytes"].(float64); !ok {
+					t.Fatalf("expected avg_chunk_size_bytes float64, got %T", summary["avg_chunk_size_bytes"])
+				}
+			},
+		},
+		{
+			name:       "chunk",
+			entityArg:  "chunk",
+			inputID:    "77",
+			resultType: observability.EntityChunk,
+			args:       []string{"chunk", "77"},
+			summary:    map[string]any{"size_bytes": int64(2048), "container_id": int64(5)},
+			relations:  []observability.Relation{{Type: "referenced_by", Direction: observability.RelationIncoming, TargetType: observability.EntityLogicalFile, TargetID: "42"}},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "size_bytes", 2048)
+				assertJSONNumber(t, summary, "container_id", 5)
+			},
+		},
+		{
+			name:       "container",
+			entityArg:  "container",
+			inputID:    "5",
+			resultType: observability.EntityContainer,
+			args:       []string{"container", "5"},
+			summary:    map[string]any{"size_bytes": int64(4096), "chunk_count": int64(9), "filename": "ctr_5.bin"},
+			assertSummary: func(t *testing.T, summary map[string]any) {
+				assertJSONNumber(t, summary, "size_bytes", 4096)
+				assertJSONNumber(t, summary, "chunk_count", 9)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+				return &observability.InspectResult{
+					GeneratedAtUTC: time.Date(2026, time.April, 27, 13, 14, 15, 0, time.UTC),
+					EntityType:     tc.resultType,
+					EntityID:       tc.inputID,
+					Summary:        tc.summary,
+					Relations:      tc.relations,
+					Warnings:       []observability.ObservationWarning{{Code: "INSPECT_WARNING", Message: "inspect warning"}},
+				}, nil
+			}
+
+			output := captureStdout(t, func() {
+				err := runInspectCommand(parsedCommandLine{
+					method:      "inspect",
+					positionals: tc.args,
+					flags:       map[string][]string{"json": {""}},
+				}, outputModeJSON)
+				if err != nil {
+					t.Fatalf("runInspectCommand JSON returned error: %v", err)
+				}
+			})
+
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+				t.Fatalf("parse inspect JSON output: %v output=%q", err, output)
+			}
+			data := assertJSONEnvelopeShape(t, payload, "inspect")
+			assertStructuredWarnings(t, payload, 1)
+
+			if got, _ := data["entity_type"].(string); got != string(tc.resultType) {
+				t.Fatalf("entity_type mismatch: got=%v want=%s", data["entity_type"], tc.resultType)
+			}
+			if got, _ := data["entity_id"].(string); got != tc.inputID {
+				t.Fatalf("entity_id mismatch: got=%v want=%s", data["entity_id"], tc.inputID)
+			}
+			summary, ok := data["summary"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected summary object, got %T", data["summary"])
+			}
+			tc.assertSummary(t, summary)
+			if size, ok := summary["size_bytes"].(string); ok && strings.Contains(size, "KiB") {
+				t.Fatalf("expected numeric size_bytes, got formatted string %q", size)
+			}
+			if len(tc.relations) > 0 {
+				relations, ok := data["relations"].([]any)
+				if !ok || len(relations) == 0 {
+					t.Fatalf("expected relations array, got %v", data["relations"])
+				}
+				relation, ok := relations[0].(map[string]any)
+				if !ok {
+					t.Fatalf("expected relation object, got %T", relations[0])
+				}
+				if _, ok := relation["target_id"].(string); !ok {
+					t.Fatalf("expected relation target_id string, got %T", relation["target_id"])
+				}
+			}
+		})
+	}
 }
 
 func TestRunInspectCommandRejectsInvalidUsage(t *testing.T) {
+	// unknown entity type
 	err := runInspectCommand(parsedCommandLine{
 		method:      "inspect",
-		positionals: []string{"chunk", "1"},
+		positionals: []string{"blob", "1"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect file <fileID>") {
-		t.Fatalf("expected inspect usage error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), `unsupported inspect entity "blob"`) {
+		t.Fatalf("expected unsupported-entity error, got: %v", err)
 	}
 
+	// wrong number of positional args
 	err = runInspectCommand(parsedCommandLine{
 		method:      "inspect",
-		positionals: []string{"file", "invalid"},
+		positionals: []string{"file"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Invalid fileID") {
-		t.Fatalf("expected invalid fileID error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect (file|logical-file|snapshot|chunk|container) <id>") {
+		t.Fatalf("expected inspect usage error for missing id, got: %v", err)
+	}
+
+	// repository does not accept an id positional
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"repository", "repository"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep inspect repository") {
+		t.Fatalf("expected repository inspect usage error when id provided, got: %v", err)
+	}
+
+	// invalid numeric id for file
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "notanumber"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), `invalid logical file id "notanumber"`) {
+		t.Fatalf("expected invalid file id error, got: %v", err)
+	}
+
+	// invalid numeric id for chunk
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"chunk", "abc"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), `invalid chunk id "abc"`) {
+		t.Fatalf("expected invalid chunk id error, got: %v", err)
+	}
+
+	// invalid limit flag
+	err = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"snapshot", "snap-1"},
+		flags:       map[string][]string{"limit": {"bad"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Invalid --limit value") {
+		t.Fatalf("expected invalid limit error, got: %v", err)
+	}
+}
+
+func TestRunInspectCommandLogicalFileAliasRoutesToEntityFile(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedEntity observability.EntityType
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedEntity = entity
+		return &observability.InspectResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 0, 0, 0, 0, time.UTC),
+			EntityType:     entity,
+			EntityID:       id,
+			Summary:        map[string]any{"chunk_count": int64(1)},
+		}, nil
+	}
+
+	captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"logical-file", "99"},
+			flags:       map[string][]string{},
+		}, outputModeText); err != nil {
+			t.Fatalf("unexpected error with logical-file alias: %v", err)
+		}
+	})
+
+	if capturedEntity != observability.EntityFile {
+		t.Fatalf("expected logical-file alias to route to EntityFile, got %v", capturedEntity)
+	}
+}
+
+func TestRunInspectCommandHelpIncludesJSONTraceAndDeterminism(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{method: "inspect", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runInspectCommand --help returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "JSON support:") {
+		t.Fatalf("expected JSON support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Trace support:") {
+		t.Fatalf("expected trace support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Deterministic output guarantee:") {
+		t.Fatalf("expected deterministic guarantee section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "--limit bounds deep traversal output") {
+		t.Fatalf("expected --limit guidance in inspect help, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Supported entities: repository") {
+		t.Fatalf("expected repository entity in inspect help, got:\n%s", output)
+	}
+}
+
+func TestRunInspectCommandRepositoryEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedEntity observability.EntityType
+	var capturedID string
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedEntity = entity
+		capturedID = id
+		return &observability.InspectResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 0, 0, 0, 0, time.UTC),
+			EntityType:     observability.EntityRepository,
+			EntityID:       "repository",
+			Summary:        map[string]any{"total_files": int64(0), "total_chunks": int64(0), "total_snapshots": int64(0)},
+		}, nil
+	}
+
+	captureStdout(t, func() {
+		if err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"repository"},
+			flags:       map[string][]string{},
+		}, outputModeText); err != nil {
+			t.Fatalf("unexpected error with repository entity: %v", err)
+		}
+	})
+
+	if capturedEntity != observability.EntityRepository {
+		t.Fatalf("expected repository entity, got %v", capturedEntity)
+	}
+	if capturedID != "" {
+		t.Fatalf("expected empty id for repository inspect, got %q", capturedID)
+	}
+}
+
+func TestRunCLIHelpSubcommandsDoNotRunStartupRecovery(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	t.Cleanup(func() { startupRecoveryPhase = originalStartupRecovery })
+
+	called := 0
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		called++
+		return recovery.Report{}, nil
+	}
+
+	for _, args := range [][]string{{"stats", "--help"}, {"inspect", "--help"}} {
+		stdout, stderr, code := runCLIWithCapturedIO(t, args)
+		if code != exitSuccess {
+			t.Fatalf("expected success for %v, got %d", args, code)
+		}
+		if strings.TrimSpace(stderr) != "" {
+			t.Fatalf("expected no stderr for %v, got:\n%s", args, stderr)
+		}
+		if !strings.Contains(stdout, "Usage:") {
+			t.Fatalf("expected help usage for %v, got:\n%s", args, stdout)
+		}
+	}
+
+	if called != 0 {
+		t.Fatalf("expected startup recovery to be skipped for help-only invocations, called=%d", called)
+	}
+}
+
+func TestRunInspectCommandSnapshotTextNewEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntitySnapshot {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "snap-99" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		if !opts.Relations {
+			t.Fatalf("expected relations=true")
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntitySnapshot,
+			EntityID:   "snap-99",
+			Summary: map[string]any{
+				"type":               "full",
+				"logical_file_count": int64(3),
+				"total_size_bytes":   int64(1024),
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"snapshot", "snap-99"},
+			flags:       map[string][]string{"relations": {""}},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand snapshot text returned error: %v", err)
+		}
+	})
+
+	for _, want := range []string{"Inspect snapshot snap-99", "Summary"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunInspectCommandChunkTextNewEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityChunk {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "77" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityChunk,
+			EntityID:   "77",
+			Summary: map[string]any{
+				"size_bytes":      int64(2048),
+				"chunker_version": "v2-fastcdc",
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"chunk", "77"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand chunk text returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Inspect chunk 77") {
+		t.Fatalf("expected output to contain chunk header, got:\n%s", output)
+	}
+}
+
+func TestRunInspectCommandContainerTextNewEntity(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityContainer {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "5" {
+			t.Fatalf("unexpected id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityContainer,
+			EntityID:   "5",
+			Summary: map[string]any{
+				"filename":    "ctr_5.bin",
+				"size_bytes":  int64(4096),
+				"chunk_count": int64(12),
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runInspectCommand(parsedCommandLine{
+			method:      "inspect",
+			positionals: []string{"container", "5"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runInspectCommand container text returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Inspect container 5") {
+		t.Fatalf("expected output to contain container header, got:\n%s", output)
+	}
+}
+
+func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedOpts observability.InspectOptions
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedOpts = opts
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   id,
+			Summary:    map[string]any{},
+		}, nil
+	}
+
+	_ = runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "1"},
+		flags:       map[string][]string{"relations": {""}, "reverse": {""}, "deep": {""}, "limit": {"7"}, "trace": {""}},
+	}, outputModeText)
+
+	if !capturedOpts.Relations {
+		t.Fatal("expected Relations=true from --relations flag")
+	}
+	if !capturedOpts.Reverse {
+		t.Fatal("expected Reverse=true from --reverse flag")
+	}
+	if !capturedOpts.Deep {
+		t.Fatal("expected Deep=true from --deep flag")
+	}
+	if capturedOpts.Limit != 7 {
+		t.Fatalf("expected Limit=7 from --limit 7, got %d", capturedOpts.Limit)
+	}
+	if !capturedOpts.Trace.Enabled {
+		t.Fatal("expected Trace.Enabled=true from --trace")
+	}
+	if _, ok := capturedOpts.Trace.Sink.(observability.HumanTraceSink); !ok {
+		t.Fatalf("expected observability.HumanTraceSink, got %T", capturedOpts.Trace.Sink)
+	}
+}
+
+func TestRunInspectCommandNotFoundError(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		return nil, fmt.Errorf("%w: chunk %s", observability.ErrNotFound, id)
+	}
+
+	err := runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"chunk", "9999"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not-found error, got: %v", err)
 	}
 }
 
@@ -2470,6 +3659,24 @@ func TestParseCommandLineTreatsFromAsValueFlag(t *testing.T) {
 	}
 	if from != "snap-parent" {
 		t.Fatalf("expected --from value snap-parent, got %q", from)
+	}
+}
+
+func TestParseCommandLineTreatsDeleteSnapshotAsValueFlag(t *testing.T) {
+	parsed, err := parseCommandLine(
+		[]string{"simulate", "gc", "--delete-snapshot", "snap-a", "--delete-snapshot", "release-2026-04"},
+		flagsWithValues,
+	)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	deleted := parsed.flagValues("delete-snapshot")
+	if len(deleted) != 2 {
+		t.Fatalf("expected two delete-snapshot values, got %v", deleted)
+	}
+	if deleted[0] != "snap-a" || deleted[1] != "release-2026-04" {
+		t.Fatalf("unexpected delete-snapshot values: %v", deleted)
 	}
 }
 
@@ -5154,34 +6361,44 @@ func TestRunGCCommandTextOutputIncludesSnapshotRetainedLogicalFiles(t *testing.T
 }
 
 func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
-	originalRunStats := runStatsPhase
+	originalRunStats := runObservabilityStatsPhase
 	t.Cleanup(func() {
-		runStatsPhase = originalRunStats
+		runObservabilityStatsPhase = originalRunStats
 	})
 
-	runStatsPhase = func() (*maintenance.StatsResult, error) {
-		return &maintenance.StatsResult{
-			TotalFiles:             7,
-			ActiveWriteChunker:     "v2-fastcdc",
-			TotalChunkReferences:   10000,
-			UniqueReferencedChunks: 7500,
-			EstimatedDedupRatioPct: 25,
-			LogicalFileCountsByVersion: map[string]int64{
-				"v1-simple-rolling": 5,
-				"v2-fastcdc":        2,
-				"unknown":           1,
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		records := []observability.ContainerStatRecord{}
+		if opts.IncludeContainers {
+			records = append(records, observability.ContainerStatRecord{ID: 10, Filename: "ctr-10.bin", TotalBytes: 99})
+		}
+
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical: observability.LogicalStats{
+				TotalFiles:             7,
+				EstimatedDedupRatioPct: 25,
 			},
-			ChunkCountsByVersion: map[string]int64{
-				"v1-simple-rolling": 3,
-				"v2-fastcdc":        2,
-				"unknown":           1,
+			Chunks: observability.ChunkStats{
+				TotalReferences:  10000,
+				UniqueReferenced: 7500,
+				CountsByVersion: map[string]int64{
+					"v1-simple-rolling": 3,
+					"v2-fastcdc":        2,
+					"unknown":           1,
+				},
+				BytesByVersion: map[string]int64{
+					"v1-simple-rolling": 30,
+					"v2-fastcdc":        20,
+					"unknown":           9,
+				},
+				ChunkerVersions: []observability.VersionStat{
+					{Version: "unknown", Chunks: 1, Bytes: 9},
+					{Version: "v1-simple-rolling", Chunks: 3, Bytes: 30},
+					{Version: "v2-fastcdc", Chunks: 2, Bytes: 20},
+				},
 			},
-			ChunkBytesByVersion: map[string]int64{
-				"v1-simple-rolling": 30,
-				"v2-fastcdc":        20,
-				"unknown":           9,
-			},
-			SnapshotRetention: maintenance.SnapshotRetentionStats{
+			Containers: observability.ContainerStats{Records: records},
+			Retention: observability.RetentionStats{
 				CurrentOnlyLogicalFiles:        2,
 				CurrentOnlyBytes:               256,
 				SnapshotReferencedLogicalFiles: 3,
@@ -5195,7 +6412,7 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"containers": {""}}}, outputModeJSON); err != nil {
 			t.Fatalf("runStatsCommand JSON returned error: %v", err)
 		}
 	})
@@ -5204,43 +6421,73 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		t.Fatalf("parse JSON payload: %v\noutput=%q", err, output)
 	}
+	if got, _ := payload["type"].(string); got != "stats" {
+		t.Fatalf("expected type=stats, got %v", payload["type"])
+	}
 	data, ok := payload["data"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing data object in payload: %v", payload)
 	}
-	retentionData, ok := data["snapshot_retention"].(map[string]any)
+	retentionData, ok := data["retention"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing snapshot_retention object in payload: %v", data)
+		t.Fatalf("missing retention object in payload: %v", data)
 	}
-	chunkCounts, ok := data["chunk_counts_by_version"].(map[string]any)
+	chunksData, ok := data["chunks"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing chunk_counts_by_version object in payload: %v", data)
+		t.Fatalf("missing chunks object in payload: %v", data)
 	}
-	logicalFileCounts, ok := data["logical_file_counts_by_version"].(map[string]any)
+	chunkerVersions, ok := chunksData["chunker_versions"].([]any)
 	if !ok {
-		t.Fatalf("missing logical_file_counts_by_version object in payload: %v", data)
+		t.Fatalf("missing chunks.chunker_versions array in payload: %v", chunksData)
 	}
-	chunkBytes, ok := data["chunk_bytes_by_version"].(map[string]any)
+	if len(chunkerVersions) != 3 {
+		t.Fatalf("expected 3 chunker_versions entries, got %d", len(chunkerVersions))
+	}
+
+	entry0, ok := chunkerVersions[0].(map[string]any)
 	if !ok {
-		t.Fatalf("missing chunk_bytes_by_version object in payload: %v", data)
+		t.Fatalf("expected chunker_versions[0] object, got %T", chunkerVersions[0])
 	}
-	assertJSONNumber(t, logicalFileCounts, "v1-simple-rolling", 5)
-	assertJSONNumber(t, logicalFileCounts, "v2-fastcdc", 2)
-	assertJSONNumber(t, logicalFileCounts, "unknown", 1)
-	if raw, ok := data["active_write_chunker"].(string); !ok || raw != "v2-fastcdc" {
-		t.Fatalf("active_write_chunker mismatch: got=%v payload=%v", data["active_write_chunker"], data)
+	entry1, ok := chunkerVersions[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected chunker_versions[1] object, got %T", chunkerVersions[1])
 	}
-	assertJSONNumber(t, data, "total_chunk_references", 10000)
-	assertJSONNumber(t, data, "unique_referenced_chunks", 7500)
-	if raw, ok := data["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
-		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", data["estimated_dedup_ratio_pct"], data)
+	entry2, ok := chunkerVersions[2].(map[string]any)
+	if !ok {
+		t.Fatalf("expected chunker_versions[2] object, got %T", chunkerVersions[2])
 	}
-	assertJSONNumber(t, chunkCounts, "v1-simple-rolling", 3)
-	assertJSONNumber(t, chunkCounts, "v2-fastcdc", 2)
-	assertJSONNumber(t, chunkCounts, "unknown", 1)
-	assertJSONNumber(t, chunkBytes, "v1-simple-rolling", 30)
-	assertJSONNumber(t, chunkBytes, "v2-fastcdc", 20)
-	assertJSONNumber(t, chunkBytes, "unknown", 9)
+
+	if got, _ := entry0["version"].(string); got != "unknown" {
+		t.Fatalf("expected chunker_versions[0].version=unknown, got %q", got)
+	}
+	assertJSONNumber(t, entry0, "chunks", 1)
+	assertJSONNumber(t, entry0, "bytes", 9)
+	if got, _ := entry1["version"].(string); got != "v1-simple-rolling" {
+		t.Fatalf("expected chunker_versions[1].version=v1-simple-rolling, got %q", got)
+	}
+	assertJSONNumber(t, entry1, "chunks", 3)
+	assertJSONNumber(t, entry1, "bytes", 30)
+	if got, _ := entry2["version"].(string); got != "v2-fastcdc" {
+		t.Fatalf("expected chunker_versions[2].version=v2-fastcdc, got %q", got)
+	}
+	assertJSONNumber(t, entry2, "chunks", 2)
+	assertJSONNumber(t, entry2, "bytes", 20)
+	repositoryData, ok := data["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing repository object in payload: %v", data)
+	}
+	logicalData, ok := data["logical"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing logical object in payload: %v", data)
+	}
+	if raw, ok := repositoryData["active_write_chunker"].(string); !ok || raw != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%v payload=%v", repositoryData["active_write_chunker"], data)
+	}
+	assertJSONNumber(t, chunksData, "total_references", 10000)
+	assertJSONNumber(t, chunksData, "unique_referenced", 7500)
+	if raw, ok := logicalData["estimated_dedup_ratio_pct"].(float64); !ok || raw != 25 {
+		t.Fatalf("estimated_dedup_ratio_pct mismatch: got=%v payload=%v", logicalData["estimated_dedup_ratio_pct"], data)
+	}
 	assertJSONNumber(t, retentionData, "current_only_logical_files", 2)
 	assertJSONNumber(t, retentionData, "snapshot_referenced_logical_files", 3)
 	assertJSONNumber(t, retentionData, "snapshot_only_logical_files", 1)
@@ -5249,92 +6496,216 @@ func TestRunStatsCommandJSONIncludesSnapshotRetention(t *testing.T) {
 	assertJSONNumber(t, retentionData, "snapshot_only_bytes", 128)
 	assertJSONNumber(t, retentionData, "shared_bytes", 640)
 	assertJSONNumber(t, retentionData, "current_only_bytes", 256)
-}
 
-func TestPrintStatsReportIncludesSnapshotRetention(t *testing.T) {
-	output := captureStdout(t, func() {
-		printStatsReport(&maintenance.StatsResult{
-			ActiveWriteChunker:     "v2-fastcdc",
-			TotalChunkReferences:   10000,
-			UniqueReferencedChunks: 7500,
-			EstimatedDedupRatioPct: 25,
-			LogicalFileCountsByVersion: map[string]int64{
-				"v1-simple-rolling": 6,
-				"v2-fastcdc":        1,
-				"unknown":           2,
-			},
-			ChunkCountsByVersion: map[string]int64{
-				"v1-simple-rolling": 4,
-				"v2-fastcdc":        1,
-				"unknown":           2,
-			},
-			ChunkBytesByVersion: map[string]int64{
-				"v1-simple-rolling": 2 * 1024 * 1024,
-				"v2-fastcdc":        1 * 1024 * 1024,
-				"unknown":           512,
-			},
-			SnapshotRetention: maintenance.SnapshotRetentionStats{
-				CurrentOnlyLogicalFiles:        4,
-				CurrentOnlyBytes:               2 * 1024 * 1024,
-				SnapshotReferencedLogicalFiles: 3,
-				SnapshotReferencedBytes:        5 * 1024 * 1024,
-				SnapshotOnlyLogicalFiles:       1,
-				SnapshotOnlyBytes:              1 * 1024 * 1024,
-				SharedLogicalFiles:             2,
-				SharedBytes:                    4 * 1024 * 1024,
-			},
-		})
-	})
-
-	for _, want := range []string{
-		"Active chunker (new writes):     v2-fastcdc",
-		"Snapshot retention:",
-		"Chunker Distribution:",
-		"v1-simple-rolling:     4 chunks",
-		"v2-fastcdc:            1 chunks",
-		"unknown:               2 chunks",
-		"Stored Data by Chunker:",
-		"v1-simple-rolling:     0.00 GB",
-		"v2-fastcdc:            0.00 GB",
-		"unknown:               0.00 GB",
-		"Logical Files by Chunker:",
-		"v1-simple-rolling:     6 files",
-		"v2-fastcdc:            1 files",
-		"unknown:               2 files",
-		"⚠ Repository contains multiple chunker versions.",
-		"This is expected after upgrades or configuration changes.",
-		"Dedup Signal:",
-		"Total chunk references:  10000",
-		"Unique referenced chunks:7500",
-		"Estimated dedup ratio:   25.00%",
-		"Current-only logical files:    4 (2.00 MB)",
-		"Snapshot-referenced files:     3 (5.00 MB)",
-		"Snapshot-only logical files:   1 (1.00 MB)",
-		"Shared logical files:          2 (4.00 MB)",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("expected stats report to contain %q, got output:\n%s", want, output)
-		}
+	containersData, ok := data["containers"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing containers object in payload: %v", data)
+	}
+	records, ok := containersData["records"].([]any)
+	if !ok {
+		t.Fatalf("expected containers.records array when --containers is set: %v", containersData)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one container record, got %d", len(records))
 	}
 }
 
-func TestPrintStatsReportOmitsMixedChunkerWarningWhenSingleKnownVersion(t *testing.T) {
+func TestStatsCommandHuman(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:    observability.LogicalStats{TotalFiles: 1, CompletedFiles: 1, TotalSizeBytes: 1024, CompletedSizeBytes: 1024},
+			Chunks:     observability.ChunkStats{TotalChunks: 1, CompletedChunks: 1, CompletedBytes: 512},
+		}, nil
+	}
+
 	output := captureStdout(t, func() {
-		printStatsReport(&maintenance.StatsResult{
-			ActiveWriteChunker: "v2-fastcdc",
-			ChunkCountsByVersion: map[string]int64{
-				"v2-fastcdc": 10,
-				"unknown":    2,
-			},
-			LogicalFileCountsByVersion: map[string]int64{
-				"v2-fastcdc": 4,
-				"unknown":    1,
-			},
-		})
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeText); err != nil {
+			t.Fatalf("runStatsCommand human returned error: %v", err)
+		}
 	})
 
-	if strings.Contains(output, "Repository contains multiple chunker versions") {
-		t.Fatalf("expected no mixed-chunker warning for single known version, got output:\n%s", output)
+	if !strings.Contains(output, "Coldkeep stats") {
+		t.Fatalf("expected human stats output header, got:\n%s", output)
+	}
+}
+
+func TestStatsCommandJSON(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:    observability.LogicalStats{TotalFiles: 1},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand json returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		t.Fatalf("parse json payload: %v\noutput=%q", err, output)
+	}
+	if got, _ := payload["type"].(string); got != "stats" {
+		t.Fatalf("expected type=stats, got %v", payload["type"])
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object: %v", payload)
+	}
+	repo, ok := data["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing repository object: %v", data)
+	}
+	if got, _ := repo["active_write_chunker"].(string); got != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%q", got)
+	}
+}
+
+func TestRunStatsCommandJSONContract(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 12, 34, 56, 0, time.UTC),
+			Repository:     observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:        observability.LogicalStats{TotalFiles: 2, CompletedSizeBytes: 4096},
+			Chunks: observability.ChunkStats{
+				TotalChunks:      3,
+				CompletedBytes:   1024,
+				TotalReferences:  5,
+				UniqueReferenced: 3,
+				ChunkerVersions:  []observability.VersionStat{{Version: "v2-fastcdc", Chunks: 3, Bytes: 1024}},
+			},
+			Containers: observability.ContainerStats{TotalBytes: 2048},
+			Warnings:   []observability.ObservationWarning{{Code: "STATS_WARNING", Message: "stats warning"}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}, outputModeJSON); err != nil {
+			t.Fatalf("runStatsCommand JSON contract returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse stats JSON output: %v output=%q", err, output)
+	}
+	data := assertJSONEnvelopeShape(t, payload, "stats")
+	assertStructuredWarnings(t, payload, 1)
+
+	repository, ok := data["repository"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected repository object, got %T", data["repository"])
+	}
+	if got, _ := repository["active_write_chunker"].(string); got != "v2-fastcdc" {
+		t.Fatalf("active_write_chunker mismatch: got=%v", repository["active_write_chunker"])
+	}
+	logical, ok := data["logical"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logical object, got %T", data["logical"])
+	}
+	assertJSONNumber(t, logical, "total_files", 2)
+	assertJSONNumber(t, logical, "completed_size_bytes", 4096)
+	chunks, ok := data["chunks"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected chunks object, got %T", data["chunks"])
+	}
+	assertJSONNumber(t, chunks, "total_chunks", 3)
+	assertJSONNumber(t, chunks, "completed_bytes", 1024)
+	if human, ok := chunks["completed_bytes"].(string); ok && strings.Contains(human, "KiB") {
+		t.Fatalf("expected numeric completed_bytes, got formatted string %q", human)
+	}
+}
+
+func TestStatsCommandJSONShorthand(t *testing.T) {
+	parsed := parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}
+	mode, err := resolveOutputMode(parsed)
+	if err != nil {
+		t.Fatalf("resolveOutputMode: %v", err)
+	}
+	if mode != outputModeJSON {
+		t.Fatalf("expected outputModeJSON for --json shorthand, got %q", mode)
+	}
+}
+
+func TestStatsCommandContainers(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	var includeContainers bool
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		includeContainers = opts.IncludeContainers
+		return &observability.StatsResult{}, nil
+	}
+
+	if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"containers": {""}}}, outputModeText); err != nil {
+		t.Fatalf("runStatsCommand with --containers returned error: %v", err)
+	}
+	if !includeContainers {
+		t.Fatal("expected IncludeContainers=true when --containers is set")
+	}
+}
+
+func TestStatsCommandTraceFlagsPassedThrough(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() { runObservabilityStatsPhase = originalRunStats })
+
+	var captured observability.StatsOptions
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		captured = opts
+		return &observability.StatsResult{}, nil
+	}
+
+	if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"trace-json": {""}}}, outputModeText); err != nil {
+		t.Fatalf("runStatsCommand with --trace-json returned error: %v", err)
+	}
+	if !captured.Trace.Enabled {
+		t.Fatal("expected Trace.Enabled=true when --trace-json is set")
+	}
+	if _, ok := captured.Trace.Sink.(*observability.JSONTraceSink); !ok {
+		t.Fatalf("expected *observability.JSONTraceSink, got %T", captured.Trace.Sink)
+	}
+}
+
+func TestStatsCommandConflictingOutputFlags(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"json":   {""},
+			"output": {"human"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+		t.Fatalf("expected output flag conflict error, got %v", err)
+	}
+}
+
+func TestStatsCommandHelpIncludesJSONTraceAndDeterminism(t *testing.T) {
+	output := captureStdout(t, func() {
+		if err := runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
+			t.Fatalf("runStatsCommand --help returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "JSON support:") {
+		t.Fatalf("expected JSON support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Trace support:") {
+		t.Fatalf("expected trace support section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Deterministic output guarantee:") {
+		t.Fatalf("expected deterministic guarantee section, got:\n%s", output)
 	}
 }
 
@@ -5986,5 +7357,897 @@ func TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata(t *testi
 	}
 	if action, _ := first["recommended_action"].(string); !strings.Contains(action, "orphan physical_file") {
 		t.Fatalf("expected recommended_action to mention orphan physical_file handling, got first=%v", first)
+	}
+}
+
+func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 26, 10, 0, 0, 0, time.UTC),
+			Kind:           observability.SimulationKindGC,
+			Exact:          true,
+			Mutated:        false,
+			GC: &observability.GCSimulationResult{
+				GeneratedAtUTC: time.Date(2026, time.April, 26, 10, 0, 0, 0, time.UTC),
+				Kind:           observability.SimulationKindGC,
+				Exact:          true,
+				Mutated:        false,
+				Assumptions: observability.GCSimulationAssumptions{
+					DeletedSnapshots: opts.AssumeDeletedSnapshots,
+				},
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            10,
+					UnreachableChunks:          2,
+					LogicallyReclaimableBytes:  200,
+					PhysicallyReclaimableBytes: 100,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    1,
+				},
+				Containers: []observability.ContainerSimulationImpact{{
+					ContainerID:        7,
+					Filename:           "c007.bin",
+					TotalBytes:         100,
+					LiveBytesAfterGC:   0,
+					ReclaimableBytes:   100,
+					ReclaimableChunks:  1,
+					TotalChunks:        1,
+					FullyReclaimable:   true,
+					RequiresCompaction: false,
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags: map[string][]string{
+				"json":            {""},
+				"delete-snapshot": {"s1"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing data object: %v", payload)
+	}
+	gcNode, ok := data["gc"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc object: %v", data)
+	}
+	if got, _ := gcNode["kind"].(string); got != "gc" {
+		t.Fatalf("expected gc.kind=gc, got %v", gcNode["kind"])
+	}
+	if got, _ := gcNode["exact"].(bool); !got {
+		t.Fatalf("expected gc.exact=true, got %v", gcNode["exact"])
+	}
+	if got, _ := gcNode["mutated"].(bool); got {
+		t.Fatalf("expected gc.mutated=false, got %v", gcNode["mutated"])
+	}
+	assumptions, ok := gcNode["assumptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc.assumptions object: %v", gcNode)
+	}
+	deleted, ok := assumptions["deleted_snapshots"].([]any)
+	if !ok || len(deleted) != 1 || deleted[0] != "s1" {
+		t.Fatalf("unexpected deleted_snapshots: %v", assumptions["deleted_snapshots"])
+	}
+	summary, ok := gcNode["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing gc.summary object: %v", gcNode)
+	}
+	assertJSONNumber(t, summary, "reachable_chunks", 10)
+	assertJSONNumber(t, summary, "unreachable_chunks", 2)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
+	assertJSONNumber(t, summary, "fully_reclaimable_containers", 1)
+	assertJSONNumber(t, summary, "partially_dead_containers", 1)
+	if _, exists := gcNode["containers"]; exists {
+		t.Fatalf("expected gc.containers omitted without --containers flag, got %v", gcNode["containers"])
+	}
+}
+
+func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            3,
+					UnreachableChunks:          2,
+					LogicallyReclaimableBytes:  150 * 1024 * 1024,
+					PhysicallyReclaimableBytes: 100 * 1024 * 1024,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    1,
+				},
+				Containers: []observability.ContainerSimulationImpact{
+					{ContainerID: 1, Filename: "full.bin", ReclaimableBytes: 100, LiveBytesAfterGC: 0, ReclaimableChunks: 2, TotalChunks: 2, FullyReclaimable: true},
+					{ContainerID: 2, Filename: "partial.bin", ReclaimableBytes: 50, LiveBytesAfterGC: 50, ReclaimableChunks: 1, TotalChunks: 2, FullyReclaimable: false, RequiresCompaction: true},
+				},
+				Assumptions: observability.GCSimulationAssumptions{DeletedSnapshots: opts.AssumeDeletedSnapshots},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags: map[string][]string{
+				"containers":      {""},
+				"delete-snapshot": {"s1", "s2"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand text returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "GC simulation") {
+		t.Fatalf("expected gc simulation header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Mode") || !strings.Contains(output, "exact: true") || !strings.Contains(output, "mutated: false") {
+		t.Fatalf("expected mode section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Reachability") || !strings.Contains(output, "reachable_chunks: 3") || !strings.Contains(output, "unreachable_chunks: 2") {
+		t.Fatalf("expected reachability section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Reclaimable") || !strings.Contains(output, "logical_bytes: 150 MiB") || !strings.Contains(output, "physical_bytes_now: 100 MiB") {
+		t.Fatalf("expected reclaimable section with MiB formatting, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Containers") || !strings.Contains(output, "fully_reclaimable: 1") || !strings.Contains(output, "partially_dead: 1") {
+		t.Fatalf("expected containers summary section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Assumptions") || !strings.Contains(output, "deleted_snapshot: s1") || !strings.Contains(output, "deleted_snapshot: s2") {
+		t.Fatalf("expected assumptions section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "status: fully_reclaimable_now") {
+		t.Fatalf("expected fully reclaimable container status, got:\n%s", output)
+	}
+	if !strings.Contains(output, "status: requires_compaction") {
+		t.Fatalf("expected requires compaction status, got:\n%s", output)
+	}
+	if !strings.Contains(output, "reclaimable_bytes: 100 B") || !strings.Contains(output, "live_bytes_after_gc: 50 B") {
+		t.Fatalf("expected human-readable container byte sizes, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Result") || !strings.Contains(output, "changed: false") || !strings.Contains(output, "state_change: none") || !strings.Contains(output, "note: no repository state changed") {
+		t.Fatalf("expected no state changed footer, got:\n%s", output)
+	}
+}
+
+func TestRunSimulateGCCommandJSONIncludesContainersWhenRequested(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+				Containers: []observability.ContainerSimulationImpact{{
+					ContainerID: 42,
+					Filename:    "c042.bin",
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags: map[string][]string{
+				"containers": {""},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	gcNode := data["gc"].(map[string]any)
+	containers, ok := gcNode["containers"].([]any)
+	if !ok || len(containers) != 1 {
+		t.Fatalf("expected one container in gc.containers when --containers is set, got %v", gcNode["containers"])
+	}
+}
+
+func TestRunSimulateGCCommandJSONContractAndWarnings(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			GeneratedAtUTC: time.Date(2026, time.April, 27, 16, 0, 0, 0, time.UTC),
+			Kind:           observability.SimulationKindGC,
+			Exact:          true,
+			Mutated:        false,
+			Warnings:       []observability.ObservationWarning{{Code: "TOP_LEVEL_WARNING", Message: "top level warning"}},
+			GC: &observability.GCSimulationResult{
+				GeneratedAtUTC: time.Date(2026, time.April, 27, 16, 0, 0, 0, time.UTC),
+				Kind:           observability.SimulationKindGC,
+				Exact:          true,
+				Mutated:        false,
+				Summary: observability.GCSimulationSummary{
+					ReachableChunks:            10,
+					UnreachableChunks:          2,
+					LogicallyReclaimableBytes:  200,
+					PhysicallyReclaimableBytes: 100,
+					FullyReclaimableContainers: 1,
+					PartiallyDeadContainers:    1,
+				},
+				Containers: []observability.ContainerSimulationImpact{{
+					ContainerID:        7,
+					Filename:           "c007.bin",
+					TotalBytes:         100,
+					LiveBytesAfterGC:   0,
+					ReclaimableBytes:   100,
+					ReclaimableChunks:  1,
+					TotalChunks:        1,
+					FullyReclaimable:   true,
+					RequiresCompaction: false,
+				}},
+				Warnings: []observability.ObservationWarning{{Code: "GC_WARNING", Message: "gc warning"}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags:       map[string][]string{"json": {""}, "containers": {""}},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand JSON contract returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, output)
+	}
+	data := assertJSONEnvelopeShape(t, payload, "simulation")
+	assertStructuredWarnings(t, payload, 2)
+	gcNode, ok := data["gc"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gc object, got %T", data["gc"])
+	}
+	if got, _ := gcNode["kind"].(string); got != "gc" {
+		t.Fatalf("gc.kind mismatch: got=%v", gcNode["kind"])
+	}
+	summary, ok := gcNode["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gc.summary object, got %T", gcNode["summary"])
+	}
+	assertJSONNumber(t, summary, "reachable_chunks", 10)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
+	containers, ok := gcNode["containers"].([]any)
+	if !ok || len(containers) != 1 {
+		t.Fatalf("expected one gc.containers entry, got %v", gcNode["containers"])
+	}
+	containerNode, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected container object, got %T", containers[0])
+	}
+	assertJSONNumber(t, containerNode, "container_id", 7)
+	assertJSONNumber(t, containerNode, "reclaimable_bytes", 100)
+	if human, ok := containerNode["reclaimable_bytes"].(string); ok && strings.Contains(human, "MiB") {
+		t.Fatalf("expected numeric reclaimable_bytes, got formatted string %q", human)
+	}
+}
+
+func TestCommandJSONModeErrorsAreStructured(t *testing.T) {
+	originalRunStats := runObservabilityStatsPhase
+	originalInspect := runObservabilityInspectPhase
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() {
+		runObservabilityStatsPhase = originalRunStats
+		runObservabilityInspectPhase = originalInspect
+		runObservabilitySimulateGCPhase = originalSimulate
+	})
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "stats",
+			run: func() error {
+				runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+					return nil, observabilityErrorf(exitGeneral, "NOT_FOUND", "stats source missing")
+				}
+				return runStatsCommand(parsedCommandLine{method: "stats", flags: map[string][]string{"json": {""}}}, outputModeJSON)
+			},
+		},
+		{
+			name: "inspect",
+			run: func() error {
+				runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+					return nil, observabilityErrorf(exitGeneral, "NOT_FOUND", "logical file 45 not found")
+				}
+				return runInspectCommand(parsedCommandLine{method: "inspect", positionals: []string{"file", "45"}, flags: map[string][]string{"json": {""}}}, outputModeJSON)
+			},
+		},
+		{
+			name: "simulate-gc",
+			run: func() error {
+				runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+					return nil, observabilityErrorf(exitGeneral, "INVALID_ARGUMENT", "snapshot s9 does not exist")
+				}
+				return runSimulateGCCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}}}, outputModeJSON)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := captureStderr(t, func() {
+				err := tc.run()
+				if err == nil {
+					t.Fatal("expected non-nil command error")
+				}
+				printCLIError(err, outputModeJSON)
+			})
+
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+				t.Fatalf("parse JSON error output: %v output=%q", err, output)
+			}
+			if got, _ := payload["status"].(string); got != "error" {
+				t.Fatalf("expected status=error, got %v", payload["status"])
+			}
+			if got, _ := payload["message"].(string); strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty message, got %v", payload["message"])
+			}
+			if _, ok := payload["error_class"].(string); !ok {
+				t.Fatalf("expected error_class string, got %T", payload["error_class"])
+			}
+			if _, ok := payload["exit_code"].(float64); !ok {
+				t.Fatalf("expected exit_code number, got %T", payload["exit_code"])
+			}
+			errorNode, ok := payload["error"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected structured error object, got %T", payload["error"])
+			}
+			if got, _ := errorNode["code"].(string); strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty error.code, got %v payload=%v", errorNode["code"], payload)
+			}
+			if got, _ := errorNode["message"].(string); strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty error.message, got %v payload=%v", errorNode["message"], payload)
+			}
+		})
+	}
+}
+
+func TestRunSimulateGCCommandDeleteSnapshotFlagPassThrough(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	var captured observability.SimulationOptions
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		captured = opts
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+			},
+		}, nil
+	}
+
+	err := runSimulateGCCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"gc"},
+		flags: map[string][]string{
+			"delete-snapshot": {"s3", "s4"},
+			"trace-json":      {""},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runSimulateGCCommand returned error: %v", err)
+	}
+
+	if captured.Kind != observability.SimulationKindGC {
+		t.Fatalf("captured.Kind = %q, want %q", captured.Kind, observability.SimulationKindGC)
+	}
+	if len(captured.AssumeDeletedSnapshots) != 2 || captured.AssumeDeletedSnapshots[0] != "s3" || captured.AssumeDeletedSnapshots[1] != "s4" {
+		t.Fatalf("captured.AssumeDeletedSnapshots = %v, want [s3 s4]", captured.AssumeDeletedSnapshots)
+	}
+	if !captured.Trace.Enabled {
+		t.Fatal("expected Trace.Enabled=true from --trace-json")
+	}
+	if _, ok := captured.Trace.Sink.(*observability.JSONTraceSink); !ok {
+		t.Fatalf("expected *observability.JSONTraceSink, got %T", captured.Trace.Sink)
+	}
+}
+
+func TestRunSimulateGCCommandRejectsMissingSnapshot(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return nil, fmt.Errorf(`gc simulation: build plan: gc.BuildPlan: validate assumed-deleted snapshots: snapshot %q does not exist`, opts.AssumeDeletedSnapshots[0])
+	}
+
+	err := runSimulateGCCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"gc"},
+		flags: map[string][]string{
+			"delete-snapshot": {"missing-snapshot"},
+		},
+	}, outputModeText)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `snapshot missing-snapshot not found`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSimulateGCCommandTextOutputIncludesWarnings(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+				Warnings: []observability.ObservationWarning{{
+					Code:    "QUARANTINED_CONTAINER",
+					Message: "quarantined containers are excluded from physical reclaim calculation",
+				}},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{
+			method:      "simulate",
+			positionals: []string{"gc"},
+			flags:       map[string][]string{},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runSimulateGCCommand returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Warnings") {
+		t.Fatalf("expected warnings section, got:\n%s", output)
+	}
+	if !strings.Contains(output, "warning: [QUARANTINED_CONTAINER] quarantined containers are excluded from physical reclaim calculation") {
+		t.Fatalf("expected warning message, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Result") || !strings.Contains(output, "changed: false") {
+		t.Fatalf("expected no state changed footer, got:\n%s", output)
+	}
+}
+
+func TestRunCLISimulateSkipsStartupRecovery(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilitySimulateGCPhase = originalSimulate
+	})
+
+	startupCalls := 0
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		startupCalls++
+		return recovery.Report{}, nil
+	}
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return &observability.SimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			GC: &observability.GCSimulationResult{
+				Kind:    observability.SimulationKindGC,
+				Exact:   true,
+				Mutated: false,
+				Summary: observability.GCSimulationSummary{},
+			},
+		}, nil
+	}
+
+	stderrOutput := captureStderr(t, func() {
+		stdoutOutput := captureStdout(t, func() {
+			code := runCLI([]string{"simulate", "gc"})
+			if code != exitSuccess {
+				t.Fatalf("expected exitSuccess, got %d", code)
+			}
+		})
+		if !strings.Contains(stdoutOutput, "GC simulation") {
+			t.Fatalf("expected simulate output, got %q", stdoutOutput)
+		}
+	})
+	if stderrOutput != "" {
+		t.Fatalf("expected no stderr output, got %q", stderrOutput)
+	}
+	if startupCalls != 0 {
+		t.Fatalf("expected startup recovery to be skipped for simulate, got %d calls", startupCalls)
+	}
+}
+
+func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	result := &observability.SimulationResult{
+		Kind:    observability.SimulationKindGC,
+		Exact:   true,
+		Mutated: false,
+		GC: &observability.GCSimulationResult{
+			Kind:    observability.SimulationKindGC,
+			Exact:   true,
+			Mutated: false,
+			Assumptions: observability.GCSimulationAssumptions{
+				DeletedSnapshots: []string{"snap-a"},
+			},
+			Summary: observability.GCSimulationSummary{
+				ReachableChunks:            11,
+				UnreachableChunks:          2,
+				LogicallyReclaimableBytes:  200 * 1024 * 1024,
+				PhysicallyReclaimableBytes: 100 * 1024 * 1024,
+				FullyReclaimableContainers: 1,
+				PartiallyDeadContainers:    1,
+			},
+			Warnings: []observability.ObservationWarning{{
+				Code:    "PARTIAL_RECLAIM_REQUIRES_COMPACTION",
+				Message: "some dead bytes are in partially live containers and are not physically reclaimable yet",
+			}},
+		},
+	}
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		return result, nil
+	}
+
+	textOutput := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}}, outputModeText)
+		if err != nil {
+			t.Fatalf("text simulate: %v", err)
+		}
+	})
+	jsonOutput := captureStdout(t, func() {
+		err := runSimulateGCCommand(parsedCommandLine{method: "simulate", positionals: []string{"gc"}, flags: map[string][]string{"json": {""}}}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("json simulate: %v", err)
+		}
+	})
+
+	if !strings.Contains(textOutput, "reachable_chunks: 11") || !strings.Contains(textOutput, "unreachable_chunks: 2") {
+		t.Fatalf("text output missing reachability summary: %s", textOutput)
+	}
+	if !strings.Contains(textOutput, "logical_bytes: 200 MiB") || !strings.Contains(textOutput, "physical_bytes_now: 100 MiB") {
+		t.Fatalf("text output missing reclaimable summary: %s", textOutput)
+	}
+	if !strings.Contains(textOutput, "deleted_snapshot: snap-a") {
+		t.Fatalf("text output missing assumptions: %s", textOutput)
+	}
+	if !strings.Contains(textOutput, "warning: [PARTIAL_RECLAIM_REQUIRES_COMPACTION] some dead bytes are in partially live containers and are not physically reclaimable yet") {
+		t.Fatalf("text output missing warning: %s", textOutput)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOutput)), &payload); err != nil {
+		t.Fatalf("parse simulate gc JSON: %v output=%q", err, jsonOutput)
+	}
+	if got, _ := payload["type"].(string); got != "simulation" {
+		t.Fatalf("expected type=simulation, got %v", payload["type"])
+	}
+	meta, ok := payload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected meta object, got %T", payload["meta"])
+	}
+	if got, _ := meta["version"].(string); got != "v1.6" {
+		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	}
+	if got, _ := meta["exact"].(bool); !got {
+		t.Fatalf("expected meta.exact=true, got %v", meta["exact"])
+	}
+	data := payload["data"].(map[string]any)
+	gcNode := data["gc"].(map[string]any)
+	summary := gcNode["summary"].(map[string]any)
+	assertJSONNumber(t, summary, "reachable_chunks", 11)
+	assertJSONNumber(t, summary, "unreachable_chunks", 2)
+	assertJSONNumber(t, summary, "logically_reclaimable_bytes", 200*1024*1024)
+	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100*1024*1024)
+	assumptions := gcNode["assumptions"].(map[string]any)
+	deleted := assumptions["deleted_snapshots"].([]any)
+	if len(deleted) != 1 || deleted[0] != "snap-a" {
+		t.Fatalf("unexpected deleted_snapshots: %v", assumptions["deleted_snapshots"])
+	}
+	warnings := payload["warnings"].([]any)
+	if len(warnings) != 1 {
+		t.Fatalf("expected one warning, got %v", warnings)
+	}
+	if _, exists := gcNode["warnings"]; exists {
+		t.Fatalf("expected gc.warnings to be omitted from data, got %v", gcNode["warnings"])
+	}
+}
+
+func TestStatsCLIHuman(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"stats"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+
+	assertGoldenBytes(t, "stats.txt", stdout)
+}
+
+func TestStatsCLIJSON(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"stats", "--json"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatal("expected startup recovery JSON event on stderr for stats command")
+	}
+
+	assertGoldenBytes(t, "stats.json", stdout)
+}
+
+func TestInspectCLIHuman(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"inspect", "chunk", "7"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+
+	assertGoldenBytes(t, "inspect_chunk.txt", stdout)
+}
+
+func TestInspectCLIJSON(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"inspect", "chunk", "7", "--output", "json"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatal("expected startup recovery JSON event on stderr for inspect command")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); err != nil {
+		t.Fatalf("parse inspect JSON payload: %v output=%q", err, stdout)
+	}
+	if got, _ := payload["type"].(string); got != "inspect" {
+		t.Fatalf("expected type=inspect, got %v", payload["type"])
+	}
+}
+
+func TestSimulateCLIHuman(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"simulate", "gc", "--delete-snapshot", "snap-old"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+
+	assertGoldenBytes(t, "simulate_gc.txt", stdout)
+}
+
+func TestSimulateCLIJSON(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess, got %d", code)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("expected no stderr output for simulate command, got %q", stderr)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); err != nil {
+		t.Fatalf("parse simulate JSON payload: %v output=%q", err, stdout)
+	}
+	if got, _ := payload["type"].(string); got != "simulation" {
+		t.Fatalf("expected type=simulation, got %v", payload["type"])
+	}
+}
+
+func TestTraceDoesNotAffectOutput(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	tests := []struct {
+		name         string
+		withoutTrace []string
+		withTrace    []string
+	}{
+		{
+			name:         "stats",
+			withoutTrace: []string{"stats", "--json"},
+			withTrace:    []string{"stats", "--json", "--trace-json"},
+		},
+		{
+			name:         "inspect",
+			withoutTrace: []string{"inspect", "chunk", "7", "--output", "json"},
+			withTrace:    []string{"inspect", "chunk", "7", "--output", "json", "--trace-json"},
+		},
+		{
+			name:         "simulate",
+			withoutTrace: []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"},
+			withTrace:    []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old", "--trace-json"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			withoutTraceStdout, _, withoutCode := runCLIWithCapturedIO(t, tc.withoutTrace)
+			withTraceStdout, _, withCode := runCLIWithCapturedIO(t, tc.withTrace)
+
+			if withoutCode != exitSuccess {
+				t.Fatalf("without trace exit code mismatch: got %d", withoutCode)
+			}
+			if withCode != exitSuccess {
+				t.Fatalf("with trace exit code mismatch: got %d", withCode)
+			}
+			if withoutTraceStdout != withTraceStdout {
+				t.Fatalf("stdout changed with trace\nwithout=%q\nwith=%q", withoutTraceStdout, withTraceStdout)
+			}
+		})
+	}
+}
+
+func TestJSONIsStable(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "stats", args: []string{"stats", "--json"}},
+		{name: "inspect", args: []string{"inspect", "chunk", "7", "--output", "json"}},
+		{name: "simulate", args: []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			first, _, firstCode := runCLIWithCapturedIO(t, tc.args)
+			second, _, secondCode := runCLIWithCapturedIO(t, tc.args)
+
+			if firstCode != exitSuccess || secondCode != exitSuccess {
+				t.Fatalf("expected success exit code, got first=%d second=%d", firstCode, secondCode)
+			}
+			if first != second {
+				t.Fatalf("JSON output is not stable\nfirst=%q\nsecond=%q", first, second)
+			}
+		})
+	}
+}
+
+func TestBackwardCompatibilityStatsCLI(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	originalRunStats := runObservabilityStatsPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilityStatsPhase = originalRunStats
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	runObservabilityStatsPhase = func(opts observability.StatsOptions) (*observability.StatsResult, error) {
+		return &observability.StatsResult{
+			Repository: observability.RepositoryStats{ActiveWriteChunker: "v2-fastcdc"},
+			Logical:    observability.LogicalStats{TotalFiles: 1, CompletedFiles: 1, TotalSizeBytes: 1024, CompletedSizeBytes: 1024},
+			Chunks:     observability.ChunkStats{TotalChunks: 1, CompletedChunks: 1, CompletedBytes: 512},
+		}, nil
+	}
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"stats"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for coldkeep stats, got %d", code)
+	}
+	if !strings.Contains(stdout, "Coldkeep stats") {
+		t.Fatalf("expected stats header in output, got:\n%s", stdout)
+	}
+}
+
+func TestBackwardCompatibilityInspectFileCLI(t *testing.T) {
+	originalStartupRecovery := startupRecoveryPhase
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() {
+		startupRecoveryPhase = originalStartupRecovery
+		runObservabilityInspectPhase = originalInspect
+	})
+
+	startupRecoveryPhase = func(string) (recovery.Report, error) {
+		return recovery.Report{}, nil
+	}
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		if entity != observability.EntityFile {
+			t.Fatalf("unexpected entity: %s", entity)
+		}
+		if id != "42" {
+			t.Fatalf("unexpected file id: %s", id)
+		}
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   id,
+			Summary: map[string]any{
+				"original_name":   "compat.txt",
+				"chunk_count":     int64(3),
+				"chunker_version": "v2-fastcdc",
+			},
+		}, nil
+	}
+
+	stdout, _, code := runCLIWithCapturedIO(t, []string{"inspect", "file", "42"})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for coldkeep inspect file <id>, got %d", code)
+	}
+	for _, want := range []string{"Inspect logical file 42", "compat.txt", "chunker_version:", "v2-fastcdc"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected inspect file output to contain %q, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestBackwardCompatibilitySimulateStoreCLI(t *testing.T) {
+	t.Setenv("COLDKEEP_CODEC", "plain")
+
+	inPath := filepath.Join(t.TempDir(), "simulate-store-compat.txt")
+	if err := os.WriteFile(inPath, []byte("simulate-store-compat-payload"), 0o600); err != nil {
+		t.Fatalf("write simulated input file: %v", err)
+	}
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"simulate", "store", inPath})
+	if code != exitSuccess {
+		t.Fatalf("expected exitSuccess for coldkeep simulate store, got %d (stderr=%q)", code, stderr)
+	}
+	if !strings.Contains(stdout, "[SIMULATE] subcommand=store") {
+		t.Fatalf("expected simulate store report header, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "dry run") {
+		t.Fatalf("expected dry-run wording in simulate store output, got:\n%s", stdout)
 	}
 }
