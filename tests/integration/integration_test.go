@@ -104,8 +104,10 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -239,8 +241,10 @@ func TestDoctorCommand(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -498,8 +502,10 @@ func TestSnapshotCreateLifecycleIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -758,8 +764,10 @@ func TestSnapshotPhase2BehaviorRegressionIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -1043,8 +1051,10 @@ func TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration(t *testing
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -1166,8 +1176,10 @@ func TestSnapshotPhase3LineageBehaviorIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -1421,8 +1433,10 @@ func TestSnapshotLineageSafetyMixedChainDeleteMiddleIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -1594,8 +1608,10 @@ func TestSnapshotCrossFeatureInteractionIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -1799,8 +1815,10 @@ func TestPhase7SnapshotRetentionLifecycleCLIIntegration(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -1928,8 +1946,10 @@ func TestSnapshotShowFilteredJSONContractMatchesFileCount(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2054,8 +2074,10 @@ func TestSnapshotDiffFilteredJSONContractMatchesSummary(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2151,8 +2173,10 @@ func TestSnapshotDiffSummaryJSONContractMatchesDetailedSummary(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2247,8 +2271,10 @@ func TestSnapshotListTreeJSONContract(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2335,8 +2361,10 @@ func TestSnapshotStatsLineageEnhancedFieldsJSONContract(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2419,8 +2447,10 @@ func TestDoctorSurfacesPhysicalMappingIntegrityFailures(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2480,8 +2510,10 @@ func TestRepairThenVerifyThenGCSmoke(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2659,8 +2691,10 @@ func TestDoctorJSONContractConsistency(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2777,8 +2811,10 @@ func TestDoctorJSONRecoveryFieldNames(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2834,8 +2870,10 @@ func TestDoctorFailureJSONContractAndStreams(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2913,8 +2951,10 @@ func TestDoctorIntegrationSmokeContract(t *testing.T) {
 	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -2991,8 +3031,10 @@ func TestDoctorMutatesStaleSealingStateAndVerifyPasses(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3060,8 +3102,10 @@ func TestDoctorAbortsProcessingLogicalFilesFromRecoverableState(t *testing.T) {
 	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3152,8 +3196,10 @@ func TestDoctorAfterRecoverableCorruptionOperatorStory(t *testing.T) {
 	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3233,8 +3279,10 @@ func TestEndToEndTrustProof(t *testing.T) {
 	testutils.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3335,8 +3383,10 @@ func TestSimulationMatchesRealSizeMetrics(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3419,8 +3469,10 @@ func TestCLIJSONOutputStreamSeparation(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3488,8 +3540,10 @@ func TestCLIJSONErrorContracts(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3600,8 +3654,10 @@ func TestCLIJSONErrorContractsDoctorRecoveryFailure(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	repoRoot := testutils.FindRepoRoot(t)
@@ -3646,8 +3702,10 @@ func TestDoctorJSONFailureShortPathSingleMachineReadablePayload(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	repoRoot := testutils.FindRepoRoot(t)
@@ -3703,8 +3761,10 @@ func TestRoundTripStoreRestore(t *testing.T) {
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3758,8 +3818,10 @@ func TestDedupSameFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3802,8 +3864,10 @@ func TestStoreFolderIdempotentDedup(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3890,8 +3954,10 @@ func TestStoreFolderIdempotentDedupEdgeCases(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -3976,8 +4042,10 @@ func TestStoreFolderParallelSmoke(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4079,8 +4147,10 @@ func TestStoreEdgeCasesFolder(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4177,8 +4247,10 @@ func TestGCRemovesUnusedContainers(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4315,8 +4387,10 @@ func TestConcurrentStoreSameFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4375,8 +4449,10 @@ func TestConcurrentStoreSameChunk(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4462,8 +4538,10 @@ func TestConcurrentStoreSameFileStress(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4551,8 +4629,10 @@ func TestChunkerAbstractionStoreRestoreRoundTrip(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4635,8 +4715,10 @@ func TestConcurrentStoreFolderStress(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4746,8 +4828,10 @@ func TestConcurrentStoreStressForcesRotation(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4844,8 +4928,10 @@ func TestRetryAfterAbortedFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4896,8 +4982,10 @@ func TestStoreRebuildsCorruptCompletedMetadata(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -4973,8 +5061,10 @@ func TestDoctorMutatesRecoverableState(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5121,8 +5211,10 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5519,8 +5611,10 @@ func TestStoreRebuildsMalformedCompletedChunkMetadata(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5605,8 +5699,10 @@ func TestStoreRebuildsMalformedCompletedChunkInQuarantinedContainer(t *testing.T
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5720,8 +5816,10 @@ func TestConcurrentRetryAfterAbortedFileStress(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5798,8 +5896,10 @@ func TestRetryAfterAbortedChunk(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5864,8 +5964,10 @@ func TestConcurrentRetryAfterAbortedChunkStress(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -5977,8 +6079,10 @@ func TestContainerRollover(t *testing.T) {
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6078,8 +6182,10 @@ func TestRotationSealsAllPreviousContainers(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6143,8 +6249,10 @@ func TestStartupRecoverySimulation(t *testing.T) {
 
 	// Use temp dirs per test
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6265,8 +6373,10 @@ func TestStartupRecoveryQuarantinesTruncatedActiveContainerTail(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6338,8 +6448,10 @@ func TestStartupRecoveryQuarantinesDamagedActiveContainerAndPreservesOtherLiveDa
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6485,8 +6597,10 @@ func TestStartupRecoveryQuarantinesSealingContainerWithGhostBytesAndGCSkipsIt(t 
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6590,8 +6704,10 @@ func TestStartupRecoveryQuarantinesGhostByteSealingContainerAndPreservesOtherLiv
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6717,8 +6833,10 @@ func TestSealContainerRejectsPhysicalSizeMismatch(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6791,8 +6909,10 @@ func TestStoreImmediatelyQuarantinesUnopenableActiveContainer(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6856,8 +6976,10 @@ func TestStartupRecoveryResyncsPreexistingQuarantinedOrphanConflictState(t *test
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6915,8 +7037,10 @@ func TestStartupRecoveryAcceptsDuplicateOrphanRetrierConflictState(t *testing.T)
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -6966,8 +7090,10 @@ func TestStartupRecoveryNonStrictContinuesOnSuspiciousOrphanConflictState(t *tes
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	_ = os.Setenv("COLDKEEP_STRICT_RECOVERY", "false")
 	defer os.Unsetenv("COLDKEEP_STRICT_RECOVERY")
 	testutils.ResetStorage(t)
@@ -7020,8 +7146,10 @@ func TestVerifyStandard(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7250,8 +7378,10 @@ func TestVerifyFull(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7508,8 +7638,10 @@ func TestSharedChunkSafety(t *testing.T) {
 
 	tmp := t.TempDir()
 
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 
 	testutils.ResetStorage(t)
 
@@ -7596,8 +7728,10 @@ func TestVerifySystemDeepPassesOnCleanStoredFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7627,8 +7761,10 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7709,8 +7845,10 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7781,8 +7919,10 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7854,8 +7994,10 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7910,8 +8052,10 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -7966,8 +8110,10 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 	testutils.SetTestAESGCMKey(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8021,8 +8167,10 @@ func TestVerifySystemDeepDetectsTrailingBytesAfterLastBlock(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8094,8 +8242,10 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8150,8 +8300,10 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8238,8 +8390,10 @@ func TestZeroByteFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8302,8 +8456,10 @@ func TestRepeatRestoreDeterminism(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8358,8 +8514,10 @@ func TestRepeatedStorePreservesChunkGraphDeterminism(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8421,8 +8579,10 @@ func TestStoreRemoveGCRestartStoreConvergesChunkGraph(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8507,8 +8667,10 @@ func TestStoreGCRestore(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8600,8 +8762,10 @@ func TestStoreLifecycleSeededRandomizedOperationOrder(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8707,8 +8871,10 @@ func TestStoreGCVerifyRestoreDeleteLoopStability(t *testing.T) {
 	const iterations = 50
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -8887,8 +9053,10 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 	const iterations = 30
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -9071,8 +9239,10 @@ func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -9203,8 +9373,10 @@ func TestGCRestoreRemoveInterleavingContainerPreservedWhilePinned(t *testing.T) 
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -9536,8 +9708,10 @@ func TestSampleDatasetEndToEnd(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -9654,8 +9828,10 @@ func TestRollbackAfterAppendContamination(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -9819,8 +9995,10 @@ func TestStoreSurfacesRollbackCleanupFailureAndQuarantinesActiveContainer(t *tes
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -9959,8 +10137,10 @@ func TestStoreSealingMarkerUpdateFailureAbortsSafelyAndRecovers(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10088,8 +10268,10 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10205,8 +10387,10 @@ func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10261,8 +10445,10 @@ func TestReuseRefusesStructurallyBrokenCompletedFile(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10442,8 +10628,10 @@ func TestReuseRefusesStructurallyBrokenCompletedChunk(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10557,8 +10745,10 @@ func TestConcurrentRemoveAndRestore(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10662,8 +10852,10 @@ func TestGCDuringActiveStore(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10767,8 +10959,10 @@ func TestLargeStoreRestoreVerifyDeepDoesNotTimeoutByDefault(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -10824,8 +11018,10 @@ func TestBatchFlagsEndToEnd(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Cleanup(func() { container.ContainersDir = "" })
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -11679,8 +11875,10 @@ func TestContainerOverflowProtection(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -11809,8 +12007,10 @@ func TestBlockOffsetContinuityValidation(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -11963,8 +12163,10 @@ func TestRemoveWithSharedChunksRefCount(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12123,8 +12325,10 @@ func TestMultiFileOpenConcurrentRestore(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12227,8 +12431,10 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12339,8 +12545,10 @@ func TestImplicitContainerFinalizationDuringStore(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12474,8 +12682,10 @@ func TestGCDryRunAccuracyMatchesRealRun(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12627,8 +12837,10 @@ func TestSearchListConsistencyWithFilters(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12714,8 +12926,10 @@ func TestPinCountAtomicityConcurrentRestore(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12796,8 +13010,10 @@ func TestEndToEndGCRestoreRemoveInterleaving(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -12904,8 +13120,10 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -13060,8 +13278,10 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -13225,8 +13445,10 @@ func TestStoreMultiChunkFileVerifiesAtomicFinalization(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -13344,8 +13566,10 @@ func TestFinalLogicalFileCompletionFailureLeavesExpectedState(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -13498,8 +13722,10 @@ func TestStoreVerifiesFileChunkContiguityOnCompletion(t *testing.T) {
 	testgate.RequireDB(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -13592,8 +13818,10 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 	testgate.RequireStress(t)
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -13742,8 +13970,10 @@ func TestSnapshotRetentionChurnLongRun(t *testing.T) {
 	const iterations = 70
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
