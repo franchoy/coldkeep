@@ -307,6 +307,9 @@ func (s *Service) sumChunkSizesByID(ctx context.Context, chunkIDs map[int64]stru
 		return 0, nil
 	}
 
+	// TODO(v1.7): Replace per-chunk point lookups with a batched strategy
+	// (chunked IN queries, temp table join, or equivalent) to scale snapshot
+	// reachability byte aggregation on large repositories.
 	var total int64
 	for chunkID := range chunkIDs {
 		var size int64
