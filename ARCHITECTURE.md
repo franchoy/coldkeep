@@ -569,7 +569,8 @@ A key design pattern in v1.2 remove operations is the use of **invariant-driven 
 
 **Pattern:**
 When cascading through physical_file mappings for removal, each step verifies the invariant:
-```
+
+```text
 logical_file.ref_count == COUNT(physical_file rows for that logical_file)
 ```
 
@@ -636,7 +637,7 @@ Phase 6 formalizes the GC trust model to explicitly operate under the v1.2 audit
 
 #### GC root model invariant chain
 
-```
+```text
 physical_file rows (audited coherent)
     → logical_file (ref_count authoritative after repair)
         → file_chunk → chunk (live_ref_count/pin_count evaluated per container)
