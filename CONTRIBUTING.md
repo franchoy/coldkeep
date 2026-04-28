@@ -4,13 +4,15 @@ Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.
 
-The project currently has five explicit correctness layers:
+The project currently has seven explicit correctness layers:
 
 - storage correctness (v1.0 core)
 - interaction correctness for CLI/automation contracts (v1.1)
 - physical-graph coherence and explicit repair semantics (v1.2)
 - snapshot-retention safety and reachability auditing (v1.3)
 - snapshot clarity and release-process hardening (v1.4)
+- chunker-evolution compatibility clarity (v1.5)
+- observability and simulation contract hardening (v1.6)
 
 The project originated as a research prototype, and continues to
 prioritize correctness, determinism, and clarity over feature velocity.
@@ -371,7 +373,7 @@ done
 
 This is the closest local approximation of what must pass for `CI Required Gate`.
 
-For the v1.4 snapshot contract gate, run the focused integration suite after the matrix loop:
+For the snapshot contract gate, run the focused integration suite after the matrix loop:
 
 ``` bash
 scripts/run_snapshot_release_gate.sh --count 1

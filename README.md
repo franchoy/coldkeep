@@ -751,7 +751,7 @@ Manual lifecycle expected in the release gate:
 
 For the full release criteria, use the snapshot sign-off sections in [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md):
 
-- `13) Snapshot sign-off checklist (Phases 1-7)`
+- `15) Snapshot sign-off checklist (Phases 1-7)`
 - `C. Test surface checklist`
 - `D. Documentation / release checklist`
 - `15) Verify snapshot / retention contract (manual gate)`
@@ -760,7 +760,7 @@ For the full release criteria, use the snapshot sign-off sections in [PRE_RELEAS
 When opening the release PR, use [`.github/pull_request_template.md`](.github/pull_request_template.md)
 to keep impact and validation context explicit.
 
-### Post-v1.4 hardening backlog (non-blocking)
+### Future Hardening Backlog (non-blocking)
 
 - Add fuzz coverage for snapshot query combinations (`--regex`, `--pattern`, `--prefix`) to further harden parser+matcher edge cases.
 - This is a future hardening task and is not part of the current release gate.
