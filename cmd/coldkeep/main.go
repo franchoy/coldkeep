@@ -77,6 +77,7 @@ var flagsWithValues = map[string]bool{
 	"prefix":          true,
 	"pattern":         true,
 	"regex":           true,
+	"delete-snapshot": true,
 	"modified-after":  true,
 	"modified-before": true,
 }

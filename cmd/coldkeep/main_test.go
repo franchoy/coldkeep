@@ -1955,7 +1955,7 @@ func TestRunSimulateCommandGCHelpIsSpecificToGC(t *testing.T) {
 	})
 
 	required := []string{
-		"Preview exact GC impact without modifying repository state (read-only).",
+		"Preview actual GC reclaimability without modifying repository state (read-only).",
 		"--delete-snapshot <id>",
 		"--containers includes per-container detail",
 		"--json is shorthand for --output json",
@@ -3659,6 +3659,24 @@ func TestParseCommandLineTreatsFromAsValueFlag(t *testing.T) {
 	}
 	if from != "snap-parent" {
 		t.Fatalf("expected --from value snap-parent, got %q", from)
+	}
+}
+
+func TestParseCommandLineTreatsDeleteSnapshotAsValueFlag(t *testing.T) {
+	parsed, err := parseCommandLine(
+		[]string{"simulate", "gc", "--delete-snapshot", "snap-a", "--delete-snapshot", "release-2026-04"},
+		flagsWithValues,
+	)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	deleted := parsed.flagValues("delete-snapshot")
+	if len(deleted) != 2 {
+		t.Fatalf("expected two delete-snapshot values, got %v", deleted)
+	}
+	if deleted[0] != "snap-a" || deleted[1] != "release-2026-04" {
+		t.Fatalf("unexpected delete-snapshot values: %v", deleted)
 	}
 }
 
