@@ -446,6 +446,22 @@ func TestSimulateGCDeterministicAcrossCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Simulate: %v", err)
 	}
+	if resultA.GeneratedAtUTC.IsZero() || resultA.GC.GeneratedAtUTC.IsZero() {
+		t.Fatalf("first result timestamps should be populated: top=%s gc=%s", resultA.GeneratedAtUTC, resultA.GC.GeneratedAtUTC)
+	}
+	if resultB.GeneratedAtUTC.IsZero() || resultB.GC.GeneratedAtUTC.IsZero() {
+		t.Fatalf("second result timestamps should be populated: top=%s gc=%s", resultB.GeneratedAtUTC, resultB.GC.GeneratedAtUTC)
+	}
+
+	// Determinism here excludes generated-at metadata.
+	resultA.GeneratedAtUTC = time.Time{}
+	resultB.GeneratedAtUTC = time.Time{}
+	if resultA.GC != nil {
+		resultA.GC.GeneratedAtUTC = time.Time{}
+	}
+	if resultB.GC != nil {
+		resultB.GC.GeneratedAtUTC = time.Time{}
+	}
 
 	encodedA, err := json.Marshal(resultA)
 	if err != nil {
@@ -764,7 +780,8 @@ func TestSimulateGCTraceEmitsMarkAndPlanEvents(t *testing.T) {
 
 func TestTraceDoesNotChangeSimulationResult(t *testing.T) {
 	dbconn := openSimulateTestDB(t)
-	svc := newServiceForTest(dbconn, nil)
+	fixedNow := time.Date(2026, time.April, 27, 10, 0, 0, 0, time.UTC)
+	svc := newServiceForTest(dbconn, func() time.Time { return fixedNow })
 
 	deadChunkID := insertSimChunk(t, dbconn, "dead-invariant", 90, 0, 0, "v2-fastcdc")
 	deadContainerID := insertSimContainer(t, dbconn, "c-invariant.bin", 90, true, false)
