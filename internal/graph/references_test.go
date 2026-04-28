@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -105,12 +104,12 @@ func TestGetReverseReferencesLogicalFileToSnapshots(t *testing.T) {
 	if len(references) != 2 {
 		t.Fatalf("expected 2 reverse refs, got %d", len(references))
 	}
-	if references[0] != (NodeID{Type: EntitySnapshot, ID: 1}) || references[1] != (NodeID{Type: EntitySnapshot, ID: 2}) {
+	if references[0] != (NodeID{Type: EntitySnapshot, SID: "1"}) || references[1] != (NodeID{Type: EntitySnapshot, SID: "2"}) {
 		t.Fatalf("unexpected snapshot refs: %+v", references)
 	}
 }
 
-func TestGetReverseReferencesRejectsNonNumericSnapshotID(t *testing.T) {
+func TestGetReverseReferencesSupportsNonNumericSnapshotID(t *testing.T) {
 	dbconn := openGraphTestDB(t)
 	svc := NewService(dbconn)
 
@@ -129,11 +128,14 @@ func TestGetReverseReferencesRejectsNonNumericSnapshotID(t *testing.T) {
 		t.Fatalf("insert snapshot_file row: %v", err)
 	}
 
-	_, err = svc.GetReverseReferences(context.Background(), NodeID{Type: EntityLogicalFile, ID: lfID})
-	if err == nil {
-		t.Fatal("expected parse error")
+	references, err := svc.GetReverseReferences(context.Background(), NodeID{Type: EntityLogicalFile, ID: lfID})
+	if err != nil {
+		t.Fatalf("GetReverseReferences: %v", err)
 	}
-	if !strings.Contains(err.Error(), "parse snapshot id") {
-		t.Fatalf("unexpected error: %v", err)
+	if len(references) != 1 {
+		t.Fatalf("expected 1 reverse ref, got %d", len(references))
+	}
+	if references[0] != (NodeID{Type: EntitySnapshot, SID: "snap-a"}) {
+		t.Fatalf("unexpected snapshot ref: %+v", references[0])
 	}
 }

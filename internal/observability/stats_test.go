@@ -280,14 +280,14 @@ func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
 	if result.Snapshots.TotalSnapshots != 1 {
 		t.Fatalf("expected snapshot total=1, got %d", result.Snapshots.TotalSnapshots)
 	}
-	if !hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
-		t.Fatalf("expected non-numeric snapshot id warning, got %+v", result.Warnings)
+	if hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
+		t.Fatalf("did not expect non-numeric snapshot id warning, got %+v", result.Warnings)
 	}
-	if result.Graph.SnapshotReachableChunks != 0 {
-		t.Fatalf("expected graph snapshot_reachable_chunks=0 with non-numeric snapshot id, got %d", result.Graph.SnapshotReachableChunks)
+	if result.Graph.SnapshotReachableChunks != 1 {
+		t.Fatalf("expected graph snapshot_reachable_chunks=1, got %d", result.Graph.SnapshotReachableChunks)
 	}
-	if result.Graph.SnapshotReachableBytes != 0 {
-		t.Fatalf("expected graph snapshot_reachable_bytes=0 with non-numeric snapshot id, got %d", result.Graph.SnapshotReachableBytes)
+	if result.Graph.SnapshotReachableBytes != 64 {
+		t.Fatalf("expected graph snapshot_reachable_bytes=64, got %d", result.Graph.SnapshotReachableBytes)
 	}
 }
 
@@ -573,7 +573,7 @@ func TestStatsIncludesContainerRecordsOnlyWhenRequested(t *testing.T) {
 	}
 }
 
-func TestStatsAddsWarningsButDoesNotRepair(t *testing.T) {
+func TestStatsDoesNotRepairWhenSnapshotIDsAreNonNumeric(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 
 	if _, err := dbconn.Exec(
@@ -591,8 +591,8 @@ func TestStatsAddsWarningsButDoesNotRepair(t *testing.T) {
 	}
 	after := mustCount(t, dbconn, `SELECT COUNT(*) FROM snapshot`)
 
-	if !hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
-		t.Fatalf("expected warning for non-numeric snapshot ids, got %+v", result.Warnings)
+	if hasWarningCode(result.Warnings, "snapshot_ids_non_numeric_skipped") {
+		t.Fatalf("did not expect warning for non-numeric snapshot ids, got %+v", result.Warnings)
 	}
 	if before != after {
 		t.Fatalf("expected no mutation/repair during stats: before=%d after=%d", before, after)

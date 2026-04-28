@@ -2,8 +2,6 @@ package graph
 
 import (
 	"context"
-	"fmt"
-	"strconv"
 )
 
 func (s *Service) GetReverseReferences(ctx context.Context, target NodeID) ([]NodeID, error) {
@@ -74,11 +72,7 @@ func (s *Service) getFileSnapshots(ctx context.Context, logicalFileID int64) ([]
 		if err := rows.Scan(&snapshotIDRaw); err != nil {
 			return nil, err
 		}
-		snapshotID, err := strconv.ParseInt(snapshotIDRaw, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse snapshot id %q: %w", snapshotIDRaw, err)
-		}
-		out = append(out, NodeID{Type: EntitySnapshot, ID: snapshotID})
+		out = append(out, NodeID{Type: EntitySnapshot, SID: snapshotIDRaw})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

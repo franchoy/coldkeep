@@ -3,7 +3,6 @@ package graph
 import (
 	"context"
 	"database/sql"
-	"strconv"
 )
 
 type Service struct {
@@ -109,7 +108,7 @@ func (s *Service) getOutgoing(ctx context.Context, n NodeID) ([]NodeID, error) {
 
 	switch n.Type {
 	case EntitySnapshot:
-		return s.getSnapshotFiles(ctx, n.ID)
+		return s.getSnapshotFiles(ctx, n.SnapshotID())
 	case EntityLogicalFile:
 		return s.getFileChunks(ctx, n.ID)
 	case EntityChunk:
@@ -126,14 +125,17 @@ func (s *Service) GetOutgoing(ctx context.Context, n NodeID) ([]NodeID, error) {
 	return s.getOutgoing(ctx, n)
 }
 
-func (s *Service) getSnapshotFiles(ctx context.Context, snapshotID int64) ([]NodeID, error) {
+func (s *Service) getSnapshotFiles(ctx context.Context, snapshotID string) ([]NodeID, error) {
+	if snapshotID == "" {
+		return nil, nil
+	}
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT logical_file_id
 		 FROM snapshot_file
 		 WHERE snapshot_id = $1
 		 ORDER BY id`,
-		strconv.FormatInt(snapshotID, 10),
+		snapshotID,
 	)
 	if err != nil {
 		return nil, err

@@ -73,7 +73,7 @@ func TestGetReachableChunksFromSnapshots(t *testing.T) {
 		t.Fatalf("insert file_chunk rows: %v", err)
 	}
 
-	reachable, err := svc.GetReachableChunks(context.Background(), []int64{1})
+	reachable, err := svc.GetReachableChunks(context.Background(), []string{"1"})
 	if err != nil {
 		t.Fatalf("GetReachableChunks: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestGetReachableChunksDeduplicatesSharedChunks(t *testing.T) {
 		t.Fatalf("insert file_chunk rows: %v", err)
 	}
 
-	reachable, err := svc.GetReachableChunks(context.Background(), []int64{1, 2})
+	reachable, err := svc.GetReachableChunks(context.Background(), []string{"1", "2"})
 	if err != nil {
 		t.Fatalf("GetReachableChunks: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestGetReachableChunks(t *testing.T) {
 		t.Fatalf("insert file_chunk rows: %v", err)
 	}
 
-	allReachable, err := svc.GetReachableChunks(context.Background(), []int64{1, 2})
+	allReachable, err := svc.GetReachableChunks(context.Background(), []string{"1", "2"})
 	if err != nil {
 		t.Fatalf("GetReachableChunks (before delete): %v", err)
 	}
@@ -332,7 +332,7 @@ func TestGetReachableChunks(t *testing.T) {
 		t.Fatalf("delete snapshot row: %v", err)
 	}
 
-	reachableAfterDelete, err := svc.GetReachableChunks(context.Background(), []int64{1, 2})
+	reachableAfterDelete, err := svc.GetReachableChunks(context.Background(), []string{"1", "2"})
 	if err != nil {
 		t.Fatalf("GetReachableChunks (after delete): %v", err)
 	}
@@ -436,9 +436,9 @@ func TestGetReachableChunksMatchesLegacyAcrossRandomizedFixtures(t *testing.T) {
 
 		queryCount := 1 + rng.Intn(snapshotCount)
 		perm := rng.Perm(snapshotCount)
-		snapshotIDs := make([]int64, 0, queryCount)
+		snapshotIDs := make([]string, 0, queryCount)
 		for i := 0; i < queryCount; i++ {
-			snapshotIDs = append(snapshotIDs, int64(perm[i]+1))
+			snapshotIDs = append(snapshotIDs, fmt.Sprintf("%d", perm[i]+1))
 		}
 
 		graphReachable, err := svc.GetReachableChunks(context.Background(), snapshotIDs)
@@ -467,7 +467,7 @@ func TestGetReachableChunksMatchesLegacyAcrossRandomizedFixtures(t *testing.T) {
 	}
 }
 
-func legacyReachableChunksForSnapshots(ctx context.Context, dbconn *sql.DB, snapshotIDs []int64) (map[int64]struct{}, error) {
+func legacyReachableChunksForSnapshots(ctx context.Context, dbconn *sql.DB, snapshotIDs []string) (map[int64]struct{}, error) {
 	if len(snapshotIDs) == 0 {
 		return map[int64]struct{}{}, nil
 	}
@@ -476,7 +476,7 @@ func legacyReachableChunksForSnapshots(ctx context.Context, dbconn *sql.DB, snap
 	args := make([]any, len(snapshotIDs))
 	for i, id := range snapshotIDs {
 		placeholders[i] = "?"
-		args[i] = fmt.Sprintf("%d", id)
+		args[i] = id
 	}
 
 	query := fmt.Sprintf(`

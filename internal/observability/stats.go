@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -210,15 +209,9 @@ func (s *Service) enrichStatsWithGraph(ctx context.Context, result *StatsResult,
 	}
 	result.Snapshots.TotalSnapshots = count
 
-	snapshotIDs, skipped, err := s.listNumericSnapshotIDs(ctx)
+	snapshotIDs, err := s.listSnapshotIDs(ctx)
 	if err != nil {
 		return err
-	}
-	if skipped > 0 {
-		result.Warnings = append(result.Warnings, ObservationWarning{
-			Code:    "snapshot_ids_non_numeric_skipped",
-			Message: fmt.Sprintf("skipped %d snapshot id(s) that are not numeric for graph reachability", skipped),
-		})
 	}
 	if len(snapshotIDs) == 0 || s == nil || s.graph == nil {
 		return nil
@@ -276,37 +269,30 @@ func (s *Service) countSnapshots(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
-func (s *Service) listNumericSnapshotIDs(ctx context.Context) ([]int64, int, error) {
+func (s *Service) listSnapshotIDs(ctx context.Context) ([]string, error) {
 	if s == nil || s.db == nil {
-		return nil, 0, nil
+		return nil, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM snapshot ORDER BY created_at, id`)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]int64, 0)
-	skipped := 0
+	ids := make([]string, 0)
 	for rows.Next() {
 		var rawID string
 		if err := rows.Scan(&rawID); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
-
-		parsed, err := strconv.ParseInt(strings.TrimSpace(rawID), 10, 64)
-		if err != nil {
-			skipped++
-			continue
-		}
-		ids = append(ids, parsed)
+		ids = append(ids, strings.TrimSpace(rawID))
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	return ids, skipped, nil
+	return ids, nil
 }
 
 func calculateEfficiency(result *StatsResult) EfficiencyStats {
@@ -337,7 +323,7 @@ func (s *Service) sumChunkSizesByID(ctx context.Context, chunkIDs map[int64]stru
 	return total, nil
 }
 
-func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []int64) (int64, int64, error) {
+func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []string) (int64, int64, error) {
 	if s == nil || s.db == nil || len(snapshotIDs) == 0 {
 		return 0, 0, nil
 	}
@@ -351,7 +337,7 @@ func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []
 			 JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
 			 JOIN chunk c ON c.id = fc.chunk_id
 			 WHERE sf.snapshot_id = $1`,
-			strconv.FormatInt(snapshotID, 10),
+			snapshotID,
 		)
 		if err != nil {
 			return 0, 0, err

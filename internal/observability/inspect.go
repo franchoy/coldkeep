@@ -234,14 +234,6 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 			return nil, err
 		}
 		result.Relations = append(result.Relations, relations...)
-		if opts.Deep {
-			if _, parseErr := strconv.ParseInt(snapshotID, 10, 64); parseErr != nil {
-				result.Warnings = append(result.Warnings, ObservationWarning{
-					Code:    "inspect.deep.snapshot_id_non_numeric",
-					Message: fmt.Sprintf("deep traversal requires numeric snapshot id; using direct relations only for snapshot %q", snapshotID),
-				})
-			}
-		}
 	}
 
 	return result, nil
@@ -493,9 +485,8 @@ func (s *Service) inspectRepositorySnapshotRelations(ctx context.Context, limit 
 }
 
 func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID string, limit int) ([]Relation, error) {
-	graphID, err := strconv.ParseInt(snapshotID, 10, 64)
-	if err == nil {
-		return s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntitySnapshot, ID: graphID}, limit)
+	if s != nil && s.graph != nil {
+		return s.getGraphOutgoingRelations(ctx, graph.NodeID{Type: graph.EntitySnapshot, SID: snapshotID}, limit)
 	}
 
 	rows, queryErr := s.db.QueryContext(
@@ -534,9 +525,8 @@ func (s *Service) getSnapshotOutgoingRelations(ctx context.Context, snapshotID s
 }
 
 func (s *Service) getSnapshotRelations(ctx context.Context, snapshotID string, opts InspectOptions) ([]Relation, error) {
-	graphID, err := strconv.ParseInt(snapshotID, 10, 64)
-	if opts.Deep && err == nil {
-		return s.expandDeep(ctx, graph.NodeID{Type: graph.EntitySnapshot, ID: graphID}, opts)
+	if opts.Deep {
+		return s.expandDeep(ctx, graph.NodeID{Type: graph.EntitySnapshot, SID: snapshotID}, opts)
 	}
 	return s.getSnapshotOutgoingRelations(ctx, snapshotID, opts.Limit)
 }
@@ -566,7 +556,7 @@ func (s *Service) expandDeep(ctx context.Context, root graph.NodeID, opts Inspec
 	emitTrace(opts.Trace, TraceEvent{
 		Step:     "inspect.deep_traversal.start",
 		Entity:   string(root.Type),
-		EntityID: strconv.FormatInt(root.ID, 10),
+		EntityID: graphNodeIDString(root),
 		Message:  "starting deep traversal",
 		Metadata: map[string]any{
 			"limit":     opts.Limit,
@@ -607,7 +597,7 @@ func (s *Service) expandDeep(ctx context.Context, root graph.NodeID, opts Inspec
 				emitTrace(opts.Trace, TraceEvent{
 					Step:     "inspect.deep_traversal.limit_reached",
 					Entity:   string(root.Type),
-					EntityID: strconv.FormatInt(root.ID, 10),
+					EntityID: graphNodeIDString(root),
 					Message:  "stopping deep traversal at relation limit",
 					Metadata: map[string]any{
 						"limit": opts.Limit,
@@ -626,7 +616,7 @@ func (s *Service) expandDeep(ctx context.Context, root graph.NodeID, opts Inspec
 				Type:       relationTypeReferences,
 				Direction:  RelationOutgoing,
 				TargetType: targetType,
-				TargetID:   strconv.FormatInt(neighbor.ID, 10),
+				TargetID:   graphNodeIDString(neighbor),
 				Metadata:   map[string]any{"depth": depth},
 			})
 			queue = append(queue, queuedNode{node: neighbor, depth: depth})
@@ -680,10 +670,19 @@ func graphNodesToRelations(nodes []graph.NodeID, limit int, relationType string,
 			Type:       relationType,
 			Direction:  direction,
 			TargetType: targetType,
-			TargetID:   strconv.FormatInt(node.ID, 10),
+			TargetID:   graphNodeIDString(node),
 		})
 	}
 	return out
+}
+
+func graphNodeIDString(node graph.NodeID) string {
+	if node.Type == graph.EntitySnapshot {
+		if node.SID != "" {
+			return node.SID
+		}
+	}
+	return strconv.FormatInt(node.ID, 10)
 }
 
 func mapGraphEntityType(entity graph.EntityType) (EntityType, bool) {

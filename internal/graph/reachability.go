@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"strconv"
 )
 
 // GCRootOptions configures root collection for GC mark traversal.
@@ -157,7 +156,7 @@ func (s *Service) ReachableChunksFromRootsWithOptions(ctx context.Context, roots
 	return reachable, nil
 }
 
-func (s *Service) GetReachableChunks(ctx context.Context, snapshotIDs []int64) (map[int64]struct{}, error) {
+func (s *Service) GetReachableChunks(ctx context.Context, snapshotIDs []string) (map[int64]struct{}, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -167,7 +166,7 @@ func (s *Service) GetReachableChunks(ctx context.Context, snapshotIDs []int64) (
 
 	allowed := make(map[string]struct{}, len(snapshotIDs))
 	for _, id := range snapshotIDs {
-		allowed[strconv.FormatInt(id, 10)] = struct{}{}
+		allowed[id] = struct{}{}
 	}
 
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT snapshot_id, logical_file_id FROM snapshot_file ORDER BY logical_file_id`)
