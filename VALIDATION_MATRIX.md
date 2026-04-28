@@ -30,7 +30,7 @@ the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
 guarantees (G1-G8), v1.1 interface-correctness extensions (G9), v1.2 physical-file
 graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G14-G17),
 with v1.4 clarifying lineage semantics, v1.5 adding chunker-evolution compatibility
-contract clarity, and v1.6 adding observability and simulation contract hardening —
+contract clarity, and v1.6 adding observability and simulation contract hardening -
 none of which introduce new guarantee IDs.
 
 ## Scope

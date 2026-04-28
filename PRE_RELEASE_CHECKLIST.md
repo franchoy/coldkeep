@@ -358,7 +358,10 @@ printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 ./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
 
 # stored-path remove: confirm remaining_ref_count in JSON output
-./coldkeep remove --stored-path "$stored_path" --output json
+./coldkeep remove --stored-path <stored-path-from-above> --output json
+
+# confirm restore-by-stored-path works
+./coldkeep restore --stored-path <stored-path> --mode override --destination ./out/restored.txt --output json
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
@@ -487,7 +490,64 @@ go test ./internal/chunk -run 'TestBothChunkersDeterministic|TestBothChunkersRec
 go test ./internal/chunk/fastcdc -run 'TestDeterministicChunkBoundariesAndData' -count=1
 ```
 
-### H. Documentation and release artifacts
+## 13) Verify v1.6 observability / simulation contract
+
+Release-ready definition:
+
+v1.6 is ready when Coldkeep can explain repository state, inspect storage relationships,
+and exactly simulate GC impact through deterministic, read-only commands, with clean
+human output and stable JSON output.
+
+### A. Repository-state explanation (`stats`)
+
+- [ ] `coldkeep stats` explains repository state in human-readable form
+- [ ] `coldkeep stats --json` emits stable tooling-oriented JSON
+- [ ] Container detail remains opt-in via `--containers`
+- [ ] Output remains deterministic for identical repository state and flags
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/observability -run 'TestStatsIncludesRepositoryAndChunkMetrics|TestStatsContainersOptional|TestStatsDeterministicOrdering|TestStatsResultCarriesChunkerBreakdown' -count=1
+go test ./cmd/coldkeep -run 'TestRunStatsCommandJSONContract|TestRunStatsCommandJSONIncludesSnapshotRetention|TestPrintStatsReportIncludesSnapshotRetention|TestPrintStatsHelpIncludesJSONTraceAndDeterminism' -count=1
+```
+
+### B. Storage-relationship inspection (`inspect`)
+
+- [ ] `coldkeep inspect <entity> <id>` supports `file`, `logical-file`, `snapshot`, `chunk`, and `container`
+- [ ] `--relations`, `--reverse`, and `--deep` behavior is documented and tested
+- [ ] `--limit` bounds deep traversal output
+- [ ] Human and JSON output remain deterministic for identical inputs
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/observability -run 'TestInspectLogicalFileIncludesChunkRelations|TestInspectChunkIncludesIncomingFileReferences|TestInspectSnapshotIncludesRetainedFileCounts|TestInspectDeterministicOrdering' -count=1
+go test ./cmd/coldkeep -run 'TestRunInspectCommandJSONContractByEntity|TestRunInspectCommandLogicalFileAliasRoutesToEntityFile|TestRunInspectCommandRejectsInvalidUsage|TestRunInspectCommandHelpIncludesJSONTraceAndDeterminism' -count=1
+```
+
+### C. Exact GC simulation (`simulate gc`)
+
+- [ ] `coldkeep simulate gc` is read-only
+- [ ] `coldkeep simulate gc --delete-snapshot <id>` reflects post-delete reclaimability exactly
+- [ ] `coldkeep simulate gc --containers` reports per-container detail when requested
+- [ ] Simulation matches GC reclaimability decisions under the same integrity gates
+
+Suggested evidence commands:
+
+```bash
+go test ./internal/observability -run 'TestSimulateGCMatchesBuildPlan|TestSimulateGCDeleteSnapshotAffectsReclaimability|TestSimulateGCDeterministicOrdering|TestSimulateGCDoesNotMutateState' -count=1
+go test ./cmd/coldkeep -run 'TestRunSimulateGCCommandJSONContract|TestRunSimulateGCCommandTextMatchesGolden|TestRunSimulateGCCommandRejectsInvalidUsage|TestPrintSimulateGCHelpIncludesReadOnlyGuarantee' -count=1
+```
+
+### D. Output-channel and contract checks
+
+- [ ] `--json` remains suitable for automation
+- [ ] `--trace` and `--trace-json` emit diagnostics to stderr only
+- [ ] Human output is understandable and JSON output keeps stable envelope structure
+- [ ] Observability commands perform zero repository mutations
+
+### E. Documentation and release artifacts
 
 - [ ] `README.md` documents `stats`, `inspect`, and `simulate gc` observability surfaces
 - [ ] `README.md` includes JSON/trace contract guidance (`--json`, `--trace`, `--trace-json`)
@@ -504,22 +564,23 @@ rg -n 'deep inspect output can be large|--deep --limit N|JSON output is intended
 rg -n 'Release highlights \(1\.6\.0\)|observability|simulate gc|trace-json' CHANGELOG.md
 ```
 
-### I. Final CI commands (explicit rerun)
+### F. Final CI commands (explicit rerun)
 
 - [ ] `go test ./...` passes
 - [ ] `go test -race ./...` passes
 - [ ] `go vet ./...` passes
 - [ ] Integration suite passes (`go test ./tests/integration/...`)
 
-## 13) Sign-off
+## 14) Sign-off
 
 - [ ] Quality parity checks passed
 - [ ] Full local CI matrix simulation passed (both codecs)
 - [ ] Smoke passed
 - [ ] Integration suite passed
+- [ ] v1.6 observability / simulation checklist passed
 - Note: Step 4 integration umbrella suite is optional (non-gating) and was triaged separately.
 
-## 14) Snapshot sign-off checklist (Phases 1-7)
+## 15) Snapshot sign-off checklist (Phases 1-7)
 
 Use this as the final snapshot gate before tagging a release.
 
@@ -678,8 +739,7 @@ do
     exit 1;
   }
 done
-
-## 14) Snapshot sign-off checklist (Phases 1-7)
+echo "G14-G17 evidence names: OK"
 ```
 
 ## 16) Snapshot CLI/contract checklist
@@ -761,6 +821,7 @@ Confirm:
 - [ ] CLI contract stability verified
 - [ ] Batch CLI contract stability verified
 - [ ] v1.2 physical-file contract verified (G10–G13)
+- [ ] v1.6 observability / simulation contract verified
 - [ ] Snapshot phase checklist verified (Phases 1-7)
 - [ ] Snapshot C. test surface checklist verified
 - [ ] Snapshot D. documentation/release checklist verified

@@ -19,7 +19,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## [1.6.0] - 2026-04-27
+## [1.6.0] - 2026-04-28
 
 Observability and simulation contract hardening milestone.
 
