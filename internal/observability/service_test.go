@@ -14,6 +14,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/gc"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -33,7 +34,7 @@ func openSimulateTestDB(t *testing.T) *sql.DB {
 func insertSimLogicalFile(t *testing.T, dbconn *sql.DB, name string) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, 100, ?, 'COMPLETED', 'v2-fastcdc')`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES (?, 100, ?, 'COMPLETED', 0, 'v2-fastcdc')`,
 		name, fmt.Sprintf("hash-%s", name),
 	)
 	if err != nil {
@@ -101,6 +102,9 @@ func insertSimPhysicalFile(t *testing.T, dbconn *sql.DB, path string, fileID int
 	t.Helper()
 	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, path, fileID); err != nil {
 		t.Fatalf("insert physical_file: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = (SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?) WHERE id = ?`, fileID, fileID); err != nil {
+		t.Fatalf("sync logical_file ref_count: %v", err)
 	}
 }
 
@@ -242,6 +246,56 @@ func TestSimulateGCMatchesGCPlan(t *testing.T) {
 	}
 	if len(result.GC.Containers) != len(plan.AffectedContainers) {
 		t.Fatalf("container count mismatch: simulate=%d plan=%d", len(result.GC.Containers), len(plan.AffectedContainers))
+	}
+}
+
+func TestSimulateGCRefusesWhenRealGCWouldRefuseOnIntegrity(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	fileID := insertSimLogicalFile(t, dbconn, "broken.txt")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/broken.txt", fileID); err != nil {
+		t.Fatalf("insert mismatched physical_file: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = 0 WHERE id = ?`, fileID); err != nil {
+		t.Fatalf("force ref_count mismatch: %v", err)
+	}
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err == nil {
+		t.Fatal("expected integrity refusal")
+	}
+	if result != nil {
+		t.Fatal("expected nil result")
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodeGCRefusedIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeGCRefusedIntegrity, code, ok, err)
+	}
+}
+
+func TestSimulateGCIncludesFullyDeadActiveContainers(t *testing.T) {
+	dbconn := openSimulateTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	deadChunkID := insertSimChunk(t, dbconn, "dead-active", 120, 0, 0, "v2-fastcdc")
+	containerID := insertSimContainer(t, dbconn, "c-active.bin", 120, false, false)
+	insertSimBlock(t, dbconn, deadChunkID, containerID, 120)
+
+	result, err := svc.Simulate(context.Background(), SimulationOptions{Kind: SimulationKindGC})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if result.GC.Summary.PhysicallyReclaimableBytes != 120 {
+		t.Fatalf("physical bytes = %d, want 120", result.GC.Summary.PhysicallyReclaimableBytes)
+	}
+	if result.GC.Summary.FullyReclaimableContainers != 1 {
+		t.Fatalf("fully reclaimable containers = %d, want 1", result.GC.Summary.FullyReclaimableContainers)
+	}
+	if len(result.GC.Containers) != 1 {
+		t.Fatalf("containers = %d, want 1", len(result.GC.Containers))
+	}
+	if result.GC.Containers[0].ContainerID != containerID {
+		t.Fatalf("container id = %d, want %d", result.GC.Containers[0].ContainerID, containerID)
 	}
 }
 

@@ -206,12 +206,7 @@ func TestStatsDelegatesAndMapsMaintenanceStats(t *testing.T) {
 		t.Fatalf("logical_file last insert id: %v", err)
 	}
 
-	if _, err := dbconn.Exec(
-		`INSERT INTO physical_file (path, logical_file_id, is_metadata_complete) VALUES (?, ?, 1)`,
-		"/data/alpha.txt", logicalFileID,
-	); err != nil {
-		t.Fatalf("insert physical_file: %v", err)
-	}
+	insertSimPhysicalFile(t, dbconn, "/data/alpha.txt", logicalFileID)
 
 	if _, err := dbconn.Exec(
 		`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`,
@@ -695,8 +690,8 @@ func TestTraceDoesNotMutateState(t *testing.T) {
 
 	// Seed minimal state: one logical file, one chunk, one container, one snapshot.
 	fileRes, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
-		"trace-mut.txt", 50, "h-trace-mut", "COMPLETED", "v2-fastcdc",
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES (?, ?, ?, ?, ?, ?)`,
+		"trace-mut.txt", 50, "h-trace-mut", "COMPLETED", 0, "v2-fastcdc",
 	)
 	if err != nil {
 		t.Fatalf("insert logical_file: %v", err)

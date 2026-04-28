@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/invariants"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -40,7 +41,7 @@ func insertChunk(t *testing.T, dbconn *sql.DB, hash string, size, liveRef, pinCo
 func insertLogicalFile(t *testing.T, dbconn *sql.DB, name string) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, 100, ?, 'COMPLETED', 'v2-fastcdc')`,
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version) VALUES (?, 100, ?, 'COMPLETED', 0, 'v2-fastcdc')`,
 		name, fmt.Sprintf("hash-%s", name),
 	)
 	if err != nil {
@@ -59,9 +60,22 @@ func linkFileChunk(t *testing.T, dbconn *sql.DB, fileID, chunkID, order int64) {
 
 func insertContainer(t *testing.T, dbconn *sql.DB, filename string, size int64) int64 {
 	t.Helper()
+	return insertContainerWithState(t, dbconn, filename, size, true, false)
+}
+
+func insertContainerWithState(t *testing.T, dbconn *sql.DB, filename string, size int64, sealed, quarantine bool) int64 {
+	t.Helper()
+	sealedValue := 0
+	if sealed {
+		sealedValue = 1
+	}
+	quarantineValue := 0
+	if quarantine {
+		quarantineValue = 1
+	}
 	res, err := dbconn.Exec(
-		`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES (?, 1, 0, ?, 67108864)`,
-		filename, size,
+		`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES (?, ?, ?, ?, 67108864)`,
+		filename, sealedValue, quarantineValue, size,
 	)
 	if err != nil {
 		t.Fatalf("insert container: %v", err)
@@ -77,6 +91,16 @@ func insertBlock(t *testing.T, dbconn *sql.DB, chunkID, containerID, storedSize 
 		chunkID, storedSize, storedSize, containerID,
 	); err != nil {
 		t.Fatalf("insert block: %v", err)
+	}
+}
+
+func insertPhysicalFile(t *testing.T, dbconn *sql.DB, path string, fileID int64) {
+	t.Helper()
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, path, fileID); err != nil {
+		t.Fatalf("insert physical_file: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = (SELECT COUNT(*) FROM physical_file WHERE logical_file_id = ?) WHERE id = ?`, fileID, fileID); err != nil {
+		t.Fatalf("sync logical_file ref_count: %v", err)
 	}
 }
 
@@ -107,6 +131,32 @@ func TestBuildPlanEmptyRepo(t *testing.T) {
 	}
 }
 
+func TestBuildPlanRefusesOnIntegrityIssues(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	fileID := insertLogicalFile(t, dbconn, "broken.txt")
+	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/broken.txt", fileID); err != nil {
+		t.Fatalf("insert mismatched physical_file: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = 0 WHERE id = ?`, fileID); err != nil {
+		t.Fatalf("force ref_count mismatch: %v", err)
+	}
+
+	_, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err == nil {
+		t.Fatal("expected integrity refusal")
+	}
+	if code, ok := invariants.Code(err); !ok || code != invariants.CodeGCRefusedIntegrity {
+		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeGCRefusedIntegrity, code, ok, err)
+	}
+	if !strings.Contains(err.Error(), "GC refused") {
+		t.Fatalf("expected error to mention GC refusal, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ref_count_mismatches=1") {
+		t.Fatalf("expected ref count mismatch details, got %v", err)
+	}
+}
+
 func TestBuildPlanChunkReachableFromPhysicalFile(t *testing.T) {
 	dbconn := openTestDB(t)
 
@@ -115,9 +165,7 @@ func TestBuildPlanChunkReachableFromPhysicalFile(t *testing.T) {
 	linkFileChunk(t, dbconn, fileID, chunkID, 0)
 
 	// Register physical_file → logical_file
-	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/notes.txt", fileID); err != nil {
-		t.Fatalf("insert physical_file: %v", err)
-	}
+	insertPhysicalFile(t, dbconn, "/notes.txt", fileID)
 
 	containerID := insertContainer(t, dbconn, "c001.bin", 100)
 	insertBlock(t, dbconn, chunkID, containerID, 100)
@@ -325,9 +373,7 @@ func TestBuildPlanDeleteSnapshotKeepsChunkReachableWhenCurrentFileStillExists(t 
 	chunkID := insertChunk(t, dbconn, "shared-current-snapshot", 256, 0, 0)
 	linkFileChunk(t, dbconn, fileID, chunkID, 0)
 
-	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current-and-snapshot.txt", fileID); err != nil {
-		t.Fatalf("insert physical_file: %v", err)
-	}
+	insertPhysicalFile(t, dbconn, "/current-and-snapshot.txt", fileID)
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-current', CURRENT_TIMESTAMP, 'full')`); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
@@ -454,6 +500,41 @@ func TestBuildPlanPartiallyDeadContainerDistinguishesLogicalVsPhysical(t *testin
 	}
 }
 
+func TestBuildPlanIncludesFullyDeadActiveContainersInPhysicalReclaim(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	deadChunkID := insertChunk(t, dbconn, "active-dead", 120, 0, 0)
+	containerID := insertContainerWithState(t, dbconn, "c-active-dead.bin", 120, false, false)
+	insertBlock(t, dbconn, deadChunkID, containerID, 120)
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReclaimableBytes != 120 {
+		t.Fatalf("ReclaimableBytes = %d, want 120", plan.ReclaimableBytes)
+	}
+	if plan.PhysicallyReclaimableBytes != 120 {
+		t.Fatalf("PhysicallyReclaimableBytes = %d, want 120", plan.PhysicallyReclaimableBytes)
+	}
+	if plan.Summary.FullyReclaimableContainers != 1 {
+		t.Fatalf("FullyReclaimableContainers = %d, want 1", plan.Summary.FullyReclaimableContainers)
+	}
+	if len(plan.AffectedContainers) != 1 {
+		t.Fatalf("AffectedContainers = %d, want 1", len(plan.AffectedContainers))
+	}
+	impact := plan.AffectedContainers[0]
+	if impact.ContainerID != containerID {
+		t.Fatalf("ContainerID = %d, want %d", impact.ContainerID, containerID)
+	}
+	if !impact.FullyReclaimable || impact.RequiresCompaction {
+		t.Fatalf("unexpected active container impact: %+v", impact)
+	}
+	if impact.LiveBytesAfterGC != 0 {
+		t.Fatalf("LiveBytesAfterGC = %d, want 0", impact.LiveBytesAfterGC)
+	}
+}
+
 func TestBuildPlanWarningsForMissingContainerUnknownVersionAndQuarantine(t *testing.T) {
 	dbconn := openTestDB(t)
 
@@ -544,12 +625,8 @@ func TestReachabilityRootsDocumentation(t *testing.T) {
 	linkFileChunk(t, dbconn, snapFile2, chunk4, 0)
 
 	// Register as physical files and snapshots
-	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current_a.txt", physFile1); err != nil {
-		t.Fatalf("insert physical_file 1: %v", err)
-	}
-	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, "/current_b.txt", physFile2); err != nil {
-		t.Fatalf("insert physical_file 2: %v", err)
-	}
+	insertPhysicalFile(t, dbconn, "/current_a.txt", physFile1)
+	insertPhysicalFile(t, dbconn, "/current_b.txt", physFile2)
 
 	// Create snapshots and link files
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('snap-001', CURRENT_TIMESTAMP, 'full')`); err != nil {
