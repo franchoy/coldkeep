@@ -4192,6 +4192,7 @@ func printSimulateGCHelp() {
 	fmt.Println("  coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <human|json>] [--json] [--trace|--trace-json]")
 	fmt.Println()
 	fmt.Println("Preview actual GC reclaimability without modifying repository state (read-only).")
+	fmt.Println("It uses the shared GC planning layer (gc.BuildPlan) to compute exact reclaimability.")
 	fmt.Println("This reflects real GC behavior, including fully-dead active containers that real GC")
 	fmt.Println("would also reclaim. It is not equivalent to 'gc --dry-run', which uses a lighter path.")
 	fmt.Println()

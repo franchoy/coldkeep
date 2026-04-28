@@ -37,8 +37,12 @@ smoke matrix verification across plain and aes-gcm codecs.
   as read-only operations.
 - **Exact GC simulation parity** — `simulate gc` reflects the same reclaimability
   decisions as GC preflight/liveness evaluation without executing deletion.
-  This is a preview of actual GC reclaimability semantics, not legacy `gc --dry-run`
-  behavior.
+  It uses the shared GC planning layer (`gc.BuildPlan`) to preview actual GC
+  reclaimability semantics (including fully-dead active containers), not legacy
+  `gc --dry-run` behavior.
+- **Known v1.7 optimization follow-up** — stats graph byte aggregation currently
+  uses per-chunk lookup (`sumChunkSizesByID`) and is slated for batched
+  optimization in v1.7.
 - **Tooling-oriented output contracts** — JSON output and trace channels are
   documented for automation use, including `--trace-json` JSONL diagnostics.
 - **Stable diagnostics channel routing** — trace diagnostics (`--trace`,
