@@ -38,7 +38,7 @@ func (s *Service) simulateGC(ctx context.Context, opts SimulationOptions) (*Simu
 	rootMetadata := map[string]any{
 		"excluded_snapshots": len(opts.AssumeDeletedSnapshots),
 	}
-	if s != nil && s.graph != nil {
+	if s.graph != nil {
 		if roots, rootsErr := s.graph.GCRoots(ctx, graph.GCRootOptions{ExcludeSnapshots: opts.AssumeDeletedSnapshots}); rootsErr == nil {
 			rootMetadata["root_count"] = len(roots)
 		}
