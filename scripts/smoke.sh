@@ -1039,11 +1039,11 @@ fi
 echo "[smoke] running real gc"
 STATS_BEFORE_GC=$(coldkeep stats --output json)
 STATS_BEFORE_GC_PAYLOAD=$(echo "$STATS_BEFORE_GC" | grep -E '^\{.*\}$' | tail -n1)
-BEFORE_TOTAL_CONTAINERS=$(echo "$STATS_BEFORE_GC_PAYLOAD" | jq -r '.data.total_containers // 0')
+BEFORE_TOTAL_CONTAINERS=$(echo "$STATS_BEFORE_GC_PAYLOAD" | jq -r '.data.containers.total_containers // .data.total_containers // 0')
 coldkeep gc > /dev/null
 STATS_AFTER_GC=$(coldkeep stats --output json)
 STATS_AFTER_GC_PAYLOAD=$(echo "$STATS_AFTER_GC" | grep -E '^\{.*\}$' | tail -n1)
-AFTER_TOTAL_CONTAINERS=$(echo "$STATS_AFTER_GC_PAYLOAD" | jq -r '.data.total_containers // 0')
+AFTER_TOTAL_CONTAINERS=$(echo "$STATS_AFTER_GC_PAYLOAD" | jq -r '.data.containers.total_containers // .data.total_containers // 0')
 ACTUAL_DELETED_CONTAINERS=$((BEFORE_TOTAL_CONTAINERS - AFTER_TOTAL_CONTAINERS))
 
 if [[ "$PREDICTED_AFFECTED_CONTAINERS" != "$ACTUAL_DELETED_CONTAINERS" ]]; then
@@ -1094,10 +1094,10 @@ else
   STATS_AFTER=$(coldkeep stats --output json)
   STATS_AFTER_PAYLOAD=$(echo "$STATS_AFTER" | grep -E '^\{.*\}$' | tail -n1)
 
-  REAL_FILES=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.total_files // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.total_files // 0') ))
-  REAL_CHUNKS=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.total_chunks // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.total_chunks // 0') ))
-  REAL_LOGICAL_SIZE_BYTES=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.total_logical_size_bytes // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.total_logical_size_bytes // 0') ))
-  REAL_PHYSICAL_SIZE_BYTES=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.live_block_bytes // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.live_block_bytes // 0') ))
+  REAL_FILES=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.logical.total_files // .data.total_files // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.logical.total_files // .data.total_files // 0') ))
+  REAL_CHUNKS=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.chunks.total_chunks // .data.total_chunks // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.chunks.total_chunks // .data.total_chunks // 0') ))
+  REAL_LOGICAL_SIZE_BYTES=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.logical.total_size_bytes // .data.total_logical_size_bytes // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.logical.total_size_bytes // .data.total_logical_size_bytes // 0') ))
+  REAL_PHYSICAL_SIZE_BYTES=$(( $(echo "$STATS_AFTER_PAYLOAD" | jq -r '.data.containers.live_block_bytes // .data.live_block_bytes // 0') - $(echo "$STATS_BEFORE_PAYLOAD" | jq -r '.data.containers.live_block_bytes // .data.live_block_bytes // 0') ))
 
   echo "[smoke] simulation predicted: files=$SIM_FILES, chunks=$SIM_CHUNKS, logical_bytes=$SIM_LOGICAL_SIZE_BYTES, physical_bytes=$SIM_PHYSICAL_SIZE_BYTES"
   echo "[smoke] real store delta: files=$REAL_FILES, chunks=$REAL_CHUNKS, logical_bytes=$REAL_LOGICAL_SIZE_BYTES, physical_bytes=$REAL_PHYSICAL_SIZE_BYTES"
