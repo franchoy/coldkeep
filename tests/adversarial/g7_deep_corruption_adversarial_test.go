@@ -45,13 +45,15 @@ func setupAdversarialG7Env(t *testing.T) (*sql.DB, map[string]string, string, st
 	t.Helper()
 
 	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
 	container.ContainersDir = filepath.Join(tmp, "containers")
-	_ = os.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
 	testutils.ResetStorage(t)
 
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 	for k, v := range env {
-		_ = os.Setenv(k, v)
+		t.Setenv(k, v)
 	}
 
 	dbconn, err := db.ConnectDB()
@@ -221,9 +223,7 @@ func TestAdversarialG7AESGCMDetectsWrongKeyMismatch(t *testing.T) {
 	inPath := testutils.CreateTempFile(t, inputDir, "g7-wrong-key.bin", 768*1024)
 	fileID := storeFileWithCodecCLIG7(t, repoRoot, binPath, env, codec, inPath)
 
-	if err := os.Setenv("COLDKEEP_KEY", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"); err != nil {
-		t.Fatalf("set wrong key: %v", err)
-	}
+	t.Setenv("COLDKEEP_KEY", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
 
 	err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
 	deepVerifyMustFailG7(t, err, "aes-gcm wrong key mismatch")
@@ -289,9 +289,7 @@ func TestAdversarialG7AESGCMDetectsInvalidKeyConfiguration(t *testing.T) {
 	inPath := testutils.CreateTempFile(t, inputDir, "g7-invalid-key.bin", 640*1024)
 	fileID := storeFileWithCodecCLIG7(t, repoRoot, binPath, env, codec, inPath)
 
-	if err := os.Setenv("COLDKEEP_KEY", "1234"); err != nil {
-		t.Fatalf("set invalid key config: %v", err)
-	}
+	t.Setenv("COLDKEEP_KEY", "1234")
 
 	err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
 	deepVerifyMustFailG7(t, err, "aes-gcm invalid key configuration")
@@ -379,9 +377,6 @@ func TestAdversarialG7DeepVerifyDetectsContainerHeaderCorruption(t *testing.T) {
 
 			dbconn, env, repoRoot, binPath, tmp := setupAdversarialG7Env(t)
 			defer dbconn.Close()
-			_ = env
-			_ = repoRoot
-			_ = binPath
 
 			inputDir := filepath.Join(tmp, "input")
 			if err := os.MkdirAll(inputDir, 0o755); err != nil {

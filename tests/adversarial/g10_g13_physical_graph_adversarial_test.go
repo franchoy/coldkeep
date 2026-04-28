@@ -3,14 +3,25 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	testutils "github.com/franchoy/coldkeep/tests/utils"
 	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
+
+// storeCLIAsync is safe to call from goroutines—returns an error instead of calling t.Fatal.
+func storeCLIAsync(repoRoot, binPath string, env map[string]string, codec, path string) error {
+	cmd := exec.Command(binPath, "store", "--codec", codec, path, "--output", "json")
+	cmd.Dir = repoRoot
+	cmd.Env = testutils.BuildCommandEnv(env)
+	if out, err := cmd.Output(); err != nil {
+		return fmt.Errorf("store command: %w (output: %s)", err, out)
+	}
+	return nil
+}
 
 func verifySystemMustFailWithInvariantG10(t *testing.T, repoRoot, binPath string, env map[string]string) map[string]any {
 	t.Helper()
@@ -143,27 +154,19 @@ func TestAdversarialG12InvariantCodeStabilityUnderConcurrentInjection(t *testing
 		t.Fatalf("write concurrent input: %v", err)
 	}
 
-	var storeErr error
-	var wg sync.WaitGroup
-	wg.Add(2)
+	storeCh := make(chan error, 1)
+	injectDoneCh := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				storeErr = fmt.Errorf("panic: %v", r)
-			}
-		}()
-		_ = storeFileWithCodecCLIG2(t, repoRoot, binPath, env, "plain", concurrentPath)
+		storeCh <- storeCLIAsync(repoRoot, binPath, env, "plain", concurrentPath)
 	}()
 	go func() {
-		defer wg.Done()
 		for i := 0; i < 5; i++ {
 			_, _ = dbconn.Exec(`UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = $1`, anchorID)
 		}
+		close(injectDoneCh)
 	}()
-	wg.Wait()
-
-	if storeErr != nil {
+	<-injectDoneCh
+	if storeErr := <-storeCh; storeErr != nil {
 		t.Fatalf("concurrent store failed: %v", storeErr)
 	}
 
