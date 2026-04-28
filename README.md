@@ -1,28 +1,22 @@
-<p align="center">
-  <img src="assets/logo/coldkeep-logo.png" alt="Coldkeep Logo" width="500"/>
-</p>
+# coldkeep
 
-<p align="center">
-  Correctness-first cold storage engine
-</p>
+![Coldkeep Logo](assets/logo/coldkeep-logo.png)
 
-<p align="center">
-  • Content-addressed • Built-in deduplication • Deterministic restore • Verifiable integrity • Crash-safe • GC-safe
-</p>
+Correctness-first cold storage engine
 
-## 🧊 Branding
+• Content-addressed • Built-in deduplication • Deterministic restore
 
-<p align="left">
-  <img src="assets/logo/coldkeep-icon.png" alt="Coldkeep Icon" width="120"/>
-</p>
+• Verifiable integrity • Crash-safe • GC-safe
+
+## Branding
 
 Coldkeep uses a visual identity based on an ice cube vault:
 
-- cold storage (ice cube)
-- secure data (vault door)
-- structured containers (internal shelves)
+- 🧊 cold storage (ice cube)
+- 🔒 secure data (vault door)
+- 🗄️ structured containers (internal shelves)
 
-# coldkeep
+## Project Status
 
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
