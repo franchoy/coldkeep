@@ -800,6 +800,7 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Release readiness flow: [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md)
 - Security reporting and threat guidance: [SECURITY.md](SECURITY.md)
 - Current-state path identity policy: [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
+- Benchmark infrastructure and baseline policy: [docs/benchmarking.md](docs/benchmarking.md)
 - Milestone history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Roadmap note (v1.6 and beyond)

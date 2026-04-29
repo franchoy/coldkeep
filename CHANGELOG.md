@@ -19,6 +19,27 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## [Unreleased] - v1.7
+
+Performance measurement milestone.
+
+### Added (v1.7)
+
+- **Benchmark infrastructure** — `coldkeep benchmark run` with eight built-in
+  scenarios (store, restore, snapshot, GC, stats), deterministic dataset
+  generation, and JSON/table output.
+- **Restore-tree determinism check** — `validateBenchmarkDeterminism` now
+  verifies that `store → restore → SHA-256(bytes)` produces an identical
+  `relative-path → digest` map across independent runs, proving user-visible
+  restore output is byte-for-bit stable.
+- **v1.6 baseline recorded** — `benchmark-baseline.json` captures the eight
+  scenario results on the small dataset before v1.7 optimizations.
+- **CI benchmark job** — runs the small dataset on every push; result uploaded
+  as a `benchmark-baseline` artifact for trend tracking.
+- **Benchmark documentation** — see [docs/benchmarking.md](docs/benchmarking.md).
+
+------------------------------------------------------------------------
+
 ## [1.6.0] - 2026-04-28
 
 Observability and simulation contract hardening milestone.
