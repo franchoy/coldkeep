@@ -1700,6 +1700,43 @@ func TestDiscoverFilesSkipsDirectories(t *testing.T) {
 	}
 }
 
+func TestDiscoverFilesStableAcrossRepeatedRuns(t *testing.T) {
+	root := t.TempDir()
+
+	creationOrder := []string{
+		filepath.Join(root, "z", "9.txt"),
+		filepath.Join(root, "a", "2.txt"),
+		filepath.Join(root, "a", "1.txt"),
+		filepath.Join(root, "m.txt"),
+	}
+	for _, p := range creationOrder {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %q: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %q: %v", p, err)
+		}
+	}
+
+	first, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles first run: %v", err)
+	}
+	second, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles second run: %v", err)
+	}
+
+	if len(first) != len(second) {
+		t.Fatalf("run-to-run length mismatch: %d != %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("run-to-run mismatch at index %d: %q != %q", i, first[i], second[i])
+		}
+	}
+}
+
 func TestStoreFolderWorkersOneCompletesSuccessfully(t *testing.T) {
 	r := runStoreFolderAndRestoreTree(t, 1)
 	if r.completedCount != 4 {
