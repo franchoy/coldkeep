@@ -2665,9 +2665,17 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		)
 		fmt.Println()
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s")
+		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s\tWORKERS\tFILES")
 		for _, row := range report.Rows {
-			_, _ = fmt.Fprintf(tw, "%s\t%.1fs\t%.0f MB/s\n", row.Case, float64(row.DurationMs)/1000.0, row.ThroughputMBps)
+			_, _ = fmt.Fprintf(
+				tw,
+				"%s\t%.1fs\t%.0f\t%d\t%d\n",
+				row.Case,
+				float64(row.DurationMs)/1000.0,
+				row.ThroughputMBps,
+				row.Execution.StoreFolderWorkers,
+				row.ExecutionStats.TotalFiles,
+			)
 		}
 		_ = tw.Flush()
 	}

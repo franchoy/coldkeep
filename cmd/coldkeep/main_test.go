@@ -2272,10 +2272,10 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 	if !strings.Contains(output, "Execution: workers=1 pipeline_depth=1 deterministic=true") {
 		t.Fatalf("expected execution summary line, got=%q", output)
 	}
-	if !strings.Contains(output, "CASE") || !strings.Contains(output, "MB/s") {
+	if !strings.Contains(output, "CASE") || !strings.Contains(output, "MB/s") || !strings.Contains(output, "WORKERS") || !strings.Contains(output, "FILES") {
 		t.Fatalf("expected concise table headers, got=%q", output)
 	}
-	if !strings.Contains(output, "store-large") || !strings.Contains(output, "2.3s") {
+	if !strings.Contains(output, "store-large") || !strings.Contains(output, "2.3s") || !strings.Contains(output, "120") || !strings.Contains(output, "100") {
 		t.Fatalf("expected scenario table row, got=%q", output)
 	}
 }
