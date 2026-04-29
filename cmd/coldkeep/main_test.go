@@ -8407,3 +8407,165 @@ func TestBackwardCompatibilitySimulateStoreCLI(t *testing.T) {
 		t.Fatalf("expected dry-run wording in simulate store output, got:\n%s", stdout)
 	}
 }
+
+// ---- Step 8: --compare baseline tests ----
+
+func TestCompareWithBaselineNoRegression(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Dataset: "small",
+		Repeat:  1,
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 2000, ThroughputMBps: 120},
+			{Case: "restore-large", DurationMs: 1500, ThroughputMBps: 160},
+		},
+	}
+	current := BenchmarkRunReport{
+		Dataset: "small",
+		Repeat:  1,
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 2100, ThroughputMBps: 115},   // ~5% slower — within threshold
+			{Case: "restore-large", DurationMs: 1450, ThroughputMBps: 162}, // faster — OK
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	if err := compareWithBaseline(current, baselineFile); err != nil {
+		t.Fatalf("expected no regression, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineDurationRegression(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1300, ThroughputMBps: 200}, // 30% slower
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	err := compareWithBaseline(current, baselineFile)
+	if err == nil {
+		t.Fatal("expected regression error, got nil")
+	}
+	if !strings.Contains(err.Error(), "regression") {
+		t.Fatalf("expected 'regression' in error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineThroughputRegression(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 120}, // 40% throughput drop
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	err := compareWithBaseline(current, baselineFile)
+	if err == nil {
+		t.Fatal("expected regression error, got nil")
+	}
+	if !strings.Contains(err.Error(), "regression") {
+		t.Fatalf("expected 'regression' in error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+			{Case: "new-case", DurationMs: 99999, ThroughputMBps: 0.001}, // not in baseline — ignored
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	if err := compareWithBaseline(current, baselineFile); err != nil {
+		t.Fatalf("expected no regression for new cases, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineMissingFileError(t *testing.T) {
+	current := BenchmarkRunReport{}
+	err := compareWithBaseline(current, "/nonexistent/baseline.json")
+	if err == nil || !strings.Contains(err.Error(), "read baseline") {
+		t.Fatalf("expected read-baseline error, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWithCompareFlag(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(_ corebenchmark.DatasetPreset, _ int) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{
+			Dataset: "small",
+			Repeat:  1,
+			Rows: []BenchmarkRunCaseRow{
+				{Case: "store-large", DurationMs: 2000, ThroughputMBps: 120},
+			},
+		}, nil
+	}
+
+	// Write a baseline with matching numbers (no regression)
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 2000, ThroughputMBps: 120},
+		},
+	}
+	baselineFile := writeBaselineJSON(t, baseline)
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"dataset": {"small"},
+				"compare": {baselineFile},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("expected no error with passing baseline compare, got: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Benchmark run") {
+		t.Fatalf("expected benchmark run output, got: %q", output)
+	}
+}
+
+// writeBaselineJSON writes a BenchmarkRunReport as the full JSON envelope to a
+// temp file and returns the path.
+func writeBaselineJSON(t *testing.T, report BenchmarkRunReport) string {
+	t.Helper()
+	payload := map[string]any{
+		"status":  "ok",
+		"command": "benchmark",
+		"data":    report,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal baseline JSON: %v", err)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "baseline-*.json")
+	if err != nil {
+		t.Fatalf("create baseline temp file: %v", err)
+	}
+	if _, err := f.Write(encoded); err != nil {
+		t.Fatalf("write baseline temp file: %v", err)
+	}
+	_ = f.Close()
+	return f.Name()
+}

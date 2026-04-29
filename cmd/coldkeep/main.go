@@ -83,6 +83,7 @@ var flagsWithValues = map[string]bool{
 	"modified-before": true,
 	"dataset":         true,
 	"repeat":          true,
+	"compare":         true,
 }
 
 type cliOutputMode string
@@ -2457,7 +2458,7 @@ type BenchmarkRunCaseRow struct {
 }
 
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat", "compare"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
@@ -2555,19 +2556,104 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
+	} else {
+		fmt.Printf("Benchmark run (%s preset, repeat=%d)\n", report.Dataset, report.Repeat)
+		fmt.Println()
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s")
+		for _, row := range report.Rows {
+			_, _ = fmt.Fprintf(tw, "%s\t%.1fs\t%.0f MB/s\n", row.Case, float64(row.DurationMs)/1000.0, row.ThroughputMBps)
+		}
+		_ = tw.Flush()
+	}
+
+	if baselinePath, hasCompare := parsed.lastFlagValue("compare"); hasCompare {
+		if err := compareWithBaseline(report, baselinePath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// compareWithBaseline reads a baseline JSON file produced by a previous
+// `benchmark run --output json` invocation and reports any cases whose
+// duration or throughput has regressed beyond regressionThresholdPct.
+func compareWithBaseline(current BenchmarkRunReport, baselinePath string) error {
+	const regressionThresholdPct = 20.0
+
+	raw, err := os.ReadFile(baselinePath)
+	if err != nil {
+		return fmt.Errorf("read baseline %q: %w", baselinePath, err)
+	}
+
+	// The baseline file is the full JSON envelope written by --output json.
+	var envelope struct {
+		Data BenchmarkRunReport `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("parse baseline %q: %w", baselinePath, err)
+	}
+	baseline := envelope.Data
+
+	baselineByCase := make(map[string]BenchmarkRunCaseRow, len(baseline.Rows))
+	for _, row := range baseline.Rows {
+		baselineByCase[row.Case] = row
+	}
+
+	type regressionEntry struct {
+		caseName string
+		field    string
+		baseline float64
+		current  float64
+		pct      float64
+	}
+	var regressions []regressionEntry
+
+	for _, row := range current.Rows {
+		base, ok := baselineByCase[row.Case]
+		if !ok {
+			continue // new case added since baseline was captured; skip
+		}
+		if base.DurationMs > 0 {
+			delta := float64(row.DurationMs-base.DurationMs) / float64(base.DurationMs) * 100.0
+			if delta > regressionThresholdPct {
+				regressions = append(regressions, regressionEntry{
+					caseName: row.Case,
+					field:    "duration_ms",
+					baseline: float64(base.DurationMs),
+					current:  float64(row.DurationMs),
+					pct:      delta,
+				})
+			}
+		}
+		if base.ThroughputMBps > 0 {
+			delta := (base.ThroughputMBps - row.ThroughputMBps) / base.ThroughputMBps * 100.0
+			if delta > regressionThresholdPct {
+				regressions = append(regressions, regressionEntry{
+					caseName: row.Case,
+					field:    "throughput_mbps",
+					baseline: base.ThroughputMBps,
+					current:  row.ThroughputMBps,
+					pct:      delta,
+				})
+			}
+		}
+	}
+
+	if len(regressions) == 0 {
 		return nil
 	}
 
-	fmt.Printf("Benchmark run (%s preset, repeat=%d)\n", report.Dataset, report.Repeat)
-	fmt.Println()
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s")
-	for _, row := range report.Rows {
-		_, _ = fmt.Fprintf(tw, "%s\t%.1fs\t%.0f MB/s\n", row.Case, float64(row.DurationMs)/1000.0, row.ThroughputMBps)
+	fmt.Fprintf(os.Stderr, "Benchmark regressions detected (>%.0f%% threshold):\n\n", regressionThresholdPct)
+	tw := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "CASE\tFIELD\tBASELINE\tCURRENT\tDEGRADATION")
+	for _, r := range regressions {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t+%.1f%%\n", r.caseName, r.field, r.baseline, r.current, r.pct)
 	}
 	_ = tw.Flush()
 
-	return nil
+	return fmt.Errorf("benchmark regression: %d case(s) exceeded the %.0f%% degradation threshold", len(regressions), regressionThresholdPct)
 }
 
 func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
