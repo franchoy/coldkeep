@@ -2994,6 +2994,7 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 
 	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
 		ColdkeepExecutable: resolveSelfExecutable(),
+		Execution:          opts,
 		ExtraEnv: map[string]string{
 			"DB_NAME":                       dbName,
 			"COLDKEEP_DB_AUTO_BOOTSTRAP":    "true",

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/franchoy/coldkeep/internal/execution"
 )
 
 const (
@@ -36,6 +38,7 @@ type CommandRunner func(spec CommandSpec) error
 type ScenarioConfig struct {
 	ColdkeepExecutable     string
 	Codec                  string
+	Execution              execution.Options
 	Seed                   int64
 	LargeFileSizeBytes     int64
 	ManySmallFileCount     int
@@ -54,14 +57,14 @@ func CoreScenarios(cfg ScenarioConfig) []BenchmarkCase {
 	cfg = cfg.withDefaults()
 
 	return []BenchmarkCase{
-		{Name: "store-large-file", Run: scenarioStoreLargeFile(cfg)},
-		{Name: "store-many-small-files", Run: scenarioStoreManySmallFiles(cfg)},
-		{Name: "store-mixed-dataset", Run: scenarioStoreMixedDataset(cfg)},
-		{Name: "restore-large-file", Run: scenarioRestoreLargeFile(cfg)},
-		{Name: "restore-many-files", Run: scenarioRestoreManyFiles(cfg)},
-		{Name: "snapshot-creation", Run: scenarioSnapshotCreation(cfg)},
-		{Name: "gc-after-churn", Run: scenarioGCAfterChurn(cfg)},
-		{Name: "stats-inspect", Run: scenarioStatsInspect(cfg)},
+		{Name: "store-large-file", Run: scenarioStoreLargeFile(cfg), Execution: cfg.Execution},
+		{Name: "store-many-small-files", Run: scenarioStoreManySmallFiles(cfg), Execution: cfg.Execution},
+		{Name: "store-mixed-dataset", Run: scenarioStoreMixedDataset(cfg), Execution: cfg.Execution},
+		{Name: "restore-large-file", Run: scenarioRestoreLargeFile(cfg), Execution: cfg.Execution},
+		{Name: "restore-many-files", Run: scenarioRestoreManyFiles(cfg), Execution: cfg.Execution},
+		{Name: "snapshot-creation", Run: scenarioSnapshotCreation(cfg), Execution: cfg.Execution},
+		{Name: "gc-after-churn", Run: scenarioGCAfterChurn(cfg), Execution: cfg.Execution},
+		{Name: "stats-inspect", Run: scenarioStatsInspect(cfg), Execution: cfg.Execution},
 	}
 }
 

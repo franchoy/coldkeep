@@ -6,12 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/franchoy/coldkeep/internal/execution"
+	"github.com/franchoy/coldkeep/internal/storage"
 )
 
 // BenchmarkCase defines one benchmark scenario execution unit.
 type BenchmarkCase struct {
-	Name string
-	Run  func(ctx BenchmarkContext) error
+	Name      string
+	Run       func(ctx BenchmarkContext) error
+	Execution execution.Options
 }
 
 // BenchmarkContext contains per-case isolated paths.
@@ -22,11 +26,13 @@ type BenchmarkContext struct {
 
 // Result captures one benchmark case execution outcome.
 type Result struct {
-	Name     string
-	Duration time.Duration
-	Metrics  Metrics
-	Success  bool
-	Error    string
+	Name      string
+	Duration  time.Duration
+	Metrics   Metrics
+	Execution execution.Options
+	ExecStats storage.ExecutionStats
+	Success   bool
+	Error     string
 }
 
 // RunBenchmark executes benchmark cases sequentially with isolated temp paths.
@@ -51,10 +57,16 @@ func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
 		cleanupErr := cleanup()
 
 		result := Result{
-			Name:     bc.Name,
-			Duration: metrics.Duration,
-			Metrics:  metrics,
-			Success:  runErr == nil && cleanupErr == nil,
+			Name:      bc.Name,
+			Duration:  metrics.Duration,
+			Metrics:   metrics,
+			Execution: bc.Execution,
+			ExecStats: storage.ExecutionStats{
+				TotalFilesProcessed: metrics.FilesProcessed,
+				TotalBytesProcessed: metrics.BytesProcessed,
+				WorkersUsed:         bc.Execution.StoreFolderWorkers,
+			},
+			Success: runErr == nil && cleanupErr == nil,
 		}
 		if runErr != nil {
 			result.Error = runErr.Error()
