@@ -1644,6 +1644,38 @@ func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsPipelineDepthGrea
 	}
 }
 
+func TestDetermineStoreFolderWorkerCountUsesRequestedForLocalWriter(t *testing.T) {
+	w := container.NewLocalWriterWithDirAndDB(t.TempDir(), container.GetContainerMaxSize(), nil)
+	got, err := determineStoreFolderWorkerCount(w, 4)
+	if err != nil {
+		t.Fatalf("determine worker count: %v", err)
+	}
+	if got != 4 {
+		t.Fatalf("worker count mismatch: got %d, want 4", got)
+	}
+}
+
+func TestDetermineStoreFolderWorkerCountForcesOneForSimulatedWriter(t *testing.T) {
+	w := container.NewSimulatedWriter(container.GetContainerMaxSize())
+	got, err := determineStoreFolderWorkerCount(w, 4)
+	if err != nil {
+		t.Fatalf("determine worker count: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("worker count mismatch: got %d, want 1", got)
+	}
+}
+
+func TestDetermineStoreFolderWorkerCountRejectsUnsupportedWriter(t *testing.T) {
+	_, err := determineStoreFolderWorkerCount(&syncFailWriter{}, 2)
+	if err == nil {
+		t.Fatal("expected unsupported writer error, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support isolated concurrent workers") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDiscoverFilesReturnsSortedPaths(t *testing.T) {
 	root := t.TempDir()
 

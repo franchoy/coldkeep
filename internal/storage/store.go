@@ -1974,6 +1974,25 @@ type FileJob struct {
 	Path  string
 }
 
+func determineStoreFolderWorkerCount(writer container.ContainerWriter, requested int) (int, error) {
+	if writer == nil {
+		return 0, fmt.Errorf("store folder requires non-nil writer")
+	}
+
+	switch writer.(type) {
+	case *container.LocalWriter:
+		// Option A: LocalWriter is cloned per file in processFile, so concurrent
+		// workers never mutate the same active-container/rollback state.
+		return requested, nil
+	case *container.SimulatedWriter:
+		// Option B: keep one worker for simulated mode. SimulatedWriter has an
+		// internal mutex, and single-worker mode preserves stable baseline behavior.
+		return 1, nil
+	default:
+		return 0, fmt.Errorf("writer type %T does not support isolated concurrent workers", writer)
+	}
+}
+
 func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) error {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
@@ -1987,9 +2006,9 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	if opts.PipelineDepth != 1 {
 		return fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
 	}
-	workerCount := opts.StoreFolderWorkers
-	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
-		workerCount = 1
+	workerCount, err := determineStoreFolderWorkerCount(sgctx.Writer, opts.StoreFolderWorkers)
+	if err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
