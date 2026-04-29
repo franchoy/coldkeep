@@ -1944,7 +1944,12 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}
 	physicalMetadata := buildPhysicalFileMetadata(fileinfo)
 
-	// Compute full file hash
+	// Phase 4 (correctness-first): keep a pre-chunk full-file hash pass.
+	//
+	// This intentionally preserves existing semantics where logical_file claim and
+	// duplicate detection run before ChunkFile(). A single-pass hash-during-chunking
+	// path is a Phase 5 optimization and should be introduced with a streaming API
+	// so claim timing and recovery behavior remain equivalent.
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
 		return StoreFileResult{}, err
@@ -1970,8 +1975,8 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	//     then link ordered file_chunk membership
 	//  6. finalize logical-file state and attach physical-file metadata
 	// The logical_file claim happens before ChunkFile() so the store path preserves
-	// its existing concurrency and recovery semantics, but the version source is the
-	// same resolved chunker used to produce the chunk list.
+	// its existing concurrency, duplicate-detection, and recovery semantics, but the
+	// version source is the same resolved chunker used to produce the chunk list.
 	storeService := NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker)
 	dbconn := storeService.Repository().DB()
 	activeChunker, err := storeService.ResolveActiveChunker()
