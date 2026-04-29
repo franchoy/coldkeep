@@ -1974,6 +1974,11 @@ type FileJob struct {
 	Path  string
 }
 
+type WorkerStats struct {
+	FilesProcessed int
+	BytesProcessed int64
+}
+
 func determineStoreFolderWorkerCount(writer container.ContainerWriter, requested int) (int, error) {
 	if writer == nil {
 		return 0, fmt.Errorf("store folder requires non-nil writer")
@@ -1994,21 +1999,26 @@ func determineStoreFolderWorkerCount(writer container.ContainerWriter, requested
 }
 
 func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) error {
+	_, err := StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx, root, codec, opts)
+	return err
+}
+
+func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (WorkerStats, error) {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
 	err := opts.Validate()
 	if err != nil {
-		return err
+		return WorkerStats{}, err
 	}
 	// Phase 2 guardrail: execution policy exists, but we intentionally do not
 	// enable staged pipelines yet. Keep store-folder semantics equivalent to
 	// the v1.6/v1.7 baseline while workers only control file-level fan-out.
 	if opts.PipelineDepth != 1 {
-		return fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
+		return WorkerStats{}, fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
 	}
 	workerCount, err := determineStoreFolderWorkerCount(sgctx.Writer, opts.StoreFolderWorkers)
 	if err != nil {
-		return err
+		return WorkerStats{}, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2016,21 +2026,26 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 
 	jobCh := make(chan FileJob, 256)
 	errCh := make(chan error, 1)
+	workerStatsCh := make(chan WorkerStats, workerCount)
 	paths, err := discoverFiles(root)
 	if err != nil {
-		return err
+		return WorkerStats{}, err
 	}
 	jobs := buildFileJobs(paths)
 
 	var wg sync.WaitGroup
-	processFile := func(job FileJob) error {
+	processFile := func(job FileJob) (int64, error) {
+		info, statErr := os.Stat(job.Path)
+		if statErr != nil {
+			return 0, statErr
+		}
 		// Per-file isolation boundary:
 		// - fresh writer instance
 		// - fresh per-file storage context copy
 		// - shared *sql.DB pool only (driver handles concurrent tx safety)
 		// StoreFileWithStorageContextAndCodecResult performs open/chunk/hash/claim/
 		// append/metadata under its transaction-safe internal flow.
-		return runWithRetryableTxAbort(ctx, func(attempt int) error {
+		err := runWithRetryableTxAbort(ctx, func(attempt int) error {
 			_ = attempt
 			workerWriter, err := newWriterFromPrototype(sgctx.Writer)
 			if err != nil {
@@ -2041,16 +2056,23 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 			workerCtx.Writer = workerWriter
 			return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
 		})
+		if err != nil {
+			return 0, err
+		}
+		return info.Size(), nil
 	}
 
 	worker := func(workerID int, jobs <-chan FileJob, errCh chan<- error, wg *sync.WaitGroup) {
 		defer wg.Done()
+		localStats := WorkerStats{}
+		defer func() { workerStatsCh <- localStats }()
 
 		for job := range jobs {
 			if ctx.Err() != nil {
 				return
 			}
-			if err := processFile(job); err != nil {
+			bytesProcessed, err := processFile(job)
+			if err != nil {
 				select {
 				case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
 					cancel()
@@ -2058,6 +2080,8 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 				}
 				return
 			}
+			localStats.FilesProcessed++
+			localStats.BytesProcessed += bytesProcessed
 		}
 	}
 
@@ -2089,13 +2113,20 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	}()
 
 	wg.Wait()
+	close(workerStatsCh)
+
+	aggregatedStats := WorkerStats{}
+	for workerStats := range workerStatsCh {
+		aggregatedStats.FilesProcessed += workerStats.FilesProcessed
+		aggregatedStats.BytesProcessed += workerStats.BytesProcessed
+	}
 
 	select {
 	case err := <-errCh:
-		return err
+		return aggregatedStats, err
 	default:
 	}
-	return nil
+	return aggregatedStats, nil
 }
 
 func discoverFiles(root string) ([]string, error) {
