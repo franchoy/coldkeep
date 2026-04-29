@@ -1996,6 +1996,7 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	defer cancel()
 
 	jobChan := make(chan FileJob, 256)
+	errCh := make(chan error, 1)
 	paths, err := discoverFiles(root)
 	if err != nil {
 		return err
@@ -2003,75 +2004,72 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	jobs := buildFileJobs(paths)
 
 	var wg sync.WaitGroup
-	var firstErr error
-	var firstErrMu sync.Mutex
 	reportErr := func(err error) {
 		if err == nil {
 			return
 		}
-		firstErrMu.Lock()
-		if firstErr == nil {
-			firstErr = err
+		select {
+		case errCh <- err:
 			cancel()
+		default:
 		}
-		firstErrMu.Unlock()
 	}
-	getFirstErr := func() error {
-		firstErrMu.Lock()
-		defer firstErrMu.Unlock()
-		return firstErr
+	worker := func(workerID int, jobCh <-chan FileJob, errCh chan<- error, wg *sync.WaitGroup) {
+		defer wg.Done()
+
+		workerWriter, err := newWriterFromPrototype(sgctx.Writer)
+		if err != nil {
+			reportErr(fmt.Errorf("worker %d: %w", workerID, err))
+			return
+		}
+
+		workerCtx := sgctx
+		workerCtx.Writer = workerWriter
+		// workerWriter is reused across files by this worker, but each file store
+		// still finalizes the active writer state by design (see StoreFile*Result).
+
+		for {
+			// Prefer cancellation over draining buffered work when shutting down.
+			if ctx.Err() != nil {
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case job, ok := <-jobCh:
+				if !ok {
+					return
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				if err := runWithRetryableTxAbort(ctx, func(attempt int) error {
+					if attempt > 0 {
+						retryWriter, retryErr := newWriterFromPrototype(sgctx.Writer)
+						if retryErr != nil {
+							return retryErr
+						}
+						workerWriter = retryWriter
+						workerCtx.Writer = retryWriter
+					}
+					return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
+				}); err != nil {
+					select {
+					case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
+						cancel()
+					default:
+					}
+					return
+				}
+			}
+		}
 	}
 
 	// Workers
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			workerWriter, err := newWriterFromPrototype(sgctx.Writer)
-			if err != nil {
-				reportErr(err)
-				return
-			}
-
-			workerCtx := sgctx
-			workerCtx.Writer = workerWriter
-			// workerWriter is reused across files by this worker, but each file store
-			// still finalizes the active writer state by design (see StoreFile*Result).
-
-			for {
-				// Prefer cancellation over draining buffered work when shutting down.
-				if ctx.Err() != nil {
-					return
-				}
-
-				select {
-				case <-ctx.Done():
-					return
-				case job, ok := <-jobChan:
-					if !ok {
-						return
-					}
-					if ctx.Err() != nil {
-						return
-					}
-					if err := runWithRetryableTxAbort(ctx, func(attempt int) error {
-						if attempt > 0 {
-							retryWriter, retryErr := newWriterFromPrototype(sgctx.Writer)
-							if retryErr != nil {
-								return retryErr
-							}
-							workerWriter = retryWriter
-							workerCtx.Writer = retryWriter
-						}
-						return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
-					}); err != nil {
-						reportErr(err)
-						return
-					}
-				}
-			}
-		}()
+		go worker(i, jobChan, errCh, &wg)
 	}
 
 	// Producer: enqueue a deterministic file plan so parallel workers consume
@@ -2081,9 +2079,10 @@ enqueueLoop:
 	for _, job := range jobs {
 		select {
 		case <-ctx.Done():
-			if err := getFirstErr(); err != nil {
+			select {
+			case err := <-errCh:
 				enqueueErr = err
-			} else {
+			default:
 				enqueueErr = context.Canceled
 			}
 			break enqueueLoop
@@ -2094,8 +2093,10 @@ enqueueLoop:
 	close(jobChan)
 	wg.Wait()
 
-	if err := getFirstErr(); err != nil {
+	select {
+	case err := <-errCh:
 		return err
+	default:
 	}
 	if enqueueErr != nil {
 		return enqueueErr
