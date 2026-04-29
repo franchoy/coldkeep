@@ -2119,6 +2119,11 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        "small",
 			Repeat:         2,
+			Execution: BenchmarkExecution{
+				StoreFolderWorkers: opts.StoreFolderWorkers,
+				PipelineDepth:      opts.PipelineDepth,
+				Deterministic:      opts.Deterministic,
+			},
 			Rows: []BenchmarkRunCaseRow{{
 				Case:           "store-large",
 				DurationMs:     2300,
@@ -2162,6 +2167,19 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	if got, _ := data["repeat"].(float64); int(got) != 2 {
 		t.Fatalf("repeat mismatch: got=%v data=%v", data["repeat"], data)
 	}
+	executionData, ok := data["execution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution object in benchmark run payload, got=%v", data["execution"])
+	}
+	if got, _ := executionData["store_folder_workers"].(float64); int(got) != 1 {
+		t.Fatalf("store_folder_workers mismatch: got=%v execution=%v", executionData["store_folder_workers"], executionData)
+	}
+	if got, _ := executionData["pipeline_depth"].(float64); int(got) != 1 {
+		t.Fatalf("pipeline_depth mismatch: got=%v execution=%v", executionData["pipeline_depth"], executionData)
+	}
+	if got, _ := executionData["deterministic"].(bool); !got {
+		t.Fatalf("deterministic mismatch: got=%v execution=%v", executionData["deterministic"], executionData)
+	}
 	rows, ok := data["rows"].([]any)
 	if !ok || len(rows) != 1 {
 		t.Fatalf("expected one benchmark row, got=%v", data["rows"])
@@ -2180,6 +2198,11 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        string(preset),
 			Repeat:         repeat,
+			Execution: BenchmarkExecution{
+				StoreFolderWorkers: opts.StoreFolderWorkers,
+				PipelineDepth:      opts.PipelineDepth,
+				Deterministic:      opts.Deterministic,
+			},
 			Rows: []BenchmarkRunCaseRow{{
 				Case:           "store-large",
 				DurationMs:     2300,
@@ -2201,6 +2224,9 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 
 	if !strings.Contains(output, "Benchmark run (medium preset") {
 		t.Fatalf("expected benchmark run heading, got=%q", output)
+	}
+	if !strings.Contains(output, "Execution: workers=1 pipeline_depth=1 deterministic=true") {
+		t.Fatalf("expected execution summary line, got=%q", output)
 	}
 	if !strings.Contains(output, "CASE") || !strings.Contains(output, "MB/s") {
 		t.Fatalf("expected concise table headers, got=%q", output)

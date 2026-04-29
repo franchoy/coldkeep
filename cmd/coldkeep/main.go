@@ -2512,7 +2512,15 @@ type BenchmarkRunReport struct {
 	GeneratedAtUTC string                `json:"generated_at_utc"`
 	Dataset        string                `json:"dataset"`
 	Repeat         int                   `json:"repeat"`
+	Execution      BenchmarkExecution    `json:"execution"`
 	Rows           []BenchmarkRunCaseRow `json:"rows"`
+}
+
+// BenchmarkExecution captures execution policy knobs used for this run.
+type BenchmarkExecution struct {
+	StoreFolderWorkers int  `json:"store_folder_workers"`
+	PipelineDepth      int  `json:"pipeline_depth"`
+	Deterministic      bool `json:"deterministic"`
 }
 
 // BenchmarkRunCaseRow is one per-case benchmark summary row.
@@ -2625,6 +2633,11 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	if err != nil {
 		return fmt.Errorf("benchmark run: %w", err)
 	}
+	report.Execution = BenchmarkExecution{
+		StoreFolderWorkers: opts.StoreFolderWorkers,
+		PipelineDepth:      opts.PipelineDepth,
+		Deterministic:      opts.Deterministic,
+	}
 
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
@@ -2636,6 +2649,12 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		fmt.Println(string(encoded))
 	} else {
 		fmt.Printf("Benchmark run (%s preset, repeat=%d)\n", report.Dataset, report.Repeat)
+		fmt.Printf(
+			"Execution: workers=%d pipeline_depth=%d deterministic=%t\n",
+			report.Execution.StoreFolderWorkers,
+			report.Execution.PipelineDepth,
+			report.Execution.Deterministic,
+		)
 		fmt.Println()
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s")
@@ -2757,7 +2776,12 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 		GeneratedAtUTC: report.GeneratedAtUTC,
 		Dataset:        string(report.Dataset),
 		Repeat:         report.Repeat,
-		Rows:           make([]BenchmarkRunCaseRow, 0),
+		Execution: BenchmarkExecution{
+			StoreFolderWorkers: opts.StoreFolderWorkers,
+			PipelineDepth:      opts.PipelineDepth,
+			Deterministic:      opts.Deterministic,
+		},
+		Rows: make([]BenchmarkRunCaseRow, 0),
 	}
 
 	type runAgg struct {
