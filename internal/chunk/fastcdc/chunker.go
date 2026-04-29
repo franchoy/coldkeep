@@ -94,9 +94,9 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 }
 
 func buildResult(offset int64, data []byte) shared.Result {
-	chunkData := make([]byte, len(data))
-	copy(chunkData, data)
-	sum := sha256.Sum256(chunkData)
+	// Hash the borrowed window first, then clone once for durable result storage.
+	sum := sha256.Sum256(data)
+	chunkData := append([]byte(nil), data...)
 	return shared.Result{
 		Info: shared.Info{
 			Hash:   hex.EncodeToString(sum[:]),

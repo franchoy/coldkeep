@@ -66,7 +66,7 @@ func (c Chunker) ChunkFile(filePath string) ([]shared.Result, error) {
 						Data: chunk,
 					})
 					offset += int64(len(chunk))
-					buffer = make([]byte, 0, MaxChunkSize)
+					buffer = buffer[:0]
 					rolling = 0
 				}
 			}
