@@ -1974,9 +1974,10 @@ type FileJob struct {
 	Path  string
 }
 
-type WorkerStats struct {
-	FilesProcessed int
-	BytesProcessed int64
+type ExecutionStats struct {
+	TotalFilesProcessed int
+	TotalBytesProcessed int64
+	WorkersUsed         int
 }
 
 func determineStoreFolderWorkerCount(writer container.ContainerWriter, requested int) (int, error) {
@@ -2003,22 +2004,22 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	return err
 }
 
-func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (WorkerStats, error) {
+func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (ExecutionStats, error) {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
 	err := opts.Validate()
 	if err != nil {
-		return WorkerStats{}, err
+		return ExecutionStats{}, err
 	}
 	// Phase 2 guardrail: execution policy exists, but we intentionally do not
 	// enable staged pipelines yet. Keep store-folder semantics equivalent to
 	// the v1.6/v1.7 baseline while workers only control file-level fan-out.
 	if opts.PipelineDepth != 1 {
-		return WorkerStats{}, fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
+		return ExecutionStats{}, fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
 	}
 	workerCount, err := determineStoreFolderWorkerCount(sgctx.Writer, opts.StoreFolderWorkers)
 	if err != nil {
-		return WorkerStats{}, err
+		return ExecutionStats{}, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2026,10 +2027,10 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 
 	jobCh := make(chan FileJob, 256)
 	errCh := make(chan error, 1)
-	workerStatsCh := make(chan WorkerStats, workerCount)
+	workerStatsCh := make(chan ExecutionStats, workerCount)
 	paths, err := discoverFiles(root)
 	if err != nil {
-		return WorkerStats{}, err
+		return ExecutionStats{}, err
 	}
 	jobs := buildFileJobs(paths)
 
@@ -2043,6 +2044,8 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 		// - fresh writer instance
 		// - fresh per-file storage context copy
 		// - shared *sql.DB pool only (driver handles concurrent tx safety)
+		// - no nested per-file parallelism in this phase; job execution stays
+		//   single-threaded so ordering and writer/tx semantics remain explicit
 		// StoreFileWithStorageContextAndCodecResult performs open/chunk/hash/claim/
 		// append/metadata under its transaction-safe internal flow.
 		err := runWithRetryableTxAbort(ctx, func(attempt int) error {
@@ -2064,10 +2067,13 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 
 	worker := func(workerID int, jobs <-chan FileJob, errCh chan<- error, wg *sync.WaitGroup) {
 		defer wg.Done()
-		localStats := WorkerStats{}
+		localStats := ExecutionStats{}
 		defer func() { workerStatsCh <- localStats }()
 
 		for job := range jobs {
+			// Do not infer completion order from dispatch order. Determinism comes
+			// from sorted job construction and persisted metadata such as chunk_order,
+			// not from when workers happen to finish.
 			if ctx.Err() != nil {
 				return
 			}
@@ -2080,8 +2086,8 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 				}
 				return
 			}
-			localStats.FilesProcessed++
-			localStats.BytesProcessed += bytesProcessed
+			localStats.TotalFilesProcessed++
+			localStats.TotalBytesProcessed += bytesProcessed
 		}
 	}
 
@@ -2115,10 +2121,10 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 	wg.Wait()
 	close(workerStatsCh)
 
-	aggregatedStats := WorkerStats{}
+	aggregatedStats := ExecutionStats{WorkersUsed: workerCount}
 	for workerStats := range workerStatsCh {
-		aggregatedStats.FilesProcessed += workerStats.FilesProcessed
-		aggregatedStats.BytesProcessed += workerStats.BytesProcessed
+		aggregatedStats.TotalFilesProcessed += workerStats.TotalFilesProcessed
+		aggregatedStats.TotalBytesProcessed += workerStats.TotalBytesProcessed
 	}
 
 	select {
