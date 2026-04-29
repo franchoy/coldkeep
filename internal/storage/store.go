@@ -11,7 +11,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
@@ -1948,12 +1948,11 @@ func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
-	workerCount := 1
-	if configuredWorkers := strings.TrimSpace(os.Getenv("COLDKEEP_STORE_FOLDER_WORKERS")); configuredWorkers != "" {
-		if parsed, parseErr := strconv.Atoi(configuredWorkers); parseErr == nil && parsed > 0 {
-			workerCount = parsed
-		}
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return err
 	}
+	workerCount := opts.StoreFolderWorkers
 	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
 		workerCount = 1
 	}

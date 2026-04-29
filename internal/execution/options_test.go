@@ -1,6 +1,8 @@
 package execution
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestDefaultOptions(t *testing.T) {
 	o := DefaultOptions()
@@ -53,5 +55,52 @@ func TestNormalizeThenValidate(t *testing.T) {
 	o := Options{StoreFolderWorkers: -2, PipelineDepth: 0, Deterministic: true}.Normalize()
 	if err := o.Validate(); err != nil {
 		t.Fatalf("Normalize then Validate: %v", err)
+	}
+}
+
+func TestFromEnvUsesBaseWhenUnset(t *testing.T) {
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "")
+
+	base := DefaultOptions()
+	got, err := FromEnv(base)
+	if err != nil {
+		t.Fatalf("FromEnv unset: %v", err)
+	}
+	if got.StoreFolderWorkers != base.StoreFolderWorkers {
+		t.Fatalf("StoreFolderWorkers: got %d, want %d", got.StoreFolderWorkers, base.StoreFolderWorkers)
+	}
+	if got.PipelineDepth != base.PipelineDepth {
+		t.Fatalf("PipelineDepth: got %d, want %d", got.PipelineDepth, base.PipelineDepth)
+	}
+	if got.Deterministic != base.Deterministic {
+		t.Fatalf("Deterministic: got %t, want %t", got.Deterministic, base.Deterministic)
+	}
+}
+
+func TestFromEnvParsesStoreFolderWorkers(t *testing.T) {
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "4")
+
+	got, err := FromEnv(DefaultOptions())
+	if err != nil {
+		t.Fatalf("FromEnv valid override: %v", err)
+	}
+	if got.StoreFolderWorkers != 4 {
+		t.Fatalf("StoreFolderWorkers: got %d, want 4", got.StoreFolderWorkers)
+	}
+}
+
+func TestFromEnvRejectsMalformedStoreFolderWorkers(t *testing.T) {
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "oops")
+
+	if _, err := FromEnv(DefaultOptions()); err == nil {
+		t.Fatal("expected error for malformed COLDKEEP_STORE_FOLDER_WORKERS")
+	}
+}
+
+func TestFromEnvRejectsNonPositiveStoreFolderWorkers(t *testing.T) {
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "0")
+
+	if _, err := FromEnv(DefaultOptions()); err == nil {
+		t.Fatal("expected error for non-positive COLDKEEP_STORE_FOLDER_WORKERS")
 	}
 }
