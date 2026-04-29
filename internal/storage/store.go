@@ -553,6 +553,8 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 	}
 
 	prepared := make([]preparedChunk, 0, len(results))
+	chunkHasher := sha256.New()
+	hashBuf := make([]byte, 0, sha256.Size)
 	for i, res := range results {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -563,8 +565,10 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 
 		// If chunker didn't provide hash, compute it now (for v1-simple-rolling)
 		if strings.TrimSpace(hash) == "" {
-			sum := sha256.Sum256(data)
-			hash = hex.EncodeToString(sum[:])
+			chunkHasher.Reset()
+			_, _ = chunkHasher.Write(data)
+			hashBuf = chunkHasher.Sum(hashBuf[:0])
+			hash = hex.EncodeToString(hashBuf)
 		}
 
 		prepared = append(prepared, preparedChunk{
