@@ -85,6 +85,7 @@ var flagsWithValues = map[string]bool{
 	"dataset":         true,
 	"repeat":          true,
 	"compare":         true,
+	"threshold":       true,
 }
 
 type cliOutputMode string
@@ -2516,7 +2517,7 @@ type BenchmarkRunCaseRow struct {
 }
 
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat", "compare"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat", "compare", "threshold"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
@@ -2626,7 +2627,15 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	}
 
 	if baselinePath, hasCompare := parsed.lastFlagValue("compare"); hasCompare {
-		if err := compareWithBaseline(report, baselinePath); err != nil {
+		threshold := 20.0
+		if rawThreshold, hasThreshold := parsed.lastFlagValue("threshold"); hasThreshold {
+			v, err := strconv.ParseFloat(strings.TrimSpace(rawThreshold), 64)
+			if err != nil || v <= 0 {
+				return usageErrorf("invalid --threshold value %q (must be a positive number representing a percentage, e.g. 20 or 100)", rawThreshold)
+			}
+			threshold = v
+		}
+		if err := compareWithBaseline(report, baselinePath, threshold); err != nil {
 			return err
 		}
 	}
@@ -2636,9 +2645,10 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 
 // compareWithBaseline reads a baseline JSON file produced by a previous
 // `benchmark run --output json` invocation and reports any cases whose
-// duration or throughput has regressed beyond regressionThresholdPct.
-func compareWithBaseline(current BenchmarkRunReport, baselinePath string) error {
-	const regressionThresholdPct = 20.0
+// duration or throughput has regressed beyond thresholdPct percent.
+// Use thresholdPct=20 for local dev work and thresholdPct=100 for CI
+// (fail only if a scenario becomes more than 2× slower).
+func compareWithBaseline(current BenchmarkRunReport, baselinePath string, thresholdPct float64) error {
 
 	raw, err := os.ReadFile(baselinePath)
 	if err != nil {
@@ -2675,7 +2685,7 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string) error 
 		}
 		if base.DurationMs > 0 {
 			delta := float64(row.DurationMs-base.DurationMs) / float64(base.DurationMs) * 100.0
-			if delta > regressionThresholdPct {
+			if delta > thresholdPct {
 				regressions = append(regressions, regressionEntry{
 					caseName: row.Case,
 					field:    "duration_ms",
@@ -2687,7 +2697,7 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string) error 
 		}
 		if base.ThroughputMBps > 0 {
 			delta := (base.ThroughputMBps - row.ThroughputMBps) / base.ThroughputMBps * 100.0
-			if delta > regressionThresholdPct {
+			if delta > thresholdPct {
 				regressions = append(regressions, regressionEntry{
 					caseName: row.Case,
 					field:    "throughput_mbps",
@@ -2703,7 +2713,7 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string) error 
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Benchmark regressions detected (>%.0f%% threshold):\n\n", regressionThresholdPct)
+	fmt.Fprintf(os.Stderr, "Benchmark regressions detected (>%.0f%% threshold):\n\n", thresholdPct)
 	tw := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "CASE\tFIELD\tBASELINE\tCURRENT\tDEGRADATION")
 	for _, r := range regressions {
@@ -2711,7 +2721,7 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string) error 
 	}
 	_ = tw.Flush()
 
-	return fmt.Errorf("benchmark regression: %d case(s) exceeded the %.0f%% degradation threshold", len(regressions), regressionThresholdPct)
+	return fmt.Errorf("benchmark regression: %d case(s) exceeded the %.0f%% degradation threshold", len(regressions), thresholdPct)
 }
 
 func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {

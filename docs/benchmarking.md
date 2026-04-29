@@ -56,11 +56,26 @@ coldkeep benchmark run --dataset small --output json > benchmark-baseline.json
    an identical `relative-path → digest` map across isolated runs, proving that
    user-visible restore output is byte-for-bit stable.
 
+## Comparison thresholds
+
+| Context | Flag | Threshold | Meaning |
+|---|---|---|---|
+| Local / dev | `--threshold 20` (default) | 20% | Fail if any scenario is >20% slower or throughput drops >20% |
+| CI | `--threshold 100` | 100% | Fail only if a scenario becomes **more than 2× slower** (disaster detection) |
+
+The 20% default is intentionally tight so developers notice regressions during active work.
+The 100% CI threshold tolerates normal run-to-run variance on short-duration small-dataset
+runs (snapshot and GC timings are DB/filesystem sensitive) while still catching catastrophic
+regressions.
+
 ## CI policy
 
-CI runs the **small** benchmark dataset on every push to confirm that the
-benchmark infrastructure itself works and to capture a timing artifact.
-The goal is to detect major regressions and build failures, not to enforce
-precise micro-performance numbers.  Run-to-run variance is expected; the
-`--compare` flag is a developer tool for deliberate regression investigation,
-not a CI gate.
+CI runs the **small** benchmark dataset on every push:
+
+1. **Always runs the benchmark** and captures a `benchmark-baseline.json` artifact.
+2. **Runs a second pass with `--compare ... --threshold 100`** to catch disasters
+   (any scenario becoming >2× slower fails the job).
+3. Does **not** enforce tight micro-performance numbers — normal timing variance is expected.
+
+Run the `--compare` flag with the default `--threshold 20` locally to investigate
+potential regressions before opening a PR.

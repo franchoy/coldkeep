@@ -480,6 +480,21 @@ jobs:
           DB_SSLMODE: disable
         run: ./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
 
+      - name: Compare against committed baseline (100% threshold — disaster check only)
+        env:
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          if [ -f benchmark-baseline.json ]; then
+            ./coldkeep benchmark run --dataset small --output json \
+              --compare benchmark-baseline.json --threshold 100
+          fi
+
       - name: Upload benchmark baseline
         uses: actions/upload-artifact@v4
         with:

@@ -8429,7 +8429,7 @@ func TestCompareWithBaselineNoRegression(t *testing.T) {
 	}
 
 	baselineFile := writeBaselineJSON(t, baseline)
-	if err := compareWithBaseline(current, baselineFile); err != nil {
+	if err := compareWithBaseline(current, baselineFile, 20.0); err != nil {
 		t.Fatalf("expected no regression, got: %v", err)
 	}
 }
@@ -8447,7 +8447,7 @@ func TestCompareWithBaselineDurationRegression(t *testing.T) {
 	}
 
 	baselineFile := writeBaselineJSON(t, baseline)
-	err := compareWithBaseline(current, baselineFile)
+	err := compareWithBaseline(current, baselineFile, 20.0)
 	if err == nil {
 		t.Fatal("expected regression error, got nil")
 	}
@@ -8469,7 +8469,7 @@ func TestCompareWithBaselineThroughputRegression(t *testing.T) {
 	}
 
 	baselineFile := writeBaselineJSON(t, baseline)
-	err := compareWithBaseline(current, baselineFile)
+	err := compareWithBaseline(current, baselineFile, 20.0)
 	if err == nil {
 		t.Fatal("expected regression error, got nil")
 	}
@@ -8492,16 +8492,61 @@ func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
 	}
 
 	baselineFile := writeBaselineJSON(t, baseline)
-	if err := compareWithBaseline(current, baselineFile); err != nil {
+	if err := compareWithBaseline(current, baselineFile, 20.0); err != nil {
 		t.Fatalf("expected no regression for new cases, got: %v", err)
 	}
 }
 
 func TestCompareWithBaselineMissingFileError(t *testing.T) {
 	current := BenchmarkRunReport{}
-	err := compareWithBaseline(current, "/nonexistent/baseline.json")
+	err := compareWithBaseline(current, "/nonexistent/baseline.json", 20.0)
 	if err == nil || !strings.Contains(err.Error(), "read baseline") {
 		t.Fatalf("expected read-baseline error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineHighThresholdToleratesModerateRegression(t *testing.T) {
+	// 30% regression should pass at threshold=100 (CI policy) but fail at threshold=20 (dev policy).
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "snapshot-creation", DurationMs: 1000, ThroughputMBps: 100},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "snapshot-creation", DurationMs: 1300, ThroughputMBps: 100}, // 30% slower
+		},
+	}
+	baselineFile := writeBaselineJSON(t, baseline)
+
+	if err := compareWithBaseline(current, baselineFile, 100.0); err != nil {
+		t.Fatalf("30%% regression should pass at 100%% (CI) threshold, got: %v", err)
+	}
+	if err := compareWithBaseline(current, baselineFile, 20.0); err == nil {
+		t.Fatal("30%% regression should fail at 20%% (dev) threshold")
+	}
+}
+
+func TestCompareWithBaselineHighThresholdCatchesDisaster(t *testing.T) {
+	// 120% regression (>2x slower) must fail even at the relaxed CI threshold of 100%.
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "gc-after-churn", DurationMs: 1000, ThroughputMBps: 50},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "gc-after-churn", DurationMs: 2200, ThroughputMBps: 50}, // 120% slower
+		},
+	}
+	baselineFile := writeBaselineJSON(t, baseline)
+
+	err := compareWithBaseline(current, baselineFile, 100.0)
+	if err == nil {
+		t.Fatal("120%% regression should fail at 100%% threshold")
+	}
+	if !strings.Contains(err.Error(), "regression") {
+		t.Fatalf("expected 'regression' in error, got: %v", err)
 	}
 }
 
