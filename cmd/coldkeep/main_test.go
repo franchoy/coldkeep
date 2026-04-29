@@ -2128,6 +2128,16 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 				Case:           "store-large",
 				DurationMs:     2300,
 				ThroughputMBps: 120,
+				Execution: BenchmarkExecution{
+					StoreFolderWorkers: opts.StoreFolderWorkers,
+					PipelineDepth:      opts.PipelineDepth,
+					Deterministic:      opts.Deterministic,
+				},
+				ExecutionStats: BenchmarkExecutionStats{
+					TotalFiles:  100,
+					TotalBytes:  104857600,
+					WorkersUsed: opts.StoreFolderWorkers,
+				},
 			}},
 		}, nil
 	}
@@ -2184,6 +2194,30 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	if !ok || len(rows) != 1 {
 		t.Fatalf("expected one benchmark row, got=%v", data["rows"])
 	}
+	row, ok := rows[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected row object, got=%v", rows[0])
+	}
+	rowExecution, ok := row["execution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution object in row payload, got=%v", row["execution"])
+	}
+	if got, _ := rowExecution["store_folder_workers"].(float64); int(got) != 1 {
+		t.Fatalf("row store_folder_workers mismatch: got=%v execution=%v", rowExecution["store_folder_workers"], rowExecution)
+	}
+	rowStats, ok := row["execution_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution_stats object in row payload, got=%v", row["execution_stats"])
+	}
+	if got, _ := rowStats["total_files"].(float64); int(got) != 100 {
+		t.Fatalf("row total_files mismatch: got=%v stats=%v", rowStats["total_files"], rowStats)
+	}
+	if got, _ := rowStats["total_bytes"].(float64); int64(got) != 104857600 {
+		t.Fatalf("row total_bytes mismatch: got=%v stats=%v", rowStats["total_bytes"], rowStats)
+	}
+	if got, _ := rowStats["workers_used"].(float64); int(got) != 1 {
+		t.Fatalf("row workers_used mismatch: got=%v stats=%v", rowStats["workers_used"], rowStats)
+	}
 }
 
 func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
@@ -2207,6 +2241,16 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 				Case:           "store-large",
 				DurationMs:     2300,
 				ThroughputMBps: 120,
+				Execution: BenchmarkExecution{
+					StoreFolderWorkers: opts.StoreFolderWorkers,
+					PipelineDepth:      opts.PipelineDepth,
+					Deterministic:      opts.Deterministic,
+				},
+				ExecutionStats: BenchmarkExecutionStats{
+					TotalFiles:  100,
+					TotalBytes:  104857600,
+					WorkersUsed: opts.StoreFolderWorkers,
+				},
 			}},
 		}, nil
 	}

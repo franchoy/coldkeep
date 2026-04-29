@@ -2523,11 +2523,19 @@ type BenchmarkExecution struct {
 	Deterministic      bool `json:"deterministic"`
 }
 
+type BenchmarkExecutionStats struct {
+	TotalFiles  int   `json:"total_files"`
+	TotalBytes  int64 `json:"total_bytes"`
+	WorkersUsed int   `json:"workers_used"`
+}
+
 // BenchmarkRunCaseRow is one per-case benchmark summary row.
 type BenchmarkRunCaseRow struct {
-	Case           string  `json:"case"`
-	DurationMs     int64   `json:"duration_ms"`
-	ThroughputMBps float64 `json:"throughput_mbps"`
+	Case           string                  `json:"case"`
+	DurationMs     int64                   `json:"duration_ms"`
+	ThroughputMBps float64                 `json:"throughput_mbps"`
+	Execution      BenchmarkExecution      `json:"execution"`
+	ExecutionStats BenchmarkExecutionStats `json:"execution_stats"`
 }
 
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -2787,6 +2795,9 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 	type runAgg struct {
 		durationMs int64
 		bytes      int64
+		files      int
+		execution  BenchmarkExecution
+		stats      BenchmarkExecutionStats
 	}
 	caseAgg := make(map[string]runAgg)
 	caseOrder := make([]string, 0)
@@ -2795,9 +2806,18 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 			agg := caseAgg[result.Name]
 			if _, seen := caseAgg[result.Name]; !seen {
 				caseOrder = append(caseOrder, result.Name)
+				agg.execution = BenchmarkExecution{
+					StoreFolderWorkers: result.Execution.StoreFolderWorkers,
+					PipelineDepth:      result.Execution.PipelineDepth,
+					Deterministic:      result.Execution.Deterministic,
+				}
+				agg.stats.WorkersUsed = result.ExecStats.WorkersUsed
 			}
 			agg.durationMs += result.Metrics.Duration.Milliseconds()
 			agg.bytes += result.Metrics.BytesProcessed
+			agg.files += result.Metrics.FilesProcessed
+			agg.stats.TotalBytes += result.ExecStats.TotalBytesProcessed
+			agg.stats.TotalFiles += result.ExecStats.TotalFilesProcessed
 			caseAgg[result.Name] = agg
 		}
 	}
@@ -2813,6 +2833,8 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 			Case:           caseName,
 			DurationMs:     agg.durationMs,
 			ThroughputMBps: throughput,
+			Execution:      agg.execution,
+			ExecutionStats: agg.stats,
 		})
 	}
 
