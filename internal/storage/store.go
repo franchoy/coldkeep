@@ -183,8 +183,8 @@ func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, container
 func newWriterFromPrototype(prototype container.ContainerWriter) (container.ContainerWriter, error) {
 	switch w := prototype.(type) {
 	case *container.LocalWriter:
-		// Clone LocalWriter per worker for thread safety; propagate DB connection
-		// so the per-worker writer can commit sealing markers independently.
+		// Clone LocalWriter per file for isolation; propagate DB connection
+		// so each isolated writer can commit sealing markers independently.
 		return container.NewLocalWriterWithDirAndDB(w.Dir(), w.MaxSize(), w.DB()), nil
 	case *container.SimulatedWriter:
 		// Do NOT clone SimulatedWriter; return the original for shared, realistic container packing.
@@ -1995,7 +1995,7 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	jobChan := make(chan FileJob, 256)
+	jobCh := make(chan FileJob, 256)
 	errCh := make(chan error, 1)
 	paths, err := discoverFiles(root)
 	if err != nil {
@@ -2005,7 +2005,12 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 
 	var wg sync.WaitGroup
 	processFile := func(job FileJob) error {
-		// Build fresh writer/context per file so worker state is fully isolated.
+		// Per-file isolation boundary:
+		// - fresh writer instance
+		// - fresh per-file storage context copy
+		// - shared *sql.DB pool only (driver handles concurrent tx safety)
+		// StoreFileWithStorageContextAndCodecResult performs open/chunk/hash/claim/
+		// append/metadata under its transaction-safe internal flow.
 		return runWithRetryableTxAbort(ctx, func(attempt int) error {
 			_ = attempt
 			workerWriter, err := newWriterFromPrototype(sgctx.Writer)
@@ -2040,7 +2045,7 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	// Workers
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go worker(i, jobChan, errCh, &wg)
+		go worker(i, jobCh, errCh, &wg)
 	}
 
 	// Producer: enqueue a deterministic file plan so parallel workers consume
@@ -2057,11 +2062,11 @@ enqueueLoop:
 				enqueueErr = context.Canceled
 			}
 			break enqueueLoop
-		case jobChan <- job:
+		case jobCh <- job:
 		}
 	}
 
-	close(jobChan)
+	close(jobCh)
 	wg.Wait()
 
 	select {
