@@ -141,6 +141,120 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	}
 }
 
+func TestPinLogicalFileRestoreChunksReturnsOrderedChunkRows(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+		 RETURNING id`,
+		"ordered-restore.bin",
+		9,
+		"ordered-restore-file-hash",
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	insertChunkWithContainer := func(name string) (int64, int64) {
+		t.Helper()
+		var containerID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO container (filename, current_size, max_size, sealed)
+			 VALUES ($1, $2, $3, TRUE)
+			 RETURNING id`,
+			name+".bin",
+			4096,
+			1048576,
+		).Scan(&containerID); err != nil {
+			t.Fatalf("insert container %s: %v", name, err)
+		}
+
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+			 RETURNING id`,
+			"hash-"+name,
+			3,
+			filestate.ChunkCompleted,
+			1,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk %s: %v", name, err)
+		}
+
+		if _, err := dbconn.Exec(
+			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+			 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+			chunkID,
+			3,
+			3,
+			[]byte{},
+			containerID,
+			0,
+		); err != nil {
+			t.Fatalf("insert block %s: %v", name, err)
+		}
+
+		return chunkID, containerID
+	}
+
+	chunk0, _ := insertChunkWithContainer("c0")
+	chunk1, _ := insertChunkWithContainer("c1")
+	chunk2, _ := insertChunkWithContainer("c2")
+
+	// Intentionally insert out of order; restore pinning must still return
+	// chunk rows ordered by chunk_order ASC.
+	for _, row := range []struct {
+		chunkID    int64
+		chunkOrder int
+	}{
+		{chunkID: chunk2, chunkOrder: 2},
+		{chunkID: chunk0, chunkOrder: 0},
+		{chunkID: chunk1, chunkOrder: 1},
+	} {
+		if _, err := dbconn.Exec(
+			`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+			 VALUES ($1, $2, $3)`,
+			fileID,
+			row.chunkID,
+			row.chunkOrder,
+		); err != nil {
+			t.Fatalf("insert file_chunk order=%d: %v", row.chunkOrder, err)
+		}
+	}
+
+	_, _, chunkRows, pinnedChunkIDs, err := pinLogicalFileRestoreChunks(dbconn, fileID)
+	if err != nil {
+		t.Fatalf("pin restore chunks: %v", err)
+	}
+	if len(chunkRows) != 3 {
+		t.Fatalf("chunk row count mismatch: got %d, want 3", len(chunkRows))
+	}
+
+	wantChunkIDs := []int64{chunk0, chunk1, chunk2}
+	for i := range wantChunkIDs {
+		if chunkRows[i].chunkOrder != int64(i) {
+			t.Fatalf("chunk row order mismatch at %d: got %d, want %d", i, chunkRows[i].chunkOrder, i)
+		}
+		if chunkRows[i].chunkID != wantChunkIDs[i] {
+			t.Fatalf("chunk row chunk id mismatch at %d: got %d, want %d", i, chunkRows[i].chunkID, wantChunkIDs[i])
+		}
+		if pinnedChunkIDs[i] != wantChunkIDs[i] {
+			t.Fatalf("pinned chunk id mismatch at %d: got %d, want %d", i, pinnedChunkIDs[i], wantChunkIDs[i])
+		}
+	}
+}
+
 func TestRestoreFailsWhenLogicalFileNotFound(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

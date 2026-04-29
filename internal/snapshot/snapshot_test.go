@@ -103,6 +103,14 @@ func TestSnapshotSourceQueryPostgresAppendsForUpdate(t *testing.T) {
 	}
 }
 
+func TestSnapshotSourceQueryIncludesDeterministicOrderBy(t *testing.T) {
+	dbconn := openTestDB(t)
+	query := snapshotSourceQuery(dbconn)
+	if !strings.Contains(query, "ORDER BY pf.path, pf.logical_file_id") {
+		t.Fatalf("expected deterministic ORDER BY clause in snapshot source query, got %q", query)
+	}
+}
+
 // ---- NormalizeSnapshotPath tests ----
 
 func TestNormalizeSnapshotPathValid(t *testing.T) {
