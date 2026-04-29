@@ -966,11 +966,13 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	path := parsed.positionals[0]
 	codecName, _ := parsed.lastFlagValue("codec")
 
+	perf := newPerfTimer()
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	perf.Mark("setup")
 
 	var result storage.StoreFileResult
 	if codecName == "" {
@@ -987,9 +989,11 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 		result, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
 	}
+	perf.Mark("operation")
 	if sgctx.Writer != nil {
 		_ = sgctx.Writer.FinalizeContainer()
 	}
+	perf.Mark("finalize")
 	if err != nil {
 		return err
 	}
@@ -1004,6 +1008,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 				"file_id":        result.FileID,
 				"file_hash":      result.FileHash,
 				"already_stored": result.AlreadyStored,
+				"perf_spans":     perf.Spans(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -1112,11 +1117,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 			return usageErrorf("--destination is required with --mode %s", destinationMode)
 		}
 
+		perf := newPerfTimer()
 		sgctx, err := storage.LoadDefaultStorageContext()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
 		defer func() { _ = sgctx.Close() }()
+		perf.Mark("setup")
 
 		result, err := storage.RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, storage.RestoreOptions{
 			Overwrite:       overwrite,
@@ -1128,6 +1135,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		if err != nil {
 			return err
 		}
+		perf.Mark("operation")
 
 		if outputMode == outputModeJSON {
 			payload := map[string]any{
@@ -1139,6 +1147,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 					"file_id":       result.FileID,
 					"restored_hash": result.RestoredHash,
 					"mode":          destinationMode,
+					"perf_spans":    perf.Spans(),
 				},
 			}
 			encoded, _ := json.Marshal(payload)
@@ -1197,11 +1206,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
+	restorePerf := newPerfTimer()
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	restorePerf.Mark("setup")
 
 	execFunc := func(fileID int64) batch.ItemResult {
 		if dryRun {
@@ -1211,7 +1222,8 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 
 	report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, execFunc)
-	return emitBatchCommandReport("restore", report, outputMode)
+	restorePerf.Mark("operation")
+	return emitBatchCommandReport("restore", report, outputMode, restorePerf.Spans())
 }
 
 func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDestinationMode, error) {
@@ -1670,7 +1682,7 @@ func executeRemoveStoredPathItem(sgctx *storage.StorageContext, storedPath strin
 	}
 }
 
-func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode) error {
+func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode, spans ...[]perfSpan) error {
 	executionMode := report.ExecutionMode
 	if executionMode == "" {
 		executionMode = batch.ExecutionModeContinueOnError
@@ -1721,6 +1733,9 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 			"execution_mode": executionMode,
 			"summary":        report.Summary,
 			"results":        jsonResults,
+		}
+		if len(spans) > 0 && len(spans[0]) > 0 {
+			payload["perf_spans"] = spans[0]
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -1791,10 +1806,12 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return usageErrorf("Usage: coldkeep gc [--dry-run]")
 	}
 
+	perf := newPerfTimer()
 	result, err := runGCPhase(dryRun, container.ContainersDir)
 	if err != nil {
 		return err
 	}
+	perf.Mark("operation")
 
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
@@ -1802,6 +1819,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			"command": "gc",
 			"data":    result,
 		}
+		payload["perf_spans"] = perf.Spans()
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
@@ -2441,6 +2459,45 @@ type BenchmarkChunkersReportRecord struct {
 	DeltaPct      float64 `json:"delta_pct"`
 	WinnerVersion string  `json:"winner_version"`
 }
+
+// ---- Phase 1 performance measurement ----
+// perfSpan is a named, sequential timing span within a single command invocation.
+// Spans are emitted as perf_spans in --output json responses.
+// Phase 1 records three coarse phases per command:
+//
+//	setup      – storage context / DB bootstrap
+//	operation  – the primary work (store / restore / gc / snapshot-create)
+//	finalize   – container sealing (store only)
+//
+// No changes to internal packages (db, container, chunk, storage) are made;
+// all timings are taken at the command-handler boundary.
+type perfSpan struct {
+	Name       string `json:"name"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// perfTimer records sequential named spans. Call Mark after each sub-phase.
+type perfTimer struct {
+	spans []perfSpan
+	last  time.Time
+}
+
+func newPerfTimer() *perfTimer {
+	return &perfTimer{last: time.Now()}
+}
+
+// Mark ends the current span and starts the next.
+func (p *perfTimer) Mark(name string) {
+	now := time.Now()
+	p.spans = append(p.spans, perfSpan{
+		Name:       name,
+		DurationMs: now.Sub(p.last).Milliseconds(),
+	})
+	p.last = now
+}
+
+// Spans returns all recorded spans in order.
+func (p *perfTimer) Spans() []perfSpan { return p.spans }
 
 // BenchmarkRunReport is the output payload for `coldkeep benchmark run`.
 type BenchmarkRunReport struct {
@@ -4162,7 +4219,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 }
 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	startedAt := time.Now()
+	perf := newPerfTimer()
 
 	if err := ensureAllowedFlags(parsed, "id", "label", "from", "output"); err != nil {
 		return err
@@ -4210,6 +4267,7 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	perf.Mark("setup")
 
 	if sgctx.DB == nil {
 		return errors.New("storage context DB is nil")
@@ -4227,22 +4285,27 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	}); err != nil {
 		return err
 	}
+	perf.Mark("operation")
 
 	var (
-		filesInserted      int64
-		hasFilesInserted   bool
-		snapshotDurationMS = time.Since(startedAt).Milliseconds()
+		filesInserted    int64
+		hasFilesInserted bool
 	)
 	if err := sgctx.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&filesInserted); err == nil {
 		hasFilesInserted = true
 	}
 
 	if outputMode == outputModeJSON {
+		totalMs := int64(0)
+		for _, s := range perf.Spans() {
+			totalMs += s.DurationMs
+		}
 		data := map[string]any{
 			"snapshot_id": snapshotID,
 			"type":        snapshotType,
 			"paths_count": len(paths),
-			"duration_ms": snapshotDurationMS,
+			"duration_ms": totalMs,
+			"perf_spans":  perf.Spans(),
 		}
 		payload := map[string]any{
 			"status":  "ok",
@@ -4273,7 +4336,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	if hasFilesInserted {
 		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", filesInserted)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", snapshotDurationMS)
+	totalMs := int64(0)
+	for _, s := range perf.Spans() {
+		totalMs += s.DurationMs
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", totalMs)
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }

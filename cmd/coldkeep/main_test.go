@@ -8546,6 +8546,97 @@ func TestRunBenchmarkRunCommandWithCompareFlag(t *testing.T) {
 	}
 }
 
+func TestRunGCCommandJSONIncludesPerfSpans(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+		return maintenance.GCResult{DryRun: false, AffectedContainers: 0}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse gc JSON payload: %v output=%q", err, output)
+	}
+
+	spans, ok := payload["perf_spans"].([]any)
+	if !ok || len(spans) == 0 {
+		t.Fatalf("expected top-level perf_spans array in gc payload, got=%v", payload)
+	}
+	first, ok := spans[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected perf span object, got=%T", spans[0])
+	}
+	if got, _ := first["name"].(string); got != "operation" {
+		t.Fatalf("expected first perf span name=operation, got=%v", first)
+	}
+}
+
+func TestRunSnapshotCreateCommandJSONIncludesPerfSpans(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		if opts.ID != "phase1-perf-test" {
+			t.Fatalf("unexpected snapshot id: %q", opts.ID)
+		}
+		if db == nil {
+			t.Fatal("expected non-nil db")
+		}
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCreateCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"create"},
+			flags: map[string][]string{
+				"id": {"phase1-perf-test"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCreateCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot JSON payload: %v output=%q", err, output)
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got=%v", payload)
+	}
+	spans, ok := data["perf_spans"].([]any)
+	if !ok || len(spans) < 2 {
+		t.Fatalf("expected data.perf_spans with at least setup+operation, got=%v", data["perf_spans"])
+	}
+}
+
 // writeBaselineJSON writes a BenchmarkRunReport as the full JSON envelope to a
 // temp file and returns the path.
 func writeBaselineJSON(t *testing.T, report BenchmarkRunReport) string {
