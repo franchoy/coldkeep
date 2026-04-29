@@ -104,7 +104,9 @@ func RunPreset(preset DatasetPreset, repeat int, base ScenarioConfig) (RunReport
 	}
 
 	for i := 1; i <= repeat; i++ {
-		results, runErr := RunBenchmark(CoreScenarios(cfg))
+		iterCfg := cfg
+		iterCfg.RunTag = fmt.Sprintf("iter-%02d", i)
+		results, runErr := RunBenchmark(CoreScenarios(iterCfg))
 		report.Iterations = append(report.Iterations, IterationReport{
 			Iteration: i,
 			Results:   results,

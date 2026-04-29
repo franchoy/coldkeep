@@ -44,6 +44,7 @@ type ScenarioConfig struct {
 	MixedMinFileSizeBytes  int
 	MixedMaxFileSizeBytes  int
 	RemoveEvery            int
+	RunTag                 string
 	ExtraEnv               map[string]string
 	Runner                 CommandRunner
 }
@@ -221,7 +222,7 @@ func scenarioSnapshotCreation(cfg ScenarioConfig) func(ctx BenchmarkContext) err
 		if err := runColdkeep(ctx, cfg, "store-folder", "--codec", cfg.Codec, datasetDir); err != nil {
 			return err
 		}
-		if err := runColdkeep(ctx, cfg, "snapshot", "create", "--id", "bench-snapshot-core"); err != nil {
+		if err := runColdkeep(ctx, cfg, "snapshot", "create", "--id", snapshotID("bench-snapshot-core", cfg.RunTag)); err != nil {
 			return err
 		}
 
@@ -250,7 +251,7 @@ func scenarioGCAfterChurn(cfg ScenarioConfig) func(ctx BenchmarkContext) error {
 			}
 		}
 
-		if err := runColdkeep(ctx, cfg, "snapshot", "create", "--id", "bench-snapshot-gc"); err != nil {
+		if err := runColdkeep(ctx, cfg, "snapshot", "create", "--id", snapshotID("bench-snapshot-gc", cfg.RunTag)); err != nil {
 			return err
 		}
 		if err := runColdkeep(ctx, cfg, "gc"); err != nil {
@@ -398,6 +399,14 @@ func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error
 		return fmt.Errorf("run coldkeep %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+func snapshotID(base string, runTag string) string {
+	tag := strings.TrimSpace(runTag)
+	if tag == "" {
+		return base
+	}
+	return base + "-" + tag
 }
 
 func defaultCommandRunner(spec CommandSpec) error {

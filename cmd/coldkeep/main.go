@@ -184,6 +184,7 @@ var runObservabilityInspectPhase = func(entity observability.EntityType, id stri
 }
 var runChunkerBenchmarkPhase = runChunkerBenchmark
 var runCoreBenchmarkPhase = runCoreBenchmark
+var runBenchmarkDeterminismPhase = validateBenchmarkDeterminism
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
 	return false, ""
@@ -2570,9 +2571,11 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 }
 
 func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
-	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
-		ColdkeepExecutable: os.Args[0],
-	})
+	if err := runBenchmarkDeterminismPhase(preset); err != nil {
+		return BenchmarkRunReport{}, err
+	}
+
+	report, err := runPresetInTemporaryDatabase(preset, repeat, "report")
 	if err != nil {
 		return BenchmarkRunReport{}, err
 	}
@@ -2617,6 +2620,211 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (Benchmark
 	}
 
 	return out, nil
+}
+
+type benchmarkStateSnapshot struct {
+	ChunkCount        int64
+	LogicalFileHashes []string
+	SnapshotContent   []string
+}
+
+func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset) error {
+	firstReport, firstState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, "determinism-a")
+	if err != nil {
+		return fmt.Errorf("determinism run A failed: %w", err)
+	}
+	_ = firstReport
+
+	secondReport, secondState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, "determinism-b")
+	if err != nil {
+		return fmt.Errorf("determinism run B failed: %w", err)
+	}
+	_ = secondReport
+
+	if firstState.ChunkCount != secondState.ChunkCount {
+		return fmt.Errorf("determinism validation failed: chunk count mismatch (%d != %d)", firstState.ChunkCount, secondState.ChunkCount)
+	}
+	if !equalStringSlices(firstState.LogicalFileHashes, secondState.LogicalFileHashes) {
+		return fmt.Errorf("determinism validation failed: logical file hash set mismatch")
+	}
+	if !equalStringSlices(firstState.SnapshotContent, secondState.SnapshotContent) {
+		return fmt.Errorf("determinism validation failed: snapshot content mismatch")
+	}
+	return nil
+}
+
+func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, runLabel string) (corebenchmark.RunReport, error) {
+	report, _, err := runPresetAndCaptureStateInTemporaryDatabase(preset, repeat, runLabel)
+	return report, err
+}
+
+func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, runLabel string) (corebenchmark.RunReport, benchmarkStateSnapshot, error) {
+	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
+	if err != nil {
+		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
+	}
+	defer func() { _ = cleanup() }()
+
+	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
+		ColdkeepExecutable: os.Args[0],
+		ExtraEnv: map[string]string{
+			"DB_NAME":                    dbName,
+			"COLDKEEP_DB_AUTO_BOOTSTRAP": "true",
+		},
+	})
+	if err != nil {
+		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
+	}
+
+	state, err := captureBenchmarkState(dbName)
+	if err != nil {
+		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
+	}
+
+	return report, state, nil
+}
+
+func createTemporaryBenchmarkDatabase(label string) (string, func() error, error) {
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	port := strings.TrimSpace(os.Getenv("DB_PORT"))
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	password := os.Getenv("DB_PASSWORD")
+	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	if host == "" || port == "" || user == "" {
+		return "", nil, fmt.Errorf("determinism validation requires DB_HOST, DB_PORT, and DB_USER")
+	}
+
+	maintenanceDB := strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB_MAINTENANCE"))
+	if maintenanceDB == "" {
+		maintenanceDB = "postgres"
+	}
+
+	name := fmt.Sprintf("coldkeep_bench_%s_%d", sanitizeDBNamePart(label), time.Now().UnixNano())
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, maintenanceDB, sslMode)
+	adminDB, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return "", nil, fmt.Errorf("open maintenance DB: %w", err)
+	}
+	defer func() { _ = adminDB.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := adminDB.PingContext(ctx); err != nil {
+		return "", nil, fmt.Errorf("ping maintenance DB: %w", err)
+	}
+	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s", name)); err != nil {
+		return "", nil, fmt.Errorf("create benchmark DB %q: %w", name, err)
+	}
+
+	cleanup := func() error {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = adminDB.ExecContext(cleanupCtx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name)
+		if _, err := adminDB.ExecContext(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)); err != nil {
+			return fmt.Errorf("drop benchmark DB %q: %w", name, err)
+		}
+		return nil
+	}
+
+	return name, cleanup, nil
+}
+
+func sanitizeDBNamePart(label string) string {
+	label = strings.ToLower(strings.TrimSpace(label))
+	if label == "" {
+		return "run"
+	}
+	var b strings.Builder
+	for _, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func captureBenchmarkState(dbName string) (benchmarkStateSnapshot, error) {
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	port := strings.TrimSpace(os.Getenv("DB_PORT"))
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	password := os.Getenv("DB_PASSWORD")
+	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, dbName, sslMode)
+	dbconn, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("open benchmark DB %q: %w", dbName, err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	state := benchmarkStateSnapshot{}
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunk`).Scan(&state.ChunkCount); err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("query chunk count: %w", err)
+	}
+
+	hashRows, err := dbconn.QueryContext(ctx, `SELECT file_hash FROM logical_file WHERE status = 'COMPLETED' ORDER BY file_hash ASC, id ASC`)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("query logical file hashes: %w", err)
+	}
+	for hashRows.Next() {
+		var hash string
+		if err := hashRows.Scan(&hash); err != nil {
+			_ = hashRows.Close()
+			return benchmarkStateSnapshot{}, fmt.Errorf("scan logical file hash: %w", err)
+		}
+		state.LogicalFileHashes = append(state.LogicalFileHashes, hash)
+	}
+	if err := hashRows.Close(); err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("close logical file hash rows: %w", err)
+	}
+
+	snapshotRows, err := dbconn.QueryContext(ctx, `
+		SELECT lf.file_hash
+		FROM snapshot_file sf
+		JOIN logical_file lf ON lf.id = sf.logical_file_id
+		ORDER BY lf.file_hash ASC, sf.snapshot_id ASC, sf.path_id ASC
+	`)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("query snapshot content: %w", err)
+	}
+	for snapshotRows.Next() {
+		var hash string
+		if err := snapshotRows.Scan(&hash); err != nil {
+			_ = snapshotRows.Close()
+			return benchmarkStateSnapshot{}, fmt.Errorf("scan snapshot content row: %w", err)
+		}
+		state.SnapshotContent = append(state.SnapshotContent, hash)
+	}
+	if err := snapshotRows.Close(); err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("close snapshot content rows: %w", err)
+	}
+
+	return state, nil
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
