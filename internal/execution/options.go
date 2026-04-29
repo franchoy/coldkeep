@@ -16,6 +16,15 @@ type Options struct {
 	Deterministic      bool
 }
 
+// ExecutionStats captures aggregated execution diagnostics for one run.
+// This shape is intentionally aggregate-only so it remains stable for
+// benchmarks and CI output.
+type ExecutionStats struct {
+	TotalFilesProcessed int
+	TotalBytesProcessed int64
+	WorkersUsed         int
+}
+
 // DefaultOptions returns v1.6-equivalent execution behavior.
 func DefaultOptions() Options {
 	return Options{

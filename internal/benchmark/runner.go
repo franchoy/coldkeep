@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/execution"
-	"github.com/franchoy/coldkeep/internal/storage"
 )
 
 // BenchmarkCase defines one benchmark scenario execution unit.
@@ -30,7 +29,7 @@ type Result struct {
 	Duration  time.Duration
 	Metrics   Metrics
 	Execution execution.Options
-	ExecStats storage.ExecutionStats
+	ExecStats execution.ExecutionStats
 	Success   bool
 	Error     string
 }
@@ -61,7 +60,7 @@ func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
 			Duration:  metrics.Duration,
 			Metrics:   metrics,
 			Execution: bc.Execution,
-			ExecStats: storage.ExecutionStats{
+			ExecStats: execution.ExecutionStats{
 				TotalFilesProcessed: metrics.FilesProcessed,
 				TotalBytesProcessed: metrics.BytesProcessed,
 				WorkersUsed:         bc.Execution.StoreFolderWorkers,

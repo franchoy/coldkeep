@@ -1974,12 +1974,6 @@ type FileJob struct {
 	Path  string
 }
 
-type ExecutionStats struct {
-	TotalFilesProcessed int
-	TotalBytesProcessed int64
-	WorkersUsed         int
-}
-
 type WorkerStats struct {
 	Files int
 	Bytes int64
@@ -2009,22 +2003,22 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	return err
 }
 
-func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (ExecutionStats, error) {
+func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) (execution.ExecutionStats, error) {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
 	err := opts.Validate()
 	if err != nil {
-		return ExecutionStats{}, err
+		return execution.ExecutionStats{}, err
 	}
 	// Phase 2 guardrail: execution policy exists, but we intentionally do not
 	// enable staged pipelines yet. Keep store-folder semantics equivalent to
 	// the v1.6/v1.7 baseline while workers only control file-level fan-out.
 	if opts.PipelineDepth != 1 {
-		return ExecutionStats{}, fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
+		return execution.ExecutionStats{}, fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
 	}
 	workerCount, err := determineStoreFolderWorkerCount(sgctx.Writer, opts.StoreFolderWorkers)
 	if err != nil {
-		return ExecutionStats{}, err
+		return execution.ExecutionStats{}, err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2035,7 +2029,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 	statsCh := make(chan WorkerStats, workerCount)
 	paths, err := discoverFiles(root)
 	if err != nil {
-		return ExecutionStats{}, err
+		return execution.ExecutionStats{}, err
 	}
 	jobs := buildFileJobs(paths)
 
@@ -2125,7 +2119,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 
 	wg.Wait()
 
-	aggregatedStats := ExecutionStats{WorkersUsed: workerCount}
+	aggregatedStats := execution.ExecutionStats{WorkersUsed: workerCount}
 	for i := 0; i < workerCount; i++ {
 		workerStats := <-statsCh
 		aggregatedStats.TotalFilesProcessed += workerStats.Files
