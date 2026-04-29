@@ -2067,25 +2067,27 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 		go worker(i, jobCh, errCh, &wg)
 	}
 
-	// Producer: enqueue a deterministic file plan so parallel workers consume
-	// a stable input order even if completion order differs.
-	var enqueueErr error
-enqueueLoop:
-	for _, job := range jobs {
-		select {
-		case <-ctx.Done():
+	// Controller: feed a deterministic plan and fail fast when any worker reports
+	// an error. The first observed worker error is pushed back so the main return
+	// path can report it after wg.Wait().
+	go func() {
+		defer close(jobCh)
+		for _, job := range jobs {
 			select {
+			case jobCh <- job:
 			case err := <-errCh:
-				enqueueErr = err
-			default:
-				enqueueErr = context.Canceled
+				select {
+				case errCh <- err:
+				default:
+				}
+				cancel()
+				return
+			case <-ctx.Done():
+				return
 			}
-			break enqueueLoop
-		case jobCh <- job:
 		}
-	}
+	}()
 
-	close(jobCh)
 	wg.Wait()
 
 	select {
@@ -2093,10 +2095,6 @@ enqueueLoop:
 		return err
 	default:
 	}
-	if enqueueErr != nil {
-		return enqueueErr
-	}
-
 	return nil
 }
 
