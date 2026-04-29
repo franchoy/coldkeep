@@ -1980,6 +1980,11 @@ type ExecutionStats struct {
 	WorkersUsed         int
 }
 
+type WorkerStats struct {
+	Files int
+	Bytes int64
+}
+
 func determineStoreFolderWorkerCount(writer container.ContainerWriter, requested int) (int, error) {
 	if writer == nil {
 		return 0, fmt.Errorf("store folder requires non-nil writer")
@@ -2027,7 +2032,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 
 	jobCh := make(chan FileJob, 256)
 	errCh := make(chan error, 1)
-	workerStatsCh := make(chan ExecutionStats, workerCount)
+	statsCh := make(chan WorkerStats, workerCount)
 	paths, err := discoverFiles(root)
 	if err != nil {
 		return ExecutionStats{}, err
@@ -2067,8 +2072,8 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 
 	worker := func(workerID int, jobs <-chan FileJob, errCh chan<- error, wg *sync.WaitGroup) {
 		defer wg.Done()
-		localStats := ExecutionStats{}
-		defer func() { workerStatsCh <- localStats }()
+		local := WorkerStats{}
+		defer func() { statsCh <- local }()
 
 		for job := range jobs {
 			// Do not infer completion order from dispatch order. Determinism comes
@@ -2086,8 +2091,8 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 				}
 				return
 			}
-			localStats.TotalFilesProcessed++
-			localStats.TotalBytesProcessed += bytesProcessed
+			local.Files++
+			local.Bytes += bytesProcessed
 		}
 	}
 
@@ -2119,12 +2124,12 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 	}()
 
 	wg.Wait()
-	close(workerStatsCh)
 
 	aggregatedStats := ExecutionStats{WorkersUsed: workerCount}
-	for workerStats := range workerStatsCh {
-		aggregatedStats.TotalFilesProcessed += workerStats.TotalFilesProcessed
-		aggregatedStats.TotalBytesProcessed += workerStats.TotalBytesProcessed
+	for i := 0; i < workerCount; i++ {
+		workerStats := <-statsCh
+		aggregatedStats.TotalFilesProcessed += workerStats.Files
+		aggregatedStats.TotalBytesProcessed += workerStats.Bytes
 	}
 
 	select {
