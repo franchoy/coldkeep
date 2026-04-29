@@ -1701,29 +1701,67 @@ func TestDiscoverFilesSkipsDirectories(t *testing.T) {
 }
 
 func TestStoreFolderWorkersOneCompletesSuccessfully(t *testing.T) {
-	_, completedCount := runStoreFolderAndRestoreTree(t, 1)
-	if completedCount != 4 {
-		t.Fatalf("completed logical file count mismatch: got %d, want 4", completedCount)
+	r := runStoreFolderAndRestoreTree(t, 1)
+	if r.completedCount != 4 {
+		t.Fatalf("completed logical file count mismatch: got %d, want 4", r.completedCount)
 	}
 }
 
 func TestStoreFolderWorkersTwoCompletesSuccessfully(t *testing.T) {
-	_, completedCount := runStoreFolderAndRestoreTree(t, 2)
-	if completedCount != 4 {
-		t.Fatalf("completed logical file count mismatch: got %d, want 4", completedCount)
+	r := runStoreFolderAndRestoreTree(t, 2)
+	if r.completedCount != 4 {
+		t.Fatalf("completed logical file count mismatch: got %d, want 4", r.completedCount)
 	}
 }
 
 func TestStoreFolderWorkersOneAndFourProduceSameRestoredTreeHash(t *testing.T) {
-	h1, _ := runStoreFolderAndRestoreTree(t, 1)
-	h4, _ := runStoreFolderAndRestoreTree(t, 4)
+	r1 := runStoreFolderAndRestoreTree(t, 1)
+	r4 := runStoreFolderAndRestoreTree(t, 4)
 
-	if ok, reason := corebenchmark.EqualRestoredTreeHashes(h1, h4); !ok {
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(r1.hashes, r4.hashes); !ok {
 		t.Fatalf("restored tree hash mismatch for workers 1 vs 4: %s", reason)
+	}
+	if r1.chunkCount != r4.chunkCount {
+		t.Fatalf("chunk count mismatch for workers 1 vs 4: %d != %d", r1.chunkCount, r4.chunkCount)
+	}
+	if len(r1.logicalFileHashes) != len(r4.logicalFileHashes) {
+		t.Fatalf("logical file hash count mismatch for workers 1 vs 4: %d != %d", len(r1.logicalFileHashes), len(r4.logicalFileHashes))
+	}
+	for i := range r1.logicalFileHashes {
+		if r1.logicalFileHashes[i] != r4.logicalFileHashes[i] {
+			t.Fatalf("logical file hash mismatch at index %d: %q != %q", i, r1.logicalFileHashes[i], r4.logicalFileHashes[i])
+		}
 	}
 }
 
-func runStoreFolderAndRestoreTree(t *testing.T, workers int) (map[string]string, int) {
+func TestStoreFolderWorkersOneAndTwoProduceSameRestoredTreeHash(t *testing.T) {
+	r1 := runStoreFolderAndRestoreTree(t, 1)
+	r2 := runStoreFolderAndRestoreTree(t, 2)
+
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(r1.hashes, r2.hashes); !ok {
+		t.Fatalf("restored tree hash mismatch for workers 1 vs 2: %s", reason)
+	}
+	if r1.chunkCount != r2.chunkCount {
+		t.Fatalf("chunk count mismatch for workers 1 vs 2: %d != %d", r1.chunkCount, r2.chunkCount)
+	}
+	if len(r1.logicalFileHashes) != len(r2.logicalFileHashes) {
+		t.Fatalf("logical file hash count mismatch for workers 1 vs 2: %d != %d", len(r1.logicalFileHashes), len(r2.logicalFileHashes))
+	}
+	for i := range r1.logicalFileHashes {
+		if r1.logicalFileHashes[i] != r2.logicalFileHashes[i] {
+			t.Fatalf("logical file hash mismatch at index %d: %q != %q", i, r1.logicalFileHashes[i], r2.logicalFileHashes[i])
+		}
+	}
+}
+
+type storeFolderRunSummary struct {
+	hashes            map[string]string
+	completedCount    int
+	chunkCount        int
+	logicalFileHashes []string
+}
+
+func runStoreFolderAndRestoreTree(t *testing.T, workers int) storeFolderRunSummary {
 	t.Helper()
 
 	root := t.TempDir()
@@ -1802,8 +1840,33 @@ func runStoreFolderAndRestoreTree(t *testing.T, workers int) (map[string]string,
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = ?`, filestate.LogicalFileCompleted).Scan(&completedCount); err != nil {
 		t.Fatalf("query completed logical_file count: %v", err)
 	}
+	var chunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkCount); err != nil {
+		t.Fatalf("query chunk count: %v", err)
+	}
+	rows, err := dbconn.Query(`SELECT file_hash FROM logical_file WHERE status = ? ORDER BY file_hash ASC, id ASC`, filestate.LogicalFileCompleted)
+	if err != nil {
+		t.Fatalf("query logical file hashes: %v", err)
+	}
+	logicalFileHashes := make([]string, 0)
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan logical file hash: %v", err)
+		}
+		logicalFileHashes = append(logicalFileHashes, hash)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close logical file hash rows: %v", err)
+	}
 
-	return hashes, completedCount
+	return storeFolderRunSummary{
+		hashes:            hashes,
+		completedCount:    completedCount,
+		chunkCount:        chunkCount,
+		logicalFileHashes: logicalFileHashes,
+	}
 }
 
 func TestLoadReuseSemanticValidationModeFromEnv(t *testing.T) {
