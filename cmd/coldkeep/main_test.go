@@ -2115,19 +2115,11 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        "small",
 			Repeat:         2,
-			Iterations: []BenchmarkRunIterationRow{
-				{
-					Iteration: 1,
-					Results: []BenchmarkRunScenarioRow{{
-						Name:           "store-large-file",
-						Success:        true,
-						DurationMs:     12,
-						FilesProcessed: 1,
-						BytesProcessed: 1024,
-						ThroughputMBps: 4.2,
-					}},
-				},
-			},
+			Rows: []BenchmarkRunCaseRow{{
+				Case:           "store-large",
+				DurationMs:     2300,
+				ThroughputMBps: 120,
+			}},
 		}, nil
 	}
 
@@ -2166,6 +2158,10 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	if got, _ := data["repeat"].(float64); int(got) != 2 {
 		t.Fatalf("repeat mismatch: got=%v data=%v", data["repeat"], data)
 	}
+	rows, ok := data["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("expected one benchmark row, got=%v", data["rows"])
+	}
 }
 
 func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
@@ -2177,16 +2173,10 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        string(preset),
 			Repeat:         repeat,
-			Iterations: []BenchmarkRunIterationRow{{
-				Iteration: 1,
-				Results: []BenchmarkRunScenarioRow{{
-					Name:           "store-large-file",
-					Success:        true,
-					DurationMs:     42,
-					FilesProcessed: 1,
-					BytesProcessed: 2048,
-					ThroughputMBps: 3.14,
-				}},
+			Rows: []BenchmarkRunCaseRow{{
+				Case:           "store-large",
+				DurationMs:     2300,
+				ThroughputMBps: 120,
 			}},
 		}, nil
 	}
@@ -2205,7 +2195,10 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 	if !strings.Contains(output, "Benchmark run (medium preset") {
 		t.Fatalf("expected benchmark run heading, got=%q", output)
 	}
-	if !strings.Contains(output, "SCENARIO") || !strings.Contains(output, "store-large-file") {
+	if !strings.Contains(output, "CASE") || !strings.Contains(output, "MB/s") {
+		t.Fatalf("expected concise table headers, got=%q", output)
+	}
+	if !strings.Contains(output, "store-large") || !strings.Contains(output, "2.3s") {
 		t.Fatalf("expected scenario table row, got=%q", output)
 	}
 }

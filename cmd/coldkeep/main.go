@@ -2442,27 +2442,17 @@ type BenchmarkChunkersReportRecord struct {
 
 // BenchmarkRunReport is the output payload for `coldkeep benchmark run`.
 type BenchmarkRunReport struct {
-	GeneratedAtUTC string                     `json:"generated_at_utc"`
-	Dataset        string                     `json:"dataset"`
-	Repeat         int                        `json:"repeat"`
-	Iterations     []BenchmarkRunIterationRow `json:"iterations"`
+	GeneratedAtUTC string                `json:"generated_at_utc"`
+	Dataset        string                `json:"dataset"`
+	Repeat         int                   `json:"repeat"`
+	Rows           []BenchmarkRunCaseRow `json:"rows"`
 }
 
-// BenchmarkRunIterationRow contains one repeated run result set.
-type BenchmarkRunIterationRow struct {
-	Iteration int                       `json:"iteration"`
-	Results   []BenchmarkRunScenarioRow `json:"results"`
-}
-
-// BenchmarkRunScenarioRow is one scenario execution row.
-type BenchmarkRunScenarioRow struct {
-	Name           string  `json:"name"`
-	Success        bool    `json:"success"`
+// BenchmarkRunCaseRow is one per-case benchmark summary row.
+type BenchmarkRunCaseRow struct {
+	Case           string  `json:"case"`
 	DurationMs     int64   `json:"duration_ms"`
-	FilesProcessed int     `json:"files_processed"`
-	BytesProcessed int64   `json:"bytes_processed"`
 	ThroughputMBps float64 `json:"throughput_mbps"`
-	Error          string  `json:"error,omitempty"`
 }
 
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
@@ -2570,22 +2560,9 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 	fmt.Printf("Benchmark run (%s preset, repeat=%d)\n", report.Dataset, report.Repeat)
 	fmt.Println()
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ITER\tSCENARIO\tSUCCESS\tDURATION (MS)\tFILES\tBYTES\tTHROUGHPUT (MB/S)\tERROR")
-	for _, iteration := range report.Iterations {
-		for _, row := range iteration.Results {
-			_, _ = fmt.Fprintf(
-				tw,
-				"%d\t%s\t%t\t%d\t%d\t%d\t%.2f\t%s\n",
-				iteration.Iteration,
-				row.Name,
-				row.Success,
-				row.DurationMs,
-				row.FilesProcessed,
-				row.BytesProcessed,
-				row.ThroughputMBps,
-				row.Error,
-			)
-		}
+	_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s")
+	for _, row := range report.Rows {
+		_, _ = fmt.Fprintf(tw, "%s\t%.1fs\t%.0f MB/s\n", row.Case, float64(row.DurationMs)/1000.0, row.ThroughputMBps)
 	}
 	_ = tw.Flush()
 
@@ -2604,25 +2581,39 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (Benchmark
 		GeneratedAtUTC: report.GeneratedAtUTC,
 		Dataset:        string(report.Dataset),
 		Repeat:         report.Repeat,
-		Iterations:     make([]BenchmarkRunIterationRow, 0, len(report.Iterations)),
+		Rows:           make([]BenchmarkRunCaseRow, 0),
 	}
+
+	type runAgg struct {
+		durationMs int64
+		bytes      int64
+	}
+	caseAgg := make(map[string]runAgg)
+	caseOrder := make([]string, 0)
 	for _, iteration := range report.Iterations {
-		row := BenchmarkRunIterationRow{
-			Iteration: iteration.Iteration,
-			Results:   make([]BenchmarkRunScenarioRow, 0, len(iteration.Results)),
-		}
 		for _, result := range iteration.Results {
-			row.Results = append(row.Results, BenchmarkRunScenarioRow{
-				Name:           result.Name,
-				Success:        result.Success,
-				DurationMs:     result.Metrics.Duration.Milliseconds(),
-				FilesProcessed: result.Metrics.FilesProcessed,
-				BytesProcessed: result.Metrics.BytesProcessed,
-				ThroughputMBps: result.Metrics.ThroughputMBps,
-				Error:          result.Error,
-			})
+			agg := caseAgg[result.Name]
+			if _, seen := caseAgg[result.Name]; !seen {
+				caseOrder = append(caseOrder, result.Name)
+			}
+			agg.durationMs += result.Metrics.Duration.Milliseconds()
+			agg.bytes += result.Metrics.BytesProcessed
+			caseAgg[result.Name] = agg
 		}
-		out.Iterations = append(out.Iterations, row)
+	}
+
+	for _, caseName := range caseOrder {
+		agg := caseAgg[caseName]
+		throughput := 0.0
+		if agg.durationMs > 0 && agg.bytes > 0 {
+			seconds := float64(agg.durationMs) / 1000.0
+			throughput = (float64(agg.bytes) / (1024.0 * 1024.0)) / seconds
+		}
+		out.Rows = append(out.Rows, BenchmarkRunCaseRow{
+			Case:           caseName,
+			DurationMs:     agg.durationMs,
+			ThroughputMBps: throughput,
+		})
 	}
 
 	return out, nil
