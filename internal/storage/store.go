@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
@@ -193,6 +194,55 @@ func newWriterFromPrototype(prototype container.ContainerWriter) (container.Cont
 	default:
 		return nil, fmt.Errorf("unsupported writer type for cloning: %T", prototype)
 	}
+}
+
+// preparedChunk holds precomputed chunk metadata before any DB mutations.
+// This separation enables CPU-side optimization: prepare all chunks deterministically,
+// then commit sequentially without re-hashing or re-allocating.
+// Index preserves deterministic order across preparation and commit phases.
+type preparedChunk struct {
+	Index          int
+	Offset         int64
+	Size           int
+	Hash           string
+	ChunkerVersion string
+	Data           []byte
+}
+
+// prepareChunksWithContext materializes all chunk metadata deterministically before mutation.
+// It computes hashes for chunkers that didn't provide them (v1-simple-rolling),
+// and captures immutable data payloads for the commit phase.
+func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunkerVersion string) ([]preparedChunk, error) {
+	if len(results) == 0 {
+		return []preparedChunk{}, nil
+	}
+
+	prepared := make([]preparedChunk, 0, len(results))
+	for i, res := range results {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		data := res.Data
+		hash := res.Info.Hash
+
+		// If chunker didn't provide hash, compute it now (for v1-simple-rolling)
+		if strings.TrimSpace(hash) == "" {
+			sum := sha256.Sum256(data)
+			hash = hex.EncodeToString(sum[:])
+		}
+
+		prepared = append(prepared, preparedChunk{
+			Index:          i,
+			Offset:         res.Info.Offset,
+			Size:           len(data),
+			Hash:           hash,
+			ChunkerVersion: chunkerVersion,
+			Data:           data,
+		})
+	}
+
+	return prepared, nil
 }
 
 type reusableLogicalFileGraphSummary struct {
@@ -1625,12 +1675,19 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}()
 
 	// At this point, we have a logical_file row in "PROCESSING" status for this file hash, either created by us or by another process.
-	chunks, err := effectiveChunker.ChunkFile(path)
+	// Phase 4 optimization: prepare all chunks deterministically before any mutations.
+	chunkResults, err := effectiveChunker.ChunkFile(path)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
 
-	chunkOrder := 0
+	// Separate preparation phase: compute all hashes, materialize data immutably.
+	// This CPU work happens before DB claims, reducing per-chunk allocations and hash re-computation.
+	preparedChunks, err := prepareChunksWithContext(ctx, chunkResults, activeVersionString)
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+
 	writer, ok := sgctx.Writer.(payloadStatefulWriter)
 	if !ok {
 		return StoreFileResult{}, fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
@@ -1639,15 +1696,14 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
 	// not by this low-level result function.
 
-	for _, chunkResult := range chunks {
+	// Commit phase: deterministically commit prepared chunks.
+	for _, prepared := range preparedChunks {
 		if err := ctx.Err(); err != nil {
 			return StoreFileResult{}, err
 		}
-		chunkData := chunkResult.Data
-		sum := sha256.Sum256(chunkData)
-		chunkHash := hex.EncodeToString(sum[:])
+		// Use precomputed hash and data; no re-allocation or re-hashing in this loop.
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, chunkHash, int64(len(chunkData)), activeVersionString, validationContainerDir)
+		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
@@ -1659,7 +1715,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				return StoreFileResult{}, err
 			}
 
-			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
+			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, prepared.Index, true); err != nil {
 				_ = tx.Rollback()
 				return StoreFileResult{}, err
 			}
@@ -1669,7 +1725,6 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				return StoreFileResult{}, err
 			}
 
-			chunkOrder++
 			continue // Move to next chunk
 		}
 
@@ -1684,15 +1739,15 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				return StoreFileResult{}, err
 			}
 
-			// Append chunk data to container file
+			// Append chunk data to container file using precomputed metadata
 			placement, _, err := storeChunkAsPlainBlockWithWriter(
 				ctx,
 				tx,
 				blockRepo,
 				writer,
 				claimedChunkID,
-				chunkHash,
-				chunkData,
+				prepared.Hash,
+				prepared.Data,
 				transformer,
 			)
 
@@ -1731,7 +1786,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 						return StoreFileResult{}, err2
 					}
 
-					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, chunkOrder, true); err2 != nil {
+					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, prepared.Index, true); err2 != nil {
 						_ = tx2.Rollback()
 						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 							return StoreFileResult{}, errors.Join(err2, rbErr)
@@ -1750,7 +1805,6 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 						return StoreFileResult{}, rbErr
 					}
-					chunkOrder++
 					break
 				}
 				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
@@ -1823,8 +1877,8 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				return StoreFileResult{}, err
 			}
 
-			// Link file ↔ chunk
-			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, chunkOrder, true); err != nil {
+			// Link file ↔ chunk using prepared index for deterministic order
+			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, prepared.Index, true); err != nil {
 				_ = tx.Rollback()
 				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
 					return StoreFileResult{}, errors.Join(err, rbErr)
@@ -1870,7 +1924,6 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 			}
 			acknowledgeWriterAppendCommitted(writer)
 
-			chunkOrder++
 			break
 		}
 	}
@@ -1880,7 +1933,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// either all chunks are successfully linked AND the file is marked complete, or the file
 	// remains PROCESSING for corrective recovery if any verification fails. This avoids the semantic gap
 	// where chunks could be fully committed but the file completion is left dangling.
-	if err := finalizeLogicalFileStorageWithContext(ctx, dbconn, fileID, chunkOrder); err != nil {
+	if err := finalizeLogicalFileStorageWithContext(ctx, dbconn, fileID, len(preparedChunks)); err != nil {
 		return StoreFileResult{}, err
 	}
 
