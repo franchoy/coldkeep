@@ -21,7 +21,19 @@ coldkeep benchmark run --dataset medium --repeat 3
 # Override store-folder benchmark worker concurrency for experiments
 coldkeep benchmark run --dataset small --workers 1
 coldkeep benchmark run --dataset small --workers 4
+```
+
+Required environment for deterministic benchmark runs:
+
 ```bash
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME=coldkeep
+export DB_SSLMODE=disable
+export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
 
 ## Current baseline
 
@@ -83,3 +95,45 @@ CI runs the **small** benchmark dataset on every push:
 
 Run the `--compare` flag with the default `--threshold 20` locally to investigate
 potential regressions before opening a PR.
+
+## Phase 4 implementation order
+
+The recommended execution order for Phase 4 performance work is:
+
+1. Profile Phase 1 benchmarks.
+2. Add internal prepared chunk representation.
+3. Extract prepare-file-chunks phase.
+4. Extract commit-prepared-chunks phase.
+5. Add deterministic index validation.
+6. Reduce obvious buffer copies.
+7. Reuse hashers locally.
+8. Optimize repeated small-file overhead only where safe.
+9. Add preparation determinism tests.
+10. Run full tests.
+11. Run benchmark compare.
+12. Document performance result in benchmark docs.
+
+## Latest local compare result (2026-04-29)
+
+Environment: local Postgres + deterministic mode + compare against
+benchmark-baseline.json (v1.6 baseline).
+
+Command set executed:
+
+```bash
+coldkeep benchmark run --dataset small --workers 1 --output json --compare benchmark-baseline.json --threshold 20
+coldkeep benchmark run --dataset small --workers 4 --output json --compare benchmark-baseline.json --threshold 20
+```
+
+Observed compare outcome:
+
+- `workers=1`: compare failed threshold with regressions in
+   `store-large-file`, `store-mixed-dataset`, `restore-large-file`, and
+   `snapshot-creation`.
+- `workers=4`: compare failed threshold with regressions in
+   `store-large-file` and `restore-large-file`; `store-mixed-dataset` and
+   `store-many-small-files` improved relative to single-worker runs.
+
+Current note: medium preset runs are environment-sensitive and can fail under
+local contention/transient transaction-abort conditions; run medium compare in
+a clean benchmark window after stabilizing local DB/containers state.
