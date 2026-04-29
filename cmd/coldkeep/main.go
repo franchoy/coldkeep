@@ -13,8 +13,8 @@ import (
 	"log"
 	"math"
 	"os"
-	"path"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -34,6 +34,7 @@ import (
 	clirender "github.com/franchoy/coldkeep/internal/cli/render"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
@@ -86,6 +87,7 @@ var flagsWithValues = map[string]bool{
 	"repeat":          true,
 	"compare":         true,
 	"threshold":       true,
+	"workers":         true,
 }
 
 type cliOutputMode string
@@ -2517,7 +2519,7 @@ type BenchmarkRunCaseRow struct {
 }
 
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat", "compare", "threshold"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat", "compare", "threshold", "workers"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
@@ -2594,6 +2596,19 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		return usageErrorf("%s", err.Error())
 	}
 
+	opts := execution.DefaultOptions()
+	if rawWorkers, hasWorkers := parsed.lastFlagValue("workers"); hasWorkers {
+		workers, err := strconv.Atoi(strings.TrimSpace(rawWorkers))
+		if err != nil || workers <= 0 {
+			return usageErrorf("invalid --workers value %q (must be integer > 0)", rawWorkers)
+		}
+		opts.StoreFolderWorkers = workers
+	}
+	opts, err = execution.FromEnv(opts)
+	if err != nil {
+		return fmt.Errorf("benchmark execution options: %w", err)
+	}
+
 	repeat := 1
 	if rawRepeat, hasRepeat := parsed.lastFlagValue("repeat"); hasRepeat {
 		repeat, err = strconv.Atoi(strings.TrimSpace(rawRepeat))
@@ -2602,7 +2617,7 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		}
 	}
 
-	report, err := runCoreBenchmarkPhase(preset, repeat)
+	report, err := runCoreBenchmarkPhase(preset, repeat, opts)
 	if err != nil {
 		return fmt.Errorf("benchmark run: %w", err)
 	}
@@ -2724,12 +2739,12 @@ func compareWithBaseline(current BenchmarkRunReport, baselinePath string, thresh
 	return fmt.Errorf("benchmark regression: %d case(s) exceeded the %.0f%% degradation threshold", len(regressions), thresholdPct)
 }
 
-func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
-	if err := runBenchmarkDeterminismPhase(preset); err != nil {
+func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+	if err := runBenchmarkDeterminismPhase(preset, opts); err != nil {
 		return BenchmarkRunReport{}, err
 	}
 
-	report, err := runPresetInTemporaryDatabase(preset, repeat, "report")
+	report, err := runPresetInTemporaryDatabase(preset, repeat, opts, "report")
 	if err != nil {
 		return BenchmarkRunReport{}, err
 	}
@@ -2782,14 +2797,14 @@ type benchmarkStateSnapshot struct {
 	SnapshotContent   []string
 }
 
-func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset) error {
-	firstReport, firstState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, "determinism-a")
+func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset, opts execution.Options) error {
+	firstReport, firstState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, opts, "determinism-a")
 	if err != nil {
 		return fmt.Errorf("determinism run A failed: %w", err)
 	}
 	_ = firstReport
 
-	secondReport, secondState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, "determinism-b")
+	secondReport, secondState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, opts, "determinism-b")
 	if err != nil {
 		return fmt.Errorf("determinism run B failed: %w", err)
 	}
@@ -2937,12 +2952,12 @@ func resolveSelfExecutable() string {
 	return os.Args[0]
 }
 
-func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, runLabel string) (corebenchmark.RunReport, error) {
-	report, _, err := runPresetAndCaptureStateInTemporaryDatabase(preset, repeat, runLabel)
+func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (corebenchmark.RunReport, error) {
+	report, _, err := runPresetAndCaptureStateInTemporaryDatabase(preset, repeat, opts, runLabel)
 	return report, err
 }
 
-func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, runLabel string) (corebenchmark.RunReport, benchmarkStateSnapshot, error) {
+func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (corebenchmark.RunReport, benchmarkStateSnapshot, error) {
 	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
 	if err != nil {
 		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
@@ -2952,8 +2967,9 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
 		ColdkeepExecutable: resolveSelfExecutable(),
 		ExtraEnv: map[string]string{
-			"DB_NAME":                    dbName,
-			"COLDKEEP_DB_AUTO_BOOTSTRAP": "true",
+			"DB_NAME":                       dbName,
+			"COLDKEEP_DB_AUTO_BOOTSTRAP":    "true",
+			"COLDKEEP_STORE_FOLDER_WORKERS": strconv.Itoa(opts.StoreFolderWorkers),
 		},
 	})
 	if err != nil {
@@ -4615,7 +4631,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  benchmark run [--dataset <small|medium|large>] [--repeat <N>] [--output <table|json>]", "Run full benchmark scenario suite using dataset presets"},
+		{"  benchmark run [--dataset <small|medium|large>] [--repeat <N>] [--workers <N>] [--output <table|json>]", "Run full benchmark scenario suite using dataset presets"},
 		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
 		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},

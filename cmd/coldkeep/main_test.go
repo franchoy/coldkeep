@@ -22,6 +22,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -2104,12 +2105,15 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	originalPhase := runCoreBenchmarkPhase
 	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
 
-	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
 		if preset != corebenchmark.DatasetPresetSmall {
 			t.Fatalf("unexpected preset: %q", preset)
 		}
 		if repeat != 2 {
 			t.Fatalf("unexpected repeat: %d", repeat)
+		}
+		if opts.StoreFolderWorkers != 1 {
+			t.Fatalf("unexpected default workers: %d", opts.StoreFolderWorkers)
 		}
 		return BenchmarkRunReport{
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
@@ -2168,7 +2172,10 @@ func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
 	originalPhase := runCoreBenchmarkPhase
 	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
 
-	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if opts.StoreFolderWorkers != 1 {
+			t.Fatalf("unexpected default workers: %d", opts.StoreFolderWorkers)
+		}
 		return BenchmarkRunReport{
 			GeneratedAtUTC: "2026-04-29T00:00:00Z",
 			Dataset:        string(preset),
@@ -2226,6 +2233,87 @@ func TestRunBenchmarkRunCommandRejectsInvalidDatasetAndRepeat(t *testing.T) {
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	err = runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"workers": {"0"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --workers") {
+		t.Fatalf("expected invalid --workers usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersFlag(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if opts.StoreFolderWorkers != 4 {
+			t.Fatalf("workers mismatch: got %d, want 4", opts.StoreFolderWorkers)
+		}
+		return BenchmarkRunReport{Dataset: string(preset), Repeat: repeat}, nil
+	}
+
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags: map[string][]string{
+			"dataset": {"small"},
+			"workers": {"4"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runBenchmarkCommand with --workers returned error: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersEnvOverridesFlag(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "6")
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if opts.StoreFolderWorkers != 6 {
+			t.Fatalf("workers mismatch: got %d, want 6 from env override", opts.StoreFolderWorkers)
+		}
+		return BenchmarkRunReport{Dataset: string(preset), Repeat: repeat}, nil
+	}
+
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags: map[string][]string{
+			"dataset": {"small"},
+			"workers": {"4"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runBenchmarkCommand with env override returned error: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersEnvInvalidFails(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "bad")
+
+	runCoreBenchmarkPhase = func(_ corebenchmark.DatasetPreset, _ int, _ execution.Options) (BenchmarkRunReport, error) {
+		t.Fatal("runCoreBenchmarkPhase should not run when env parsing fails")
+		return BenchmarkRunReport{}, nil
+	}
+
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"dataset": {"small"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "benchmark execution options") {
+		t.Fatalf("expected benchmark execution options error, got: %v", err)
 	}
 }
 
@@ -8554,7 +8642,7 @@ func TestRunBenchmarkRunCommandWithCompareFlag(t *testing.T) {
 	originalPhase := runCoreBenchmarkPhase
 	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
 
-	runCoreBenchmarkPhase = func(_ corebenchmark.DatasetPreset, _ int) (BenchmarkRunReport, error) {
+	runCoreBenchmarkPhase = func(_ corebenchmark.DatasetPreset, _ int, _ execution.Options) (BenchmarkRunReport, error) {
 		return BenchmarkRunReport{
 			Dataset: "small",
 			Repeat:  1,

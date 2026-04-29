@@ -5,7 +5,7 @@ changing correctness guarantees.
 
 ## Running benchmarks
 
-```
+```bash
 # Quick run against a local Postgres instance
 coldkeep benchmark run --dataset small
 
@@ -17,7 +17,11 @@ coldkeep benchmark run --dataset small --output json --compare benchmark-baselin
 
 # Available presets: small | medium | large
 coldkeep benchmark run --dataset medium --repeat 3
-```
+
+# Override store-folder benchmark worker concurrency for experiments
+coldkeep benchmark run --dataset small --workers 1
+coldkeep benchmark run --dataset small --workers 4
+```bash
 
 ## Current baseline
 
@@ -28,14 +32,14 @@ regression reference for CI.
 
 To regenerate the baseline after an intentional performance change:
 
-```
+```bash
 coldkeep benchmark run --dataset small --output json > benchmark-baseline.json
 ```
 
 ## Scenarios
 
 | Name | What it measures |
-|---|---|
+| --- | --- |
 | `store-large-file` | Throughput for a single large sequential file |
 | `store-many-small-files` | Throughput across many small files |
 | `store-mixed-dataset` | Throughput across a mixed random/repeated dataset |
@@ -59,7 +63,7 @@ coldkeep benchmark run --dataset small --output json > benchmark-baseline.json
 ## Comparison thresholds
 
 | Context | Flag | Threshold | Meaning |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Local / dev | `--threshold 20` (default) | 20% | Fail if any scenario is >20% slower or throughput drops >20% |
 | CI | `--threshold 100` | 100% | Fail only if a scenario becomes **more than 2× slower** (disaster detection) |
 
