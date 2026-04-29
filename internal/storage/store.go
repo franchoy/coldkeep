@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1984,6 +1985,10 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	defer cancel()
 
 	fileChan := make(chan string, 256)
+	paths, err := discoverFiles(root)
+	if err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 	var firstErr error
@@ -2057,26 +2062,22 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 		}()
 	}
 
-	// Producer
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			reportErr(walkErr)
-			return walkErr
-		}
-
-		if !d.IsDir() {
-			select {
-			case <-ctx.Done():
-				if err := getFirstErr(); err != nil {
-					return err
-				}
-				return context.Canceled
-			case fileChan <- path:
+	// Producer: enqueue a deterministic file plan so parallel workers consume
+	// a stable input order even if completion order differs.
+	var enqueueErr error
+enqueueLoop:
+	for _, path := range paths {
+		select {
+		case <-ctx.Done():
+			if err := getFirstErr(); err != nil {
+				enqueueErr = err
+			} else {
+				enqueueErr = context.Canceled
 			}
+			break enqueueLoop
+		case fileChan <- path:
 		}
-
-		return nil
-	})
+	}
 
 	close(fileChan)
 	wg.Wait()
@@ -2084,11 +2085,29 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	if err := getFirstErr(); err != nil {
 		return err
 	}
-	if walkErr != nil {
-		return walkErr
+	if enqueueErr != nil {
+		return enqueueErr
 	}
 
 	return nil
+}
+
+func discoverFiles(root string) ([]string, error) {
+	paths := make([]string, 0)
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func sleepWithContext(ctx context.Context, wait time.Duration) error {

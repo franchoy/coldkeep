@@ -1628,6 +1628,62 @@ func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsInvalidPipelineDe
 	}
 }
 
+func TestDiscoverFilesReturnsSortedPaths(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(root, "zdir"), 0o755); err != nil {
+		t.Fatalf("mkdir zdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "adir", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir adir/nested: %v", err)
+	}
+
+	files := []string{
+		filepath.Join(root, "zdir", "c.txt"),
+		filepath.Join(root, "adir", "nested", "b.txt"),
+		filepath.Join(root, "a.txt"),
+	}
+	for _, p := range files {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	got, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(root, "a.txt"),
+		filepath.Join(root, "adir", "nested", "b.txt"),
+		filepath.Join(root, "zdir", "c.txt"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("path count mismatch: got %d, want %d (got=%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("path[%d]: got %q, want %q (full got=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestDiscoverFilesSkipsDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "only-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir only-dir: %v", err)
+	}
+
+	got, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no files, got %v", got)
+	}
+}
+
 func TestLoadReuseSemanticValidationModeFromEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "")
 	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationSuspicious {
