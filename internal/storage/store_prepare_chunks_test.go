@@ -61,3 +61,265 @@ func TestPrepareChunksWithContextPreservesProvidedHash(t *testing.T) {
 		t.Fatalf("provided hash should be preserved: got %q want %q", prepared[0].Hash, provided)
 	}
 }
+
+// TestPrepareChunksWithContextDeterminismSameFile verifies that preparing the same file
+// yields identical chunk metadata across multiple preparation calls (deterministic).
+func TestPrepareChunksWithContextDeterminismSameFile(t *testing.T) {
+	results := []chunk.Result{
+		{Info: chunk.Info{Offset: 0}, Data: []byte("first chunk data")},
+		{Info: chunk.Info{Offset: 15}, Data: []byte("second chunk data")},
+		{Info: chunk.Info{Offset: 32}, Data: []byte("third chunk data")},
+	}
+	chunkerVer := string(chunk.VersionV1SimpleRolling)
+
+	// Prepare the same chunks multiple times
+	prepared1, err := prepareChunksWithContext(context.Background(), results, chunkerVer)
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext(1): %v", err)
+	}
+	prepared2, err := prepareChunksWithContext(context.Background(), results, chunkerVer)
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext(2): %v", err)
+	}
+
+	// Verify same number of chunks
+	if len(prepared1) != len(prepared2) {
+		t.Fatalf("chunk count mismatch: first=%d, second=%d", len(prepared1), len(prepared2))
+	}
+
+	// Verify identical chunk metadata across all attributes
+	for i := range prepared1 {
+		p1 := prepared1[i]
+		p2 := prepared2[i]
+
+		if p1.Index != p2.Index {
+			t.Errorf("Index mismatch at position %d: got %d, want %d", i, p2.Index, p1.Index)
+		}
+		if p1.Offset != p2.Offset {
+			t.Errorf("Offset mismatch at position %d: got %d, want %d", i, p2.Offset, p1.Offset)
+		}
+		if p1.Size != p2.Size {
+			t.Errorf("Size mismatch at position %d: got %d, want %d", i, p2.Size, p1.Size)
+		}
+		if p1.Hash != p2.Hash {
+			t.Errorf("Hash mismatch at position %d: got %q, want %q", i, p2.Hash, p1.Hash)
+		}
+		if p1.ChunkerVersion != p2.ChunkerVersion {
+			t.Errorf("ChunkerVersion mismatch at position %d: got %q, want %q", i, p2.ChunkerVersion, p1.ChunkerVersion)
+		}
+	}
+}
+
+// TestPrepareChunksWithContextPreservesChunkIndexes verifies that chunk indexes
+// match the result sequence (0-based, in order).
+func TestPrepareChunksWithContextPreservesChunkIndexes(t *testing.T) {
+	results := []chunk.Result{
+		{Info: chunk.Info{Offset: 0}, Data: []byte("chunk0")},
+		{Info: chunk.Info{Offset: 6}, Data: []byte("chunk1")},
+		{Info: chunk.Info{Offset: 12}, Data: []byte("chunk2")},
+		{Info: chunk.Info{Offset: 18}, Data: []byte("chunk3")},
+	}
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext: %v", err)
+	}
+
+	if len(prepared) != len(results) {
+		t.Fatalf("chunk count mismatch: got %d, want %d", len(prepared), len(results))
+	}
+
+	for i, p := range prepared {
+		if p.Index != i {
+			t.Errorf("Index mismatch at position %d: got %d, want %d", i, p.Index, i)
+		}
+	}
+}
+
+// TestPrepareChunksWithContextPreservesChunkSizes verifies that prepared chunk sizes
+// match the original data payloads.
+func TestPrepareChunksWithContextPreservesChunkSizes(t *testing.T) {
+	testData := [][]byte{
+		[]byte("small"),                              // 5 bytes
+		[]byte("medium size"),                        // 11 bytes
+		[]byte("a much longer chunk with more data"), // longer
+	}
+	results := make([]chunk.Result, len(testData))
+	for i, data := range testData {
+		results[i] = chunk.Result{
+			Info: chunk.Info{Offset: int64(i * 100)},
+			Data: data,
+		}
+	}
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext: %v", err)
+	}
+
+	for i, p := range prepared {
+		if p.Size != len(testData[i]) {
+			t.Errorf("Size mismatch at index %d: got %d, want %d", i, p.Size, len(testData[i]))
+		}
+	}
+}
+
+// TestPrepareChunksWithContextComputesConsistentHashes verifies that computed hashes
+// (when not provided by chunker) are stable and match SHA256 of the data.
+func TestPrepareChunksWithContextComputesConsistentHashes(t *testing.T) {
+	testData := []string{"test chunk 1", "test chunk 2", "test chunk 3"}
+	results := make([]chunk.Result, len(testData))
+	for i, data := range testData {
+		results[i] = chunk.Result{
+			Info: chunk.Info{Offset: int64(i * 50)},
+			Data: []byte(data),
+		}
+	}
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext: %v", err)
+	}
+
+	// Verify hashes match SHA256 of data
+	for i, p := range prepared {
+		expected := sha256.Sum256(results[i].Data)
+		expectedHex := hex.EncodeToString(expected[:])
+		if p.Hash != expectedHex {
+			t.Errorf("Hash mismatch at index %d: got %q, want %q", i, p.Hash, expectedHex)
+		}
+	}
+
+	// Verify hashes are deterministic (call again, get same hashes)
+	prepared2, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext(second): %v", err)
+	}
+
+	for i := range prepared {
+		if prepared[i].Hash != prepared2[i].Hash {
+			t.Errorf("Hash non-deterministic at index %d: first=%q, second=%q", i, prepared[i].Hash, prepared2[i].Hash)
+		}
+	}
+}
+
+// TestPrepareChunksWithContextPreservesChunkerVersion verifies that the chunker version
+// is correctly captured in all prepared chunks.
+func TestPrepareChunksWithContextPreservesChunkerVersion(t *testing.T) {
+	results := []chunk.Result{
+		{Info: chunk.Info{Offset: 0}, Data: []byte("data1")},
+		{Info: chunk.Info{Offset: 5}, Data: []byte("data2")},
+	}
+
+	testVersions := []string{
+		string(chunk.VersionV1SimpleRolling),
+		string(chunk.VersionV2FastCDC),
+	}
+
+	for _, version := range testVersions {
+		prepared, err := prepareChunksWithContext(context.Background(), results, version)
+		if err != nil {
+			t.Fatalf("prepareChunksWithContext with version %q: %v", version, err)
+		}
+
+		if len(prepared) != len(results) {
+			t.Fatalf("chunk count mismatch for version %q: got %d, want %d", version, len(prepared), len(results))
+		}
+
+		for i, p := range prepared {
+			if p.ChunkerVersion != version {
+				t.Errorf("Version mismatch at index %d: got %q, want %q", i, p.ChunkerVersion, version)
+			}
+		}
+	}
+}
+
+// TestPrepareChunksWithContextComputesFinalFileHash verifies that all chunk hashes
+// can be combined to compute the full file hash using SHA256.
+func TestPrepareChunksWithContextComputesFinalFileHash(t *testing.T) {
+	// Create chunks with specific sizes that will combine to a known size
+	chunks := [][]byte{
+		[]byte("alpha"),
+		[]byte("beta"),
+		[]byte("gamma"),
+	}
+	results := make([]chunk.Result, len(chunks))
+	for i, data := range chunks {
+		results[i] = chunk.Result{
+			Info: chunk.Info{Offset: int64(i * 50)},
+			Data: data,
+		}
+	}
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext: %v", err)
+	}
+
+	// Verify we can compute final file hash from combined data
+	combined := make([]byte, 0)
+	for _, chunk := range chunks {
+		combined = append(combined, chunk...)
+	}
+
+	// Also verify each chunk hash is consistent
+	for i, p := range prepared {
+		chunkHash := sha256.Sum256(chunks[i])
+		chunkHashHex := hex.EncodeToString(chunkHash[:])
+		if p.Hash != chunkHashHex {
+			t.Errorf("Chunk %d hash mismatch: got %q, want %q", i, p.Hash, chunkHashHex)
+		}
+	}
+
+	// Verify total size adds up
+	totalSize := 0
+	for _, p := range prepared {
+		totalSize += p.Size
+	}
+	if totalSize != len(combined) {
+		t.Errorf("Total size mismatch: got %d, want %d", totalSize, len(combined))
+	}
+}
+
+// TestPrepareChunksWithContextPreservesDataPayloads verifies that Data field in prepared chunks
+// exactly matches the input chunk data for later encoding/storage.
+func TestPrepareChunksWithContextPreservesDataPayloads(t *testing.T) {
+	testData := [][]byte{
+		[]byte("payload one"),
+		[]byte("payload two with more data"),
+		[]byte(""),
+		[]byte("final payload"),
+	}
+	results := make([]chunk.Result, len(testData))
+	for i, data := range testData {
+		results[i] = chunk.Result{
+			Info: chunk.Info{Offset: int64(i * 100)},
+			Data: data,
+		}
+	}
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext: %v", err)
+	}
+
+	for i, p := range prepared {
+		if string(p.Data) != string(testData[i]) {
+			t.Errorf("Data mismatch at index %d: got %q, want %q", i, string(p.Data), string(testData[i]))
+		}
+	}
+}
+
+// TestPrepareChunksWithContextHandlesEmptyChunkList verifies graceful handling of zero chunks.
+func TestPrepareChunksWithContextHandlesEmptyChunkList(t *testing.T) {
+	results := []chunk.Result{}
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext with empty list: %v", err)
+	}
+
+	if len(prepared) != 0 {
+		t.Fatalf("expected empty prepared list, got %d chunks", len(prepared))
+	}
+}

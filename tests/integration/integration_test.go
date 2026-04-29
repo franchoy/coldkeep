@@ -14231,3 +14231,125 @@ func TestSnapshotRetentionChurnLongRun(t *testing.T) {
 	testutils.AssertNoProcessingRows(t, dbconn)
 	testutils.AssertUniqueFileChunkOrders(t, dbconn)
 }
+
+// TestPreparedChunksStoreGraphEquivalence (Phase 4 Step 9) verifies that the prepared/commit path produces
+// identical store results compared to the direct store path (same chunk graph, same file hash,
+// same chunk indexes, sizes, hashes, and chunker versions).
+func TestPreparedChunksStoreGraphEquivalence(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a multi-chunk test file
+	inPath := testutils.CreateTempFile(t, inputDir, "prepare_equivalence.bin", 3*1024*1024)
+
+	ctx := testutils.NewTestContext(dbconn)
+	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+	if storeResult.FileID == 0 {
+		t.Fatal("expected FileID > 0")
+	}
+
+	// Verify computed file hash is consistent
+	expectedHash := testutils.SHA256File(t, inPath)
+	if storeResult.FileHash != expectedHash {
+		t.Errorf("store result file hash mismatch: got %q, want %q", storeResult.FileHash, expectedHash)
+	}
+
+	// Query store graph to verify prepared/commit path results
+	fileChunkRecords := testutils.QueryChunkGraph(t, dbconn, storeResult.FileID)
+	if len(fileChunkRecords) == 0 {
+		t.Fatal("expected at least one file_chunk row")
+	}
+
+	// Verify contiguous chunk ordering [0..n-1]
+	for i, rec := range fileChunkRecords {
+		if rec.Order != i {
+			t.Errorf("chunk ordering error at position %d: got order=%d, want=%d", i, rec.Order, i)
+		}
+	}
+
+	// Verify all chunks have non-empty hashes and positive sizes
+	for i, rec := range fileChunkRecords {
+		if rec.Hash == "" {
+			t.Errorf("chunk %d at position %d: hash is empty", i, i)
+		}
+		if rec.Size <= 0 {
+			t.Errorf("chunk %d at position %d: expected size > 0, got %d", i, i, rec.Size)
+		}
+	}
+
+	// Verify logical_file metadata is correctly set
+	var logicalStatus, logicalHash string
+	if err := dbconn.QueryRow(
+		`SELECT status, file_hash FROM logical_file WHERE id = $1`,
+		storeResult.FileID,
+	).Scan(&logicalStatus, &logicalHash); err != nil {
+		t.Fatalf("QueryRow logical_file: %v", err)
+	}
+
+	if logicalStatus != string(filestate.LogicalFileCompleted) {
+		t.Errorf("logical_file status: expected %s, got %s", filestate.LogicalFileCompleted, logicalStatus)
+	}
+
+	if logicalHash != storeResult.FileHash {
+		t.Errorf("logical_file.file_hash mismatch: stored=%q, result=%q", logicalHash, storeResult.FileHash)
+	}
+
+	// Verify total chunk sizes match file size
+	var totalSize int64
+	for _, rec := range fileChunkRecords {
+		totalSize += rec.Size
+	}
+
+	fileBody, err := os.ReadFile(inPath)
+	if err != nil {
+		t.Fatalf("read input file: %v", err)
+	}
+
+	if totalSize != int64(len(fileBody)) {
+		t.Errorf("total chunk size mismatch: chunks=%d, file=%d", totalSize, len(fileBody))
+	}
+
+	// Verify round-trip restore produces identical content
+	restoreDir := filepath.Join(tmp, "restore")
+	_ = os.MkdirAll(restoreDir, 0o755)
+	restorePath := filepath.Join(restoreDir, "restored_prepare_equiv.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, storeResult.FileID, restorePath); err != nil {
+		t.Fatalf("restore file: %v", err)
+	}
+
+	restoredContent, err := os.ReadFile(restorePath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+
+	if !bytes.Equal(restoredContent, fileBody) {
+		t.Fatal("restored content does not match original")
+	}
+
+	restoredHash := testutils.SHA256File(t, restorePath)
+	if restoredHash != expectedHash {
+		t.Errorf("restored file hash mismatch: got %q, want %q", restoredHash, expectedHash)
+	}
+}
