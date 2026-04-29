@@ -2739,6 +2739,14 @@ func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset) error {
 	return nil
 }
 
+func resolveSelfExecutable() string {
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	// Fall back to argv[0] if os.Executable() fails (should not happen in practice).
+	return os.Args[0]
+}
+
 func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, runLabel string) (corebenchmark.RunReport, error) {
 	report, _, err := runPresetAndCaptureStateInTemporaryDatabase(preset, repeat, runLabel)
 	return report, err
@@ -2752,7 +2760,7 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 	defer func() { _ = cleanup() }()
 
 	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
-		ColdkeepExecutable: os.Args[0],
+		ColdkeepExecutable: resolveSelfExecutable(),
 		ExtraEnv: map[string]string{
 			"DB_NAME":                    dbName,
 			"COLDKEEP_DB_AUTO_BOOTSTRAP": "true",
