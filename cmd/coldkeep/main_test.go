@@ -2343,6 +2343,42 @@ func TestRunBenchmarkRunCommandWorkersEnvInvalidFails(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkRunCommandWorkersEnvDeterministicAcrossInvocations(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "6")
+
+	seen := make([]int, 0, 2)
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		seen = append(seen, opts.StoreFolderWorkers)
+		return BenchmarkRunReport{Dataset: string(preset), Repeat: repeat}, nil
+	}
+
+	run := func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"dataset": {"small"},
+				"workers": {"4"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand with env override returned error: %v", err)
+		}
+	}
+
+	run()
+	run()
+
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 benchmark invocations, got %d", len(seen))
+	}
+	if seen[0] != 6 || seen[1] != 6 {
+		t.Fatalf("expected deterministic env override (6,6), got (%d,%d)", seen[0], seen[1])
+	}
+}
+
 func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 	err := runListCommand(parsedCommandLine{
 		method: "list",

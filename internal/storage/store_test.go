@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -1682,6 +1683,112 @@ func TestDiscoverFilesSkipsDirectories(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("expected no files, got %v", got)
 	}
+}
+
+func TestStoreFolderWorkersOneCompletesSuccessfully(t *testing.T) {
+	_, completedCount := runStoreFolderAndRestoreTree(t, 1)
+	if completedCount != 4 {
+		t.Fatalf("completed logical file count mismatch: got %d, want 4", completedCount)
+	}
+}
+
+func TestStoreFolderWorkersTwoCompletesSuccessfully(t *testing.T) {
+	_, completedCount := runStoreFolderAndRestoreTree(t, 2)
+	if completedCount != 4 {
+		t.Fatalf("completed logical file count mismatch: got %d, want 4", completedCount)
+	}
+}
+
+func TestStoreFolderWorkersOneAndFourProduceSameRestoredTreeHash(t *testing.T) {
+	h1, _ := runStoreFolderAndRestoreTree(t, 1)
+	h4, _ := runStoreFolderAndRestoreTree(t, 4)
+
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(h1, h4); !ok {
+		t.Fatalf("restored tree hash mismatch for workers 1 vs 4: %s", reason)
+	}
+}
+
+func runStoreFolderAndRestoreTree(t *testing.T, workers int) (map[string]string, int) {
+	t.Helper()
+
+	root := t.TempDir()
+	containersDir := t.TempDir()
+	restoreRoot := t.TempDir()
+
+	sourceFiles := map[string]string{
+		"a.txt":        "alpha",
+		"nested/b.txt": "bravo",
+		"nested/c.txt": "charlie",
+		"deep/d/e.txt": "echo",
+	}
+	for rel, content := range sourceFiles {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir source parent for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write source file %q: %v", rel, err)
+		}
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		t.Fatal("expected non-nil local writer")
+	}
+
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+
+	opts := execution.Options{StoreFolderWorkers: workers, PipelineDepth: 1, Deterministic: true}
+	if err := StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, blocks.CodecPlain, opts); err != nil {
+		t.Fatalf("store folder with workers=%d: %v", workers, err)
+	}
+
+	storedPaths, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discover source files: %v", err)
+	}
+	for _, storedPath := range storedPaths {
+		rel, err := filepath.Rel(root, storedPath)
+		if err != nil {
+			t.Fatalf("relative path for %q: %v", storedPath, err)
+		}
+		destination := filepath.Join(restoreRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			t.Fatalf("mkdir restore parent for %q: %v", rel, err)
+		}
+		_, err = RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+			Overwrite:       true,
+			DestinationMode: RestoreDestinationOverride,
+			Destination:     destination,
+		})
+		if err != nil {
+			t.Fatalf("restore by stored path %q: %v", storedPath, err)
+		}
+	}
+
+	hashes, err := corebenchmark.HashRestoredTree(restoreRoot)
+	if err != nil {
+		t.Fatalf("hash restored tree: %v", err)
+	}
+
+	var completedCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = ?`, filestate.LogicalFileCompleted).Scan(&completedCount); err != nil {
+		t.Fatalf("query completed logical_file count: %v", err)
+	}
+
+	return hashes, completedCount
 }
 
 func TestLoadReuseSemanticValidationModeFromEnv(t *testing.T) {

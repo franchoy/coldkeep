@@ -18,6 +18,12 @@ func TestDefaultOptions(t *testing.T) {
 	}
 }
 
+func TestDefaultOptionsDeterministicTrue(t *testing.T) {
+	if !DefaultOptions().Deterministic {
+		t.Fatal("default deterministic mode must be true")
+	}
+}
+
 func TestOptionsNormalize(t *testing.T) {
 	o := Options{
 		StoreFolderWorkers: 0,
