@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
@@ -2099,6 +2100,142 @@ func TestRunBenchmarkCommandTextOutputIncludesRows(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
+		if preset != corebenchmark.DatasetPresetSmall {
+			t.Fatalf("unexpected preset: %q", preset)
+		}
+		if repeat != 2 {
+			t.Fatalf("unexpected repeat: %d", repeat)
+		}
+		return BenchmarkRunReport{
+			GeneratedAtUTC: "2026-04-29T00:00:00Z",
+			Dataset:        "small",
+			Repeat:         2,
+			Iterations: []BenchmarkRunIterationRow{
+				{
+					Iteration: 1,
+					Results: []BenchmarkRunScenarioRow{{
+						Name:           "store-large-file",
+						Success:        true,
+						DurationMs:     12,
+						FilesProcessed: 1,
+						BytesProcessed: 1024,
+						ThroughputMBps: 4.2,
+					}},
+				},
+			},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"output":  {"json"},
+				"dataset": {"small"},
+				"repeat":  {"2"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse benchmark run JSON payload: %v output=%q", err, output)
+	}
+	if got, _ := payload["status"].(string); got != "ok" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "benchmark" {
+		t.Fatalf("command mismatch: got=%v payload=%v", payload["command"], payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in benchmark run payload, got=%v", payload)
+	}
+	if got, _ := data["dataset"].(string); got != "small" {
+		t.Fatalf("dataset mismatch: got=%v data=%v", data["dataset"], data)
+	}
+	if got, _ := data["repeat"].(float64); int(got) != 2 {
+		t.Fatalf("repeat mismatch: got=%v data=%v", data["repeat"], data)
+	}
+}
+
+func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{
+			GeneratedAtUTC: "2026-04-29T00:00:00Z",
+			Dataset:        string(preset),
+			Repeat:         repeat,
+			Iterations: []BenchmarkRunIterationRow{{
+				Iteration: 1,
+				Results: []BenchmarkRunScenarioRow{{
+					Name:           "store-large-file",
+					Success:        true,
+					DurationMs:     42,
+					FilesProcessed: 1,
+					BytesProcessed: 2048,
+					ThroughputMBps: 3.14,
+				}},
+			}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags:       map[string][]string{"dataset": {"medium"}, "output": {"table"}},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Benchmark run (medium preset") {
+		t.Fatalf("expected benchmark run heading, got=%q", output)
+	}
+	if !strings.Contains(output, "SCENARIO") || !strings.Contains(output, "store-large-file") {
+		t.Fatalf("expected scenario table row, got=%q", output)
+	}
+}
+
+func TestRunBenchmarkRunCommandRejectsInvalidDatasetAndRepeat(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"dataset": {"invalid"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid dataset preset") {
+		t.Fatalf("expected invalid dataset preset usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	err = runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"repeat": {"0"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --repeat") {
+		t.Fatalf("expected invalid --repeat usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 	err := runListCommand(parsedCommandLine{
 		method: "list",
@@ -2246,6 +2383,32 @@ func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"benchmark", "run", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected benchmark run --output json to infer json mode, got %q", mode)
+	}
+}
+
+func TestResolveOutputModeAllowsBenchmarkTableOnly(t *testing.T) {
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "benchmark",
+		flags:  map[string][]string{"output": {"table"}},
+	})
+	if err != nil {
+		t.Fatalf("expected benchmark table output to be accepted, got %v", err)
+	}
+	if mode != outputModeText {
+		t.Fatalf("expected benchmark table output to map to text mode, got %q", mode)
+	}
+
+	_, err = resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"output": {"table"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid --output value") {
+		t.Fatalf("expected non-benchmark table output to be rejected, got %v", err)
 	}
 }
 

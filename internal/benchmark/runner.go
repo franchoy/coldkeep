@@ -24,6 +24,7 @@ type BenchmarkContext struct {
 type Result struct {
 	Name     string
 	Duration time.Duration
+	Metrics  Metrics
 	Success  bool
 	Error    string
 }
@@ -44,14 +45,15 @@ func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
 			return results, fmt.Errorf("create context for benchmark case %q: %w", bc.Name, err)
 		}
 
-		started := time.Now()
-		runErr := bc.Run(ctx)
-		duration := time.Since(started)
+		metrics, runErr := Measure(func() error {
+			return bc.Run(ctx)
+		})
 		cleanupErr := cleanup()
 
 		result := Result{
 			Name:     bc.Name,
-			Duration: duration,
+			Duration: metrics.Duration,
+			Metrics:  metrics,
 			Success:  runErr == nil && cleanupErr == nil,
 		}
 		if runErr != nil {

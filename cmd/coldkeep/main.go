@@ -24,9 +24,10 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/chunk/benchmark"
+	chunkbenchmark "github.com/franchoy/coldkeep/internal/chunk/benchmark"
 	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 	clirender "github.com/franchoy/coldkeep/internal/cli/render"
@@ -80,6 +81,8 @@ var flagsWithValues = map[string]bool{
 	"delete-snapshot": true,
 	"modified-after":  true,
 	"modified-before": true,
+	"dataset":         true,
+	"repeat":          true,
 }
 
 type cliOutputMode string
@@ -180,6 +183,7 @@ var runObservabilityInspectPhase = func(entity observability.EntityType, id stri
 	return r, nil
 }
 var runChunkerBenchmarkPhase = runChunkerBenchmark
+var runCoreBenchmarkPhase = runCoreBenchmark
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
 	return false, ""
@@ -772,10 +776,19 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	switch normalized {
 	case "", "text", "human":
 		return outputModeText, nil
+	case "table":
+		if parsed.method == "benchmark" {
+			return outputModeText, nil
+		}
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	case "json":
 		return outputModeJSON, nil
 	default:
-		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
+		allowed := "human, text, json"
+		if parsed.method == "benchmark" {
+			allowed = "human, text, table, json"
+		}
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: %s)", value, allowed)
 	}
 }
 
@@ -2427,21 +2440,57 @@ type BenchmarkChunkersReportRecord struct {
 	WinnerVersion string  `json:"winner_version"`
 }
 
+// BenchmarkRunReport is the output payload for `coldkeep benchmark run`.
+type BenchmarkRunReport struct {
+	GeneratedAtUTC string                     `json:"generated_at_utc"`
+	Dataset        string                     `json:"dataset"`
+	Repeat         int                        `json:"repeat"`
+	Iterations     []BenchmarkRunIterationRow `json:"iterations"`
+}
+
+// BenchmarkRunIterationRow contains one repeated run result set.
+type BenchmarkRunIterationRow struct {
+	Iteration int                       `json:"iteration"`
+	Results   []BenchmarkRunScenarioRow `json:"results"`
+}
+
+// BenchmarkRunScenarioRow is one scenario execution row.
+type BenchmarkRunScenarioRow struct {
+	Name           string  `json:"name"`
+	Success        bool    `json:"success"`
+	DurationMs     int64   `json:"duration_ms"`
+	FilesProcessed int     `json:"files_processed"`
+	BytesProcessed int64   `json:"bytes_processed"`
+	ThroughputMBps float64 `json:"throughput_mbps"`
+	Error          string  `json:"error,omitempty"`
+}
+
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep benchmark <chunkers> [--output <text|json>]")
-	}
-	if len(parsed.positionals) > 1 {
-		return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+		return usageErrorf("Usage: coldkeep benchmark <chunkers|run> [options]")
 	}
 
 	subcommand := parsed.positionals[0]
-	if subcommand != "chunkers" {
-		return usageErrorf("unknown benchmark subcommand %q (expected: chunkers)", subcommand)
+	switch subcommand {
+	case "chunkers":
+		if len(parsed.positionals) > 1 {
+			return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+		}
+		return runBenchmarkChunkersCommand(outputMode)
+	case "run":
+		if len(parsed.positionals) > 1 {
+			return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+		}
+		return runBenchmarkRunCommand(parsed, outputMode)
+	default:
+		return usageErrorf("unknown benchmark subcommand %q (expected: chunkers, run)", subcommand)
 	}
+}
+
+func runBenchmarkChunkersCommand(outputMode cliOutputMode) error {
 
 	report, err := runChunkerBenchmarkPhase()
 	if err != nil {
@@ -2487,19 +2536,111 @@ func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) err
 	return nil
 }
 
+func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	rawPreset, _ := parsed.lastFlagValue("dataset")
+	preset, err := corebenchmark.ParseDatasetPreset(rawPreset)
+	if err != nil {
+		return usageErrorf("%s", err.Error())
+	}
+
+	repeat := 1
+	if rawRepeat, hasRepeat := parsed.lastFlagValue("repeat"); hasRepeat {
+		repeat, err = strconv.Atoi(strings.TrimSpace(rawRepeat))
+		if err != nil || repeat <= 0 {
+			return usageErrorf("invalid --repeat value %q (must be integer > 0)", rawRepeat)
+		}
+	}
+
+	report, err := runCoreBenchmarkPhase(preset, repeat)
+	if err != nil {
+		return fmt.Errorf("benchmark run: %w", err)
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "benchmark",
+			"data":    report,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+		return nil
+	}
+
+	fmt.Printf("Benchmark run (%s preset, repeat=%d)\n", report.Dataset, report.Repeat)
+	fmt.Println()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "ITER\tSCENARIO\tSUCCESS\tDURATION (MS)\tFILES\tBYTES\tTHROUGHPUT (MB/S)\tERROR")
+	for _, iteration := range report.Iterations {
+		for _, row := range iteration.Results {
+			_, _ = fmt.Fprintf(
+				tw,
+				"%d\t%s\t%t\t%d\t%d\t%d\t%.2f\t%s\n",
+				iteration.Iteration,
+				row.Name,
+				row.Success,
+				row.DurationMs,
+				row.FilesProcessed,
+				row.BytesProcessed,
+				row.ThroughputMBps,
+				row.Error,
+			)
+		}
+	}
+	_ = tw.Flush()
+
+	return nil
+}
+
+func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int) (BenchmarkRunReport, error) {
+	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
+		ColdkeepExecutable: os.Args[0],
+	})
+	if err != nil {
+		return BenchmarkRunReport{}, err
+	}
+
+	out := BenchmarkRunReport{
+		GeneratedAtUTC: report.GeneratedAtUTC,
+		Dataset:        string(report.Dataset),
+		Repeat:         report.Repeat,
+		Iterations:     make([]BenchmarkRunIterationRow, 0, len(report.Iterations)),
+	}
+	for _, iteration := range report.Iterations {
+		row := BenchmarkRunIterationRow{
+			Iteration: iteration.Iteration,
+			Results:   make([]BenchmarkRunScenarioRow, 0, len(iteration.Results)),
+		}
+		for _, result := range iteration.Results {
+			row.Results = append(row.Results, BenchmarkRunScenarioRow{
+				Name:           result.Name,
+				Success:        result.Success,
+				DurationMs:     result.Metrics.Duration.Milliseconds(),
+				FilesProcessed: result.Metrics.FilesProcessed,
+				BytesProcessed: result.Metrics.BytesProcessed,
+				ThroughputMBps: result.Metrics.ThroughputMBps,
+				Error:          result.Error,
+			})
+		}
+		out.Iterations = append(out.Iterations, row)
+	}
+
+	return out, nil
+}
+
 func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 	type metricSpec struct {
 		datasetName string
 		metricName  string
-		compute     func(base, candidate benchmark.Result) (float64, error)
+		compute     func(base, candidate chunkbenchmark.Result) (float64, error)
 	}
 
 	metrics := []metricSpec{
 		{
 			datasetName: "slight-modifications",
 			metricName:  "reuse-after-small-edit",
-			compute: func(base, candidate benchmark.Result) (float64, error) {
-				reuse, err := benchmark.CompareReuse(base, candidate)
+			compute: func(base, candidate chunkbenchmark.Result) (float64, error) {
+				reuse, err := chunkbenchmark.CompareReuse(base, candidate)
 				if err != nil {
 					return 0, err
 				}
@@ -2509,8 +2650,8 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 		{
 			datasetName: "shifted-data",
 			metricName:  "reuse-after-shift",
-			compute: func(base, candidate benchmark.Result) (float64, error) {
-				stability, err := benchmark.CompareBoundaryStability(base, candidate)
+			compute: func(base, candidate chunkbenchmark.Result) (float64, error) {
+				stability, err := chunkbenchmark.CompareBoundaryStability(base, candidate)
 				if err != nil {
 					return 0, err
 				}
@@ -2519,8 +2660,8 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 		},
 	}
 
-	index := make(map[string]benchmark.Dataset)
-	for _, dataset := range benchmark.DefaultDatasets() {
+	index := make(map[string]chunkbenchmark.Dataset)
+	for _, dataset := range chunkbenchmark.DefaultDatasets() {
 		index[dataset.Name] = dataset
 	}
 
@@ -2537,12 +2678,12 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 			return BenchmarkChunkersReport{}, fmt.Errorf("benchmark dataset %q has no mutation variants", spec.datasetName)
 		}
 
-		baseV1 := benchmark.RunChunker(v1, dataset.Base.Data)
-		candidateV1 := benchmark.RunChunker(v1, dataset.Mutations[0].Data)
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV1); err != nil {
+		baseV1 := chunkbenchmark.RunChunker(v1, dataset.Base.Data)
+		candidateV1 := chunkbenchmark.RunChunker(v1, dataset.Mutations[0].Data)
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV1); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v1: %w", spec.datasetName, err)
 		}
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV1); err != nil {
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV1); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v1: %w", spec.datasetName, err)
 		}
 		v1Pct, err := spec.compute(baseV1, candidateV1)
@@ -2550,12 +2691,12 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 			return BenchmarkChunkersReport{}, fmt.Errorf("compute %s for %q v1: %w", spec.metricName, spec.datasetName, err)
 		}
 
-		baseV2 := benchmark.RunChunker(v2, dataset.Base.Data)
-		candidateV2 := benchmark.RunChunker(v2, dataset.Mutations[0].Data)
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV2); err != nil {
+		baseV2 := chunkbenchmark.RunChunker(v2, dataset.Base.Data)
+		candidateV2 := chunkbenchmark.RunChunker(v2, dataset.Mutations[0].Data)
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV2); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v2: %w", spec.datasetName, err)
 		}
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV2); err != nil {
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV2); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v2: %w", spec.datasetName, err)
 		}
 		v2Pct, err := spec.compute(baseV2, candidateV2)
@@ -3981,6 +4122,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
+		{"  benchmark run [--dataset <small|medium|large>] [--repeat <N>] [--output <table|json>]", "Run full benchmark scenario suite using dataset presets"},
 		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
 		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
