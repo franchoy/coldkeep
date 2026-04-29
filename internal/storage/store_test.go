@@ -17,6 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/execution"
 
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -1594,6 +1595,36 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 				t.Fatalf("expected validation error containing %q or nil, got: %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsInvalidWorkers(t *testing.T) {
+	err := StoreFolderWithStorageContextAndCodecAndOptions(
+		StorageContext{},
+		t.TempDir(),
+		blocks.CodecPlain,
+		execution.Options{StoreFolderWorkers: 0, PipelineDepth: 1, Deterministic: true},
+	)
+	if err == nil {
+		t.Fatal("expected invalid options error, got nil")
+	}
+	if !strings.Contains(err.Error(), "store folder workers must be >= 1") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsInvalidPipelineDepth(t *testing.T) {
+	err := StoreFolderWithStorageContextAndCodecAndOptions(
+		StorageContext{},
+		t.TempDir(),
+		blocks.CodecPlain,
+		execution.Options{StoreFolderWorkers: 1, PipelineDepth: 0, Deterministic: true},
+	)
+	if err == nil {
+		t.Fatal("expected invalid options error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pipeline depth must be >= 1") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

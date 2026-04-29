@@ -1911,6 +1911,10 @@ func StoreFolder(root string) error {
 	if err != nil {
 		return err
 	}
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return err
+	}
 
 	sgctx, err := LoadDefaultStorageContext()
 	if err != nil {
@@ -1918,7 +1922,7 @@ func StoreFolder(root string) error {
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	return StoreFolderWithStorageContextAndCodec(sgctx, root, codec)
+	return StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, codec, opts)
 }
 
 func StoreFolderWithCodec(root string, codecName string) error {
@@ -1926,6 +1930,10 @@ func StoreFolderWithCodec(root string, codecName string) error {
 	if err != nil {
 		return err
 	}
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return err
+	}
 
 	sgctx, err := LoadDefaultStorageContext()
 	if err != nil {
@@ -1933,22 +1941,37 @@ func StoreFolderWithCodec(root string, codecName string) error {
 	}
 	defer func() { _ = sgctx.Close() }()
 
-	return StoreFolderWithStorageContextAndCodec(sgctx, root, codec)
+	return StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, codec, opts)
 }
 
 func StoreFolderWithStorageContext(sgctx StorageContext, root string) error {
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return err
+	}
+	return StoreFolderWithStorageContextAndOptions(sgctx, root, opts)
+}
+
+func StoreFolderWithStorageContextAndOptions(sgctx StorageContext, root string, opts execution.Options) error {
 	codec, err := blocks.LoadDefaultCodec()
 	if err != nil {
 		return err
 	}
-
-	return StoreFolderWithStorageContextAndCodec(sgctx, root, codec)
+	return StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, codec, opts)
 }
 
 func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, codec blocks.Codec) error {
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return err
+	}
+	return StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, codec, opts)
+}
+
+func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) error {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
-	opts, err := execution.FromEnv(execution.DefaultOptions())
+	err := opts.Validate()
 	if err != nil {
 		return err
 	}

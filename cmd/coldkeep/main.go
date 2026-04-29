@@ -1041,6 +1041,10 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 
 	path := parsed.positionals[0]
 	codecName, _ := parsed.lastFlagValue("codec")
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return fmt.Errorf("store-folder execution options: %w", err)
+	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -1049,7 +1053,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 	defer func() { _ = sgctx.Close() }()
 
 	if codecName == "" {
-		err = storage.StoreFolderWithStorageContext(sgctx, path)
+		err = storage.StoreFolderWithStorageContextAndOptions(sgctx, path, opts)
 	} else {
 		if codecName == "plain" {
 			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
@@ -1060,7 +1064,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 			return parseErr
 		}
 
-		err = storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
+		err = storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, path, codec, opts)
 	}
 	if err != nil {
 		return err
@@ -3291,10 +3295,14 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 			}
 			return storage.StoreFileWithStorageContextAndCodec(sgctx, path, codec)
 		case "store-folder":
-			if codecName == "" {
-				return storage.StoreFolderWithStorageContext(sgctx, path)
+			opts, optsErr := execution.FromEnv(execution.DefaultOptions())
+			if optsErr != nil {
+				return fmt.Errorf("store-folder execution options: %w", optsErr)
 			}
-			return storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
+			if codecName == "" {
+				return storage.StoreFolderWithStorageContextAndOptions(sgctx, path, opts)
+			}
+			return storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, path, codec, opts)
 		}
 		return nil
 	})
