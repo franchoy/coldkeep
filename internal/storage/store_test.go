@@ -1629,6 +1629,21 @@ func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsInvalidPipelineDe
 	}
 }
 
+func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsPipelineDepthGreaterThanOne(t *testing.T) {
+	err := StoreFolderWithStorageContextAndCodecAndOptions(
+		StorageContext{},
+		t.TempDir(),
+		blocks.CodecPlain,
+		execution.Options{StoreFolderWorkers: 1, PipelineDepth: 2, Deterministic: true},
+	)
+	if err == nil {
+		t.Fatal("expected pipeline guardrail error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pipeline depth must be 1 in v1.7 phase 2") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDiscoverFilesReturnsSortedPaths(t *testing.T) {
 	root := t.TempDir()
 

@@ -1976,6 +1976,12 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	if err != nil {
 		return err
 	}
+	// Phase 2 guardrail: execution policy exists, but we intentionally do not
+	// enable staged pipelines yet. Keep store-folder semantics equivalent to
+	// the v1.6/v1.7 baseline while workers only control file-level fan-out.
+	if opts.PipelineDepth != 1 {
+		return fmt.Errorf("pipeline depth must be 1 in v1.7 phase 2")
+	}
 	workerCount := opts.StoreFolderWorkers
 	if _, ok := sgctx.Writer.(*container.SimulatedWriter); ok {
 		workerCount = 1
