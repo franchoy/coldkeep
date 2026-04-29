@@ -577,6 +577,17 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 		})
 	}
 
+	// Keep commit semantics deterministic even if preparation becomes parallel in the future.
+	sort.Slice(prepared, func(i, j int) bool {
+		return prepared[i].Index < prepared[j].Index
+	})
+
+	for i, ch := range prepared {
+		if ch.Index != i {
+			return nil, fmt.Errorf("non-contiguous chunk index: got %d want %d", ch.Index, i)
+		}
+	}
+
 	return prepared, nil
 }
 
