@@ -1969,6 +1969,11 @@ func StoreFolderWithStorageContextAndCodec(sgctx StorageContext, root string, co
 	return StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, codec, opts)
 }
 
+type FileJob struct {
+	Index int
+	Path  string
+}
+
 func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root string, codec blocks.Codec, opts execution.Options) error {
 	// Default to a single worker for deterministic append ordering and safer
 	// container mutation semantics under mixed file sizes.
@@ -1990,11 +1995,12 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fileChan := make(chan string, 256)
+	jobChan := make(chan FileJob, 256)
 	paths, err := discoverFiles(root)
 	if err != nil {
 		return err
 	}
+	jobs := buildFileJobs(paths)
 
 	var wg sync.WaitGroup
 	var firstErr error
@@ -2042,7 +2048,7 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 				select {
 				case <-ctx.Done():
 					return
-				case p, ok := <-fileChan:
+				case job, ok := <-jobChan:
 					if !ok {
 						return
 					}
@@ -2058,7 +2064,7 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 							workerWriter = retryWriter
 							workerCtx.Writer = retryWriter
 						}
-						return StoreFileWithStorageContextAndCodec(workerCtx, p, codec)
+						return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
 					}); err != nil {
 						reportErr(err)
 						return
@@ -2072,7 +2078,7 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	// a stable input order even if completion order differs.
 	var enqueueErr error
 enqueueLoop:
-	for _, path := range paths {
+	for _, job := range jobs {
 		select {
 		case <-ctx.Done():
 			if err := getFirstErr(); err != nil {
@@ -2081,11 +2087,11 @@ enqueueLoop:
 				enqueueErr = context.Canceled
 			}
 			break enqueueLoop
-		case fileChan <- path:
+		case jobChan <- job:
 		}
 	}
 
-	close(fileChan)
+	close(jobChan)
 	wg.Wait()
 
 	if err := getFirstErr(); err != nil {
@@ -2114,6 +2120,14 @@ func discoverFiles(root string) ([]string, error) {
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func buildFileJobs(paths []string) []FileJob {
+	jobs := make([]FileJob, len(paths))
+	for i, p := range paths {
+		jobs[i] = FileJob{Index: i, Path: p}
+	}
+	return jobs
 }
 
 func sleepWithContext(ctx context.Context, wait time.Duration) error {

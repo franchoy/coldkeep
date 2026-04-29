@@ -1737,6 +1737,24 @@ func TestDiscoverFilesStableAcrossRepeatedRuns(t *testing.T) {
 	}
 }
 
+func TestBuildFileJobsPreservesOrderAndIndex(t *testing.T) {
+	paths := []string{"/tmp/b.txt", "/tmp/c.txt", "/tmp/d.txt"}
+
+	jobs := buildFileJobs(paths)
+	if len(jobs) != len(paths) {
+		t.Fatalf("job count mismatch: got %d, want %d", len(jobs), len(paths))
+	}
+
+	for i := range paths {
+		if jobs[i].Index != i {
+			t.Fatalf("job[%d].Index mismatch: got %d, want %d", i, jobs[i].Index, i)
+		}
+		if jobs[i].Path != paths[i] {
+			t.Fatalf("job[%d].Path mismatch: got %q, want %q", i, jobs[i].Path, paths[i])
+		}
+	}
+}
+
 func TestStoreFolderWorkersOneCompletesSuccessfully(t *testing.T) {
 	r := runStoreFolderAndRestoreTree(t, 1)
 	if r.completedCount != 4 {
