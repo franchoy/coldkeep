@@ -509,6 +509,37 @@ type StoreFileResult struct {
 	AlreadyStored bool   `json:"already_stored"`
 }
 
+// storeFileRuntime captures immutable per-operation dependencies reused across
+// many file stores (for example StoreFolder with many small files).
+type storeFileRuntime struct {
+	transformer            blocks.Transformer
+	blockRepo              *blocks.Repository
+	storeService           *StoreService
+	validationContainerDir string
+}
+
+func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFileRuntime, error) {
+	transformer, err := blocks.GetBlockTransformer(codec)
+	if err != nil {
+		if codec == blocks.CodecAESGCM {
+			return nil, fmt.Errorf("encryption key required for aes-gcm: %w", err)
+		}
+		return nil, fmt.Errorf("initialize codec %s: %w", codec, err)
+	}
+
+	validationContainerDir := sgctx.EffectiveContainerDir()
+	if sgctx.IsSimulated() {
+		validationContainerDir = ""
+	}
+
+	return &storeFileRuntime{
+		transformer:            transformer,
+		blockRepo:              &blocks.Repository{DB: sgctx.DB},
+		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
+		validationContainerDir: validationContainerDir,
+	}, nil
+}
+
 func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, containerID int64, filename string, containersDir string) error {
 	if sealer, ok := writer.(optionalContainerSealer); ok {
 		return sealer.SealContainer(tx, containerID, filename, containersDir)
@@ -1912,6 +1943,20 @@ func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string
 // When replace is false, existing path mapped to different logical content fails.
 // When replace is true, existing path mapping is atomically retargeted.
 func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, path string, codec blocks.Codec, replace bool) (result StoreFileResult, err error) {
+	runtime, err := buildStoreFileRuntime(sgctx, codec)
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+	return storeFileWithStorageContextAndRuntimeResultWithPolicy(sgctx, path, replace, nil, runtime)
+}
+
+func storeFileWithStorageContextAndRuntimeResultWithPolicy(
+	sgctx StorageContext,
+	path string,
+	replace bool,
+	knownFileInfo os.FileInfo,
+	runtime *storeFileRuntime,
+) (result StoreFileResult, err error) {
 	normalizedPath, err := normalizePhysicalFilePath(path)
 	if err != nil {
 		return StoreFileResult{}, err
@@ -1920,16 +1965,8 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	transformer, err := blocks.GetBlockTransformer(codec)
-	if err != nil {
-		if codec == blocks.CodecAESGCM {
-			return StoreFileResult{}, fmt.Errorf("encryption key required for aes-gcm: %w", err)
-		}
-		return StoreFileResult{}, fmt.Errorf("initialize codec %s: %w", codec, err)
-	}
-
-	blockRepo := &blocks.Repository{
-		DB: sgctx.DB,
+	if runtime == nil {
+		return StoreFileResult{}, fmt.Errorf("store runtime must not be nil")
 	}
 
 	file, err := os.Open(path)
@@ -1938,9 +1975,12 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	}
 	defer func() { _ = file.Close() }()
 
-	fileinfo, err := file.Stat()
-	if err != nil {
-		return StoreFileResult{}, err
+	fileinfo := knownFileInfo
+	if fileinfo == nil {
+		fileinfo, err = file.Stat()
+		if err != nil {
+			return StoreFileResult{}, err
+		}
 	}
 	physicalMetadata := buildPhysicalFileMetadata(fileinfo)
 
@@ -1961,10 +2001,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 		return StoreFileResult{}, err
 	}
 
-	validationContainerDir := sgctx.EffectiveContainerDir()
-	if sgctx.IsSimulated() {
-		validationContainerDir = ""
-	}
+	validationContainerDir := runtime.validationContainerDir
 
 	// Phase 3 store flow pattern:
 	//  1. resolve one active chunker for the whole operation
@@ -1977,7 +2014,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 	// The logical_file claim happens before ChunkFile() so the store path preserves
 	// its existing concurrency, duplicate-detection, and recovery semantics, but the
 	// version source is the same resolved chunker used to produce the chunk list.
-	storeService := NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker)
+	storeService := runtime.storeService
 	dbconn := storeService.Repository().DB()
 	activeChunker, err := storeService.ResolveActiveChunker()
 	if err != nil {
@@ -2098,12 +2135,12 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 			placement, _, err := storeChunkAsPlainBlockWithWriter(
 				ctx,
 				tx,
-				blockRepo,
+				runtime.blockRepo,
 				writer,
 				claimedChunkID,
 				prepared.Hash,
 				prepared.Data,
-				transformer,
+				runtime.transformer,
 			)
 
 			if err != nil {
@@ -2121,7 +2158,7 @@ func StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx StorageContext, p
 				if errors.Is(err, container.ErrContainerFull) {
 					continue
 				}
-				existingBlock, getBlockErr := blockRepo.GetByChunkID(ctx, claimedChunkID)
+				existingBlock, getBlockErr := runtime.blockRepo.GetByChunkID(ctx, claimedChunkID)
 				if getBlockErr == nil && existingBlock != nil {
 					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
 					// block metadata already exists for this chunk ID.
@@ -2429,6 +2466,11 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 		return execution.ExecutionStats{}, err
 	}
 
+	runtime, err := buildStoreFileRuntime(sgctx, codec)
+	if err != nil {
+		return execution.ExecutionStats{}, err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -2464,7 +2506,8 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 
 			workerCtx := sgctx
 			workerCtx.Writer = workerWriter
-			return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
+			_, err = storeFileWithStorageContextAndRuntimeResultWithPolicy(workerCtx, job.Path, false, info, runtime)
+			return err
 		})
 		if err != nil {
 			return 0, err
