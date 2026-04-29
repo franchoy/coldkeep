@@ -2004,64 +2004,35 @@ func StoreFolderWithStorageContextAndCodecAndOptions(sgctx StorageContext, root 
 	jobs := buildFileJobs(paths)
 
 	var wg sync.WaitGroup
-	reportErr := func(err error) {
-		if err == nil {
-			return
-		}
-		select {
-		case errCh <- err:
-			cancel()
-		default:
-		}
+	processFile := func(job FileJob) error {
+		// Build fresh writer/context per file so worker state is fully isolated.
+		return runWithRetryableTxAbort(ctx, func(attempt int) error {
+			_ = attempt
+			workerWriter, err := newWriterFromPrototype(sgctx.Writer)
+			if err != nil {
+				return err
+			}
+
+			workerCtx := sgctx
+			workerCtx.Writer = workerWriter
+			return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
+		})
 	}
-	worker := func(workerID int, jobCh <-chan FileJob, errCh chan<- error, wg *sync.WaitGroup) {
+
+	worker := func(workerID int, jobs <-chan FileJob, errCh chan<- error, wg *sync.WaitGroup) {
 		defer wg.Done()
 
-		workerWriter, err := newWriterFromPrototype(sgctx.Writer)
-		if err != nil {
-			reportErr(fmt.Errorf("worker %d: %w", workerID, err))
-			return
-		}
-
-		workerCtx := sgctx
-		workerCtx.Writer = workerWriter
-		// workerWriter is reused across files by this worker, but each file store
-		// still finalizes the active writer state by design (see StoreFile*Result).
-
-		for {
-			// Prefer cancellation over draining buffered work when shutting down.
+		for job := range jobs {
 			if ctx.Err() != nil {
 				return
 			}
-
-			select {
-			case <-ctx.Done():
+			if err := processFile(job); err != nil {
+				select {
+				case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
+					cancel()
+				default:
+				}
 				return
-			case job, ok := <-jobCh:
-				if !ok {
-					return
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				if err := runWithRetryableTxAbort(ctx, func(attempt int) error {
-					if attempt > 0 {
-						retryWriter, retryErr := newWriterFromPrototype(sgctx.Writer)
-						if retryErr != nil {
-							return retryErr
-						}
-						workerWriter = retryWriter
-						workerCtx.Writer = retryWriter
-					}
-					return StoreFileWithStorageContextAndCodec(workerCtx, job.Path, codec)
-				}); err != nil {
-					select {
-					case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
-						cancel()
-					default:
-					}
-					return
-				}
 			}
 		}
 	}
