@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -2792,6 +2793,128 @@ func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset) error {
 	}
 	if !equalStringSlices(firstState.SnapshotContent, secondState.SnapshotContent) {
 		return fmt.Errorf("determinism validation failed: snapshot content mismatch")
+	}
+
+	// Verify that the user-visible restore output is also bit-for-bit identical
+	// across independent runs. This is a stronger guarantee than DB hash
+	// equality: it proves store→restore→hash(bytes) is stable.
+	firstTree, err := runRestoreDeterminismCheck("restore-det-a")
+	if err != nil {
+		return fmt.Errorf("restore determinism run A failed: %w", err)
+	}
+	secondTree, err := runRestoreDeterminismCheck("restore-det-b")
+	if err != nil {
+		return fmt.Errorf("restore determinism run B failed: %w", err)
+	}
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(firstTree, secondTree); !ok {
+		return fmt.Errorf("determinism validation failed: restored tree mismatch: %s", reason)
+	}
+	return nil
+}
+
+// runRestoreDeterminismCheck performs a minimal store→restore cycle in an
+// isolated temporary database and returns a map of relative path → SHA-256
+// digest for all files in the restored output directory. The same fixed seed
+// and file size are used on every call so that two independent invocations
+// should produce identical maps.
+func runRestoreDeterminismCheck(runLabel string) (map[string]string, error) {
+	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cleanup() }()
+
+	workDir, err := os.MkdirTemp("", "coldkeep-restore-det-*")
+	if err != nil {
+		return nil, fmt.Errorf("create work dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(workDir) }()
+
+	storageDir := filepath.Join(workDir, "storage", "containers")
+	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create storage dir: %w", err)
+	}
+
+	// Write a small deterministic file (fixed seed, fixed size).
+	srcFile := filepath.Join(workDir, "source.bin")
+	if err := corebenchmark.WriteDeterministicFile(srcFile, 256*1024, 0xDEADBEEF); err != nil {
+		return nil, fmt.Errorf("write deterministic source file: %w", err)
+	}
+
+	exe := resolveSelfExecutable()
+	baseEnv := buildDeterminismEnv(dbName, storageDir)
+
+	if err := runSubprocess(exe, []string{"store", srcFile}, workDir, baseEnv); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+
+	restoreDir := filepath.Join(workDir, "restore-output")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create restore output dir: %w", err)
+	}
+	restoreDest := filepath.Join(restoreDir, "source.bin")
+	if err := runSubprocess(exe, []string{
+		"restore",
+		"--stored-path", srcFile,
+		"--mode", "override",
+		"--destination", restoreDest,
+		"--overwrite",
+	}, workDir, baseEnv); err != nil {
+		return nil, fmt.Errorf("restore: %w", err)
+	}
+
+	return corebenchmark.HashRestoredTree(restoreDir)
+}
+
+func buildDeterminismEnv(dbName, storageDir string) []string {
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	port := strings.TrimSpace(os.Getenv("DB_PORT"))
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	password := os.Getenv("DB_PASSWORD")
+	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+
+	env := os.Environ()
+	overrides := map[string]string{
+		"DB_HOST":                    host,
+		"DB_PORT":                    port,
+		"DB_USER":                    user,
+		"DB_PASSWORD":                password,
+		"DB_SSLMODE":                 sslMode,
+		"DB_NAME":                    dbName,
+		"COLDKEEP_DB_AUTO_BOOTSTRAP": "true",
+		"COLDKEEP_STORAGE_DIR":       storageDir,
+	}
+	// Build a deduplicated env slice: start from os.Environ(), then apply overrides.
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(env)+len(overrides))
+	for k, v := range overrides {
+		result = append(result, k+"="+v)
+		seen[k] = true
+	}
+	for _, kv := range env {
+		key := kv
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			key = kv[:idx]
+		}
+		if !seen[key] {
+			result = append(result, kv)
+		}
+	}
+	return result
+}
+
+func runSubprocess(exe string, args []string, workDir string, env []string) error {
+	cmd := exec.Command(exe, args...) // #nosec G204 — exe is always resolveSelfExecutable()
+	cmd.Dir = workDir
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if len(out) > 0 {
+			return fmt.Errorf("%w\n%s", err, out)
+		}
+		return err
 	}
 	return nil
 }

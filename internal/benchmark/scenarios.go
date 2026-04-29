@@ -342,6 +342,13 @@ func createMixedSizeDataset(dir string, fileCount int, minSize int, maxSize int,
 	return paths, totalBytes, nil
 }
 
+// WriteDeterministicFile writes size bytes of deterministic pseudo-random content
+// derived from seed to path. It is exported so that external validation helpers
+// (e.g. restore-hash determinism checks) can produce the same byte sequence.
+func WriteDeterministicFile(path string, size int64, seed int64) error {
+	return writeDeterministicFile(path, size, seed)
+}
+
 func writeDeterministicFile(path string, size int64, seed int64) error {
 	if size <= 0 {
 		return fmt.Errorf("file size must be > 0")
