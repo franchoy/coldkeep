@@ -137,3 +137,34 @@ Observed compare outcome:
 Current note: medium preset runs are environment-sensitive and can fail under
 local contention/transient transaction-abort conditions; run medium compare in
 a clean benchmark window after stabilizing local DB/containers state.
+
+## Phase 4 carry-over
+
+Phase 4 introduced prepare/commit separation for correctness and future pipeline
+work. This currently adds measurable two-pass overhead on large-file store
+workloads because the file hash and chunk preparation are still performed
+separately (one full read pass for hashing, one for chunking).
+
+This is accepted as temporary v1.7 performance debt and must remain visible in
+benchmark comparisons until reduced or explicitly re-baselined. The baseline
+file (`benchmark-baseline.json`) intentionally reflects the pre-Phase-4 numbers
+so that the overhead stays visible.
+
+**Status:** Phase 4 COMPLETE WITH TRACKED PERFORMANCE DEBT  
+**Debt:** two-pass file hash + chunk preparation overhead  
+**Target:** Phase 5 / single-pass store preparation optimization
+
+## Phase 5 plan — Single-Pass Store Preparation
+
+**Goal:** remove or reduce the two-pass store overhead while preserving the
+Phase 4 prepare/commit separation model.
+
+**Target behaviour:**
+
+- Read the file once
+- Compute the logical file hash while preparing chunk metadata in the same pass
+- Finalize prepared chunks
+- Then commit sequentially (unchanged from Phase 4)
+
+This directly addresses the only amber item from the Phase 4 completion
+checklist and is the top priority for the next store-path optimization pass.
