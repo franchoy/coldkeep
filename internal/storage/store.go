@@ -28,15 +28,6 @@ type payloadStatefulWriter interface {
 	FinalizeContainer() error
 }
 
-// prepareOptions captures parameters for the CPU-side preparation phase.
-// Preparation can later become parallel without DB access.
-type prepareOptions struct {
-	filePath         string
-	effectiveChunker chunk.Chunker
-	chunkerVersion   string
-	ctx              context.Context
-}
-
 // preparedFile is the internal output of the CPU-side preparation phase.
 // It captures deterministic, immutable metadata before any DB/container mutation.
 type preparedFile struct {
@@ -47,48 +38,73 @@ type preparedFile struct {
 	Chunks         []preparedChunk
 }
 
-// prepareFileChunksWithContext reads a file and materializes all chunk metadata deterministically.
-// This is the CPU-side preparation phase: read → chunk → hash → prepare metadata.
-// No DB mutations occur here. Later this phase can be parallelized across files.
-func prepareFileChunksWithContext(opts prepareOptions) ([]preparedChunk, error) {
-	if err := opts.ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// Read and chunk the file
-	chunkResults, err := opts.effectiveChunker.ChunkFile(opts.filePath)
-	if err != nil {
-		return nil, fmt.Errorf("chunk file %s: %w", opts.filePath, err)
-	}
-
-	// Materialize all chunk metadata before any mutations
-	prepared, err := prepareChunksWithContext(opts.ctx, chunkResults, opts.chunkerVersion)
-	if err != nil {
-		return nil, fmt.Errorf("prepare chunks for %s: %w", opts.filePath, err)
-	}
-
-	return prepared, nil
-}
-
 // prepareFileForStoreWithContext performs single-pass file preparation and
 // returns the immutable file-level metadata used by the commit phase.
-func prepareFileForStoreWithContext(opts prepareOptions) (preparedFile, error) {
-	preparedChunks, err := prepareFileChunksWithContext(opts)
-	if err != nil {
+func prepareFileForStoreWithContext(
+	ctx context.Context,
+	path string,
+	effectiveChunker chunk.Chunker,
+	chunkerVersion string,
+) (preparedFile, error) {
+	if err := ctx.Err(); err != nil {
 		return preparedFile{}, err
 	}
 
+	chunkResults, err := effectiveChunker.ChunkFile(path)
+	if err != nil {
+		return preparedFile{}, fmt.Errorf("chunk file %s: %w", path, err)
+	}
+
+	prepared := make([]preparedChunk, 0, len(chunkResults))
+	chunkHasher := sha256.New()
+	fileHasher := sha256.New()
+	hashBuf := make([]byte, 0, sha256.Size)
 	totalSize := int64(0)
-	for _, ch := range preparedChunks {
-		totalSize += int64(ch.Size)
+
+	for i, res := range chunkResults {
+		if err := ctx.Err(); err != nil {
+			return preparedFile{}, err
+		}
+
+		data := res.Data
+		_, _ = fileHasher.Write(data)
+
+		hash := res.Info.Hash
+		if strings.TrimSpace(hash) == "" {
+			chunkHasher.Reset()
+			_, _ = chunkHasher.Write(data)
+			hashBuf = chunkHasher.Sum(hashBuf[:0])
+			hash = hex.EncodeToString(hashBuf)
+		}
+
+		prepared = append(prepared, preparedChunk{
+			Index:          i,
+			Offset:         res.Info.Offset,
+			Size:           len(data),
+			Hash:           hash,
+			ChunkerVersion: chunkerVersion,
+			Data:           data,
+		})
+		totalSize += int64(len(data))
+	}
+
+	// Preserve deterministic commit semantics even if preparation gains internal
+	// parallelism in future phases.
+	sort.Slice(prepared, func(i, j int) bool {
+		return prepared[i].Index < prepared[j].Index
+	})
+	for i, ch := range prepared {
+		if ch.Index != i {
+			return preparedFile{}, fmt.Errorf("non-contiguous chunk index: got %d want %d", ch.Index, i)
+		}
 	}
 
 	return preparedFile{
-		Path:           opts.filePath,
-		LogicalHash:    logicalFileHashFromPreparedChunks(preparedChunks),
+		Path:           path,
+		LogicalHash:    hex.EncodeToString(fileHasher.Sum(nil)),
 		SizeBytes:      totalSize,
-		ChunkerVersion: opts.chunkerVersion,
-		Chunks:         preparedChunks,
+		ChunkerVersion: chunkerVersion,
+		Chunks:         prepared,
 	}, nil
 }
 
@@ -606,9 +622,8 @@ type preparedChunk struct {
 	Data           []byte
 }
 
-// prepareChunksWithContext materializes all chunk metadata deterministically before mutation.
-// It computes hashes for chunkers that didn't provide them (v1-simple-rolling),
-// and captures immutable data payloads for the commit phase.
+// prepareChunksWithContext materializes chunk metadata deterministically.
+// It computes hashes for chunkers that didn't provide them.
 func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunkerVersion string) ([]preparedChunk, error) {
 	if len(results) == 0 {
 		return []preparedChunk{}, nil
@@ -624,8 +639,6 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 
 		data := res.Data
 		hash := res.Info.Hash
-
-		// If chunker didn't provide hash, compute it now (for v1-simple-rolling)
 		if strings.TrimSpace(hash) == "" {
 			chunkHasher.Reset()
 			_, _ = chunkHasher.Write(data)
@@ -643,11 +656,9 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 		})
 	}
 
-	// Keep commit semantics deterministic even if preparation becomes parallel in the future.
 	sort.Slice(prepared, func(i, j int) bool {
 		return prepared[i].Index < prepared[j].Index
 	})
-
 	for i, ch := range prepared {
 		if ch.Index != i {
 			return nil, fmt.Errorf("non-contiguous chunk index: got %d want %d", ch.Index, i)
@@ -655,16 +666,6 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 	}
 
 	return prepared, nil
-}
-
-// logicalFileHashFromPreparedChunks derives the full-file logical hash from the
-// prepared chunk payloads in deterministic index order.
-func logicalFileHashFromPreparedChunks(prepared []preparedChunk) string {
-	h := sha256.New()
-	for _, ch := range prepared {
-		_, _ = h.Write(ch.Data)
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 type reusableLogicalFileGraphSummary struct {
@@ -2046,12 +2047,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	activeVersionString := string(activeVersion)
 	// Phase 5 single-pass prepare: chunk + hash + metadata materialization first,
 	// then claim and commit sequentially.
-	prepared, err := prepareFileForStoreWithContext(prepareOptions{
-		filePath:         path,
-		effectiveChunker: effectiveChunker,
-		chunkerVersion:   activeVersionString,
-		ctx:              ctx,
-	})
+	prepared, err := prepareFileForStoreWithContext(ctx, path, effectiveChunker, activeVersionString)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
