@@ -233,6 +233,29 @@ optimizations can only reduce overhead **between** them, not eliminate them.
    - Set: file mode, mtime, uid, gid if metadata is present and not skipped
 ```
 
+### Design principles (not to be violated)
+
+**One ordered chunk recipe per file (O(1) DB queries):**
+
+The restore flow loads all chunk metadata for a file in a **single ordered query**
+during STAGE 2-4. This design principle is performance-critical and must be
+preserved across all optimizations:
+
+- The query joins `file_chunk`, `chunk`, `blocks`, and optionally `container`
+- Result is sorted by `chunk_order ASC` (deterministic order guarantee)
+- All chunk metadata is pre-fetched: offsets, sizes, hashes, codecs, container locations
+- STAGE 5b (chunk-by-chunk loop) reads from pre-loaded rows with **zero additional DB queries**
+- This ensures O(n) file I/O + CPU work per file, and O(1) DB trips per file
+
+**Do NOT refactor this into:**
+- per-chunk lookup patterns (would increase DB queries to O(n) per file)
+- lazy-load or streaming patterns (loses tuple prefetching, adds per-chunk latency)
+- separate queries for offsets vs hashes vs codecs (violates cache locality)
+
+This constraint is automatically preserved by keeping the current query structure;
+Phase 6 optimizations can only affect the computation/verification path, not the
+recipe loading strategy.
+
 ### Optimization scope (Phase 6)
 
 Optimizations that respect the above flow and safety guarantees:

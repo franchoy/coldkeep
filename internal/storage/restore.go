@@ -162,6 +162,19 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 	}
 
 	// ================================================================
+	// DESIGN PRINCIPLE: One ordered chunk recipe query per file
+	// ================================================================
+	// This is a performance-critical optimization:
+	// - Single query loads ALL chunk metadata for the file (ordered by chunk_order)
+	// - Result includes: offsets, sizes, hashes, codecs, container locations
+	// - Loop below iterates pre-loaded rows with NO additional DB queries
+	// - This ensures O(1) DB operations per file, not O(n) per chunk
+	//
+	// DO NOT refactor this into:
+	// - per-chunk lookup loops (n queries per file x files)
+	// - lazy-load patterns (defeats tuple prefetching, adds latency)
+	// - separate queries for offset/hash/codec (cache-unfriendly)
+	//
 	// STAGE 2-4: Pin chunks + load metadata/recipe (atomic transaction)
 	// ================================================================
 	// Query: ordered chunks for this logical file + blocks metadata
@@ -608,6 +621,12 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// ================================================================
 	// STAGE 5b: Restore chunk by chunk (ordered, sequential)
 	// ================================================================
+	// CRITICAL: This loop iterates pre-loaded chunkRows
+	// - Recipe was loaded ONCE in pinLogicalFileRestoreChunksWithContext
+	// - Loop performs 0 additional DB queries
+	// - All per-file state (order, offsets, hashes, codec) pre-fetched
+	// - Performance: O(n) file I/O + CPU only, O(1) DB operations per file
+	//
 	// For each pinned chunk (in order):
 	//   - Validate: chunk_order is monotonically contiguous
 	//   - Locate: container file + block offset
