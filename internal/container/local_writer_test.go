@@ -78,16 +78,16 @@ func TestLockContainerRowNowaitWithRetrySucceedsOnFirstAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected lock acquisition success, got: %v", err)
 	}
-	if tx.execCalls != 1 {
-		t.Fatalf("expected one exec call, got %d", tx.execCalls)
+	if tx.execCalls != 3 {
+		t.Fatalf("expected savepoint + lock + release, got %d exec calls", tx.execCalls)
 	}
-	if len(tx.queries) != 1 || !strings.Contains(tx.queries[0], "FOR UPDATE NOWAIT") {
+	if len(tx.queries) != 3 || !strings.Contains(tx.queries[1], "FOR UPDATE NOWAIT") {
 		t.Fatalf("expected NOWAIT lock query, got: %v", tx.queries)
 	}
 }
 
 func TestLockContainerRowNowaitWithRetryReturnsContentionAfterExhaustion(t *testing.T) {
-	tx := &stubTx{errs: []error{&pq.Error{Code: "55P03"}}}
+	tx := &stubTx{errs: []error{nil, &pq.Error{Code: "55P03"}, nil, nil}}
 
 	err := lockContainerRowNowaitWithRetry(tx, nil, 42, 1, time.Millisecond)
 	if !errors.Is(err, ErrContainerLockContention) {
@@ -95,6 +95,39 @@ func TestLockContainerRowNowaitWithRetryReturnsContentionAfterExhaustion(t *test
 	}
 	if !strings.Contains(err.Error(), "container 42") {
 		t.Fatalf("expected container id in contention error, got: %v", err)
+	}
+}
+
+func TestLockContainerRowNowaitWithRetryUsesSavepointRollbackBetweenLockRetries(t *testing.T) {
+	tx := &stubTx{errs: []error{nil, &pq.Error{Code: "55P03"}, nil, nil, nil, nil}}
+
+	err := lockContainerRowNowaitWithRetry(tx, nil, 42, 2, time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected retry to succeed after lock contention, got: %v", err)
+	}
+	if tx.execCalls != 7 {
+		t.Fatalf("expected 7 exec calls across savepoint retry flow, got %d", tx.execCalls)
+	}
+	if tx.queries[0] != "SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected initial savepoint, got %q", tx.queries[0])
+	}
+	if !strings.Contains(tx.queries[1], "FOR UPDATE NOWAIT") {
+		t.Fatalf("expected NOWAIT lock query, got %q", tx.queries[1])
+	}
+	if tx.queries[2] != "ROLLBACK TO SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected rollback to savepoint after lock contention, got %q", tx.queries[2])
+	}
+	if tx.queries[3] != "RELEASE SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected release after rollback, got %q", tx.queries[3])
+	}
+	if tx.queries[4] != "SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected second savepoint before retry, got %q", tx.queries[4])
+	}
+	if !strings.Contains(tx.queries[5], "FOR UPDATE NOWAIT") {
+		t.Fatalf("expected second NOWAIT lock query, got %q", tx.queries[5])
+	}
+	if tx.queries[6] != "RELEASE SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected final savepoint release after successful retry, got %q", tx.queries[6])
 	}
 }
 

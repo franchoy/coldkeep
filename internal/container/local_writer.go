@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -254,11 +255,30 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 	} else {
 		lockQuery += " FOR UPDATE NOWAIT"
 	}
+	useSavepoint := strings.Contains(lockQuery, "FOR UPDATE NOWAIT")
 
 	for attempt := 0; attempt < attempts; attempt++ {
+		if useSavepoint {
+			if _, err := tx.Exec("SAVEPOINT coldkeep_container_lock_retry"); err != nil {
+				return fmt.Errorf("create savepoint for container %d lock retry: %w", containerID, err)
+			}
+		}
 		_, err := tx.Exec(lockQuery, containerID)
 		if err == nil {
+			if useSavepoint {
+				if _, releaseErr := tx.Exec("RELEASE SAVEPOINT coldkeep_container_lock_retry"); releaseErr != nil {
+					return fmt.Errorf("release savepoint for container %d lock retry: %w", containerID, releaseErr)
+				}
+			}
 			return nil
+		}
+		if useSavepoint {
+			if _, rollbackErr := tx.Exec("ROLLBACK TO SAVEPOINT coldkeep_container_lock_retry"); rollbackErr != nil {
+				return fmt.Errorf("rollback savepoint for container %d lock retry: %w", containerID, rollbackErr)
+			}
+			if _, releaseErr := tx.Exec("RELEASE SAVEPOINT coldkeep_container_lock_retry"); releaseErr != nil {
+				return fmt.Errorf("release savepoint for container %d lock retry: %w", containerID, releaseErr)
+			}
 		}
 		if !isLockNotAvailable(err) {
 			return err
