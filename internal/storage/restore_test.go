@@ -1645,9 +1645,15 @@ func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected restore to fail for chunk-order discontinuity")
 	}
-	if !strings.Contains(err.Error(), "no restorable chunks found for file") &&
+	// Defensive ordering validation now catches discontinuity early, which is better
+	// than allowing it to slip through to the restore loop. Accept either:
+	// 1. Ordering validation error (preferred - early detection)
+	// 2. Original loop errors (hash-mismatch or no-restorable-chunks)
+	if !strings.Contains(err.Error(), "invalid restore recipe ordering") &&
+		!strings.Contains(err.Error(), "non-contiguous restore chunk order") &&
+		!strings.Contains(err.Error(), "no restorable chunks found for file") &&
 		!strings.Contains(err.Error(), "restored file hash mismatch") {
-		t.Fatalf("expected no-restorable-chunks or hash-mismatch error, got: %v", err)
+		t.Fatalf("expected ordering/hash/restorable-chunks error, got: %v", err)
 	}
 }
 

@@ -173,6 +173,35 @@ func buildRestoreRecipe(logicalFileID int64, originalName, expectedHash string, 
 	}
 }
 
+// validateRestoreRecipeOrdering defensively checks that recipe chunks are
+// contiguous and in order, even though the DB query uses ORDER BY.
+// This prevents silent failures if DB ordering is violated or corrupted.
+//
+// Returns an error if:
+// - Chunk Index does not equal its position in Chunks slice
+// - Empty recipe with non-zero starting index
+// - Any other ordering anomaly
+func validateRestoreRecipeOrdering(recipe *restoreRecipe) error {
+	if len(recipe.Chunks) == 0 {
+		// Empty file is valid (zero chunks)
+		return nil
+	}
+
+	for i, chunk := range recipe.Chunks {
+		// Chunks must be zero-indexed and contiguous
+		if chunk.Index != int64(i) {
+			return fmt.Errorf("non-contiguous restore chunk order at position %d: got Index=%d want Index=%d (chunk_id=%d)", i, chunk.Index, int64(i), chunk.ID)
+		}
+	}
+
+	// Validate consistency between recipe and pinned IDs
+	if len(recipe.Chunks) != len(recipe.PinnedChunkIDs) {
+		return fmt.Errorf("recipe ordering mismatch: %d chunks but %d pinned IDs", len(recipe.Chunks), len(recipe.PinnedChunkIDs))
+	}
+
+	return nil
+}
+
 func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) error {
 	trimmed := strings.TrimSpace(version)
 	if trimmed == "" {
@@ -651,6 +680,12 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Build semantic restore recipe from database rows
 	recipe := buildRestoreRecipe(fileID, originalName, expectedFileHash, int64(0), chunkRows, pinnedChunkIDs)
 	result.OriginalName = recipe.OriginalName
+
+	// Defensively validate recipe ordering before proceeding to restore
+	// This catches any DB ordering issues or data corruption early
+	if err := validateRestoreRecipeOrdering(&recipe); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("invalid restore recipe ordering: %w", err)
+	}
 
 	// ================================================================
 	// STAGE 5a: Prepare output file and harness
