@@ -428,6 +428,44 @@ func commitPreparedChunksWithContext(
 	return result, nil
 }
 
+// commitPreparedFileWithContext commits a fully prepared file recipe without
+// re-reading or re-hashing file contents.
+func commitPreparedFileWithContext(
+	ctx context.Context,
+	dbconn *sql.DB,
+	writer payloadStatefulWriter,
+	blockRepo *blocks.Repository,
+	transformer blocks.Transformer,
+	sgctx StorageContext,
+	prepared preparedFile,
+	fileID int64,
+	normalizedPath string,
+	physicalMetadata physicalFileMetadata,
+	validationContainerDir string,
+	replace bool,
+) (StoreFileResult, error) {
+	commitInfo := commitInfoForChunks{
+		fileID:                 fileID,
+		fileHash:               prepared.LogicalHash,
+		normalizedPath:         normalizedPath,
+		physicalMetadata:       physicalMetadata,
+		validationContainerDir: validationContainerDir,
+		replace:                replace,
+	}
+
+	return commitPreparedChunksWithContext(
+		ctx,
+		dbconn,
+		writer,
+		blockRepo,
+		transformer,
+		sgctx,
+		commitInfo,
+		prepared.Chunks,
+		prepared.ChunkerVersion,
+	)
+}
+
 // Append lifecycle state machine (authoritative v1.0 contract):
 //
 // Trigger:
@@ -2111,11 +2149,6 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		}
 	}()
 
-	// At this point, we have a logical_file row in "PROCESSING" status for this
-	// file hash, and prepared chunks in deterministic order ready for sequential
-	// commit.
-	preparedChunks := prepared.Chunks
-
 	writer, ok := sgctx.Writer.(payloadStatefulWriter)
 	if !ok {
 		return StoreFileResult{}, fmt.Errorf("StoreFileWithStorageContextAndCodec requires writer with AppendPayload/FinalizeContainer, got %T", sgctx.Writer)
@@ -2124,264 +2157,28 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	// Writer finalization is owned by call boundaries (wrappers/CLI/context close),
 	// not by this low-level result function.
 
-	// Commit phase: deterministically commit prepared chunks.
-	for _, prepared := range preparedChunks {
-		if err := ctx.Err(); err != nil {
-			return StoreFileResult{}, err
-		}
-		// Use precomputed hash and data; no re-allocation or re-hashing in this loop.
-		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, validationContainerDir)
-		if err != nil {
-			return StoreFileResult{}, err
-		}
-
-		if chunkStatus == filestate.ChunkCompleted {
-			// Chunk already stored and ready: we can reuse it, just need to link it to the logical file
-			tx, err := dbconn.BeginTx(ctx, nil)
-			if err != nil {
-				return StoreFileResult{}, err
-			}
-
-			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, prepared.Index, true); err != nil {
-				_ = tx.Rollback()
-				return StoreFileResult{}, err
-			}
-
-			if err = tx.Commit(); err != nil {
-				_ = tx.Rollback()
-				return StoreFileResult{}, err
-			}
-
-			continue // Move to next chunk
-		}
-
-		// At this point, we have a chunk row in "PROCESSING" status for this chunk hash, either created by us or by another process.
-
-		for {
-			if err := ctx.Err(); err != nil {
-				return StoreFileResult{}, err
-			}
-			tx, err := dbconn.BeginTx(ctx, nil)
-			if err != nil {
-				return StoreFileResult{}, err
-			}
-
-			// Append chunk data to container file using precomputed metadata
-			placement, _, err := storeChunkAsPlainBlockWithWriter(
-				ctx,
-				tx,
-				runtime.blockRepo,
-				writer,
-				claimedChunkID,
-				prepared.Hash,
-				prepared.Data,
-				runtime.transformer,
-			)
-
-			if err != nil {
-				_ = tx.Rollback()
-				var brokenOpenErr *container.BrokenOpenContainerError
-				if errors.As(err, &brokenOpenErr) {
-					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID, sgctx.EffectiveContainerDir()); quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d after rollback: %w", brokenOpenErr.ContainerID, quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-				if errors.Is(err, container.ErrContainerLockContention) {
-					continue
-				}
-				if errors.Is(err, container.ErrContainerFull) {
-					continue
-				}
-				existingBlock, getBlockErr := runtime.blockRepo.GetByChunkID(ctx, claimedChunkID)
-				if getBlockErr == nil && existingBlock != nil {
-					// Retry scenario: chunk row was set back to ABORTED/PROCESSING but
-					// block metadata already exists for this chunk ID.
-					tx2, err2 := dbconn.BeginTx(ctx, nil)
-					if err2 != nil {
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if _, err2 = tx2.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
-						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if err2 = linkFileChunkWithContext(ctx, tx2, fileID, claimedChunkID, prepared.Index, true); err2 != nil {
-						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if err2 = tx2.Commit(); err2 != nil {
-						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, rbErr
-					}
-					break
-				}
-				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(getBlockErr, rbErr)
-					}
-					return StoreFileResult{}, getBlockErr
-				}
-
-				if _, err3 := dbconn.ExecContext(
-					ctx,
-					`UPDATE chunk SET status = $1 WHERE id = $2`,
-					filestate.ChunkAborted,
-					claimedChunkID,
-				); err3 != nil {
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err3, rbErr)
-					}
-					return StoreFileResult{}, err3
-				}
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-
-			// Mark chunk as completed
-			if _, err := tx.ExecContext(
-				ctx,
-				`UPDATE chunk SET status = $1 WHERE id = $2`,
-				filestate.ChunkCompleted,
-				claimedChunkID,
-			); err != nil {
-				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-
-			if placement.Rotated {
-				// Contract: LocalWriter only handles physical finalize/close on rotation.
-				// Caller must persist final size and seal the previously active container row in DB.
-				if err := container.UpdateContainerSize(tx, placement.PreviousID, placement.PreviousSize); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					return StoreFileResult{}, err
-				}
-				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					quarantineErr := quarantineContainerNow(sgctx.DB, placement.PreviousID, sgctx.EffectiveContainerDir())
-					if quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-			}
-
-			// Always persist size for the container that received this payload.
-			if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
-				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-
-			// Link file ↔ chunk using prepared index for deterministic order
-			if err := linkFileChunkWithContext(ctx, tx, fileID, claimedChunkID, prepared.Index, true); err != nil {
-				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-			if placement.Full {
-				// Mark sealing in the current transaction, which already owns the row lock.
-				if err := markContainerSealingInTx(tx, placement.ContainerID); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					return StoreFileResult{}, err
-				}
-				if err := writer.FinalizeContainer(); err != nil {
-					_ = tx.Rollback()
-					quarantineErr := quarantineWriterActiveContainer(writer)
-					if quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine active container after finalize failure: %w", quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
-				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					quarantineErr := quarantineContainerNow(sgctx.DB, placement.ContainerID, sgctx.EffectiveContainerDir())
-					if quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-			}
-
-			if err = tx.Commit(); err != nil {
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-			acknowledgeWriterAppendCommitted(writer)
-
-			break
-		}
-	}
-
-	// Atomically verify all chunks are linked and mark logical file as COMPLETED in a single transaction.
-	// This groups the final state transition into a deliberate second phase that is logically atomic:
-	// either all chunks are successfully linked AND the file is marked complete, or the file
-	// remains PROCESSING for corrective recovery if any verification fails. This avoids the semantic gap
-	// where chunks could be fully committed but the file completion is left dangling.
-	if err := finalizeLogicalFileStorageWithContext(ctx, dbconn, fileID, len(preparedChunks)); err != nil {
-		return StoreFileResult{}, err
-	}
-
-	tx, err := dbconn.BeginTx(ctx, nil)
+	commitResult, err := commitPreparedFileWithContext(
+		ctx,
+		dbconn,
+		writer,
+		runtime.blockRepo,
+		runtime.transformer,
+		sgctx,
+		prepared,
+		fileID,
+		normalizedPath,
+		physicalMetadata,
+		validationContainerDir,
+		replace,
+	)
 	if err != nil {
-		return StoreFileResult{}, err
-	}
-	if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
-		_ = tx.Rollback()
-		return StoreFileResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		_ = tx.Rollback()
 		return StoreFileResult{}, err
 	}
 
 	// Mark the operation as completed to avoid aborting it in the deferred function
 	completed = true
 
-	return result, nil
+	return commitResult, nil
 }
 
 // -----------------------------------------------------------------------------
