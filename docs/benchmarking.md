@@ -141,18 +141,11 @@ a clean benchmark window after stabilizing local DB/containers state.
 ## Phase 4 carry-over
 
 Phase 4 introduced prepare/commit separation for correctness and future pipeline
-work. This currently adds measurable two-pass overhead on large-file store
-workloads because the file hash and chunk preparation are still performed
-separately (one full read pass for hashing, one for chunking).
+work. The temporary two-pass store overhead identified in Phase 4 was resolved
+in Phase 5 by moving logical-file hashing into the preparation pass.
 
-This is accepted as temporary v1.7 performance debt and must remain visible in
-benchmark comparisons until reduced or explicitly re-baselined. The baseline
-file (`benchmark-baseline.json`) intentionally reflects the pre-Phase-4 numbers
-so that the overhead stays visible.
-
-**Status:** Phase 4 COMPLETE WITH TRACKED PERFORMANCE DEBT  
-**Debt:** two-pass file hash + chunk preparation overhead  
-**Target:** Phase 5 / single-pass store preparation optimization
+**Status:** Phase 4 carry-over debt addressed in Phase 5  
+**Resolved item:** two-pass file hash + chunk preparation overhead
 
 ## Phase 5
 
