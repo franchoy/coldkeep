@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -801,6 +802,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 	}()
 
+	// Phase 6 Step 7: Buffered output writer (1MB buffer)
+	// Reduces syscall overhead for small chunk writes
+	// Flush() is called before Sync() to preserve durability
+	bufw := bufio.NewWriterSize(outFile, 1<<20)
+	defer func() {
+		if bufw != nil {
+			if flushErr := bufw.Flush(); flushErr != nil {
+				log.Printf("event=restore_buffered_writer_error action=flush_failed file_id=%d err=%v", fileID, flushErr)
+			}
+		}
+	}()
+
 	hasher := sha256.New()
 
 	// Phase 6 Step 6: Initialize restore-local reader cache
@@ -937,8 +950,8 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			continue
 		}
 
-		// Write to output
-		if _, err := outFile.Write(plaintext); err != nil {
+		// Write to buffered output
+		if _, err := bufw.Write(plaintext); err != nil {
 			log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
 			continue
 		}
@@ -962,7 +975,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 	}
 
-	// Compute the final hash before fsync/close/rename
+	// Compute the final hash before flush/fsync/close/rename
 	restoredHash := hex.EncodeToString(hasher.Sum(nil))
 	result.RestoredHash = restoredHash
 	if restoredHash != recipe.ExpectedHash {
@@ -973,12 +986,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// ================================================================
 	// STAGE 6: Finalize and commit to destination
 	// ================================================================
+	// - Flush: buffered writer to underlying file
 	// - Fsync: temporary output file to ensure durability
 	// - Rename: atomic replace of temporary file with target path
 	// - Fsync: directory metadata to ensure rename is durable
 	// * CRITICAL: These operations preserve durability on crash
 	// * CRITICAL: Final hash check before rename ensures early corruption detection
 	//
+	// Flush buffered writer before fsync
+	if err := bufw.Flush(); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("flush buffered writer: %w", err)
+	}
+
 	// Fsync ensures data is written to disk before returning
 	if err := outFile.Sync(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
