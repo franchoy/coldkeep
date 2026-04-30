@@ -154,17 +154,23 @@ so that the overhead stays visible.
 **Debt:** two-pass file hash + chunk preparation overhead  
 **Target:** Phase 5 / single-pass store preparation optimization
 
-## Phase 5 plan — Single-Pass Store Preparation
+## Phase 5
 
-**Goal:** remove or reduce the two-pass store overhead while preserving the
-Phase 4 prepare/commit separation model.
+Phase 5 removes the Phase 4 two-pass store overhead by computing the logical
+file hash during chunk preparation. The prepare/commit boundary remains intact:
+preparation is CPU/read-side only, while commit remains sequential and ordered.
 
-**Target behaviour:**
+Latest local stabilized check (repeat=3 medians per dataset/worker, Postgres,
+deterministic mode) still shows regression pressure versus the v1.6 small
+baseline reference:
 
-- Read the file once
-- Compute the logical file hash while preparing chunk metadata in the same pass
-- Finalize prepared chunks
-- Then commit sequentially (unchanged from Phase 4)
+- store-large-file: still regressed
+- store-mixed-dataset: still regressed
+- store-many-small-files: still regressed
 
-This directly addresses the only amber item from the Phase 4 completion
-checklist and is the top priority for the next store-path optimization pass.
+Notes:
+
+- medium workers=4 improved versus medium workers=1 on mixed and large-file
+   throughput, but this does not fully clear baseline regression signals.
+- small workers=4 showed only slight movement and remains below the recorded
+   baseline on key store scenarios.
