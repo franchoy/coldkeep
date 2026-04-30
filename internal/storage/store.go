@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -624,6 +623,16 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 	}
 
 	return prepared, nil
+}
+
+// logicalFileHashFromPreparedChunks derives the full-file logical hash from the
+// prepared chunk payloads in deterministic index order.
+func logicalFileHashFromPreparedChunks(prepared []preparedChunk) string {
+	h := sha256.New()
+	for _, ch := range prepared {
+		_, _ = h.Write(ch.Data)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type reusableLogicalFileGraphSummary struct {
@@ -1969,37 +1978,14 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		return StoreFileResult{}, fmt.Errorf("store runtime must not be nil")
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return StoreFileResult{}, err
-	}
-	defer func() { _ = file.Close() }()
-
 	fileinfo := knownFileInfo
 	if fileinfo == nil {
-		fileinfo, err = file.Stat()
+		fileinfo, err = os.Stat(path)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 	}
 	physicalMetadata := buildPhysicalFileMetadata(fileinfo)
-
-	// Phase 4 (correctness-first): keep a pre-chunk full-file hash pass.
-	//
-	// This intentionally preserves existing semantics where logical_file claim and
-	// duplicate detection run before ChunkFile(). A single-pass hash-during-chunking
-	// path is a Phase 5 optimization and should be introduced with a streaming API
-	// so claim timing and recovery behavior remain equivalent.
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, file); err != nil {
-		return StoreFileResult{}, err
-	}
-	fileHash := hex.EncodeToString(hasher.Sum(nil))
-	result.FileHash = fileHash
-
-	if _, err := file.Seek(0, 0); err != nil {
-		return StoreFileResult{}, err
-	}
 
 	validationContainerDir := runtime.validationContainerDir
 
@@ -2026,6 +2012,20 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		return StoreFileResult{}, fmt.Errorf("resolved active chunker version must not be empty")
 	}
 	activeVersionString := string(activeVersion)
+	// Phase 5 single-pass prepare: chunk + hash + metadata materialization first,
+	// then claim and commit sequentially.
+	preparedChunks, err := prepareFileChunksWithContext(prepareOptions{
+		filePath:         path,
+		effectiveChunker: effectiveChunker,
+		chunkerVersion:   activeVersionString,
+		ctx:              ctx,
+	})
+	if err != nil {
+		return StoreFileResult{}, err
+	}
+	fileHash := logicalFileHashFromPreparedChunks(preparedChunks)
+	result.FileHash = fileHash
+
 	// Try to claim logical file for this hash (concurrency-safe)
 	fileID, filestatus, err := prepareLogicalFileForStoreWithContext(ctx, dbconn, fileinfo, fileHash, activeVersionString, validationContainerDir)
 	if err != nil {
@@ -2066,19 +2066,9 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		}
 	}()
 
-	// At this point, we have a logical_file row in "PROCESSING" status for this file hash, either created by us or by another process.
-	// Phase 4 optimization: prepare all chunks deterministically before any mutations.
-	chunkResults, err := effectiveChunker.ChunkFile(path)
-	if err != nil {
-		return StoreFileResult{}, err
-	}
-
-	// Separate preparation phase: compute all hashes, materialize data immutably.
-	// This CPU work happens before DB claims, reducing per-chunk allocations and hash re-computation.
-	preparedChunks, err := prepareChunksWithContext(ctx, chunkResults, activeVersionString)
-	if err != nil {
-		return StoreFileResult{}, err
-	}
+	// At this point, we have a logical_file row in "PROCESSING" status for this
+	// file hash, and prepared chunks in deterministic order ready for sequential
+	// commit.
 
 	writer, ok := sgctx.Writer.(payloadStatefulWriter)
 	if !ok {
