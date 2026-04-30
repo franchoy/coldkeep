@@ -37,6 +37,16 @@ type prepareOptions struct {
 	ctx              context.Context
 }
 
+// preparedFile is the internal output of the CPU-side preparation phase.
+// It captures deterministic, immutable metadata before any DB/container mutation.
+type preparedFile struct {
+	Path           string
+	LogicalHash    string
+	SizeBytes      int64
+	ChunkerVersion string
+	Chunks         []preparedChunk
+}
+
 // prepareFileChunksWithContext reads a file and materializes all chunk metadata deterministically.
 // This is the CPU-side preparation phase: read → chunk → hash → prepare metadata.
 // No DB mutations occur here. Later this phase can be parallelized across files.
@@ -58,6 +68,28 @@ func prepareFileChunksWithContext(opts prepareOptions) ([]preparedChunk, error) 
 	}
 
 	return prepared, nil
+}
+
+// prepareFileForStoreWithContext performs single-pass file preparation and
+// returns the immutable file-level metadata used by the commit phase.
+func prepareFileForStoreWithContext(opts prepareOptions) (preparedFile, error) {
+	preparedChunks, err := prepareFileChunksWithContext(opts)
+	if err != nil {
+		return preparedFile{}, err
+	}
+
+	totalSize := int64(0)
+	for _, ch := range preparedChunks {
+		totalSize += int64(ch.Size)
+	}
+
+	return preparedFile{
+		Path:           opts.filePath,
+		LogicalHash:    logicalFileHashFromPreparedChunks(preparedChunks),
+		SizeBytes:      totalSize,
+		ChunkerVersion: opts.chunkerVersion,
+		Chunks:         preparedChunks,
+	}, nil
 }
 
 // commitInfoForChunks captures immutable information needed for commit phase.
@@ -2014,7 +2046,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	activeVersionString := string(activeVersion)
 	// Phase 5 single-pass prepare: chunk + hash + metadata materialization first,
 	// then claim and commit sequentially.
-	preparedChunks, err := prepareFileChunksWithContext(prepareOptions{
+	prepared, err := prepareFileForStoreWithContext(prepareOptions{
 		filePath:         path,
 		effectiveChunker: effectiveChunker,
 		chunkerVersion:   activeVersionString,
@@ -2023,7 +2055,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	if err != nil {
 		return StoreFileResult{}, err
 	}
-	fileHash := logicalFileHashFromPreparedChunks(preparedChunks)
+	fileHash := prepared.LogicalHash
 	result.FileHash = fileHash
 
 	// Try to claim logical file for this hash (concurrency-safe)
@@ -2069,6 +2101,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	// At this point, we have a logical_file row in "PROCESSING" status for this
 	// file hash, and prepared chunks in deterministic order ready for sequential
 	// commit.
+	preparedChunks := prepared.Chunks
 
 	writer, ok := sgctx.Writer.(payloadStatefulWriter)
 	if !ok {
