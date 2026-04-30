@@ -174,3 +174,18 @@ Notes:
    throughput, but this does not fully clear baseline regression signals.
 - small workers=4 showed only slight movement and remains below the recorded
    baseline on key store scenarios.
+
+### Phase 5 guardrails (do not change)
+
+Phase 5 optimization work must not alter core compatibility or commit-safety
+contracts. Specifically, do not:
+
+- parallelize chunks inside a file
+- change chunk boundaries
+- change hash algorithms
+- change logical file identity
+- change DB schema
+- change container format
+- change rollback/fsync semantics
+- batch commits across files
+- weaken prepare/commit separation
