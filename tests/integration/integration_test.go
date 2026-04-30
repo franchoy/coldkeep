@@ -8431,6 +8431,46 @@ func TestZeroByteFile(t *testing.T) {
 
 	fileID := testutils.FetchFileIDByHash(t, dbconn, emptyHash)
 
+	var logicalSize int64
+	var logicalHash string
+	var logicalStatus string
+	if err := dbconn.QueryRow(
+		`SELECT total_size, file_hash, status FROM logical_file WHERE id = $1`,
+		fileID,
+	).Scan(&logicalSize, &logicalHash, &logicalStatus); err != nil {
+		t.Fatalf("query logical_file metadata: %v", err)
+	}
+	if logicalSize != 0 {
+		t.Fatalf("logical_file.total_size mismatch: got %d want 0", logicalSize)
+	}
+	if logicalHash != emptyHash {
+		t.Fatalf("logical_file.file_hash mismatch: got %q want %q", logicalHash, emptyHash)
+	}
+	if logicalStatus != string(filestate.LogicalFileCompleted) {
+		t.Fatalf("logical_file.status mismatch: got %q want %q", logicalStatus, filestate.LogicalFileCompleted)
+	}
+
+	var fileChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&fileChunkCount); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if fileChunkCount != 0 {
+		t.Fatalf("expected zero file_chunk rows for empty file, got %d", fileChunkCount)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1
+	`, fileID).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunk rows: %v", err)
+	}
+	if linkedChunkCount != 0 {
+		t.Fatalf("expected zero linked chunk rows for empty file, got %d", linkedChunkCount)
+	}
+
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "empty.restored.bin")

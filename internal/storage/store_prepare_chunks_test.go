@@ -446,6 +446,61 @@ func TestPrepareFileForStoreWithContextLogicalHashMatchesHashFile(t *testing.T) 
 	}
 }
 
+func TestPrepareFileForStoreEmptyFileParity(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "empty.bin")
+	if err := os.WriteFile(path, []byte{}, 0o600); err != nil {
+		t.Fatalf("write empty fixture: %v", err)
+	}
+
+	legacyHash, err := hashFile(path)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		chunker chunk.Chunker
+	}{
+		{name: "v1-simple-rolling", chunker: simplecdc.New()},
+		{name: "v2-fastcdc", chunker: fastcdc.New()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			chunkerVersion := string(tc.chunker.Version())
+
+			phase4Prepared, err := prepareFileForStorePhase4Baseline(context.Background(), path, tc.chunker, chunkerVersion)
+			if err != nil {
+				t.Fatalf("phase4 baseline prepare: %v", err)
+			}
+
+			phase5Prepared, err := prepareFileForStoreWithContext(context.Background(), path, tc.chunker, chunkerVersion)
+			if err != nil {
+				t.Fatalf("phase5 prepare: %v", err)
+			}
+
+			if phase4Prepared.LogicalHash != phase5Prepared.LogicalHash {
+				t.Fatalf("logical hash mismatch: phase4=%q phase5=%q", phase4Prepared.LogicalHash, phase5Prepared.LogicalHash)
+			}
+			if phase5Prepared.LogicalHash != legacyHash {
+				t.Fatalf("logical hash mismatch vs hashFile: phase5=%q legacy=%q", phase5Prepared.LogicalHash, legacyHash)
+			}
+
+			if len(phase4Prepared.Chunks) != len(phase5Prepared.Chunks) {
+				t.Fatalf("empty chunk representation length mismatch: phase4=%d phase5=%d", len(phase4Prepared.Chunks), len(phase5Prepared.Chunks))
+			}
+			if len(phase5Prepared.Chunks) != 0 {
+				t.Fatalf("expected zero chunks for empty file, got %d", len(phase5Prepared.Chunks))
+			}
+
+			if got := reconstructBytesFromPrepared(phase5Prepared.Chunks); len(got) != 0 {
+				t.Fatalf("expected empty reconstructed bytes, got %d bytes", len(got))
+			}
+		})
+	}
+}
+
 // prepareFileForStorePhase4Baseline models the prior two-step preparation path:
 // chunk file first, then prepare chunk metadata, then derive logical file hash.
 func prepareFileForStorePhase4Baseline(
