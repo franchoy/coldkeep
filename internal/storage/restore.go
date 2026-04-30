@@ -85,6 +85,94 @@ type restoreLogicalFileRow struct {
 	chunkerVersion string
 }
 
+// ================================================================
+// Internal semantic restore recipe types (Phase 6)
+// ================================================================
+// These types abstract away v1.7 schema details and provide explicit,
+// ordered structure for restore execution. Benefits:
+// - Explicit ordering semantics independent of DB row layout
+// - Simpler to benchmark (recipe is a cohesive unit)
+// - Simpler for future daemon/API execution (first-class recipe type)
+// - Easier v1.8 block abstraction adaptation (decouples from schema)
+
+// restoreChunk represents a single chunk decoded from the recipe.
+type restoreChunk struct {
+	// Index: sequential position in recipe (0-based chunk_order)
+	Index int64
+	// ID: chunk row identifier (used for logging and cleanup)
+	ID int64
+	// Hash: expected SHA-256 hash of chunk plaintext (verification)
+	Hash string
+	// PlaintextSize: expected size of decoded chunk
+	PlaintextSize int64
+	// StoredSize: compressed/encrypted size on disk
+	StoredSize int64
+	// Offset: byte offset into container file
+	Offset int64
+	// Codec: block encoding (e.g., "aesgcm", "plain")
+	Codec string
+	// FormatVersion: block format version
+	FormatVersion int
+	// Nonce: encryption nonce (if codec uses it)
+	Nonce []byte
+	// ContainerID: database container row ID
+	ContainerID int64
+	// ContainerName: filesystem filename of container
+	ContainerName string
+	// ContainerMaxSize: max size of container file
+	ContainerMaxSize int64
+	// Status: chunk status (should be ChunkCompleted)
+	Status string
+}
+
+// restoreRecipe represents a complete restore plan for one logical file.
+type restoreRecipe struct {
+	// LogicalFileID: database logical_file row ID
+	LogicalFileID int64
+	// OriginalName: original filename from logical_file
+	OriginalName string
+	// ExpectedHash: expected SHA-256 of complete restored file
+	ExpectedHash string
+	// FileSize: total size of file after restoration
+	FileSize int64
+	// Chunks: ordered list of chunks to restore
+	Chunks []restoreChunk
+	// PinnedChunkIDs: chunk IDs to be unpinned after restore
+	// (captured separately to prevent GC during restore)
+	PinnedChunkIDs []int64
+}
+
+// buildRestoreRecipe converts database rows and metadata into a semantic recipe.
+// This builder abstracts away v1.7 schema details and provides explicit structure.
+func buildRestoreRecipe(logicalFileID int64, originalName, expectedHash string, fileSize int64, chunkRows []restoreChunkRow, pinnedChunkIDs []int64) restoreRecipe {
+	chunks := make([]restoreChunk, len(chunkRows))
+	for i, row := range chunkRows {
+		chunks[i] = restoreChunk{
+			Index:            row.chunkOrder,
+			ID:               row.chunkID,
+			Hash:             row.expectedChunkHash,
+			PlaintextSize:    row.plaintextSize,
+			StoredSize:       row.storedSize,
+			Offset:           row.blockOffset,
+			Codec:            row.blocksCodec,
+			FormatVersion:    row.blocksFormatVersion,
+			Nonce:            row.blocksNonce,
+			ContainerID:      row.blocksContainerID,
+			ContainerName:    row.filename,
+			ContainerMaxSize: row.maxSize,
+			Status:           row.chunkStatus,
+		}
+	}
+	return restoreRecipe{
+		LogicalFileID:  logicalFileID,
+		OriginalName:   originalName,
+		ExpectedHash:   expectedHash,
+		FileSize:       fileSize,
+		Chunks:         chunks,
+		PinnedChunkIDs: pinnedChunkIDs,
+	}
+}
+
 func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) error {
 	trimmed := strings.TrimSpace(version)
 	if trimmed == "" {
@@ -560,7 +648,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 	}()
 
-	result.OriginalName = originalName
+	// Build semantic restore recipe from database rows
+	recipe := buildRestoreRecipe(fileID, originalName, expectedFileHash, int64(0), chunkRows, pinnedChunkIDs)
+	result.OriginalName = recipe.OriginalName
 
 	// ================================================================
 	// STAGE 5a: Prepare output file and harness
@@ -621,7 +711,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// ================================================================
 	// STAGE 5b: Restore chunk by chunk (ordered, sequential)
 	// ================================================================
-	// CRITICAL: This loop iterates pre-loaded chunkRows
+	// CRITICAL: This loop iterates pre-loaded recipe.Chunks
 	// - Recipe was loaded ONCE in pinLogicalFileRestoreChunksWithContext
 	// - Loop performs 0 additional DB queries
 	// - All per-file state (order, offsets, hashes, codec) pre-fetched
@@ -643,30 +733,30 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	validChunks := 0
 	var firstRestoreError error
 	const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	isExpectedEmptyFile := len(chunkRows) == 0 && expectedFileHash == emptyFileSHA256
-	for _, chunkRow := range chunkRows {
+	isExpectedEmptyFile := len(recipe.Chunks) == 0 && recipe.ExpectedHash == emptyFileSHA256
+	for _, chunk := range recipe.Chunks {
 		if err := ctx.Err(); err != nil {
 			return RestoreFileResult{}, err
 		}
 
-		if chunkRow.chunkStatus != filestate.ChunkCompleted {
+		if chunk.Status != filestate.ChunkCompleted {
 			continue // skip incomplete chunks (should not happen)
 		}
 
 		// If the container is missing (quarantined), skip this chunk but continue restoring others
-		if chunkRow.filename == "" {
-			log.Printf("event=restore_skip_chunk action=missing_container file_id=%d chunk_id=%d", fileID, chunkRow.chunkID)
+		if chunk.ContainerName == "" {
+			log.Printf("event=restore_skip_chunk action=missing_container file_id=%d chunk_id=%d", fileID, chunk.ID)
 			continue
 		}
 
 		// Validate monotonically contiguous chunk sequence
-		if chunkRow.chunkOrder != expectedOrder {
-			log.Printf("event=restore_skip_chunk action=order_discontinuity file_id=%d chunk_order=%d expected=%d", fileID, chunkRow.chunkOrder, expectedOrder)
+		if chunk.Index != expectedOrder {
+			log.Printf("event=restore_skip_chunk action=order_discontinuity file_id=%d chunk_order=%d expected=%d", fileID, chunk.Index, expectedOrder)
 			continue
 		}
 		expectedOrder++
 
-		if containerfilename != chunkRow.filename {
+		if containerfilename != chunk.ContainerName {
 			// Close previous container before opening new one
 			if filecontainer != nil {
 				if err := filecontainer.Close(); err != nil {
@@ -675,30 +765,30 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 				filecontainer = nil
 			}
 
-			containerPath := filepath.Join(containersDir, chunkRow.filename)
-			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+			containerPath := filepath.Join(containersDir, chunk.ContainerName)
+			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunk.ContainerMaxSize)
 			if err != nil {
-				log.Printf("event=restore_skip_chunk action=container_open_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunkRow.chunkID, chunkRow.filename, err)
+				log.Printf("event=restore_skip_chunk action=container_open_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
 				continue
 			}
-			containerfilename = chunkRow.filename
+			containerfilename = chunk.ContainerName
 		}
 
 		// Read block payload
-		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
+		payload, err := container.ReadPayloadAt(filecontainer, chunk.Offset, chunk.StoredSize)
 		if err != nil {
-			log.Printf("event=restore_skip_chunk action=read_payload_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunkRow.chunkID, chunkRow.filename, err)
+			log.Printf("event=restore_skip_chunk action=read_payload_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
 			continue
 		}
 
 		// Use cached transformer to avoid repeated allocations
-		codec := blocks.Codec(chunkRow.blocksCodec)
+		codec := blocks.Codec(chunk.Codec)
 		transformer, ok := transformerCache[codec]
 		if !ok {
 			var err error
 			transformer, err = blocks.GetBlockTransformer(codec)
 			if err != nil {
-				log.Printf("event=restore_skip_chunk action=transformer_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunkRow.chunkID, chunkRow.blocksCodec, err)
+				log.Printf("event=restore_skip_chunk action=transformer_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunk.ID, chunk.Codec, err)
 				if firstRestoreError == nil {
 					firstRestoreError = err
 				}
@@ -708,21 +798,21 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 
 		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-			ChunkHash: chunkRow.expectedChunkHash,
+			ChunkHash: chunk.Hash,
 			Descriptor: blocks.Descriptor{
-				ChunkID:       chunkRow.chunkID,
+				ChunkID:       chunk.ID,
 				Codec:         codec,
-				FormatVersion: chunkRow.blocksFormatVersion,
-				PlaintextSize: chunkRow.plaintextSize,
-				StoredSize:    chunkRow.storedSize,
-				Nonce:         chunkRow.blocksNonce,
-				ContainerID:   chunkRow.blocksContainerID,
-				BlockOffset:   chunkRow.blockOffset,
+				FormatVersion: chunk.FormatVersion,
+				PlaintextSize: chunk.PlaintextSize,
+				StoredSize:    chunk.StoredSize,
+				Nonce:         chunk.Nonce,
+				ContainerID:   chunk.ContainerID,
+				BlockOffset:   chunk.Offset,
 			},
 			Payload: payload,
 		})
 		if err != nil {
-			log.Printf("event=restore_skip_chunk action=decode_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunkRow.chunkID, chunkRow.blocksCodec, err)
+			log.Printf("event=restore_skip_chunk action=decode_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunk.ID, chunk.Codec, err)
 			if firstRestoreError == nil {
 				firstRestoreError = err
 			}
@@ -730,9 +820,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 
 		// Validate plaintext size
-		if int64(len(plaintext)) != chunkRow.plaintextSize {
-			sizeErr := fmt.Errorf("plaintext size mismatch for chunk %d: expected %d got %d", chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
-			log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunkRow.chunkID, chunkRow.plaintextSize, len(plaintext))
+		if int64(len(plaintext)) != chunk.PlaintextSize {
+			sizeErr := fmt.Errorf("plaintext size mismatch for chunk %d: expected %d got %d", chunk.ID, chunk.PlaintextSize, len(plaintext))
+			log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunk.ID, chunk.PlaintextSize, len(plaintext))
 			if firstRestoreError == nil {
 				firstRestoreError = sizeErr
 			}
@@ -742,9 +832,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// Validate hashes (DB hash and on-disk record hash)
 		sum := sha256.Sum256(plaintext)
 		gotHash := hex.EncodeToString(sum[:])
-		if gotHash != chunkRow.expectedChunkHash {
-			hashErr := fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunkRow.expectedChunkHash, gotHash)
-			log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunkRow.chunkID, chunkRow.expectedChunkHash, gotHash)
+		if gotHash != chunk.Hash {
+			hashErr := fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunk.Hash, gotHash)
+			log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunk.ID, chunk.Hash, gotHash)
 			if firstRestoreError == nil {
 				firstRestoreError = hashErr
 			}
@@ -753,13 +843,13 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 
 		// Write to output
 		if _, err := outFile.Write(plaintext); err != nil {
-			log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunkRow.chunkID, err)
+			log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
 			continue
 		}
 
 		// Update file hash
 		if _, err := hasher.Write(plaintext); err != nil {
-			log.Printf("event=restore_skip_chunk action=hash_failed file_id=%d chunk_id=%d err=%v", fileID, chunkRow.chunkID, err)
+			log.Printf("event=restore_skip_chunk action=hash_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
 			continue
 		}
 		validChunks++
@@ -779,9 +869,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Compute the final hash before fsync/close/rename
 	restoredHash := hex.EncodeToString(hasher.Sum(nil))
 	result.RestoredHash = restoredHash
-	if restoredHash != expectedFileHash {
-		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, expectedFileHash, restoredHash)
-		return RestoreFileResult{}, fmt.Errorf("restored file hash mismatch: expected %s got %s", expectedFileHash, restoredHash)
+	if restoredHash != recipe.ExpectedHash {
+		log.Printf("event=restore_partial_warning file_id=%d expected_hash=%s restored_hash=%s", fileID, recipe.ExpectedHash, restoredHash)
+		return RestoreFileResult{}, fmt.Errorf("restored file hash mismatch: expected %s got %s", recipe.ExpectedHash, restoredHash)
 	}
 
 	// ================================================================
