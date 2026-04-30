@@ -883,6 +883,13 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			continue
 		}
 
+		// TEST HOOK: assert state just before first payload read.
+		if TestRestoreBeforeChunkReadHook != nil {
+			if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+				return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
+			}
+		}
+
 		// Read block payload
 		payload, err := container.ReadPayloadAt(filecontainer, chunk.Offset, chunk.StoredSize)
 		if err != nil {
@@ -1100,3 +1107,7 @@ func applyPhysicalMetadata(outputPath string, descriptor RestoreDescriptor, opts
 // testRestoreFailBeforeRenameHook is a test-only hook for simulating restore failures after temp file is written but before rename.
 // It should only be set in tests.
 var TestRestoreFailBeforeRenameHook func(tempOutputPath, outputPath string) error
+
+// TestRestoreBeforeChunkReadHook is a test-only hook invoked immediately before
+// reading chunk payload bytes from a container. It should only be set in tests.
+var TestRestoreBeforeChunkReadHook func(dbconn *sql.DB, chunkID int64) error
