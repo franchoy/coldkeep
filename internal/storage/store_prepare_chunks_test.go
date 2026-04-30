@@ -405,6 +405,47 @@ func TestPrepareFileForStorePhase4Phase5Parity(t *testing.T) {
 	}
 }
 
+func TestPrepareFileForStoreWithContextLogicalHashMatchesHashFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "logical_identity_input.bin")
+
+	content := bytes.Repeat([]byte("logical-identity-parity-"), 120000)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	legacyHash, err := hashFile(path)
+	if err != nil {
+		t.Fatalf("hashFile: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		chunker chunk.Chunker
+	}{
+		{name: "v1-simple-rolling", chunker: simplecdc.New()},
+		{name: "v2-fastcdc", chunker: fastcdc.New()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := prepareFileForStoreWithContext(
+				context.Background(),
+				path,
+				tc.chunker,
+				string(tc.chunker.Version()),
+			)
+			if err != nil {
+				t.Fatalf("prepareFileForStoreWithContext: %v", err)
+			}
+
+			if prepared.LogicalHash != legacyHash {
+				t.Fatalf("logical hash identity mismatch: prepared=%q legacy=%q", prepared.LogicalHash, legacyHash)
+			}
+		})
+	}
+}
+
 // prepareFileForStorePhase4Baseline models the prior two-step preparation path:
 // chunk file first, then prepare chunk metadata, then derive logical file hash.
 func prepareFileForStorePhase4Baseline(

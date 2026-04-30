@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -36,6 +37,22 @@ type preparedFile struct {
 	SizeBytes      int64
 	ChunkerVersion string
 	Chunks         []preparedChunk
+}
+
+// hashFile computes the logical identity hash from raw file bytes.
+// Keep this helper for parity tests that guard identity semantics.
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // prepareFileForStoreWithContext performs single-pass file preparation and
