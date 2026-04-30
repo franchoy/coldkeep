@@ -181,3 +181,77 @@ contracts. Specifically, do not:
 - change rollback/fsync semantics
 - batch commits across files
 - weaken prepare/commit separation
+
+## Phase 6: Restore Read-Path Optimization
+
+Phase 6 optimizes the restore read path without weakening integrity or safety
+semantics. The restore flow has unmissable safety checkpoints that must remain;
+optimizations can only reduce overhead **between** them, not eliminate them.
+
+### Restore flow (current)
+
+```
+1. STAGE: Resolve restore target
+   - Input: restoration target (file ID or path)
+   - Output: RestoreDescriptor with logical_file_id, path, metadata flags
+
+2. STAGE: Pin chunks (protect from GC)
+   - Query: SELECT ... FROM file_chunk ... WHERE logical_file_id = ? ORDER BY chunk_order
+   - Action: UPDATE chunk SET pin_count = pin_count + 1 WHERE id = ?
+   - Guarantee: ✓ Pin **before** performing any read or restore work
+   - Guarantee: ✓ Ordered query ensures proper chunk visibility and sequence
+
+3. STAGE: Load logical file metadata
+   - Query: SELECT original_name, file_hash FROM logical_file WHERE id = ?
+   - Output: expected file hash (for integrity check at end)
+
+4. STAGE: Load ordered chunk recipe
+   - Query: SELECT ... FROM file_chunk [WITH chunks/blocks] ORDER BY chunk_order
+   - Output: restoreChunkRow list (container location, offsets, hashes, codec)
+
+5. STAGE: For each chunk (ordered iteration)
+   - Validate: chunk_order is monotonically contiguous
+   - Locate: container file + block offset
+   - Read: io operations to fetch compressed block from container
+   - Decode: decompress/decrypt block using codec + nonce + key
+   - Verify: SHA-256: computed hash == expected chunk hash
+   - Append: plaintext bytes to temporary output file
+   - Update: running file hash (SHA-256)
+
+6. STAGE: Finalize and commit to destination
+   - Fsync: temporary output file to ensure durability
+   - Rename: atomic replace of temporary file with target path
+   - Fsync: directory metadata to ensure rename is durable
+   - Guarantee: ✓ Final hash == expected file hash (catch corruption early)
+
+7. STAGE: Unpin chunks (allow GC)
+   - Action: UPDATE chunk SET pin_count = pin_count - 1 WHERE id = ?
+   - Guarantee: ✓ Unpin **after** restore completes or fails (via defer)
+   - Guarantee: ✓ Even on error, chunks are unpinned for cleanup
+
+8. STAGE: Apply physical metadata (optional)
+   - Set: file mode, mtime, uid, gid if metadata is present and not skipped
+```
+
+### Optimization scope (Phase 6)
+
+Optimizations that respect the above flow and safety guarantees:
+
+1. **Batch pin/unpin updates** — combine multiple chunk pins into one SQL statement
+   while preserving transactional semantics and exact pin_count accuracy.
+2. **Output buffering** — add write buffering to reduce syscalls, conditioned on
+   final fsync + rename guarantees remaining unchanged.
+3. **Container locality metrics** — measure open/close churn to guide future access
+   patterns without changing sequential read semantics.
+4. **Decode-path micro-benchmarks** — add Go benchmarks to isolate codec/hash
+   overhead from end-to-end benchmark noise.
+
+### Optimization scope (NOT Phase 6)
+
+Optimizations that **cannot** be applied in Phase 6 without explicit safety re-review:
+
+- Parallelize chunk processing (breaks ordered file integrity)
+- Skip pin/unpin (allows chunks to be GC'd mid-restore, risking data loss)
+- Defer fsync/rename (breaks durability on crash)
+- Skip final hash verification (cannot catch silent corruption)
+- Batch unpin before restore completes (loses fail-safe cleanup semantics)

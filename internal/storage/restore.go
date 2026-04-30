@@ -161,6 +161,15 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 		return "", "", nil, nil, err
 	}
 
+	// ================================================================
+	// STAGE 2-4: Pin chunks + load metadata/recipe (atomic transaction)
+	// ================================================================
+	// Query: ordered chunks for this logical file + blocks metadata
+	// Action: INCREMENT pin_count for each chunk (GC protection)
+	// Result: snapshot of deterministic chunk recipe + pinned IDs
+	// Guarantee: ✓ If commit succeeds, chunks are pinned and cannot be GC'd
+	// Guarantee: ✓ Query is ordered by chunk_order for deterministic restore
+	//
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			fc.chunk_order,
@@ -286,6 +295,15 @@ func unpinRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB, chunkIDs
 		}
 	}()
 
+	// ================================================================
+	// STAGE 7: Unpin chunks (allow GC after restore)
+	// ================================================================
+	// Action: DECREMENT pin_count for each chunk
+	// Guarantee: ✓ Called in defer even if restore fails
+	// Guarantee: ✓ Chunks become eligible for GC after unpin
+	// Note: Current implementation: one UPDATE per chunk
+	// Optimization target: batch into single SQL statement
+	//
 	for _, chunkID := range chunkIDs {
 		result, execErr := tx.ExecContext(
 			ctx,
@@ -432,6 +450,12 @@ func restoreFromDescriptorWithStorageContextResultOptions(sgctx StorageContext, 
 		return RestoreFileResult{}, err
 	}
 
+	// ================================================================
+	// STAGE 8: Apply physical metadata (optional)
+	// ================================================================
+	// - Set file mode, mtime, uid, gid if present and not skipped
+	// - May fail but does not invalidate restored content
+	//
 	if err := applyPhysicalMetadata(result.OutputPath, descriptor, opts); err != nil {
 		return RestoreFileResult{}, err
 	}
@@ -497,11 +521,22 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
+	// ================================================================
+	// STAGE 1-4: Resolve target, pin chunks, and load metadata/recipe
+	// ================================================================
+	// - Resolves restore target (fileID)
+	// - Pins all chunks BEFORE any read to protect from GC
+	// - Loads: logical_file metadata (name, expected hash)
+	// - Loads: ordered chunk recipe (container, offsets, hashes, codec)
+	// * CRITICAL: Pin count incremented during this phase
+	// * CRITICAL: Defer unpins at end to ensure cleanup even on error
+	//
 	originalName, expectedFileHash, chunkRows, pinnedChunkIDs, err := pinLogicalFileRestoreChunksWithContext(ctx, dbconn, fileID)
 	if err != nil {
 		return RestoreFileResult{}, err
 	}
 	defer func() {
+		// STAGE 7: Unpin chunks (allow GC after restore completes or fails)
 		cleanupCtx, cleanupCancel := db.NewOperationContext(context.Background())
 		defer cleanupCancel()
 		if unpinErr := unpinRestoreChunksWithContext(cleanupCtx, dbconn, pinnedChunkIDs); unpinErr != nil {
@@ -514,9 +549,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 
 	result.OriginalName = originalName
 
-	// ------------------------------------------------------------
-	// Prepare output file
-	// ------------------------------------------------------------
+	// ================================================================
+	// STAGE 5a: Prepare output file and harness
+	// ================================================================
 	if st, err := os.Stat(outputPath); err == nil && st.IsDir() {
 		outputPath = filepath.Join(outputPath, originalName)
 	} else if strings.HasSuffix(outputPath, string(os.PathSeparator)) {
@@ -570,9 +605,21 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 	}()
 
-	// ------------------------------------------------------------
-	// Restore chunk by chunk
-	// ------------------------------------------------------------
+	// ================================================================
+	// STAGE 5b: Restore chunk by chunk (ordered, sequential)
+	// ================================================================
+	// For each pinned chunk (in order):
+	//   - Validate: chunk_order is monotonically contiguous
+	//   - Locate: container file + block offset
+	//   - Read: fetch compressed block from container
+	//   - Decode: decompress/decrypt using codec + nonce
+	//   - Verify: SHA-256(plaintext) == expected_chunk_hash
+	//   - Append: plaintext bytes to temp output
+	//   - Update: running file hash
+	//
+	// Error handling: skip unreliable chunks but fail if none succeeded
+	// and file is not empty.
+	//
 	var expectedOrder int64 = 0
 	validChunks := 0
 	var firstRestoreError error
@@ -718,6 +765,15 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		return RestoreFileResult{}, fmt.Errorf("restored file hash mismatch: expected %s got %s", expectedFileHash, restoredHash)
 	}
 
+	// ================================================================
+	// STAGE 6: Finalize and commit to destination
+	// ================================================================
+	// - Fsync: temporary output file to ensure durability
+	// - Rename: atomic replace of temporary file with target path
+	// - Fsync: directory metadata to ensure rename is durable
+	// * CRITICAL: These operations preserve durability on crash
+	// * CRITICAL: Final hash check before rename ensures early corruption detection
+	//
 	// Fsync ensures data is written to disk before returning
 	if err := outFile.Sync(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("fsync output file: %w", err)
