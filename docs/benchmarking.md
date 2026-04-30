@@ -160,20 +160,19 @@ Phase 5 removes the Phase 4 two-pass store overhead by computing the logical
 file hash during chunk preparation. The prepare/commit boundary remains intact:
 preparation is CPU/read-side only, while commit remains sequential and ordered.
 
-Latest local stabilized check (repeat=3 medians per dataset/worker, Postgres,
-deterministic mode) still shows regression pressure versus the v1.6 small
-baseline reference:
+Latest local benchmark compare against the v1.6 small baseline (Postgres,
+deterministic mode, threshold=20) now reports these Phase 5 store outcomes:
 
-- store-large-file: still regressed
-- store-mixed-dataset: still regressed
-- store-many-small-files: still regressed
+- store-large-file: improved
+- store-mixed-dataset: improved
+- store-many-small-files: improved
 
 Notes:
 
-- medium workers=4 improved versus medium workers=1 on mixed and large-file
-   throughput, but this does not fully clear baseline regression signals.
-- small workers=4 showed only slight movement and remains below the recorded
-   baseline on key store scenarios.
+- official small compare commands (workers=1 and workers=4) are currently green
+   against `benchmark-baseline.json` at threshold 20.
+- focused repeat harness runs still show medium-profile variability and should
+   be treated as directional diagnostics, not baseline-gate replacements.
 
 ### Phase 5 guardrails (do not change)
 
