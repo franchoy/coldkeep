@@ -24,18 +24,35 @@ type stubTx struct {
 }
 
 type fakeContainer struct {
-	syncErr  error
-	closeErr error
+	size      int64
+	appendErr error
+	truncErr  error
+	syncErr   error
+	closeErr  error
 }
 
-func (f *fakeContainer) Append(data []byte) (int64, error) { return 0, nil }
+func (f *fakeContainer) Append(data []byte) (int64, error) {
+	if f.appendErr != nil {
+		return 0, f.appendErr
+	}
+	offset := f.size
+	f.size += int64(len(data))
+	return offset, nil
+}
 func (f *fakeContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	return nil, nil
 }
-func (f *fakeContainer) Size() int64               { return ContainerHdrLen }
-func (f *fakeContainer) Truncate(size int64) error { return nil }
-func (f *fakeContainer) Sync() error               { return f.syncErr }
-func (f *fakeContainer) Close() error              { return f.closeErr }
+func (f *fakeContainer) Size() int64 { return f.size }
+func (f *fakeContainer) Truncate(size int64) error {
+	if f.truncErr != nil {
+		return f.truncErr
+	}
+	f.size = size
+	return nil
+}
+func (f *fakeContainer) Sync() error        { return f.syncErr }
+func (f *fakeContainer) Close() error       { return f.closeErr }
+func (f *fakeContainer) SetSize(size int64) { f.size = size }
 
 func (s *stubTx) Exec(query string, args ...any) (sql.Result, error) {
 	s.queries = append(s.queries, query)
@@ -176,6 +193,65 @@ func TestLockContainerRowNowaitWithRetryZeroAttemptsReturnsContention(t *testing
 	}
 	if !strings.Contains(err.Error(), "container 88") {
 		t.Fatalf("expected error to mention container id, got: %v", err)
+	}
+}
+
+func TestLocalWriterAppendPayloadRefreshesDBSizeBeforeRotationDecision(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY,
+			filename TEXT,
+			current_size INTEGER,
+			max_size INTEGER,
+			sealed BOOLEAN,
+			sealing BOOLEAN,
+			quarantine BOOLEAN
+		)
+	`); err != nil {
+		t.Fatalf("create container table: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO container (id, filename, current_size, max_size, sealed, sealing, quarantine)
+		VALUES (1, 'active.bin', ?, ?, FALSE, FALSE, FALSE)
+	`, ContainerHdrLen+10, ContainerHdrLen+24); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	handle := &fakeContainer{size: ContainerHdrLen + 10}
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), ContainerHdrLen+24, dbconn)
+	w.hasActive = true
+	w.activeID = 1
+	w.activeFile = "active.bin"
+	w.activeHandle = handle
+	w.activeSize = ContainerHdrLen + 20
+
+	placement, err := w.AppendPayload(tx, []byte("12345678"))
+	if err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+	if placement.Rotated {
+		t.Fatalf("expected no rotation after refreshing db size, got placement=%+v", placement)
+	}
+	if placement.ContainerID != 1 {
+		t.Fatalf("expected append to existing container, got %d", placement.ContainerID)
+	}
+	if placement.Offset != ContainerHdrLen+10 {
+		t.Fatalf("expected offset %d, got %d", ContainerHdrLen+10, placement.Offset)
+	}
+	if placement.NewContainerSize != ContainerHdrLen+18 {
+		t.Fatalf("expected new size %d, got %d", ContainerHdrLen+18, placement.NewContainerSize)
 	}
 }
 
