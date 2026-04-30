@@ -1,12 +1,17 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
+	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 )
 
 func TestPrepareChunksWithContextComputesExpectedHashesDeterministically(t *testing.T) {
@@ -322,4 +327,130 @@ func TestPrepareChunksWithContextHandlesEmptyChunkList(t *testing.T) {
 	if len(prepared) != 0 {
 		t.Fatalf("expected empty prepared list, got %d chunks", len(prepared))
 	}
+}
+
+func TestPrepareFileForStorePhase4Phase5Parity(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "parity_input.bin")
+
+	// Large enough to force multi-chunk behavior for v1-simple-rolling max size,
+	// while also exercising v2-fastcdc chunk metadata flow.
+	content := bytes.Repeat([]byte("coldkeep-phase5-parity-"), 150000)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		chunker chunk.Chunker
+	}{
+		{name: "v1-simple-rolling", chunker: simplecdc.New()},
+		{name: "v2-fastcdc", chunker: fastcdc.New()},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			chunkerVersion := string(tc.chunker.Version())
+
+			phase4Prepared, err := prepareFileForStorePhase4Baseline(context.Background(), path, tc.chunker, chunkerVersion)
+			if err != nil {
+				t.Fatalf("phase4 baseline prepare: %v", err)
+			}
+
+			phase5Prepared, err := prepareFileForStoreWithContext(context.Background(), path, tc.chunker, chunkerVersion)
+			if err != nil {
+				t.Fatalf("phase5 prepare: %v", err)
+			}
+
+			if len(phase4Prepared.Chunks) != len(phase5Prepared.Chunks) {
+				t.Fatalf("chunk count mismatch: phase4=%d phase5=%d", len(phase4Prepared.Chunks), len(phase5Prepared.Chunks))
+			}
+
+			for i := range phase4Prepared.Chunks {
+				c4 := phase4Prepared.Chunks[i]
+				c5 := phase5Prepared.Chunks[i]
+
+				if c4.Index != c5.Index {
+					t.Fatalf("chunk index mismatch at %d: phase4=%d phase5=%d", i, c4.Index, c5.Index)
+				}
+				if c4.Size != c5.Size {
+					t.Fatalf("chunk size mismatch at %d: phase4=%d phase5=%d", i, c4.Size, c5.Size)
+				}
+				if c4.Hash != c5.Hash {
+					t.Fatalf("chunk hash mismatch at %d: phase4=%q phase5=%q", i, c4.Hash, c5.Hash)
+				}
+				if c4.ChunkerVersion != c5.ChunkerVersion {
+					t.Fatalf("chunker version mismatch at %d: phase4=%q phase5=%q", i, c4.ChunkerVersion, c5.ChunkerVersion)
+				}
+			}
+
+			if phase4Prepared.LogicalHash != phase5Prepared.LogicalHash {
+				t.Fatalf("logical file hash mismatch: phase4=%q phase5=%q", phase4Prepared.LogicalHash, phase5Prepared.LogicalHash)
+			}
+
+			phase4Restored := reconstructBytesFromPrepared(phase4Prepared.Chunks)
+			phase5Restored := reconstructBytesFromPrepared(phase5Prepared.Chunks)
+			if !bytes.Equal(phase4Restored, phase5Restored) {
+				t.Fatalf("final restored bytes mismatch between phase4 and phase5")
+			}
+
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read original file: %v", err)
+			}
+			if !bytes.Equal(original, phase5Restored) {
+				t.Fatalf("final restored bytes mismatch with original content")
+			}
+		})
+	}
+}
+
+// prepareFileForStorePhase4Baseline models the prior two-step preparation path:
+// chunk file first, then prepare chunk metadata, then derive logical file hash.
+func prepareFileForStorePhase4Baseline(
+	ctx context.Context,
+	path string,
+	effectiveChunker chunk.Chunker,
+	chunkerVersion string,
+) (preparedFile, error) {
+	if err := ctx.Err(); err != nil {
+		return preparedFile{}, err
+	}
+
+	results, err := effectiveChunker.ChunkFile(path)
+	if err != nil {
+		return preparedFile{}, err
+	}
+
+	preparedChunks, err := prepareChunksWithContext(ctx, results, chunkerVersion)
+	if err != nil {
+		return preparedFile{}, err
+	}
+
+	totalSize := int64(0)
+	h := sha256.New()
+	for _, ch := range preparedChunks {
+		totalSize += int64(ch.Size)
+		_, _ = h.Write(ch.Data)
+	}
+
+	return preparedFile{
+		Path:           path,
+		LogicalHash:    hex.EncodeToString(h.Sum(nil)),
+		SizeBytes:      totalSize,
+		ChunkerVersion: chunkerVersion,
+		Chunks:         preparedChunks,
+	}, nil
+}
+
+func reconstructBytesFromPrepared(chunks []preparedChunk) []byte {
+	total := 0
+	for _, ch := range chunks {
+		total += len(ch.Data)
+	}
+	out := make([]byte, 0, total)
+	for _, ch := range chunks {
+		out = append(out, ch.Data...)
+	}
+	return out
 }
