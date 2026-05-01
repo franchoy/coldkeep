@@ -652,8 +652,8 @@ func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, container
 func newWriterFromPrototype(prototype container.ContainerWriter) (container.ContainerWriter, error) {
 	switch w := prototype.(type) {
 	case *container.LocalWriter:
-		// Clone LocalWriter per file for isolation; propagate DB connection
-		// so each isolated writer can commit sealing markers independently.
+		// Clone LocalWriter per worker for isolation; propagate DB connection
+		// so each worker-owned writer can commit sealing markers independently.
 		return container.NewLocalWriterWithDirAndDB(w.Dir(), w.MaxSize(), w.DB()), nil
 	case *container.SimulatedWriter:
 		// Do NOT clone SimulatedWriter; return the original for shared, realistic container packing.
@@ -2264,7 +2264,7 @@ func determineStoreFolderWorkerCount(writer container.ContainerWriter, requested
 
 	switch writer.(type) {
 	case *container.LocalWriter:
-		// Option A: LocalWriter is cloned per file in processFile, so concurrent
+		// Option A: LocalWriter is cloned per worker in processFile, so concurrent
 		// workers never mutate the same active-container/rollback state.
 		return requested, nil
 	case *container.SimulatedWriter:
@@ -2317,29 +2317,36 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 	jobs := buildFileJobs(paths)
 
 	var wg sync.WaitGroup
-	processFile := func(job FileJob) (int64, error) {
+	processFile := func(workerCtx *StorageContext, job FileJob) (int64, error) {
 		info, statErr := os.Stat(job.Path)
 		if statErr != nil {
 			return 0, statErr
 		}
-		// Per-file isolation boundary:
-		// - fresh writer instance
-		// - fresh per-file storage context copy
+		// Per-worker isolation boundary:
+		// - one writer instance is owned by one worker and reused across files
+		// - retryable transaction-abort retries rebuild that worker writer before retry
+		// - per-file execution still uses the worker-local storage context copy
 		// - shared *sql.DB pool only (driver handles concurrent tx safety)
 		// - no nested per-file parallelism in this phase; job execution stays
 		//   single-threaded so ordering and writer/tx semantics remain explicit
 		// StoreFileWithStorageContextAndCodecResult performs open/chunk/hash/claim/
 		// append/metadata under its transaction-safe internal flow.
 		err := runWithRetryableTxAbort(ctx, func(attempt int) error {
-			_ = attempt
-			workerWriter, err := newWriterFromPrototype(sgctx.Writer)
-			if err != nil {
-				return err
+			if attempt > 0 {
+				if workerCtx.Writer != nil {
+					if err := workerCtx.Writer.FinalizeContainer(); err != nil {
+						return fmt.Errorf("reset worker writer before retry: %w", err)
+					}
+				}
+
+				workerWriter, err := newWriterFromPrototype(sgctx.Writer)
+				if err != nil {
+					return err
+				}
+				workerCtx.Writer = workerWriter
 			}
 
-			workerCtx := sgctx
-			workerCtx.Writer = workerWriter
-			_, err = storeFileWithStorageContextAndRuntimeResultWithPolicy(workerCtx, job.Path, false, info, runtime)
+			_, err := storeFileWithStorageContextAndRuntimeResultWithPolicy(*workerCtx, job.Path, false, info, runtime)
 			return err
 		})
 		if err != nil {
@@ -2353,6 +2360,31 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 		local := WorkerStats{}
 		defer func() { statsCh <- local }()
 
+		workerWriter, err := newWriterFromPrototype(sgctx.Writer)
+		if err != nil {
+			select {
+			case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
+				cancel()
+			default:
+			}
+			return
+		}
+
+		workerCtx := sgctx
+		workerCtx.Writer = workerWriter
+		defer func() {
+			if workerCtx.Writer == nil {
+				return
+			}
+			if finalizeErr := workerCtx.Writer.FinalizeContainer(); finalizeErr != nil {
+				select {
+				case errCh <- fmt.Errorf("worker %d: finalize worker writer: %w", workerID, finalizeErr):
+					cancel()
+				default:
+				}
+			}
+		}()
+
 		for job := range jobs {
 			// Do not infer completion order from dispatch order. Determinism comes
 			// from sorted job construction and persisted metadata such as chunk_order,
@@ -2360,7 +2392,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 			if ctx.Err() != nil {
 				return
 			}
-			bytesProcessed, err := processFile(job)
+			bytesProcessed, err := processFile(&workerCtx, job)
 			if err != nil {
 				select {
 				case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
