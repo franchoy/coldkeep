@@ -63,6 +63,22 @@ Phase 8 focused on conservative, low-risk cleanup in store/restore paths:
 - keep durability boundaries explicit and test-validated
 - benchmark continuously after meaningful changes
 
+### Suggested implementation order (Phase 8)
+
+1. Capture focused I/O benchmark baseline.
+2. Add operation-scoped I/O metrics.
+3. Inspect append/fsync/open-close paths.
+4. Add writer-scoped handle reuse if not already present.
+5. Add safe buffered writes if beneficial.
+6. Remove redundant fsyncs only inside one append operation.
+7. Optimize snapshot metadata batching/prepared statements.
+8. Remove duplicate stat/path normalization.
+9. Validate restore cache lifecycle.
+10. Add fault-path tests.
+11. Run adversarial/recovery tests.
+12. Run benchmark matrix.
+13. Document accepted/rejected optimizations.
+
 ### Metrics before/after (focus scenarios)
 
 Before = `benchmark-baseline.json` (v1.6 small baseline)
