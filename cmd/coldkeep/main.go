@@ -36,6 +36,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -333,6 +334,14 @@ func runCLI(args []string) int {
 	if err != nil {
 		return printCLIError(err, startupMode)
 	}
+
+	ioSubcommand := ""
+	if len(parsed.positionals) > 0 {
+		ioSubcommand = strings.TrimSpace(parsed.positionals[0])
+	}
+	defer func() {
+		_ = iodebug.FlushProcessCounters(parsed.method, ioSubcommand)
+	}()
 
 	outputMode, err := resolveOutputMode(parsed)
 	if err != nil {
@@ -2524,9 +2533,14 @@ type BenchmarkExecution struct {
 }
 
 type BenchmarkExecutionStats struct {
-	TotalFiles  int   `json:"total_files"`
-	TotalBytes  int64 `json:"total_bytes"`
-	WorkersUsed int   `json:"workers_used"`
+	TotalFiles            int   `json:"total_files"`
+	TotalBytes            int64 `json:"total_bytes"`
+	WorkersUsed           int   `json:"workers_used"`
+	ContainerAppendCount  int64 `json:"container_append_count,omitempty"`
+	FsyncCount            int64 `json:"fsync_count,omitempty"`
+	ContainerOpenCount    int64 `json:"container_open_count,omitempty"`
+	ContainerCloseCount   int64 `json:"container_close_count,omitempty"`
+	SnapshotMetadataWrite int64 `json:"snapshot_metadata_write_count,omitempty"`
 }
 
 // BenchmarkRunCaseRow is one per-case benchmark summary row.
@@ -2826,6 +2840,11 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 			agg.files += result.Metrics.FilesProcessed
 			agg.stats.TotalBytes += result.ExecStats.TotalBytesProcessed
 			agg.stats.TotalFiles += result.ExecStats.TotalFilesProcessed
+			agg.stats.ContainerAppendCount += result.ExecStats.ContainerAppendCount
+			agg.stats.FsyncCount += result.ExecStats.FsyncCount
+			agg.stats.ContainerOpenCount += result.ExecStats.ContainerOpenCount
+			agg.stats.ContainerCloseCount += result.ExecStats.ContainerCloseCount
+			agg.stats.SnapshotMetadataWrite += result.ExecStats.SnapshotMetadataWrites
 			caseAgg[result.Name] = agg
 		}
 	}

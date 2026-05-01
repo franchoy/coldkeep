@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
 
@@ -80,6 +81,7 @@ func openExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 	if err != nil {
 		return nil, err
 	}
+	iodebug.IncContainerOpen()
 
 	stat, err := f.Stat()
 	if err != nil {
@@ -136,6 +138,7 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 	}
 
 	c.offset += int64(n)
+	iodebug.IncContainerAppend()
 	return off, nil
 }
 
@@ -178,7 +181,11 @@ func (c *FileContainer) Sync() error {
 		return fmt.Errorf("container is closed")
 	}
 
-	return c.f.Sync()
+	if err := c.f.Sync(); err != nil {
+		return err
+	}
+	iodebug.IncFsync()
+	return nil
 }
 
 func (c *FileContainer) Close() error {
@@ -187,6 +194,9 @@ func (c *FileContainer) Close() error {
 	}
 	err := c.f.Close()
 	c.f = nil
+	if err == nil {
+		iodebug.IncContainerClose()
+	}
 	return err
 }
 
@@ -315,6 +325,7 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 	if err != nil {
 		return ActiveContainer{}, retireNewContainer(err)
 	}
+	iodebug.IncContainerOpen()
 	closeOnError := true
 	defer func() {
 		if closeOnError {
@@ -331,10 +342,12 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 	if err := f.Sync(); err != nil {
 		return ActiveContainer{}, retireNewContainer(err)
 	}
+	iodebug.IncFsync()
 	//close file
 	if err = f.Close(); err != nil {
 		return ActiveContainer{}, retireNewContainer(err)
 	}
+	iodebug.IncContainerClose()
 	closeOnError = false
 
 	container, err := OpenWritableContainer(fullPath, containerMaxSize)

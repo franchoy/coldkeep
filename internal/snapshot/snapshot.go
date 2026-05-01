@@ -15,6 +15,7 @@ import (
 	"time"
 
 	idb "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -355,6 +356,7 @@ func insertSnapshot(ctx context.Context, exec sqlExecutor, s Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("insert snapshot id=%s: %w", s.ID, err)
 	}
+	iodebug.IncSnapshotMetadataWrite()
 
 	log.Printf("snapshot: inserted id=%s type=%s", s.ID, s.Type)
 	return nil
@@ -418,6 +420,7 @@ func insertSnapshotFileByPathID(ctx context.Context, exec sqlExecutor, row snaps
 	if err != nil {
 		return 0, fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
 	}
+	iodebug.IncSnapshotMetadataWrite()
 
 	log.Printf("snapshot: inserted snapshot_file id=%d snapshot_id=%s path=%q", id, row.SnapshotID, normalizedPath)
 	return id, nil
@@ -440,6 +443,7 @@ func insertSnapshotFileByPathIDNoReturning(ctx context.Context, exec sqlExecutor
 	if err != nil {
 		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
 	}
+	iodebug.IncSnapshotMetadataWrite()
 
 	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", row.SnapshotID, normalizedPath)
 	return nil

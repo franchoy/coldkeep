@@ -20,9 +20,14 @@ type Options struct {
 // This shape is intentionally aggregate-only so it remains stable for
 // benchmarks and CI output.
 type ExecutionStats struct {
-	TotalFilesProcessed int
-	TotalBytesProcessed int64
-	WorkersUsed         int
+	TotalFilesProcessed    int
+	TotalBytesProcessed    int64
+	WorkersUsed            int
+	ContainerAppendCount   int64
+	FsyncCount             int64
+	ContainerOpenCount     int64
+	ContainerCloseCount    int64
+	SnapshotMetadataWrites int64
 }
 
 // DefaultOptions returns v1.6-equivalent execution behavior.
