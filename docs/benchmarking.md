@@ -182,15 +182,19 @@ contracts. Specifically, do not:
 - batch commits across files
 - weaken prepare/commit separation
 
-## Phase 6: Restore Read-Path Optimization
+## Phase 6 -- Restore read-path optimization
 
-Phase 6 optimizes the restore read path without weakening integrity or safety
-semantics. The restore flow has unmissable safety checkpoints that must remain;
-optimizations can only reduce overhead **between** them, not eliminate them.
+Phase 6 optimizes restore-side metadata loading and I/O behavior while preserving
+pin/unpin safety, deterministic chunk ordering, and byte-identical restore output.
+
+No storage format, schema, GC, snapshot, or chunker behavior changes are introduced.
+
+The restore flow has unmissable safety checkpoints that must remain; optimizations
+can only reduce overhead **between** them, not eliminate them.
 
 ### Restore flow (current)
 
-```
+```text
 1. STAGE: Resolve restore target
    - Input: restoration target (file ID or path)
    - Output: RestoreDescriptor with logical_file_id, path, metadata flags
@@ -248,6 +252,7 @@ preserved across all optimizations:
 - This ensures O(n) file I/O + CPU work per file, and O(1) DB trips per file
 
 **Do NOT refactor this into:**
+
 - per-chunk lookup patterns (would increase DB queries to O(n) per file)
 - lazy-load or streaming patterns (loses tuple prefetching, adds per-chunk latency)
 - separate queries for offsets vs hashes vs codecs (violates cache locality)
@@ -278,3 +283,45 @@ Optimizations that **cannot** be applied in Phase 6 without explicit safety re-r
 - Defer fsync/rename (breaks durability on crash)
 - Skip final hash verification (cannot catch silent corruption)
 - Batch unpin before restore completes (loses fail-safe cleanup semantics)
+
+### Actual benchmark result (2026-05-01)
+
+Step 12 benchmark runs were executed locally for:
+
+```bash
+coldkeep benchmark run --dataset small --workers 1 --output json
+coldkeep benchmark run --dataset small --workers 4 --output json
+coldkeep benchmark run --dataset medium --workers 1 --output json
+coldkeep benchmark run --dataset medium --workers 4 --output json
+```
+
+Observed restore outcome:
+
+- **Small dataset**: restore performance improved with `workers=4`.
+- `restore-large-file`: `3001 ms -> 2409 ms` (`-19.7%` duration),
+   `5.33 -> 6.64 MB/s` (`+24.6%` throughput)
+- `restore-many-files`: `5838 ms -> 4782 ms` (`-18.1%` duration),
+   `0.0167 -> 0.0204 MB/s` (`+22.1%` throughput)
+- **Medium dataset**: restore results were effectively neutral.
+- `restore-large-file`: `37865 ms -> 38064 ms` (`+0.5%` duration),
+   `6.76 -> 6.73 MB/s` (`-0.5%` throughput)
+- `restore-many-files`: `53827 ms -> 54192 ms` (`+0.7%` duration),
+   `0.0726 -> 0.0721 MB/s` (`-0.7%` throughput)
+
+Interpretation:
+
+- The optimization appears to reduce restore-side overhead on the smaller profile,
+   where open/cache/buffering and metadata costs are more visible.
+- On the medium profile, restore was already close to efficient enough that the
+   measured result is essentially neutral rather than a large win.
+- This is an acceptable Phase 6 outcome: restore improved where overhead was more
+   exposed, and remained correctness-preserving and performance-neutral elsewhere.
+
+Benchmark note:
+
+- The current benchmark suite includes `store-mixed-dataset`, not
+   `restore-mixed-dataset`, so mixed-dataset restore was not separately measured in
+   this Phase 6 run.
+- The local medium `workers=4` run required a larger DB operation timeout window
+   (`COLDKEEP_DB_OPERATION_TIMEOUT_MS=1800000`) to complete determinism validation
+   reliably on this machine.
