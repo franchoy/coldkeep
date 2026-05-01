@@ -1,6 +1,7 @@
 package container
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -44,10 +45,15 @@ func (e *BrokenOpenContainerError) Unwrap() error {
 // --------------------------------------------------------------------------
 
 type FileContainer struct {
-	f       *os.File
-	offset  int64 // current write position
-	maxSize int64 // maximum allowed size for this container (including header)
+	f             *os.File
+	offset        int64 // logical write position including buffered bytes
+	persistedSize int64 // physically flushed size on disk
+	maxSize       int64 // maximum allowed size for this container (including header)
+	readonly      bool
+	pending       bytes.Buffer
 }
+
+const fileContainerWriteBufferSize = 256 * 1024
 
 type Container interface {
 	Append(data []byte) (offset int64, err error)
@@ -93,11 +99,19 @@ func openExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 		_ = f.Close()
 		return nil, fmt.Errorf("validate container header %s: %w", path, err)
 	}
+	if !readonly {
+		if _, err := f.Seek(stat.Size(), io.SeekStart); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("seek container end %s: %w", path, err)
+		}
+	}
 
 	return &FileContainer{
-		f:       f,
-		offset:  stat.Size(),
-		maxSize: maxSize,
+		f:             f,
+		offset:        stat.Size(),
+		persistedSize: stat.Size(),
+		maxSize:       maxSize,
+		readonly:      readonly,
 	}, nil
 }
 
@@ -121,31 +135,49 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 	if c.f == nil {
 		return 0, fmt.Errorf("container is closed")
 	}
+	if c.readonly {
+		return 0, fmt.Errorf("container is read-only")
+	}
 
 	if c.offset+int64(len(data)) > c.maxSize {
 		return 0, ErrContainerFull
 	}
 
 	off := c.offset
-
-	n, err := c.f.WriteAt(data, off)
-	if err != nil {
-		return 0, err
+	if len(data) >= fileContainerWriteBufferSize && c.pending.Len() == 0 {
+		n, err := c.writeDirect(data)
+		if err != nil {
+			return 0, err
+		}
+		c.offset += int64(n)
+	} else {
+		if c.pending.Len()+len(data) > fileContainerWriteBufferSize {
+			if err := c.flushPending(); err != nil {
+				return 0, err
+			}
+		}
+		n, err := c.pending.Write(data)
+		if err != nil {
+			return 0, err
+		}
+		if n != len(data) {
+			return 0, fmt.Errorf("partial buffered write")
+		}
+		c.offset += int64(n)
 	}
 
-	if n != len(data) {
-		return 0, fmt.Errorf("partial write")
-	}
-
-	c.offset += int64(n)
 	iodebug.IncContainerAppend()
-	iodebug.AddBytesWritten(int64(n))
 	return off, nil
 }
 
 func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	if c.f == nil {
 		return nil, fmt.Errorf("container is closed")
+	}
+	if !c.readonly {
+		if err := c.flushPending(); err != nil {
+			return nil, err
+		}
 	}
 
 	buf := make([]byte, size)
@@ -171,9 +203,47 @@ func (c *FileContainer) Truncate(size int64) error {
 	if c.f == nil {
 		return fmt.Errorf("container is closed")
 	}
+	if c.readonly {
+		return fmt.Errorf("container is read-only")
+	}
+
+	if size < 0 {
+		return fmt.Errorf("invalid truncate size %d", size)
+	}
+
+	if size < c.persistedSize {
+		c.pending.Reset()
+		if err := c.f.Truncate(size); err != nil {
+			return err
+		}
+		if _, err := c.f.Seek(size, io.SeekStart); err != nil {
+			return err
+		}
+		c.persistedSize = size
+		c.offset = size
+		return nil
+	}
+
+	if size <= c.offset {
+		pendingBytes := size - c.persistedSize
+		if pendingBytes < 0 {
+			pendingBytes = 0
+		}
+		if pendingBytes < int64(c.pending.Len()) {
+			c.pending.Truncate(int(pendingBytes))
+		}
+		c.offset = size
+		return nil
+	}
+
+	c.pending.Reset()
 	if err := c.f.Truncate(size); err != nil {
 		return err
 	}
+	if _, err := c.f.Seek(size, io.SeekStart); err != nil {
+		return err
+	}
+	c.persistedSize = size
 	c.offset = size
 	return nil
 }
@@ -181,6 +251,11 @@ func (c *FileContainer) Truncate(size int64) error {
 func (c *FileContainer) Sync() error {
 	if c.f == nil {
 		return fmt.Errorf("container is closed")
+	}
+	if !c.readonly {
+		if err := c.flushPending(); err != nil {
+			return err
+		}
 	}
 
 	if err := c.f.Sync(); err != nil {
@@ -194,12 +269,68 @@ func (c *FileContainer) Close() error {
 	if c.f == nil {
 		return nil
 	}
+	if !c.readonly {
+		if err := c.flushPending(); err != nil {
+			return err
+		}
+	}
 	err := c.f.Close()
 	c.f = nil
 	if err == nil {
 		iodebug.IncContainerClose()
 	}
 	return err
+}
+
+func (c *FileContainer) flushPending() error {
+	if c == nil || c.f == nil || c.readonly || c.pending.Len() == 0 {
+		return nil
+	}
+	for c.pending.Len() > 0 {
+		n, err := c.f.Write(c.pending.Bytes())
+		if n > 0 {
+			c.persistedSize += int64(n)
+			iodebug.AddBytesWritten(int64(n))
+			c.pending.Next(n)
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("partial write")
+		}
+	}
+	return nil
+}
+
+func (c *FileContainer) writeDirect(data []byte) (int, error) {
+	n, err := c.f.Write(data)
+	if n > 0 {
+		c.persistedSize += int64(n)
+		iodebug.AddBytesWritten(int64(n))
+	}
+	if err != nil {
+		return n, err
+	}
+	if n != len(data) {
+		return n, fmt.Errorf("partial write")
+	}
+	return n, nil
+}
+
+func (c *FileContainer) SetSize(size int64) {
+	if c == nil {
+		return
+	}
+	if size < 0 {
+		size = 0
+	}
+	c.pending.Reset()
+	c.offset = size
+	c.persistedSize = size
+	if c.f != nil && !c.readonly {
+		_, _ = c.f.Seek(size, io.SeekStart)
+	}
 }
 
 func containersDirOrDefault(dir string) string {

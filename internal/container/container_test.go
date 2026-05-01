@@ -77,6 +77,107 @@ func TestFileContainerReadAtFailsOnShortRead(t *testing.T) {
 	}
 }
 
+func TestFileContainerBuffersSmallWritesUntilSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "buffered.bin")
+	createTestContainerFile(t, path, ContainerHdrLen+128)
+
+	c, err := OpenWritableContainer(path, ContainerHdrLen+128)
+	if err != nil {
+		t.Fatalf("open writable container: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.Append([]byte("hello")); err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat container file: %v", err)
+	}
+	if info.Size() != ContainerHdrLen {
+		t.Fatalf("expected physical size to remain at header length before sync, got %d", info.Size())
+	}
+
+	if err := c.Sync(); err != nil {
+		t.Fatalf("sync payload: %v", err)
+	}
+
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat container file after sync: %v", err)
+	}
+	if info.Size() != ContainerHdrLen+5 {
+		t.Fatalf("expected physical size %d after sync, got %d", ContainerHdrLen+5, info.Size())
+	}
+	if got := c.Size(); got != ContainerHdrLen+5 {
+		t.Fatalf("expected logical size %d, got %d", ContainerHdrLen+5, got)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read container file: %v", err)
+	}
+	if string(payload[ContainerHdrLen:]) != "hello" {
+		t.Fatalf("unexpected payload bytes: %q", payload[ContainerHdrLen:])
+	}
+}
+
+func TestFileContainerReadAtFlushesPendingWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "read-flush.bin")
+	createTestContainerFile(t, path, ContainerHdrLen+128)
+
+	c, err := OpenWritableContainer(path, ContainerHdrLen+128)
+	if err != nil {
+		t.Fatalf("open writable container: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.Append([]byte("abc")); err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+
+	got, err := c.ReadAt(ContainerHdrLen, 3)
+	if err != nil {
+		t.Fatalf("read payload after buffered append: %v", err)
+	}
+	if string(got) != "abc" {
+		t.Fatalf("payload mismatch: got %q want %q", got, "abc")
+	}
+}
+
+func TestFileContainerTruncateDiscardsPendingWritesWithoutSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "truncate-buffer.bin")
+	createTestContainerFile(t, path, ContainerHdrLen+128)
+
+	c, err := OpenWritableContainer(path, ContainerHdrLen+128)
+	if err != nil {
+		t.Fatalf("open writable container: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.Append([]byte("pending")); err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+	if err := c.Truncate(ContainerHdrLen); err != nil {
+		t.Fatalf("truncate pending append: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat container file: %v", err)
+	}
+	if info.Size() != ContainerHdrLen {
+		t.Fatalf("expected physical size %d after truncate, got %d", ContainerHdrLen, info.Size())
+	}
+	if got := c.Size(); got != ContainerHdrLen {
+		t.Fatalf("expected logical size reset to %d, got %d", ContainerHdrLen, got)
+	}
+	_, err = c.ReadAt(ContainerHdrLen, 1)
+	if err == nil || !strings.Contains(err.Error(), "short read") {
+		t.Fatalf("expected no payload after truncate, got: %v", err)
+	}
+}
+
 func TestOpenWritableContainerFailsOnInvalidHeader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad-header.bin")
 	if err := os.WriteFile(path, []byte("not-a-valid-container-header"), 0o644); err != nil {
