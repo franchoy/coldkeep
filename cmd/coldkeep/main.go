@@ -339,6 +339,7 @@ func runCLI(args []string) int {
 	if len(parsed.positionals) > 0 {
 		ioSubcommand = strings.TrimSpace(parsed.positionals[0])
 	}
+	iodebug.StartOperation()
 	defer func() {
 		_ = iodebug.FlushProcessCounters(parsed.method, ioSubcommand)
 	}()
@@ -2533,14 +2534,23 @@ type BenchmarkExecution struct {
 }
 
 type BenchmarkExecutionStats struct {
-	TotalFiles            int   `json:"total_files"`
-	TotalBytes            int64 `json:"total_bytes"`
-	WorkersUsed           int   `json:"workers_used"`
-	ContainerAppendCount  int64 `json:"container_append_count,omitempty"`
-	FsyncCount            int64 `json:"fsync_count,omitempty"`
-	ContainerOpenCount    int64 `json:"container_open_count,omitempty"`
-	ContainerCloseCount   int64 `json:"container_close_count,omitempty"`
-	SnapshotMetadataWrite int64 `json:"snapshot_metadata_write_count,omitempty"`
+	TotalFiles            int                `json:"total_files"`
+	TotalBytes            int64              `json:"total_bytes"`
+	WorkersUsed           int                `json:"workers_used"`
+	ContainerAppendCount  int64              `json:"container_append_count,omitempty"`
+	FsyncCount            int64              `json:"fsync_count,omitempty"`
+	ContainerOpenCount    int64              `json:"container_open_count,omitempty"`
+	ContainerCloseCount   int64              `json:"container_close_count,omitempty"`
+	SnapshotMetadataWrite int64              `json:"snapshot_metadata_write_count,omitempty"`
+	IO                    BenchmarkIOMetrics `json:"io"`
+}
+
+type BenchmarkIOMetrics struct {
+	ContainerOpens   int64 `json:"container_opens"`
+	ContainerAppends int64 `json:"container_appends"`
+	Fsyncs           int64 `json:"fsyncs"`
+	BytesWritten     int64 `json:"bytes_written"`
+	BytesRead        int64 `json:"bytes_read"`
 }
 
 // BenchmarkRunCaseRow is one per-case benchmark summary row.
@@ -2844,6 +2854,11 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 			agg.stats.FsyncCount += result.ExecStats.FsyncCount
 			agg.stats.ContainerOpenCount += result.ExecStats.ContainerOpenCount
 			agg.stats.ContainerCloseCount += result.ExecStats.ContainerCloseCount
+			agg.stats.IO.ContainerAppends += result.ExecStats.ContainerAppendCount
+			agg.stats.IO.Fsyncs += result.ExecStats.FsyncCount
+			agg.stats.IO.ContainerOpens += result.ExecStats.ContainerOpenCount
+			agg.stats.IO.BytesWritten += result.ExecStats.BytesWritten
+			agg.stats.IO.BytesRead += result.ExecStats.BytesRead
 			agg.stats.SnapshotMetadataWrite += result.ExecStats.SnapshotMetadataWrites
 			caseAgg[result.Name] = agg
 		}

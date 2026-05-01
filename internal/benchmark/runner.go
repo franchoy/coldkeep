@@ -41,6 +41,8 @@ type ioDebugProcessRecord struct {
 	FsyncCount             int64 `json:"fsync_count"`
 	ContainerOpenCount     int64 `json:"container_open_count"`
 	ContainerCloseCount    int64 `json:"container_close_count"`
+	BytesWritten           int64 `json:"bytes_written"`
+	BytesRead              int64 `json:"bytes_read"`
 	SnapshotMetadataWrites int64 `json:"snapshot_metadata_write_count"`
 }
 
@@ -99,6 +101,8 @@ func RunBenchmark(cases []BenchmarkCase) ([]Result, error) {
 				FsyncCount:             ioStats.FsyncCount,
 				ContainerOpenCount:     ioStats.ContainerOpenCount,
 				ContainerCloseCount:    ioStats.ContainerCloseCount,
+				BytesWritten:           ioStats.BytesWritten,
+				BytesRead:              ioStats.BytesRead,
 				SnapshotMetadataWrites: ioStats.SnapshotMetadataWrites,
 			},
 			Success: runErr == nil && cleanupErr == nil,
@@ -155,6 +159,8 @@ func readAggregatedIOCounters(path string) (ioDebugProcessRecord, error) {
 		out.FsyncCount += rec.FsyncCount
 		out.ContainerOpenCount += rec.ContainerOpenCount
 		out.ContainerCloseCount += rec.ContainerCloseCount
+		out.BytesWritten += rec.BytesWritten
+		out.BytesRead += rec.BytesRead
 		out.SnapshotMetadataWrites += rec.SnapshotMetadataWrites
 	}
 	if err := scanner.Err(); err != nil {

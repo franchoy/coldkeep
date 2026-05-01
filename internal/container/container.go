@@ -139,6 +139,7 @@ func (c *FileContainer) Append(data []byte) (int64, error) {
 
 	c.offset += int64(n)
 	iodebug.IncContainerAppend()
+	iodebug.AddBytesWritten(int64(n))
 	return off, nil
 }
 
@@ -157,6 +158,7 @@ func (c *FileContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	if int64(n) != size {
 		return nil, fmt.Errorf("short read")
 	}
+	iodebug.AddBytesRead(int64(n))
 
 	return buf, nil
 }

@@ -27,6 +27,8 @@ type ExecutionStats struct {
 	FsyncCount             int64
 	ContainerOpenCount     int64
 	ContainerCloseCount    int64
+	BytesWritten           int64
+	BytesRead              int64
 	SnapshotMetadataWrites int64
 }
 

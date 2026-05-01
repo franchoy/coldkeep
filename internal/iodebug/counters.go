@@ -15,6 +15,8 @@ type Counters struct {
 	FsyncCount             int64 `json:"fsync_count"`
 	ContainerOpenCount     int64 `json:"container_open_count"`
 	ContainerCloseCount    int64 `json:"container_close_count"`
+	BytesWritten           int64 `json:"bytes_written"`
+	BytesRead              int64 `json:"bytes_read"`
 	SnapshotMetadataWrites int64 `json:"snapshot_metadata_write_count"`
 }
 
@@ -32,8 +34,25 @@ var (
 	fsyncCount             atomic.Int64
 	containerOpenCount     atomic.Int64
 	containerCloseCount    atomic.Int64
+	bytesWritten           atomic.Int64
+	bytesRead              atomic.Int64
 	snapshotMetadataWrites atomic.Int64
 )
+
+// StartOperation resets in-process metrics so captured counters are scoped to
+// one command execution rather than cumulative process lifetime totals.
+func StartOperation() {
+	if !isEnabled() {
+		return
+	}
+	containerAppendCount.Store(0)
+	fsyncCount.Store(0)
+	containerOpenCount.Store(0)
+	containerCloseCount.Store(0)
+	bytesWritten.Store(0)
+	bytesRead.Store(0)
+	snapshotMetadataWrites.Store(0)
+}
 
 func isEnabled() bool {
 	enabledOnce.Do(func() {
@@ -77,12 +96,28 @@ func IncSnapshotMetadataWrite() {
 	snapshotMetadataWrites.Add(1)
 }
 
+func AddBytesWritten(n int64) {
+	if !isEnabled() || n <= 0 {
+		return
+	}
+	bytesWritten.Add(n)
+}
+
+func AddBytesRead(n int64) {
+	if !isEnabled() || n <= 0 {
+		return
+	}
+	bytesRead.Add(n)
+}
+
 func Snapshot() Counters {
 	return Counters{
 		ContainerAppendCount:   containerAppendCount.Load(),
 		FsyncCount:             fsyncCount.Load(),
 		ContainerOpenCount:     containerOpenCount.Load(),
 		ContainerCloseCount:    containerCloseCount.Load(),
+		BytesWritten:           bytesWritten.Load(),
+		BytesRead:              bytesRead.Load(),
 		SnapshotMetadataWrites: snapshotMetadataWrites.Load(),
 	}
 }
