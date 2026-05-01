@@ -424,3 +424,15 @@ Before closing Phase 6, confirm:
 - go test ./... passes
 
 Once those are green, Phase 6 is complete.
+
+## Phase 7 Priority 3 -- Restore/store indexes
+
+Decision: do not add new restore/store indexes.
+
+Rationale: current schema coverage already includes the needed access paths:
+
+- `file_chunk(logical_file_id, chunk_order)`
+- `logical_file(file_hash, total_size)`
+- `chunk(chunk_hash, size)`
+
+This priority is an explicit no-op to avoid redundant index churn.
