@@ -138,6 +138,49 @@ Current note: medium preset runs are environment-sensitive and can fail under
 local contention/transient transaction-abort conditions; run medium compare in
 a clean benchmark window after stabilizing local DB/containers state.
 
+## Phase 7 benchmark matrix (2026-05-01)
+
+Executed matrix:
+
+```bash
+coldkeep benchmark run --dataset small --workers 1 --output json
+coldkeep benchmark run --dataset small --workers 4 --output json
+coldkeep benchmark run --dataset medium --workers 1 --output json
+coldkeep benchmark run --dataset medium --workers 4 --output json
+```
+
+Focused read-path scenarios from this run:
+
+- `snapshot-creation`
+   - small w1: 672ms
+   - small w4: 631ms
+   - medium w1: 69901ms
+   - medium w4: 43955ms
+- `gc-after-churn`
+   - small w1: 2462ms
+   - small w4: 1733ms
+   - medium w1: 30225ms
+   - medium w4: 22860ms
+- `stats-inspect`
+   - small w1: 903ms
+   - small w4: 635ms
+   - medium w1: 73280ms
+   - medium w4: 49338ms
+
+Write-path impact check (Step 8) for index-cost guardrails:
+
+- Compared to the v1.6 small baseline, single-worker store timings regressed for
+   `store-large-file` and `store-mixed-dataset` in this local run.
+- At workers=4, `store-many-small-files` and `store-mixed-dataset` improved,
+   while `store-large-file` remained slower than baseline.
+- No new Phase 7 candidate snapshot index was added, so these write-path
+   results are not attributable to a newly introduced snapshot index.
+
+Decision recorded for Phase 7:
+
+- Keep candidate snapshot indexes out of schema until EXPLAIN plus benchmark
+   evidence demonstrates real read-path gain with acceptable write-path cost.
+
 ## Phase 4 carry-over
 
 Phase 4 introduced prepare/commit separation for correctness and future pipeline
