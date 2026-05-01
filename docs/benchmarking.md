@@ -290,6 +290,24 @@ Optimizations that **cannot** be applied in Phase 6 without explicit safety re-r
 - Defer fsync/rename (breaks durability on crash)
 - Batch unpin before restore completes (loses fail-safe cleanup semantics)
 
+### Suggested implementation order
+
+The recommended execution order for Phase 6 restore work is:
+
+1. Profile restore benchmark scenarios.
+2. Document current restore flow.
+3. Add internal `restoreRecipe` / `restoreChunk`.
+4. Load ordered recipe once per file.
+5. Add defensive chunk-order validation.
+6. Add restore-local container reader cache.
+7. Add buffered output writes.
+8. Remove unnecessary byte copies.
+9. Preserve and test pin/unpin behavior.
+10. Add restore determinism tests.
+11. Run full test suite.
+12. Run benchmark compare.
+13. Update docs.
+
 ### Actual benchmark result (2026-05-01)
 
 Step 12 benchmark runs were executed locally for:
