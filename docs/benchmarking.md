@@ -519,6 +519,82 @@ Rationale: current schema coverage already includes the needed access paths:
 - `logical_file(file_hash, total_size)`
 - `chunk(chunk_hash, size)`
 
+## Phase 8 -- Conservative I/O Optimization
+
+Phase 8 optimizes I/O behavior while preserving crash-safety guarantees.
+The ordering remains:
+
+`write bytes -> flush/fsync -> publish metadata`
+
+No storage format, schema, GC, snapshot, or restore semantics changed.
+
+### Phase 8 benchmark protocol
+
+After each meaningful change:
+
+```bash
+go run ./cmd/coldkeep benchmark run --dataset small --workers 1 --output json
+go run ./cmd/coldkeep benchmark run --dataset small --workers 4 --output json
+```
+
+End-of-phase matrix:
+
+```bash
+go run ./cmd/coldkeep benchmark run --dataset medium --workers 1 --output json
+go run ./cmd/coldkeep benchmark run --dataset medium --workers 4 --output json
+```
+
+Recorded outputs for Step 12:
+
+- `.benchmarks/step12/small_w1.json`
+- `.benchmarks/step12/small_w4.json`
+- `.benchmarks/step12/medium_w1.json`
+- `.benchmarks/step12/medium_w4.json`
+
+### Metrics before/after (focus scenarios)
+
+Before = `benchmark-baseline.json` (v1.6 small baseline)
+After = Phase 8 Step 12 outputs (small workers 1 and 4)
+
+| Scenario | Baseline small w1 (ms) | Phase 8 small w1 (ms) | Delta vs baseline | Phase 8 small w4 (ms) | Delta vs baseline |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `snapshot-creation` | 520 | 861 | +66% | 423 | -19% |
+| `store-large-file` | 1608 | 3029 | +88% | 2999 | +87% |
+| `store-mixed-dataset` | 399 | 741 | +86% | 310 | -22% |
+| `gc-after-churn` | 2624 | 3405 | +30% | 2193 | -16% |
+| `restore-large-file` | 1790 | 3244 | +81% | 3211 | +79% |
+
+Medium matrix (absolute results, end-of-phase):
+
+| Scenario | Medium w1 (ms) | Medium w4 (ms) |
+| --- | ---: | ---: |
+| `snapshot-creation` | 67876 | 36573 |
+| `store-large-file` | 33076 | 34291 |
+| `store-mixed-dataset` | 65002 | 38402 |
+| `gc-after-churn` | 28733 | 21991 |
+| `restore-large-file` | 37120 | 37416 |
+
+### Optimizations accepted
+
+- Step 8: store-path metadata flow cleanup (`preparedFile.PhysicalMetadata` carry path)
+- Step 9: restore reader-cache close aggregation (`errors.Join`), buffered-writer finalization guard, and dead API parameter cleanup
+- Step 10: failure-path coverage for write/flush/fsync/rollback/snapshot-batch/close-on-error invariants
+- Step 11: crash-safety recovery chain validation (recovery -> verify -> restore -> GC)
+- Step 12: benchmark-after-change cadence (small) plus end matrix (medium)
+
+### Optimizations rejected
+
+- Restore parallelism in Phase 8 (risk to deterministic ordering and crash boundary behavior in v1.x)
+- Global/cross-operation restore reader cache (lifetime and quarantine/GC coupling risk)
+- Any throughput shortcut that weakens fsync/rollback durability boundaries
+
+### Remaining debt
+
+- `store-large-file` and `restore-large-file` remain slower than the v1.6 small baseline in this environment.
+- Additional restore-path SQL efficiency work (for example unpin batching) is still pending.
+- Restore parallelism remains deferred to a later release with explicit ordering and memory-budget design.
+- Re-evaluate `store-large-file` degradation under an isolated benchmark window to separate architectural cost from local environment noise.
+
 This priority is an explicit no-op to avoid redundant index churn.
 
 ## Phase 7 Priority 4 -- GC index proposal

@@ -1,0 +1,79 @@
+# Coldkeep I/O Performance
+
+This document tracks I/O-focused performance work and the corresponding safety
+contracts.
+
+## Phase 8 -- Conservative I/O Optimization
+
+Phase 8 optimizes I/O behavior while preserving crash-safety guarantees.
+The ordering remains:
+
+`write bytes -> flush/fsync -> publish metadata`
+
+No storage format, schema, GC, snapshot, or restore semantics changed.
+
+### Scope summary
+
+Phase 8 focused on conservative, low-risk cleanup in store/restore paths:
+
+- remove redundant or duplicated per-file I/O work where safe
+- tighten error-path cleanup and rollback behavior
+- keep durability boundaries explicit and test-validated
+- benchmark continuously after meaningful changes
+
+### Metrics before/after (focus scenarios)
+
+Before = `benchmark-baseline.json` (v1.6 small baseline)
+After = Phase 8 Step 12 outputs from `.benchmarks/step12/*.json`
+
+| Scenario | Baseline small w1 (ms) | Phase 8 small w1 (ms) | Delta vs baseline | Phase 8 small w4 (ms) | Delta vs baseline |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `snapshot-creation` | 520 | 861 | +66% | 423 | -19% |
+| `store-large-file` | 1608 | 3029 | +88% | 2999 | +87% |
+| `store-mixed-dataset` | 399 | 741 | +86% | 310 | -22% |
+| `gc-after-churn` | 2624 | 3405 | +30% | 2193 | -16% |
+| `restore-large-file` | 1790 | 3244 | +81% | 3211 | +79% |
+
+Medium matrix (end-of-phase absolute numbers):
+
+| Scenario | Medium w1 (ms) | Medium w4 (ms) |
+| --- | ---: | ---: |
+| `snapshot-creation` | 67876 | 36573 |
+| `store-large-file` | 33076 | 34291 |
+| `store-mixed-dataset` | 65002 | 38402 |
+| `gc-after-churn` | 28733 | 21991 |
+| `restore-large-file` | 37120 | 37416 |
+
+### Optimizations accepted
+
+- Store-path stat/metadata flow cleanup (single-file metadata path carried in `preparedFile`)
+- Restore-path minor cleanup (`errors.Join` close aggregation, safer buffered-writer finalization)
+- Error-path and rollback validation expansion for pre-publish failure boundaries
+- Crash-safety fault-injection + recovery chain validation
+- Benchmark-after-change cadence (small runs per meaningful step, medium matrix at phase end)
+
+### Optimizations rejected
+
+- Restore parallelism inside Phase 8
+- Global restore reader cache shared across operations
+- Any optimization that weakens fsync/rollback durability boundaries
+
+Reason: correctness and crash-safety boundaries outweigh marginal throughput gains in
+this phase.
+
+### Remaining debt
+
+- `store-large-file` remains slower than the v1.6 small baseline in this local profile.
+- `restore-large-file` remains slower than the v1.6 small baseline in this local profile.
+- Restore unpin batching and related SQL efficiency work remain deferred.
+- Deterministic restore parallelism is deferred to a later release with explicit design
+  for ordering, memory budget, and failure semantics.
+
+### Interpretation
+
+Phase 8 intentionally prioritized durability and safety clarity over aggressive
+throughput improvements. The accepted changes are keep-worthy because they are
+low risk and improve maintainability/testability of failure boundaries.
+
+Performance-sensitive follow-up work should continue in v1.8/v1.10+ under the same
+publish-boundary invariant.
