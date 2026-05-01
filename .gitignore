@@ -88,4 +88,8 @@ out/
 # test output
 # =========================
 # cmd/coldkeep/testdata/ — golden files are tracked; do not ignore
-.bench_step12
+
+# =========================
+# benchmark output
+# =========================
+.bench_*
