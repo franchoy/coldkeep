@@ -10423,6 +10423,142 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 	testutils.AssertNoProcessingRows(t, dbconn)
 }
 
+func TestSnapshotBatchInsertFailureRecoversAndPreservesVerifyRestoreGC(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	anchorPath := testutils.CreateTempFile(t, inputDir, "snapshot-batch-failure-anchor.bin", 320*1024)
+	anchorHash := testutils.SHA256File(t, anchorPath)
+
+	storeCtx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: container.ContainersDir,
+	}
+	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(storeCtx, anchorPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	const snapshotID = "snap-crash-batch"
+
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_snapshot_file_insert_trg ON snapshot_file`); err != nil {
+		t.Fatalf("drop stale snapshot trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_snapshot_file_insert()`); err != nil {
+		t.Fatalf("drop stale snapshot trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE FUNCTION ck_fail_snapshot_file_insert()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'injected snapshot batch insert failure';
+		END;
+		$$
+	`); err != nil {
+		t.Fatalf("create snapshot trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE TRIGGER ck_fail_snapshot_file_insert_trg
+		BEFORE INSERT ON snapshot_file
+		FOR EACH ROW
+		EXECUTE FUNCTION ck_fail_snapshot_file_insert()
+	`); err != nil {
+		t.Fatalf("create snapshot trigger: %v", err)
+	}
+	defer func() {
+		_, _ = dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_snapshot_file_insert_trg ON snapshot_file`)
+		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_snapshot_file_insert()`)
+	}()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	snapCmd := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", snapshotID, "--output", "json")
+	if snapCmd.ExitCode == 0 {
+		t.Fatalf("expected snapshot create to fail under injected batch failure, stdout=%s", snapCmd.Stdout)
+	}
+	if !strings.Contains(strings.ToLower(snapCmd.Stdout+snapCmd.Stderr), "injected snapshot batch insert failure") {
+		t.Fatalf("expected injected snapshot batch failure text in CLI output; stdout=%s stderr=%s", snapCmd.Stdout, snapCmd.Stderr)
+	}
+
+	var snapshotRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = $1`, snapshotID).Scan(&snapshotRows); err != nil {
+		t.Fatalf("count failed snapshot row: %v", err)
+	}
+	if snapshotRows != 0 {
+		t.Fatalf("expected snapshot row rollback after batch insert failure, got %d", snapshotRows)
+	}
+
+	var snapshotFileRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&snapshotFileRows); err != nil {
+		t.Fatalf("count failed snapshot_file rows: %v", err)
+	}
+	if snapshotFileRows != 0 {
+		t.Fatalf("expected no snapshot_file rows after failed batch insert, got %d", snapshotFileRows)
+	}
+
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("system recovery after snapshot batch failure: %v", err)
+	}
+	testutils.AssertNoProcessingRows(t, dbconn)
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify full after recovery: %v", err)
+	}
+
+	outDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+	outPath := filepath.Join(outDir, "snapshot-batch-failure-anchor.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, storeResult.FileID, outPath); err != nil {
+		t.Fatalf("restore after recovery: %v", err)
+	}
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != anchorHash {
+		t.Fatalf("restored hash mismatch after recovery: want %s got %s", anchorHash, gotHash)
+	}
+
+	if _, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir); err != nil {
+		t.Fatalf("gc dry-run after recovery: %v", err)
+	}
+	if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+		t.Fatalf("gc real run after recovery: %v", err)
+	}
+
+	outPathAfterGC := filepath.Join(outDir, "snapshot-batch-failure-anchor.after-gc.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, storeResult.FileID, outPathAfterGC); err != nil {
+		t.Fatalf("restore after gc: %v", err)
+	}
+	if gotHash := testutils.SHA256File(t, outPathAfterGC); gotHash != anchorHash {
+		t.Fatalf("restored hash mismatch after gc: want %s got %s", anchorHash, gotHash)
+	}
+}
+
 func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
 	testgate.RequireDB(t)
 
