@@ -135,3 +135,120 @@ low risk and improve maintainability/testability of failure boundaries.
 
 Performance-sensitive follow-up work should continue in v1.8/v1.10+ under the same
 publish-boundary invariant.
+
+### Phase 8 completion checklist status
+
+Status legend:
+
+- PASS: complete and evidenced
+- PARTIAL: complete with explicit debt or scoped exception
+
+#### Baseline
+
+- PASS: focused I/O benchmark baseline captured
+- PASS: store-large-file reviewed
+- PASS: store-mixed-dataset reviewed
+- PASS: snapshot-creation reviewed
+- PASS: gc-after-churn reviewed
+- PASS: restore-large-file reviewed
+
+Evidence: benchmark outputs and extracted focus set in .benchmarks/step12 and
+the metrics tables above.
+
+#### Instrumentation
+
+- PASS: operation-scoped I/O metrics added
+- PASS: container opens counted
+- PASS: appends counted
+- PASS: fsyncs counted
+- PASS: bytes read/written counted
+- PASS: metrics exposed in benchmark JSON
+
+Evidence: execution_stats and execution_stats.io fields in benchmark JSON.
+
+#### Write path
+
+- PASS: container write buffering reviewed
+- PASS: flush-before-fsync preserved
+- PASS: fsync-before-metadata-publish preserved
+- PASS: redundant fsyncs reviewed and only removed in safe scope
+- PASS: writer-scoped handle reuse reviewed/implemented
+- PASS: no global writer/cache introduced
+
+#### Snapshot path
+
+- PASS: snapshot creation write/query pattern reviewed
+- PASS: batch insert or prepared statement reuse implemented
+- PASS: snapshot creation remains atomic
+- PASS: no partial snapshot visibility
+- PASS: snapshot immutability unchanged
+
+Evidence: snapshot batch failure rollback coverage and existing snapshot contract tests.
+
+#### Store path
+
+- PASS: repeated stat/path normalization reviewed
+- PASS: file metadata reused safely
+- PASS: no stale filesystem state cached across operations
+- PASS: preparedFile flow remains intact
+- PASS: commit remains sequential
+
+#### Restore path
+
+- PASS: reader cache lifecycle validated
+- PASS: repeated open/close avoided where supported
+- PASS: no restore ordering changes
+- PASS: no restore verification changes
+- PASS: restored bytes unchanged in covered regression/integration paths
+
+#### Safety
+
+- PASS: write failure before metadata publish tested
+- PARTIAL: flush failure before metadata publish tested if injectable
+- PASS: fsync failure before metadata publish tested
+- PASS: rollback after partial append tested
+- PASS: snapshot batch failure tested
+- PASS: container handles close on error
+- PASS: recovery/verify tests pass
+- PASS: GC after failure still safe
+
+Notes:
+
+- Flush-failure injection is partial because the write path exposes append/sync
+  failure hooks directly; there is no distinct low-level flush seam on the
+  container writer interface in the current model.
+
+#### Performance
+
+- PASS: benchmark run after each major optimization (small set)
+- PASS: final full benchmark matrix run
+- PASS: snapshot-creation regression documented
+- PASS: store-large-file regression documented
+- PASS: store-mixed-dataset variability documented
+- PARTIAL: restore-large-file neutral or improved
+- PASS: GC after churn neutral or improved in workers=4 profile
+- PASS: no new major regressions introduced outside documented debt items
+
+Notes:
+
+- restore-large-file is marked PARTIAL because it remains slower vs v1.6 small
+  baseline in the recorded local profile and is explicitly tracked as debt.
+
+#### Tests
+
+- PASS: I/O behavior tests added
+- PASS: fault-injection tests added where feasible
+- PASS: snapshot tests pass
+- PASS: restore determinism tests pass
+- PASS: GC tests pass
+- PASS: adversarial tests pass
+- PASS: go test ./... passes
+
+#### Documentation
+
+- PASS: docs/io-performance.md added/updated
+- PASS: docs/benchmarking.md updated
+- PASS: accepted optimizations documented
+- PASS: rejected/deferred optimizations documented
+- PASS: crash-safety ordering documented
+- PASS: no unsafe performance claims added
