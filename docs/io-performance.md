@@ -127,6 +127,28 @@ this phase.
 - Deterministic restore parallelism is deferred to a later release with explicit design
   for ordering, memory budget, and failure semantics.
 
+### Phase 9 scope freeze (v1.7 release readiness)
+
+Phase 9 is validation and polish only. Do not add new optimizations unless they
+fix a release blocker.
+
+Allowed:
+
+- tests
+- docs
+- small correctness fixes
+- benchmark reporting polish
+- release notes
+- minor cleanup
+
+Avoid:
+
+- new worker behavior
+- new DB indexes
+- new I/O batching model
+- new CLI contract changes
+- new storage/schema changes
+
 ### Interpretation
 
 Phase 8 intentionally prioritized durability and safety clarity over aggressive

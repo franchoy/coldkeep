@@ -20,22 +20,32 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 14-17 as required release gates after sections 1-13.
 
-## Release Freeze Policy (Phase 10 gate)
+## Release Freeze Policy (v1.7 Phase 9 Step 1)
 
-Before running the technical release checks below, enforce feature freeze.
+Before running the technical release checks below, freeze implementation scope.
 
-Allowed change categories during this gate:
+Phase 9 goal: prove v1.7 is faster while remaining fully Coldkeep-safe across
+deterministic restore, GC safety, snapshot correctness, crash-safety assumptions,
+stable CLI behavior, measurable performance, and no hidden semantic regressions.
 
-- test fixes
-- bug fixes
-- documentation corrections
-- release metadata updates
+At this point, do not add new optimizations unless they fix a release blocker.
 
-Disallowed during this gate:
+Allowed during this gate:
 
-- new CDC behavior
-- new CLI features
-- schema expansion
+- tests
+- docs
+- small correctness fixes
+- benchmark reporting polish
+- release notes
+- minor cleanup
+
+Avoid during this gate:
+
+- new worker behavior
+- new DB indexes
+- new I/O batching model
+- new CLI contract changes
+- new storage/schema changes
 
 Expected:
 
