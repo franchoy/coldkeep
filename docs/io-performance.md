@@ -12,6 +12,30 @@ The ordering remains:
 
 No storage format, schema, GC, snapshot, or restore semantics changed.
 
+### Safe optimizations list (Phase 8 candidates)
+
+The following candidates are considered safe under the Phase 8 durability
+contract when implemented conservatively.
+
+| Candidate | Status |
+| --- | --- |
+| operation-scoped I/O metrics | implemented |
+| prepared statement reuse for snapshot rows | implemented |
+| transaction-local snapshot batching | implemented |
+| writer-scoped container handle reuse | implemented |
+| buffered writes with flush-before-fsync | implemented |
+| remove duplicate stat/path normalization | implemented |
+| restore reader cleanup | implemented |
+| remove redundant copies | partial (ongoing) |
+
+Notes:
+
+- `remove redundant copies` remains partial because copy-elimination opportunities
+  must continue to be evaluated case-by-case against readability and error-path
+  safety.
+- Any future candidate must preserve the publish boundary invariant:
+  `write bytes -> flush/fsync -> publish metadata`.
+
 ### Scope summary
 
 Phase 8 focused on conservative, low-risk cleanup in store/restore paths:

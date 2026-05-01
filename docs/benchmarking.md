@@ -528,6 +528,19 @@ The ordering remains:
 
 No storage format, schema, GC, snapshot, or restore semantics changed.
 
+### Safe optimizations list (Phase 8 candidates)
+
+| Candidate | Status |
+| --- | --- |
+| operation-scoped I/O metrics | implemented |
+| prepared statement reuse for snapshot rows | implemented |
+| transaction-local snapshot batching | implemented |
+| writer-scoped container handle reuse | implemented |
+| buffered writes with flush-before-fsync | implemented |
+| remove duplicate stat/path normalization | implemented |
+| restore reader cleanup | implemented |
+| remove redundant copies | partial (ongoing) |
+
 ### Phase 8 benchmark protocol
 
 After each meaningful change:
