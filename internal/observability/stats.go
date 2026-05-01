@@ -329,13 +329,34 @@ func (s *Service) sumChunkSizesByID(ctx context.Context, chunkIDs map[int64]stru
 			args[i] = chunkID
 		}
 
-		query := `SELECT COALESCE(SUM(size),0) FROM chunk WHERE id IN (` + strings.Join(placeholders, ", ") + `)`
+		query := `SELECT id, size FROM chunk WHERE id IN (` + strings.Join(placeholders, ", ") + `)`
 
-		var batchTotal int64
-		if err := s.db.QueryRowContext(ctx, query, args...).Scan(&batchTotal); err != nil {
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return 0, err
 		}
-		total += batchTotal
+
+		sizeByID := make(map[int64]int64, len(batch))
+		for rows.Next() {
+			var chunkID int64
+			var size int64
+			if err := rows.Scan(&chunkID, &size); err != nil {
+				_ = rows.Close()
+				return 0, err
+			}
+			sizeByID[chunkID] = size
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		if err := rows.Close(); err != nil {
+			return 0, err
+		}
+
+		for _, chunkID := range batch {
+			total += sizeByID[chunkID]
+		}
 	}
 
 	return total, nil
