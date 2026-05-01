@@ -278,10 +278,16 @@ Optimizations that respect the above flow and safety guarantees:
 
 Optimizations that **cannot** be applied in Phase 6 without explicit safety re-review:
 
-- Parallelize chunk processing (breaks ordered file integrity)
-- Skip pin/unpin (allows chunks to be GC'd mid-restore, risking data loss)
+- Parallelize restore writes yet
+- Change restore output ordering
+- Skip hash verification if it is currently performed
+- Weaken `pin_count` semantics or reduce restore pin/unpin safety
+- Cache container readers globally
+- Let GC delete unpinned chunks during restore
+- Change snapshot restore semantics
+- Introduce a schema migration unless benchmark evidence proves it necessary
+- Alter file path reconstruction behavior
 - Defer fsync/rename (breaks durability on crash)
-- Skip final hash verification (cannot catch silent corruption)
 - Batch unpin before restore completes (loses fail-safe cleanup semantics)
 
 ### Actual benchmark result (2026-05-01)
