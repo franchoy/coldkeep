@@ -181,6 +181,47 @@ Decision recorded for Phase 7:
 - Keep candidate snapshot indexes out of schema until EXPLAIN plus benchmark
    evidence demonstrates real read-path gain with acceptable write-path cost.
 
+### Phase 7 - Benchmark Results (revision)
+
+#### Improvements
+
+- GC after churn improved significantly (up to ~34% on small, ~24% on medium).
+- stats/inspect improved significantly (up to ~40% on small, ~32% on medium).
+- Worker scaling remains strong across all measured scenarios.
+
+#### Snapshot creation behavior
+
+Snapshot creation regressed versus the v1.6 small baseline:
+
+- ~29% slower on small dataset (`workers=1`).
+- ~21% slower on small dataset (`workers=4`).
+
+However, snapshot creation still scales with workers in medium runs:
+
+- ~37% faster from `workers=1` to `workers=4` on medium.
+
+#### Interpretation
+
+This behavior is treated as a workload-shift effect rather than a correctness or
+stability failure. The likely contributors are:
+
+- Increased metadata/query work after Phase 6-7 changes.
+- More explicit, safer query shapes.
+- No snapshot-specific batching optimization yet.
+
+Phase 7 status is COMPLETE with one explicit condition:
+
+- Snapshot-creation regression is documented and accepted as temporary
+   performance debt pending later phases.
+
+#### Baseline policy
+
+Do not regenerate `benchmark-baseline.json` yet.
+
+Keep the current baseline until snapshot behavior is either optimized or
+explicitly accepted long-term after later phase work (Phase 8/9), so the
+regression remains visible.
+
 ## Phase 4 carry-over
 
 Phase 4 introduced prepare/commit separation for correctness and future pipeline
