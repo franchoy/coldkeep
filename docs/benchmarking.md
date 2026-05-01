@@ -308,6 +308,74 @@ The recommended execution order for Phase 6 restore work is:
 12. Run benchmark compare.
 13. Update docs.
 
+### Phase 6 completion checklist
+
+Use this checklist before considering Phase 6 complete.
+
+#### Profiling
+
+- restore baseline captured before changes
+- restore-large-file reviewed
+- restore-many-files reviewed
+- restore-mixed-dataset reviewed
+- query count/open count hotspots identified
+
+#### Architecture
+
+- internal restore recipe type added
+- ordered chunk recipe loaded once per file where feasible
+- defensive chunk-order validation added
+- restore-local reader cache added if beneficial
+- buffered output writes added if beneficial
+- no global restore cache introduced
+
+#### Correctness
+
+- restored bytes unchanged
+- restored tree hash unchanged
+- logical file hash validation still passes
+- snapshot restore behavior unchanged
+- partial/filter restore behavior unchanged
+- restore after GC still works
+- empty-file restore unchanged
+
+#### Safety
+
+- chunks pinned before restore reads
+- chunks unpinned after successful restore
+- chunks unpinned after failed restore
+- no stale pins after error
+- GC cannot remove chunks during restore
+- no fsync semantics weakened if restore had them
+- no container lifecycle changes
+
+#### Performance
+
+- repeated per-chunk DB lookups reduced or confirmed absent
+- repeated container open/close reduced or confirmed absent
+- unnecessary byte copies reduced
+- restore-large-file improved or documented neutral
+- restore-many-files improved or documented neutral
+- no major regression in store/snapshot/GC scenarios
+
+#### Tests
+
+- restore recipe ordering test added
+- reader cache lifecycle test added if cache is implemented
+- pin/unpin failure test added
+- restore twice produces identical tree hash
+- snapshot restore determinism test passes
+- restore after GC test passes
+- full adversarial suite passes
+- go test ./... passes
+
+#### Documentation
+
+- Phase 6 benchmark note added
+- before/after restore results documented
+- any neutral result documented honestly
+- no claim of unsafe restore parallelism added
+
 ### Actual benchmark result (2026-05-01)
 
 Step 12 benchmark runs were executed locally for:
