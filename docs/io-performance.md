@@ -36,6 +36,24 @@ Notes:
 - Any future candidate must preserve the publish boundary invariant:
   `write bytes -> flush/fsync -> publish metadata`.
 
+### Dangerous optimizations to avoid (Phase 8)
+
+Do not apply these in Phase 8:
+
+- async container writes
+- metadata publish before fsync
+- global file descriptor cache
+- cross-worker shared writer
+- batch fsync across independent logical commits
+- change container layout
+- change chunk/block layout
+- skip verification
+- parallel restore output writes
+- defer rollback cleanup
+
+These may be valid in a future engine model, but they are intentionally
+out-of-scope for the current crash-safety and compatibility contract.
+
 ### Scope summary
 
 Phase 8 focused on conservative, low-risk cleanup in store/restore paths:

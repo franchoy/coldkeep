@@ -541,6 +541,24 @@ No storage format, schema, GC, snapshot, or restore semantics changed.
 | restore reader cleanup | implemented |
 | remove redundant copies | partial (ongoing) |
 
+### Dangerous optimizations to avoid (Phase 8)
+
+Do not apply these in Phase 8:
+
+- async container writes
+- metadata publish before fsync
+- global file descriptor cache
+- cross-worker shared writer
+- batch fsync across independent logical commits
+- change container layout
+- change chunk/block layout
+- skip verification
+- parallel restore output writes
+- defer rollback cleanup
+
+Some of these may be valid in a future engine model, but they are out-of-scope
+for the current v1.x crash-safety and compatibility model.
+
 ### Phase 8 benchmark protocol
 
 After each meaningful change:
