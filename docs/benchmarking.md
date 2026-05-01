@@ -436,3 +436,12 @@ Rationale: current schema coverage already includes the needed access paths:
 - `chunk(chunk_hash, size)`
 
 This priority is an explicit no-op to avoid redundant index churn.
+
+## Phase 7 Priority 4 -- GC index proposal
+
+Decision: do not add `chunk(container_id)`.
+
+Rationale: `container_id` is stored on `blocks`, not on `chunk`, so a
+`chunk(container_id)` index is invalid for this schema.
+
+GC behavior remains unchanged unless query-plan evidence shows a real hotspot.
