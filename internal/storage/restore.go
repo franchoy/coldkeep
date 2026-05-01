@@ -237,7 +237,7 @@ func newRestoreReaderCache(fileID int64) *restoreReaderCache {
 // GetReader returns a cached reader for the given container, opening it if needed.
 // Ownership: reader remains owned by cache and must not be closed by caller.
 // The cache ensures cleanup via Close() method.
-func (c *restoreReaderCache) GetReader(ctx context.Context, containerPath string, maxSize int64) (*container.FileContainer, error) {
+func (c *restoreReaderCache) GetReader(containerPath string, maxSize int64) (*container.FileContainer, error) {
 	containerName := filepath.Base(containerPath)
 
 	// Check cache
@@ -259,21 +259,20 @@ func (c *restoreReaderCache) GetReader(ctx context.Context, containerPath string
 
 // Close closes all cached readers and clears the cache.
 // MUST be called via defer to ensure cleanup even on error.
+// All close errors are aggregated and returned via errors.Join.
 func (c *restoreReaderCache) Close() error {
-	var lastErr error
+	var errs []error
 	for containerName, reader := range c.readers {
 		if reader == nil {
 			continue
 		}
 		if err := reader.Close(); err != nil {
 			log.Printf("event=restore_cache_close_failed action=reader_close file_id=%d container=%s err=%v", c.fileID, containerName, err)
-			if lastErr == nil {
-				lastErr = err
-			}
+			errs = append(errs, err)
 		}
 	}
 	c.readers = make(map[string]*container.FileContainer)
-	return lastErr
+	return errors.Join(errs...)
 }
 
 func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) error {
@@ -877,7 +876,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 
 		// Phase 6 Step 6: Get container reader from cache (reduces open/close overhead)
 		containerPath := filepath.Join(containersDir, chunk.ContainerName)
-		filecontainer, err := readerCache.GetReader(ctx, containerPath, chunk.ContainerMaxSize)
+		filecontainer, err := readerCache.GetReader(containerPath, chunk.ContainerMaxSize)
 		if err != nil {
 			log.Printf("event=restore_skip_chunk action=container_read_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
 			continue
@@ -1004,6 +1003,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	if err := bufw.Flush(); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("flush buffered writer: %w", err)
 	}
+	bufw = nil // prevent deferred flush from writing to already-closed outFile
 
 	// Fsync ensures data is written to disk before returning
 	if err := outFile.Sync(); err != nil {

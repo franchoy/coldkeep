@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"testing"
 )
 
@@ -22,10 +21,9 @@ func TestRestoreReaderCacheInitialization(t *testing.T) {
 
 func TestRestoreReaderCacheHandlesOpenError(t *testing.T) {
 	cache := newRestoreReaderCache(1)
-	ctx := context.Background()
 
 	// Try to open non-existent container
-	reader, err := cache.GetReader(ctx, "/nonexistent/container.bin", 512)
+	reader, err := cache.GetReader("/nonexistent/container.bin", 512)
 	if err == nil {
 		t.Fatal("expected error for non-existent container, got nil")
 	}
