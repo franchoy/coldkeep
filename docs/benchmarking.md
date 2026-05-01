@@ -317,7 +317,7 @@ Use this checklist before considering Phase 6 complete.
 - restore baseline captured before changes
 - restore-large-file reviewed
 - restore-many-files reviewed
-- restore-mixed-dataset reviewed
+- mixed workload coverage reviewed and documented
 - query count/open count hotspots identified
 
 #### Architecture
@@ -376,44 +376,51 @@ Use this checklist before considering Phase 6 complete.
 - any neutral result documented honestly
 - no claim of unsafe restore parallelism added
 
-### Actual benchmark result (2026-05-01)
+### Phase 6 Step 12 benchmark matrix
 
-Step 12 benchmark runs were executed locally for:
+The full Step 12 matrix completed successfully:
 
-```bash
-coldkeep benchmark run --dataset small --workers 1 --output json
-coldkeep benchmark run --dataset small --workers 4 --output json
-coldkeep benchmark run --dataset medium --workers 1 --output json
-coldkeep benchmark run --dataset medium --workers 4 --output json
-```
+- small, workers=1
+- small, workers=4
+- medium, workers=1
+- medium, workers=4
 
-Observed restore outcome:
+For the medium workers=4 run, `COLDKEEP_DB_OPERATION_TIMEOUT_MS=1800000`
+was used to avoid timeout noise during the benchmark window.
 
-- **Small dataset**: restore performance improved with `workers=4`.
-- `restore-large-file`: `3001 ms -> 2409 ms` (`-19.7%` duration),
-   `5.33 -> 6.64 MB/s` (`+24.6%` throughput)
-- `restore-many-files`: `5838 ms -> 4782 ms` (`-18.1%` duration),
-   `0.0167 -> 0.0204 MB/s` (`+22.1%` throughput)
-- **Medium dataset**: restore results were effectively neutral.
-- `restore-large-file`: `37865 ms -> 38064 ms` (`+0.5%` duration),
-   `6.76 -> 6.73 MB/s` (`-0.5%` throughput)
-- `restore-many-files`: `53827 ms -> 54192 ms` (`+0.7%` duration),
-   `0.0726 -> 0.0721 MB/s` (`-0.7%` throughput)
+#### Restore results
 
-Interpretation:
+Small dataset:
 
-- The optimization appears to reduce restore-side overhead on the smaller profile,
-   where open/cache/buffering and metadata costs are more visible.
-- On the medium profile, restore was already close to efficient enough that the
-   measured result is essentially neutral rather than a large win.
-- This is an acceptable Phase 6 outcome: restore improved where overhead was more
-   exposed, and remained correctness-preserving and performance-neutral elsewhere.
+- restore-large-file improved by ~19.7% duration / ~24.6% throughput
+- restore-many-files improved by ~18.1% duration / ~22.1% throughput
 
-Benchmark note:
+Medium dataset:
 
-- The current benchmark suite includes `store-mixed-dataset`, not
-   `restore-mixed-dataset`, so mixed-dataset restore was not separately measured in
-   this Phase 6 run.
-- The local medium `workers=4` run required a larger DB operation timeout window
-   (`COLDKEEP_DB_OPERATION_TIMEOUT_MS=1800000`) to complete determinism validation
-   reliably on this machine.
+- restore-large-file was effectively neutral: +0.53% duration
+- restore-many-files was effectively neutral: +0.68% duration
+
+#### Mixed workload note
+
+There is currently no `restore-mixed-dataset` benchmark scenario.
+The closest available mixed scenario is `store-mixed-dataset`.
+
+#### Interpretation
+
+Phase 6 improved restore behavior clearly on the small dataset and remained
+neutral on the medium dataset. No major restore regression was observed.
+
+### Phase 6 remaining checks
+
+Before closing Phase 6, confirm:
+
+- restore recipe/order tests pass
+- reader cache lifecycle tests pass, if cache was added
+- pin/unpin success and failure tests pass
+- restore twice produces identical tree hash
+- snapshot restore determinism still passes
+- restore after GC still passes
+- full adversarial suite passes
+- go test ./... passes
+
+Once those are green, Phase 6 is complete.
