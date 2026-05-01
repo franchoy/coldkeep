@@ -449,6 +449,42 @@ func insertSnapshotFileByPathIDNoReturning(ctx context.Context, exec sqlExecutor
 	return nil
 }
 
+func insertSnapshotFilesByPathIDNoReturningBatch(ctx context.Context, tx *sql.Tx, rows []snapshotFileDBRow, normalizedPaths []string) error {
+	if len(rows) != len(normalizedPaths) {
+		return fmt.Errorf("snapshot_file batch rows/paths mismatch: %d rows vs %d paths", len(rows), len(normalizedPaths))
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare snapshot_file batch insert: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for i, row := range rows {
+		if _, err := stmt.ExecContext(
+			ctx,
+			row.SnapshotID,
+			row.PathID,
+			row.LogicalFileID,
+			row.Size,
+			row.Mode,
+			row.MTime,
+		); err != nil {
+			return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPaths[i], err)
+		}
+		iodebug.IncSnapshotMetadataWrite()
+		log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", row.SnapshotID, normalizedPaths[i])
+	}
+
+	return nil
+}
+
 func ListSnapshots(ctx context.Context, db *sql.DB, filter SnapshotListFilter) ([]Snapshot, error) {
 	if db == nil {
 		return nil, errors.New("snapshot db cannot be nil")
@@ -1505,26 +1541,29 @@ func CreateSnapshotWithOptions(
 		return fmt.Errorf("resolve snapshot_path ids for snapshot %s: %w", snapshotID, err)
 	}
 
-	insertedCount := 0
+	insertRows := make([]snapshotFileDBRow, 0, len(pending))
+	insertPaths := make([]string, 0, len(pending))
 	for _, entry := range pending {
 		pathID, ok := pathIDs[entry.normalizedPath]
 		if !ok {
 			return fmt.Errorf("no path_id resolved for %q in snapshot %s", entry.normalizedPath, snapshotID)
 		}
-		row := snapshotFileDBRow{
+		insertRows = append(insertRows, snapshotFileDBRow{
 			SnapshotID:    snapshotID,
 			PathID:        pathID,
 			LogicalFileID: entry.logicalFileID,
 			Size:          sql.NullInt64{Int64: entry.totalSize, Valid: true},
 			Mode:          entry.mode,
 			MTime:         entry.mtime,
-		}
-		err = insertSnapshotFileByPathIDNoReturning(ctx, tx, row, entry.normalizedPath)
-		if err != nil {
-			return err
-		}
-		insertedCount++
+		})
+		insertPaths = append(insertPaths, entry.normalizedPath)
 	}
+
+	if err := insertSnapshotFilesByPathIDNoReturningBatch(ctx, tx, insertRows, insertPaths); err != nil {
+		return err
+	}
+
+	insertedCount := len(insertRows)
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit snapshot transaction: %w", err)
