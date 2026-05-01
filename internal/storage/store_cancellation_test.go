@@ -86,7 +86,7 @@ func TestPrepareFileForStoreWithContextCancellationBeforeRead(t *testing.T) {
 	cancel()
 
 	ck := &trackingChunker{}
-	_, err := prepareFileForStoreWithContext(ctx, path, ck, string(ck.Version()))
+	_, err := prepareFileForStoreWithContext(ctx, path, ck, string(ck.Version()), nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestPrepareFileForStoreWithContextCancellationMidPrepare(t *testing.T) {
 	ck := &trackingChunker{out: results}
 	ctx := &cancelAfterNErrContext{base: context.Background(), remaining: 2}
 
-	_, err := prepareFileForStoreWithContext(ctx, path, ck, string(ck.Version()))
+	_, err := prepareFileForStoreWithContext(ctx, path, ck, string(ck.Version()), nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled during prepare, got: %v", err)
 	}

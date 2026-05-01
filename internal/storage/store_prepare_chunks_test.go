@@ -357,7 +357,7 @@ func TestPrepareFileForStorePhase4Phase5Parity(t *testing.T) {
 				t.Fatalf("phase4 baseline prepare: %v", err)
 			}
 
-			phase5Prepared, err := prepareFileForStoreWithContext(context.Background(), path, tc.chunker, chunkerVersion)
+			phase5Prepared, err := prepareFileForStoreWithContext(context.Background(), path, tc.chunker, chunkerVersion, nil)
 			if err != nil {
 				t.Fatalf("phase5 prepare: %v", err)
 			}
@@ -434,6 +434,7 @@ func TestPrepareFileForStoreWithContextLogicalHashMatchesHashFile(t *testing.T) 
 				path,
 				tc.chunker,
 				string(tc.chunker.Version()),
+				nil,
 			)
 			if err != nil {
 				t.Fatalf("prepareFileForStoreWithContext: %v", err)
@@ -475,7 +476,7 @@ func TestPrepareFileForStoreEmptyFileParity(t *testing.T) {
 				t.Fatalf("phase4 baseline prepare: %v", err)
 			}
 
-			phase5Prepared, err := prepareFileForStoreWithContext(context.Background(), path, tc.chunker, chunkerVersion)
+			phase5Prepared, err := prepareFileForStoreWithContext(context.Background(), path, tc.chunker, chunkerVersion, nil)
 			if err != nil {
 				t.Fatalf("phase5 prepare: %v", err)
 			}

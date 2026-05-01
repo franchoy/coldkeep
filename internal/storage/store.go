@@ -32,11 +32,12 @@ type payloadStatefulWriter interface {
 // preparedFile is the internal output of the CPU-side preparation phase.
 // It captures deterministic, immutable metadata before any DB/container mutation.
 type preparedFile struct {
-	Path           string
-	LogicalHash    string
-	SizeBytes      int64
-	ChunkerVersion string
-	Chunks         []preparedChunk
+	Path             string
+	LogicalHash      string
+	SizeBytes        int64
+	ChunkerVersion   string
+	PhysicalMetadata physicalFileMetadata
+	Chunks           []preparedChunk
 }
 
 // hashFile computes the logical identity hash from raw file bytes.
@@ -57,11 +58,13 @@ func hashFile(path string) (string, error) {
 
 // prepareFileForStoreWithContext performs single-pass file preparation and
 // returns the immutable file-level metadata used by the commit phase.
+// fileinfo is the os.FileInfo for path; if nil, PhysicalMetadata in the result will be zero-valued.
 func prepareFileForStoreWithContext(
 	ctx context.Context,
 	path string,
 	effectiveChunker chunk.Chunker,
 	chunkerVersion string,
+	fileinfo os.FileInfo,
 ) (preparedFile, error) {
 	if err := ctx.Err(); err != nil {
 		return preparedFile{}, err
@@ -117,11 +120,12 @@ func prepareFileForStoreWithContext(
 	}
 
 	return preparedFile{
-		Path:           path,
-		LogicalHash:    hex.EncodeToString(fileHasher.Sum(nil)),
-		SizeBytes:      totalSize,
-		ChunkerVersion: chunkerVersion,
-		Chunks:         prepared,
+		Path:             path,
+		LogicalHash:      hex.EncodeToString(fileHasher.Sum(nil)),
+		SizeBytes:        totalSize,
+		ChunkerVersion:   chunkerVersion,
+		PhysicalMetadata: buildPhysicalFileMetadata(fileinfo),
+		Chunks:           prepared,
 	}, nil
 }
 
@@ -2073,8 +2077,6 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 			return StoreFileResult{}, err
 		}
 	}
-	physicalMetadata := buildPhysicalFileMetadata(fileinfo)
-
 	validationContainerDir := runtime.validationContainerDir
 
 	// Phase 3 store flow pattern:
@@ -2102,7 +2104,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	activeVersionString := string(activeVersion)
 	// Phase 5 single-pass prepare: chunk + hash + metadata materialization first,
 	// then claim and commit sequentially.
-	prepared, err := prepareFileForStoreWithContext(ctx, path, effectiveChunker, activeVersionString)
+	prepared, err := prepareFileForStoreWithContext(ctx, path, effectiveChunker, activeVersionString, fileinfo)
 	if err != nil {
 		return StoreFileResult{}, err
 	}
@@ -2121,7 +2123,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		if err != nil {
 			return StoreFileResult{}, err
 		}
-		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, physicalMetadata, replace); err != nil {
+		if _, err := ensurePhysicalFileForPathWithPolicyWithTx(ctx, dbconn, tx, normalizedPath, fileID, prepared.PhysicalMetadata, replace); err != nil {
 			_ = tx.Rollback()
 			return StoreFileResult{}, err
 		}
@@ -2167,7 +2169,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		prepared,
 		fileID,
 		normalizedPath,
-		physicalMetadata,
+		prepared.PhysicalMetadata,
 		validationContainerDir,
 		replace,
 	)
