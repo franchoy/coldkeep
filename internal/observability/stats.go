@@ -375,11 +375,17 @@ func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []
 	}
 
 	query := `
-		WITH unique_chunks AS (
+		WITH snapshot_totals AS (
+			SELECT snapshot_id, COUNT(*) AS file_count, COALESCE(SUM(size), 0) AS total_size
+			FROM snapshot_file
+			WHERE snapshot_id IN (` + strings.Join(placeholders, ", ") + `)
+			GROUP BY snapshot_id
+		),
+		unique_chunks AS (
 			SELECT DISTINCT fc.chunk_id
 			FROM snapshot_file sf
+			JOIN snapshot_totals st ON st.snapshot_id = sf.snapshot_id
 			JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
-			WHERE sf.snapshot_id IN (` + strings.Join(placeholders, ", ") + `)
 		)
 		SELECT COUNT(*), COALESCE(SUM(c.size),0)
 		FROM unique_chunks uc
