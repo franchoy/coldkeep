@@ -123,50 +123,47 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 	r.ActiveWriteChunker = activeWriteChunker
 
-	var totalLogical, completedLogical, processingLogical, abortedLogical sql.NullInt64
-	var healthySize, quarantineSize, totalContainerSize, liveBytes, deadBytes sql.NullInt64
+	var liveBytes, deadBytes sql.NullInt64
 	var totalFileRetries, maxFileRetries, totalChunkRetries, maxChunkRetries sql.NullInt64
 	var avgFileRetries, avgChunkRetries sql.NullFloat64
 
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file`).
-		Scan(&r.TotalFiles, &totalLogical); err != nil {
-		return nil, fmt.Errorf("failed to query total logical files: %w", err)
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) AS total_files,
+			COALESCE(SUM(total_size), 0) AS total_size,
+			COALESCE(SUM(CASE WHEN status = $1 THEN 1 ELSE 0 END), 0) AS completed_files,
+			COALESCE(SUM(CASE WHEN status = $1 THEN total_size ELSE 0 END), 0) AS completed_size,
+			COALESCE(SUM(CASE WHEN status = $2 THEN 1 ELSE 0 END), 0) AS processing_files,
+			COALESCE(SUM(CASE WHEN status = $2 THEN total_size ELSE 0 END), 0) AS processing_size,
+			COALESCE(SUM(CASE WHEN status = $3 THEN 1 ELSE 0 END), 0) AS aborted_files,
+			COALESCE(SUM(CASE WHEN status = $3 THEN total_size ELSE 0 END), 0) AS aborted_size
+		FROM logical_file
+	`, filestate.LogicalFileCompleted, filestate.LogicalFileProcessing, filestate.LogicalFileAborted).Scan(
+		&r.TotalFiles,
+		&r.TotalLogicalSizeBytes,
+		&r.CompletedFiles,
+		&r.CompletedSizeBytes,
+		&r.ProcessingFiles,
+		&r.ProcessingSizeBytes,
+		&r.AbortedFiles,
+		&r.AbortedSizeBytes,
+	); err != nil {
+		return nil, fmt.Errorf("failed to query logical file aggregate stats: %w", err)
 	}
-	r.TotalLogicalSizeBytes = totalLogical.Int64
 
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileCompleted).
-		Scan(&r.CompletedFiles, &completedLogical); err != nil {
-		return nil, fmt.Errorf("failed to query completed logical files: %w", err)
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN quarantine = FALSE THEN 1 ELSE 0 END), 0) AS healthy_containers,
+			COALESCE(SUM(CASE WHEN quarantine = FALSE THEN current_size ELSE 0 END), 0) AS healthy_size,
+			COALESCE(SUM(CASE WHEN quarantine = TRUE THEN 1 ELSE 0 END), 0) AS quarantine_containers,
+			COALESCE(SUM(CASE WHEN quarantine = TRUE THEN current_size ELSE 0 END), 0) AS quarantine_size
+		FROM container
+	`).Scan(&r.HealthyContainers, &r.HealthyContainerBytes, &r.QuarantineContainers, &r.QuarantineContainerBytes); err != nil {
+		return nil, fmt.Errorf("failed to query container aggregate stats: %w", err)
 	}
-	r.CompletedSizeBytes = completedLogical.Int64
-
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileProcessing).
-		Scan(&r.ProcessingFiles, &processingLogical); err != nil {
-		return nil, fmt.Errorf("failed to query processing logical files: %w", err)
-	}
-	r.ProcessingSizeBytes = processingLogical.Int64
-
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM logical_file WHERE status = $1`, filestate.LogicalFileAborted).
-		Scan(&r.AbortedFiles, &abortedLogical); err != nil {
-		return nil, fmt.Errorf("failed to query aborted logical files: %w", err)
-	}
-	r.AbortedSizeBytes = abortedLogical.Int64
-
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = FALSE`).
-		Scan(&r.HealthyContainers, &healthySize); err != nil {
-		return nil, fmt.Errorf("failed to query healthy containers: %w", err)
-	}
-	r.HealthyContainerBytes = healthySize.Int64
-
-	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(current_size),0) FROM container WHERE quarantine = TRUE`).
-		Scan(&r.QuarantineContainers, &quarantineSize); err != nil {
-		return nil, fmt.Errorf("failed to query quarantined containers: %w", err)
-	}
-	r.QuarantineContainerBytes = quarantineSize.Int64
 
 	r.TotalContainers = r.HealthyContainers + r.QuarantineContainers
-	totalContainerSize = sql.NullInt64{Int64: r.HealthyContainerBytes + r.QuarantineContainerBytes, Valid: true}
-	r.TotalContainerBytes = totalContainerSize.Int64
+	r.TotalContainerBytes = r.HealthyContainerBytes + r.QuarantineContainerBytes
 
 	if err := dbconn.QueryRowContext(ctx, `
 		SELECT
