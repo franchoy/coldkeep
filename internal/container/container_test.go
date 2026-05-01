@@ -178,6 +178,52 @@ func TestFileContainerTruncateDiscardsPendingWritesWithoutSync(t *testing.T) {
 	}
 }
 
+func TestFileContainerSyncSkipsRedundantFsyncWithoutNewWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "redundant-sync.bin")
+	createTestContainerFile(t, path, ContainerHdrLen+128)
+
+	c, err := OpenWritableContainer(path, ContainerHdrLen+128)
+	if err != nil {
+		t.Fatalf("open writable container: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := c.Append([]byte("abc")); err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+	if c.pending.Len() != 3 {
+		t.Fatalf("expected small append to stay buffered before sync, got pending=%d", c.pending.Len())
+	}
+	if err := c.Sync(); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	if c.dirty {
+		t.Fatalf("expected first sync to clear dirty state")
+	}
+	if c.pending.Len() != 0 {
+		t.Fatalf("expected first sync to flush pending bytes, got pending=%d", c.pending.Len())
+	}
+	if err := c.Sync(); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if c.dirty {
+		t.Fatalf("expected second sync without writes to remain a no-op")
+	}
+
+	if err := c.Truncate(ContainerHdrLen); err != nil {
+		t.Fatalf("truncate payload: %v", err)
+	}
+	if !c.dirty {
+		t.Fatalf("expected truncate to mark container dirty")
+	}
+	if err := c.Sync(); err != nil {
+		t.Fatalf("sync after truncate: %v", err)
+	}
+	if c.dirty {
+		t.Fatalf("expected sync after truncate to clear dirty state")
+	}
+}
+
 func TestOpenWritableContainerFailsOnInvalidHeader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad-header.bin")
 	if err := os.WriteFile(path, []byte("not-a-valid-container-header"), 0o644); err != nil {

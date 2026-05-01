@@ -50,6 +50,7 @@ type FileContainer struct {
 	persistedSize int64 // physically flushed size on disk
 	maxSize       int64 // maximum allowed size for this container (including header)
 	readonly      bool
+	dirty         bool
 	pending       bytes.Buffer
 }
 
@@ -112,6 +113,7 @@ func openExistingContainer(readonly bool, path string, maxSize int64) (*FileCont
 		persistedSize: stat.Size(),
 		maxSize:       maxSize,
 		readonly:      readonly,
+		dirty:         false,
 	}, nil
 }
 
@@ -221,6 +223,7 @@ func (c *FileContainer) Truncate(size int64) error {
 		}
 		c.persistedSize = size
 		c.offset = size
+		c.dirty = true
 		return nil
 	}
 
@@ -233,6 +236,9 @@ func (c *FileContainer) Truncate(size int64) error {
 			c.pending.Truncate(int(pendingBytes))
 		}
 		c.offset = size
+		if size != c.persistedSize {
+			c.dirty = true
+		}
 		return nil
 	}
 
@@ -245,6 +251,7 @@ func (c *FileContainer) Truncate(size int64) error {
 	}
 	c.persistedSize = size
 	c.offset = size
+	c.dirty = true
 	return nil
 }
 
@@ -257,10 +264,14 @@ func (c *FileContainer) Sync() error {
 			return err
 		}
 	}
+	if !c.dirty {
+		return nil
+	}
 
 	if err := c.f.Sync(); err != nil {
 		return err
 	}
+	c.dirty = false
 	iodebug.IncFsync()
 	return nil
 }
@@ -290,6 +301,7 @@ func (c *FileContainer) flushPending() error {
 		n, err := c.f.Write(c.pending.Bytes())
 		if n > 0 {
 			c.persistedSize += int64(n)
+			c.dirty = true
 			iodebug.AddBytesWritten(int64(n))
 			c.pending.Next(n)
 		}
@@ -307,6 +319,7 @@ func (c *FileContainer) writeDirect(data []byte) (int, error) {
 	n, err := c.f.Write(data)
 	if n > 0 {
 		c.persistedSize += int64(n)
+		c.dirty = true
 		iodebug.AddBytesWritten(int64(n))
 	}
 	if err != nil {
@@ -328,6 +341,7 @@ func (c *FileContainer) SetSize(size int64) {
 	c.pending.Reset()
 	c.offset = size
 	c.persistedSize = size
+	c.dirty = false
 	if c.f != nil && !c.readonly {
 		_, _ = c.f.Seek(size, io.SeekStart)
 	}
