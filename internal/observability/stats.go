@@ -2,7 +2,6 @@ package observability
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -307,20 +306,36 @@ func (s *Service) sumChunkSizesByID(ctx context.Context, chunkIDs map[int64]stru
 		return 0, nil
 	}
 
-	// TODO(v1.7): Replace per-chunk point lookups with a batched strategy
-	// (chunked IN queries, temp table join, or equivalent) to scale snapshot
-	// reachability byte aggregation on large repositories.
-	var total int64
+	const maxBatchSize = 500
+
+	ids := make([]int64, 0, len(chunkIDs))
 	for chunkID := range chunkIDs {
-		var size int64
-		err := s.db.QueryRowContext(ctx, `SELECT size FROM chunk WHERE id = $1`, chunkID).Scan(&size)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				continue
-			}
+		ids = append(ids, chunkID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	var total int64
+	for start := 0; start < len(ids); start += maxBatchSize {
+		end := start + maxBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+
+		batch := ids[start:end]
+		placeholders := make([]string, len(batch))
+		args := make([]any, len(batch))
+		for i, chunkID := range batch {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = chunkID
+		}
+
+		query := `SELECT COALESCE(SUM(size),0) FROM chunk WHERE id IN (` + strings.Join(placeholders, ", ") + `)`
+
+		var batchTotal int64
+		if err := s.db.QueryRowContext(ctx, query, args...).Scan(&batchTotal); err != nil {
 			return 0, err
 		}
-		total += size
+		total += batchTotal
 	}
 
 	return total, nil
@@ -331,45 +346,32 @@ func (s *Service) snapshotReachabilityViaSQL(ctx context.Context, snapshotIDs []
 		return 0, 0, nil
 	}
 
-	uniqueChunkSizes := make(map[int64]int64)
-	for _, snapshotID := range snapshotIDs {
-		rows, err := s.db.QueryContext(
-			ctx,
-			`SELECT fc.chunk_id, c.size
-			 FROM snapshot_file sf
-			 JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
-			 JOIN chunk c ON c.id = fc.chunk_id
-			 WHERE sf.snapshot_id = $1`,
-			snapshotID,
+	placeholders := make([]string, len(snapshotIDs))
+	args := make([]any, len(snapshotIDs))
+	for i, snapshotID := range snapshotIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = snapshotID
+	}
+
+	query := `
+		WITH unique_chunks AS (
+			SELECT DISTINCT fc.chunk_id
+			FROM snapshot_file sf
+			JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+			WHERE sf.snapshot_id IN (` + strings.Join(placeholders, ", ") + `)
 		)
-		if err != nil {
-			return 0, 0, err
-		}
+		SELECT COUNT(*), COALESCE(SUM(c.size),0)
+		FROM unique_chunks uc
+		JOIN chunk c ON c.id = uc.chunk_id
+	`
 
-		for rows.Next() {
-			var chunkID int64
-			var size int64
-			if err := rows.Scan(&chunkID, &size); err != nil {
-				_ = rows.Close()
-				return 0, 0, err
-			}
-			if _, exists := uniqueChunkSizes[chunkID]; !exists {
-				uniqueChunkSizes[chunkID] = size
-			}
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return 0, 0, err
-		}
-		_ = rows.Close()
-	}
-
+	var chunkCount int64
 	var totalBytes int64
-	for _, size := range uniqueChunkSizes {
-		totalBytes += size
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&chunkCount, &totalBytes); err != nil {
+		return 0, 0, err
 	}
 
-	return int64(len(uniqueChunkSizes)), totalBytes, nil
+	return chunkCount, totalBytes, nil
 }
 
 func buildEfficiencyStats(logicalBytes, uniqueChunkBytes, containerBytes int64) EfficiencyStats {

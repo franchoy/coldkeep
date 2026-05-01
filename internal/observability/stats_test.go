@@ -804,6 +804,196 @@ func TestTraceDoesNotChangeStatsResult(t *testing.T) {
 	}
 }
 
+func TestSumChunkSizesByIDMatchesLegacyLoop(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	chunkResA, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "sum-a", 11, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk A: %v", err)
+	}
+	chunkA, err := chunkResA.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk A last insert id: %v", err)
+	}
+
+	chunkResB, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "sum-b", 22, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk B: %v", err)
+	}
+	chunkB, err := chunkResB.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk B last insert id: %v", err)
+	}
+
+	chunkIDs := map[int64]struct{}{
+		chunkA: {},
+		chunkB: {},
+		999999: {}, // missing chunk id should be ignored
+	}
+
+	got, err := svc.sumChunkSizesByID(context.Background(), chunkIDs)
+	if err != nil {
+		t.Fatalf("sumChunkSizesByID: %v", err)
+	}
+
+	want, err := legacySumChunkSizesByID(context.Background(), dbconn, chunkIDs)
+	if err != nil {
+		t.Fatalf("legacySumChunkSizesByID: %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("sumChunkSizesByID mismatch: got=%d want=%d", got, want)
+	}
+}
+
+func TestSnapshotReachabilityViaSQLMatchesLegacyLoop(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+	svc := newServiceForTest(dbconn, nil)
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "reach-a", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot reach-a: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "reach-b", time.Now().UTC(), "full"); err != nil {
+		t.Fatalf("insert snapshot reach-b: %v", err)
+	}
+
+	fileRes1, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"reach-1.txt", 30, "hash-reach-1", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file 1: %v", err)
+	}
+	file1, err := fileRes1.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical_file 1 last insert id: %v", err)
+	}
+
+	fileRes2, err := dbconn.Exec(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version) VALUES (?, ?, ?, ?, ?)`,
+		"reach-2.txt", 40, "hash-reach-2", "COMPLETED", "v2-fastcdc",
+	)
+	if err != nil {
+		t.Fatalf("insert logical_file 2: %v", err)
+	}
+	file2, err := fileRes2.LastInsertId()
+	if err != nil {
+		t.Fatalf("logical_file 2 last insert id: %v", err)
+	}
+
+	chunkRes1, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "reach-c1", 10, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk c1: %v", err)
+	}
+	chunk1, err := chunkRes1.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk c1 last insert id: %v", err)
+	}
+
+	chunkRes2, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "reach-c2", 20, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk c2: %v", err)
+	}
+	chunk2, err := chunkRes2.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk c2 last insert id: %v", err)
+	}
+
+	chunkRes3, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "reach-c3", 30, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert chunk c3: %v", err)
+	}
+	chunk3, err := chunkRes3.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk c3 last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?), (?, ?, ?)`, file1, chunk1, 0, file1, chunk2, 1); err != nil {
+		t.Fatalf("insert file_chunk mappings for file1: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES (?, ?, ?), (?, ?, ?)`, file2, chunk2, 0, file2, chunk3, 1); err != nil {
+		t.Fatalf("insert file_chunk mappings for file2: %v", err)
+	}
+
+	testdb.InsertSnapshotFileRef(t, dbconn, "reach-a", "snap/reach-1.txt", file1)
+	testdb.InsertSnapshotFileRef(t, dbconn, "reach-b", "snap/reach-2.txt", file2)
+
+	snapshotIDs := []string{"reach-a", "reach-b", "reach-a", "missing"}
+
+	gotChunks, gotBytes, err := svc.snapshotReachabilityViaSQL(context.Background(), snapshotIDs)
+	if err != nil {
+		t.Fatalf("snapshotReachabilityViaSQL: %v", err)
+	}
+
+	wantChunks, wantBytes, err := legacySnapshotReachabilityViaSQL(context.Background(), dbconn, snapshotIDs)
+	if err != nil {
+		t.Fatalf("legacySnapshotReachabilityViaSQL: %v", err)
+	}
+
+	if gotChunks != wantChunks || gotBytes != wantBytes {
+		t.Fatalf("snapshotReachabilityViaSQL mismatch: got=(%d,%d) want=(%d,%d)", gotChunks, gotBytes, wantChunks, wantBytes)
+	}
+}
+
+func legacySumChunkSizesByID(ctx context.Context, dbconn *sql.DB, chunkIDs map[int64]struct{}) (int64, error) {
+	var total int64
+	for chunkID := range chunkIDs {
+		var size int64
+		err := dbconn.QueryRowContext(ctx, `SELECT size FROM chunk WHERE id = $1`, chunkID).Scan(&size)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return 0, err
+		}
+		total += size
+	}
+	return total, nil
+}
+
+func legacySnapshotReachabilityViaSQL(ctx context.Context, dbconn *sql.DB, snapshotIDs []string) (int64, int64, error) {
+	uniqueChunkSizes := make(map[int64]int64)
+	for _, snapshotID := range snapshotIDs {
+		rows, err := dbconn.QueryContext(
+			ctx,
+			`SELECT fc.chunk_id, c.size
+			 FROM snapshot_file sf
+			 JOIN file_chunk fc ON fc.logical_file_id = sf.logical_file_id
+			 JOIN chunk c ON c.id = fc.chunk_id
+			 WHERE sf.snapshot_id = $1`,
+			snapshotID,
+		)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		for rows.Next() {
+			var chunkID int64
+			var size int64
+			if err := rows.Scan(&chunkID, &size); err != nil {
+				_ = rows.Close()
+				return 0, 0, err
+			}
+			if _, exists := uniqueChunkSizes[chunkID]; !exists {
+				uniqueChunkSizes[chunkID] = size
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, 0, err
+		}
+		_ = rows.Close()
+	}
+
+	var totalBytes int64
+	for _, size := range uniqueChunkSizes {
+		totalBytes += size
+	}
+
+	return int64(len(uniqueChunkSizes)), totalBytes, nil
+}
+
 func TestStatsDeterministicAcrossCalls(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 	fixedNow := time.Date(2026, time.April, 27, 12, 0, 0, 0, time.UTC)
