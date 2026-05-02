@@ -281,6 +281,9 @@ Bootstrap ON (clean schema bootstrap path):
 
 ```bash
 unset COLDKEEP_CODEC
+export DB_NAME=coldkeep_bootstrap_on_probe
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_on_probe;"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_on_probe;"
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ./coldkeep stats
 ```
@@ -288,6 +291,9 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 Bootstrap OFF (fail-fast when schema is missing):
 
 ```bash
+export DB_NAME=coldkeep_bootstrap_off_probe
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_off_probe;"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_off_probe;"
 unset COLDKEEP_DB_AUTO_BOOTSTRAP
 # Point to a fresh DB without schema and confirm command fails fast.
 ./coldkeep stats
