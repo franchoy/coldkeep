@@ -8,7 +8,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/observability"
 )
 
-const cliJSONSchemaVersion = "v1.6"
+const cliJSONSchemaVersion = "v1.7"
 
 type jsonEnvelope struct {
 	GeneratedAtUTC string                             `json:"generated_at_utc"`

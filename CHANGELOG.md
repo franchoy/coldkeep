@@ -19,9 +19,9 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## [Unreleased] - v1.7
+## [1.7.0] - 2026-05-02
 
-Performance measurement milestone.
+Deterministic Performance Foundation milestone.
 
 v1.7 improves performance through controlled execution and conservative
 measurement-guided cleanup. It is not a fully concurrent daemon release.

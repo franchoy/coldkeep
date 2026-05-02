@@ -381,8 +381,8 @@ func assertJSONEnvelopeShape(t *testing.T, payload map[string]any, wantType stri
 	if !ok {
 		t.Fatalf("expected meta object, got %T", payload["meta"])
 	}
-	if got, _ := meta["version"].(string); got != "v1.6" {
-		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	if got, _ := meta["version"].(string); got != "v1.7" {
+		t.Fatalf("expected meta.version=v1.7, got %v", meta["version"])
 	}
 	if _, ok := meta["exact"].(bool); !ok {
 		t.Fatalf("expected meta.exact bool, got %T", meta["exact"])
@@ -8330,8 +8330,8 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected meta object, got %T", payload["meta"])
 	}
-	if got, _ := meta["version"].(string); got != "v1.6" {
-		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	if got, _ := meta["version"].(string); got != "v1.7" {
+		t.Fatalf("expected meta.version=v1.7, got %v", meta["version"])
 	}
 	if got, _ := meta["exact"].(bool); !got {
 		t.Fatalf("expected meta.exact=true, got %v", meta["exact"])

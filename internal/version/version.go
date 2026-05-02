@@ -3,8 +3,8 @@ package version
 import "fmt"
 
 const (
-	Major = 0
-	Minor = 9
+	Major = 1
+	Minor = 7
 	Patch = 0
 )
 
