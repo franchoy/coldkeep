@@ -478,6 +478,8 @@ jobs:
       - name: Run benchmark (small dataset) and capture baseline
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep
@@ -489,6 +491,8 @@ jobs:
       - name: Compare against committed baseline (100% threshold — disaster check only)
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           DB_HOST: 127.0.0.1
           DB_PORT: 5432
           DB_USER: coldkeep

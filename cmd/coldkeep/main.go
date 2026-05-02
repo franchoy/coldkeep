@@ -3013,8 +3013,16 @@ func buildDeterminismEnv(dbName, storageDir string) []string {
 	user := strings.TrimSpace(os.Getenv("DB_USER"))
 	password := os.Getenv("DB_PASSWORD")
 	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	codec := strings.TrimSpace(os.Getenv("COLDKEEP_CODEC"))
+	key := os.Getenv("COLDKEEP_KEY")
 	if sslMode == "" {
 		sslMode = "disable"
+	}
+	if codec == "" {
+		codec = "plain"
+	}
+	if strings.EqualFold(codec, "aes-gcm") && strings.TrimSpace(key) == "" {
+		codec = "plain"
 	}
 
 	env := os.Environ()
@@ -3027,6 +3035,10 @@ func buildDeterminismEnv(dbName, storageDir string) []string {
 		"DB_NAME":                    dbName,
 		"COLDKEEP_DB_AUTO_BOOTSTRAP": "true",
 		"COLDKEEP_STORAGE_DIR":       storageDir,
+		"COLDKEEP_CODEC":             codec,
+	}
+	if strings.TrimSpace(key) != "" {
+		overrides["COLDKEEP_KEY"] = key
 	}
 	// Build a deduplicated env slice: start from os.Environ(), then apply overrides.
 	seen := make(map[string]bool)

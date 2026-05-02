@@ -8917,3 +8917,55 @@ func writeBaselineJSON(t *testing.T, report BenchmarkRunReport) string {
 	_ = f.Close()
 	return f.Name()
 }
+
+func TestBuildDeterminismEnvFallsBackToPlainWhenAESKeyMissing(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "coldkeep")
+	t.Setenv("DB_PASSWORD", "coldkeep")
+	t.Setenv("DB_SSLMODE", "disable")
+	t.Setenv("COLDKEEP_CODEC", "aes-gcm")
+	t.Setenv("COLDKEEP_KEY", "")
+
+	env := buildDeterminismEnv("coldkeep_bench_test", "/tmp/storage")
+	lookup := envSliceToMap(env)
+
+	if got := lookup["COLDKEEP_CODEC"]; got != "plain" {
+		t.Fatalf("expected fallback codec plain when key missing, got=%q", got)
+	}
+	if got := lookup["COLDKEEP_KEY"]; strings.TrimSpace(got) != "" {
+		t.Fatalf("expected empty COLDKEEP_KEY when key is missing, got=%q", got)
+	}
+}
+
+func TestBuildDeterminismEnvKeepsAESWhenKeyPresent(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "coldkeep")
+	t.Setenv("DB_PASSWORD", "coldkeep")
+	t.Setenv("DB_SSLMODE", "disable")
+	t.Setenv("COLDKEEP_CODEC", "aes-gcm")
+	t.Setenv("COLDKEEP_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	env := buildDeterminismEnv("coldkeep_bench_test", "/tmp/storage")
+	lookup := envSliceToMap(env)
+
+	if got := lookup["COLDKEEP_CODEC"]; got != "aes-gcm" {
+		t.Fatalf("expected codec aes-gcm when key present, got=%q", got)
+	}
+	if got := lookup["COLDKEEP_KEY"]; got == "" {
+		t.Fatalf("expected non-empty COLDKEEP_KEY when key present")
+	}
+}
+
+func envSliceToMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, kv := range env {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		out[parts[0]] = parts[1]
+	}
+	return out
+}
