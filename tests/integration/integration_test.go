@@ -236,6 +236,78 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	}
 }
 
+func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	payload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(
+		t,
+		repoRoot,
+		binPath,
+		env,
+		"benchmark",
+		"run",
+		"--dataset", "small",
+		"--workers", "4",
+		"--output", "json",
+	), "benchmark")
+
+	data := testutils.JSONMap(t, payload, "data")
+	aggStats := testutils.JSONMap(t, data, "execution_stats")
+	if workers := testutils.JSONInt64(t, aggStats, "workers_used"); workers <= 0 {
+		t.Fatalf("expected positive aggregate workers_used, got %d", workers)
+	}
+
+	rowsRaw, ok := data["rows"].([]any)
+	if !ok || len(rowsRaw) == 0 {
+		t.Fatalf("expected non-empty benchmark rows, got %v", data["rows"])
+	}
+	firstRow, ok := rowsRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first benchmark row object, got %T", rowsRaw[0])
+	}
+	rowStatsRaw, ok := firstRow["execution_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected row execution_stats object, got %T", firstRow["execution_stats"])
+	}
+	workersUsedRaw, ok := rowStatsRaw["workers_used"].(float64)
+	if !ok || int64(workersUsedRaw) <= 0 {
+		t.Fatalf("expected positive row workers_used, got %v", rowStatsRaw["workers_used"])
+	}
+}
+
 func TestDoctorCommand(t *testing.T) {
 	testgate.RequireDB(t)
 
