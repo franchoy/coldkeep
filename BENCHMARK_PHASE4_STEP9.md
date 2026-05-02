@@ -25,7 +25,7 @@ The Phase 4 optimization separates file storage into two phases:
 ### Small Dataset - Single Worker (1 worker)
 
 | Operation | Duration (ms) | Throughput (MB/s) | Files | Total Bytes |
-|-----------|---------------|------------------|-------|-------------|
+| --------- | ------------- | ----------------- | ----- | ----------- |
 | **store-large-file** | 2,301 | 6.95 | 1 | 16 MB |
 | **store-mixed-dataset** | 571 | 4.33 | 20 | 2.5 MB |
 | **store-many-small-files** | 1,295 | 0.075 | 100 | 100 KB |
@@ -33,7 +33,7 @@ The Phase 4 optimization separates file storage into two phases:
 ### Small Dataset - Multi-Worker (4 workers)
 
 | Operation | Duration (ms) | Throughput (MB/s) | Files | Total Bytes |
-|-----------|---------------|------------------|-------|-------------|
+| --------- | ------------- | ----------------- | ----- | ----------- |
 | **store-large-file** | 2,292 | 6.98 | 1 | 16 MB |
 | **store-mixed-dataset** | 292 | 8.47 | 20 | 2.5 MB |
 | **store-many-small-files** | 514 | 0.19 | 100 | 100 KB |
@@ -106,7 +106,7 @@ This section locks explicit decisions for the optimization pass so choices are n
 ### Keep
 
 | Optimization | Decision | Why |
-|-------------|----------|-----|
+| ------------ | -------- | --- |
 | Step 8: Store path single-stat flow with `preparedFile.PhysicalMetadata` as the carry path | **keep** | Removes redundant metadata-building path, keeps one-file/one-stat semantics, no behavior regression, and no stale cross-file cache. |
 | Step 9: Restore reader cache cleanup hardening (`errors.Join` in cache close) | **keep** | Better failure visibility with no behavior change in success path. |
 | Step 9: Restore finalization guard (`bufw = nil` after explicit flush) | **keep** | Prevents deferred flush against a closed handle on error/finalization paths; low complexity and safer close semantics. |
@@ -118,7 +118,7 @@ This section locks explicit decisions for the optimization pass so choices are n
 ### Reject (Documented to Avoid Re-Litigation)
 
 | Idea | Decision | Why Rejected |
-|------|----------|--------------|
+| ---- | -------- | ------------ |
 | Introduce restore parallelism in this pass | **reject** | High correctness risk for ordered replay and verification boundaries in current v1.x scope; not needed for this safety-first pass. |
 | Add cross-operation/global reader cache for restore | **reject** | Handle lifetime and quarantine/GC interactions add operational risk; restore-local cache already captures the low-risk gain. |
 | Relax fsync/rollback durability checks for throughput gains | **reject** | Violates the core durability invariant: no metadata may publish bytes that are not durably written. |
@@ -126,7 +126,7 @@ This section locks explicit decisions for the optimization pass so choices are n
 ### Defer (Valuable, but Not v1.x Scope)
 
 | Idea | Decision | Target Window | Why Deferred |
-|------|----------|---------------|--------------|
+| ---- | -------- | ------------- | ------------ |
 | Restore parallelism with deterministic ordered writer boundary | **defer** | v1.8/v1.10+ | Needs dedicated design for deterministic merge/order guarantees, memory budgeting, and stronger failure-model testing. |
 | Restore unpin batch update optimization (`unpinRestoreChunksWithContext`) | **defer** | v1.8+ | Valuable SQL efficiency improvement, but current per-chunk correctness is stable and already validated. |
 | Snapshot metadata batch insert path specialization beyond current prepared statement reuse | **defer** | v1.10+ | Potential throughput upside, but requires broader DB-backend contract and migration-safe perf validation. |
@@ -147,7 +147,7 @@ No baseline rebasing was performed in this step.
 ### Delta Table (Duration; lower is better)
 
 | Scenario | Baseline (ms) | v1.7 Final (ms) | Delta vs Baseline |
-| --- | ---: | ---: | ---: |
+| -------- | ------------: | --------------: | ----------------: |
 | `store-large-file` | 1608 | 10483 | +551% |
 | `store-many-small-files` | 1176 | 4902 | +316% |
 | `store-mixed-dataset` | 399 | 2513 | +529% |
