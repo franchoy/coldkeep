@@ -2,10 +2,13 @@
 
 ## Status
 
-coldkeep v1.6 is a correctness-first storage engine focused on
+coldkeep v1.7 is a correctness-first storage engine focused on
 data integrity, deterministic restore, explicit operator-visible
 failure handling, and read-only observability/simulation tooling
 for safer diagnostics.
+
+v1.7 also introduces controlled-execution performance work without changing
+the storage format or introducing schema-breaking migrations.
 
 It is suitable for controlled production environments where:
 

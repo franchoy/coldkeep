@@ -1,5 +1,10 @@
 # Phase 4 Step 9 - Benchmark Results
 
+This file is a phase-specific benchmark report.
+If you are new to the project, read [README.md](README.md) first and then
+[docs/benchmarking.md](docs/benchmarking.md) for the canonical benchmark model
+and current release framing.
+
 ## Executive Summary
 
 Benchmarked the prepared/commit chunk path optimization (Phase 4 Step 9) using the small dataset on April 29, 2026.

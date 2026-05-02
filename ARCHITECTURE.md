@@ -27,7 +27,7 @@ The architecture composes:
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
 
-Correctness has seven explicit layers:
+Correctness has eight explicit layers:
 
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
@@ -36,6 +36,7 @@ Correctness has seven explicit layers:
 - v1.4 snapshot clarity hardening: lineage metadata is explicit and non-dependency by contract
 - v1.5 chunker-evolution compatibility clarity: mixed-version repositories are first-class, write-default policy is explicit and new-writes-only
 - v1.6 observability and simulation contract hardening: read-only introspection, exact GC simulation parity, tooling-safe trace channel behavior
+- v1.7 deterministic performance foundation: controlled execution, benchmark-backed validation, and release-readiness safety proof without storage-format or schema-breaking changes
 
 Migration philosophy:
 

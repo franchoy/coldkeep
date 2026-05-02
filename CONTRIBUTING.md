@@ -4,7 +4,7 @@ Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.
 
-The project currently has seven explicit correctness layers:
+The project currently has eight explicit correctness layers:
 
 - storage correctness (v1.0 core)
 - interaction correctness for CLI/automation contracts (v1.1)
@@ -13,6 +13,7 @@ The project currently has seven explicit correctness layers:
 - snapshot clarity and release-process hardening (v1.4)
 - chunker-evolution compatibility clarity (v1.5)
 - observability and simulation contract hardening (v1.6)
+- deterministic performance foundation through controlled execution and benchmark-backed validation (v1.7)
 
 The project originated as a research prototype, and continues to
 prioritize correctness, determinism, and clarity over feature velocity.

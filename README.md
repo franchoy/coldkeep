@@ -64,7 +64,7 @@ or operator-visible schema compatibility.
 
 ## Status
 
-Coldkeep has seven explicit correctness layers:
+Coldkeep has eight explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
