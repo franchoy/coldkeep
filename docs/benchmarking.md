@@ -10,6 +10,7 @@ Release framing for v1.7:
 - No storage format change is introduced.
 - No schema-breaking change is introduced.
 - Restore determinism, GC safety, and snapshot semantics remain preserved.
+- Migration note: none required for v1.7.
 
 ## Running benchmarks
 
@@ -29,6 +30,10 @@ coldkeep benchmark run --dataset medium --repeat 3
 # Override store-folder benchmark worker concurrency for experiments
 coldkeep benchmark run --dataset small --workers 1
 coldkeep benchmark run --dataset small --workers 4
+
+# Medium runs can exceed default DB operation timeout on busy local machines
+export COLDKEEP_DB_OPERATION_TIMEOUT_MS=1800000
+coldkeep benchmark run --dataset medium --workers 4 --output json
 ```
 
 Required environment for deterministic benchmark runs:
@@ -41,6 +46,52 @@ export DB_PASSWORD=coldkeep
 export DB_NAME=coldkeep
 export DB_SSLMODE=disable
 export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+### Benchmark output examples
+
+Human table output now includes configured vs effectively used workers:
+
+```text
+Benchmark run (small preset, repeat=1)
+Execution: workers=4 pipeline_depth=1 deterministic=true
+
+CASE                    TIME   MB/s  W_CFG  W_USED  FILES
+store-large-file        2.9s   110   4      4       1
+store-many-small-files  4.8s   97    4      4       1200
+snapshot-creation       0.6s   0     4      1       0
+```
+
+JSON output exposes both per-case worker usage and an aggregate
+`execution_stats` block:
+
+```json
+{
+   "status": "ok",
+   "command": "benchmark",
+   "data": {
+      "dataset": "small",
+      "execution": {
+         "store_folder_workers": 4,
+         "pipeline_depth": 1,
+         "deterministic": true
+      },
+      "execution_stats": {
+         "workers_used": 4,
+         "total_files": 2400,
+         "total_bytes": 123456789
+      },
+      "rows": [
+         {
+            "case": "store-many-small-files",
+            "execution_stats": {
+               "workers_used": 4,
+               "total_files": 1200
+            }
+         }
+      ]
+   }
+}
 ```
 
 ## Current baseline

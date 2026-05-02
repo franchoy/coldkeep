@@ -48,6 +48,7 @@ change.
 
 - No storage format change.
 - No schema-breaking change.
+- Migration required: none.
 - Restore remains deterministic and byte-identical.
 - GC safety model remains conservative and reference-safe.
 - Snapshot creation, retention, diff, and restore semantics remain unchanged.

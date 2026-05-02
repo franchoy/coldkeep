@@ -25,6 +25,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
 > Status: v1.7 adds controlled-execution performance measurement and validation while preserving restore determinism, GC safety, and snapshot semantics. It is not a fully concurrent daemon release, and it does not change the storage format or introduce a schema-breaking migration.
+> Migration note (v1.7): none required.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

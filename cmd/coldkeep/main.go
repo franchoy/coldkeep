@@ -2519,11 +2519,12 @@ func (p *perfTimer) Spans() []perfSpan { return p.spans }
 
 // BenchmarkRunReport is the output payload for `coldkeep benchmark run`.
 type BenchmarkRunReport struct {
-	GeneratedAtUTC string                `json:"generated_at_utc"`
-	Dataset        string                `json:"dataset"`
-	Repeat         int                   `json:"repeat"`
-	Execution      BenchmarkExecution    `json:"execution"`
-	Rows           []BenchmarkRunCaseRow `json:"rows"`
+	GeneratedAtUTC string                  `json:"generated_at_utc"`
+	Dataset        string                  `json:"dataset"`
+	Repeat         int                     `json:"repeat"`
+	Execution      BenchmarkExecution      `json:"execution"`
+	ExecutionStats BenchmarkExecutionStats `json:"execution_stats"`
+	Rows           []BenchmarkRunCaseRow   `json:"rows"`
 }
 
 // BenchmarkExecution captures execution policy knobs used for this run.
@@ -2689,15 +2690,16 @@ func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 		)
 		fmt.Println()
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s\tWORKERS\tFILES")
+		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s\tW_CFG\tW_USED\tFILES")
 		for _, row := range report.Rows {
 			_, _ = fmt.Fprintf(
 				tw,
-				"%s\t%.1fs\t%.0f\t%d\t%d\n",
+				"%s\t%.1fs\t%.0f\t%d\t%d\t%d\n",
 				row.Case,
 				float64(row.DurationMs)/1000.0,
 				row.ThroughputMBps,
 				row.Execution.StoreFolderWorkers,
+				row.ExecutionStats.WorkersUsed,
 				row.ExecutionStats.TotalFiles,
 			)
 		}
@@ -2878,6 +2880,21 @@ func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execu
 			Execution:      agg.execution,
 			ExecutionStats: agg.stats,
 		})
+		out.ExecutionStats.TotalFiles += agg.stats.TotalFiles
+		out.ExecutionStats.TotalBytes += agg.stats.TotalBytes
+		if agg.stats.WorkersUsed > out.ExecutionStats.WorkersUsed {
+			out.ExecutionStats.WorkersUsed = agg.stats.WorkersUsed
+		}
+		out.ExecutionStats.ContainerAppendCount += agg.stats.ContainerAppendCount
+		out.ExecutionStats.FsyncCount += agg.stats.FsyncCount
+		out.ExecutionStats.ContainerOpenCount += agg.stats.ContainerOpenCount
+		out.ExecutionStats.ContainerCloseCount += agg.stats.ContainerCloseCount
+		out.ExecutionStats.SnapshotMetadataWrite += agg.stats.SnapshotMetadataWrite
+		out.ExecutionStats.IO.ContainerOpens += agg.stats.IO.ContainerOpens
+		out.ExecutionStats.IO.ContainerAppends += agg.stats.IO.ContainerAppends
+		out.ExecutionStats.IO.Fsyncs += agg.stats.IO.Fsyncs
+		out.ExecutionStats.IO.BytesWritten += agg.stats.IO.BytesWritten
+		out.ExecutionStats.IO.BytesRead += agg.stats.IO.BytesRead
 	}
 
 	return out, nil
