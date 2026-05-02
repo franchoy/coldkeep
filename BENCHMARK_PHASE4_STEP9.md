@@ -10,6 +10,7 @@ and current release framing.
 Benchmarked the prepared/commit chunk path optimization (Phase 4 Step 9) using the small dataset on April 29, 2026.
 
 The Phase 4 optimization separates file storage into two phases:
+
 - **Preparation Phase**: Materializes all chunk metadata deterministically (hashing, sizing) before DB mutations
 - **Commit Phase**: Processes pre-computed chunks sequentially and deterministically (no re-hashing, no re-allocation)
 
@@ -40,17 +41,20 @@ The Phase 4 optimization separates file storage into two phases:
 ## Performance Analysis
 
 ### Large File Storage
+
 - **Single worker**: 6.95 MB/s
 - **Multi-worker (4x)**: 6.98 MB/s
 - **Impact**: Minimal change, as expected for single large file (chunking overhead limited by sequential I/O)
 
 ### Mixed Dataset
+
 - **Single worker**: 4.33 MB/s
 - **Multi-worker (4x)**: 8.47 MB/s
 - **Improvement**: +1.96x throughput with 4 workers (modest scaling efficiency)
 - **Analysis**: Preparation phase parallelization benefit visible in mixed 20-file workload
 
 ### Many Small Files
+
 - **Single worker**: 0.075 MB/s (1,295 ms for 100 KB)
 - **Multi-worker (4x)**: 0.19 MB/s (514 ms for 100 KB)
 - **Improvement**: +2.52x throughput with 4 workers
@@ -66,6 +70,7 @@ The Phase 4 optimization separates file storage into two phases:
 ## Observed Metrics
 
 **Store Operation Scaling**:
+
 - Large file: Serial I/O dominates; chunking overhead minimal
 - Mixed workload: 1.96x speedup suggests ~50% efficiency in 4-worker setup (expected for mixed sizes + DB transactions)
 - Many small files: 2.52x speedup shows good parallelization for high-cardinality, low per-file computation
@@ -87,6 +92,7 @@ As expected, restore/GC/snapshot improvements were not the focus of Phase 4:
 ## Conclusion
 
 Phase 4 Step 9 implementation is complete with comprehensive test coverage:
+
 - ✅ 10 unit tests validating chunk preparation determinism, indexes, sizes, hashes, versions, and final file hash
 - ✅ 1 integration test validating store graph equivalence and round-trip restore correctness
 - ✅ Benchmark results show expected multi-worker scaling (modest to meaningful improvement for prepared/commit path)

@@ -222,20 +222,20 @@ coldkeep benchmark run --dataset medium --workers 4 --output json
 Focused read-path scenarios from this run:
 
 - `snapshot-creation`
-   - small w1: 672ms
-   - small w4: 631ms
-   - medium w1: 69901ms
-   - medium w4: 43955ms
+  - small w1: 672ms
+  - small w4: 631ms
+  - medium w1: 69901ms
+  - medium w4: 43955ms
 - `gc-after-churn`
-   - small w1: 2462ms
-   - small w4: 1733ms
-   - medium w1: 30225ms
-   - medium w4: 22860ms
+  - small w1: 2462ms
+  - small w4: 1733ms
+  - medium w1: 30225ms
+  - medium w4: 22860ms
 - `stats-inspect`
-   - small w1: 903ms
-   - small w4: 635ms
-   - medium w1: 73280ms
-   - medium w4: 49338ms
+  - small w1: 903ms
+  - small w4: 635ms
+  - medium w1: 73280ms
+  - medium w4: 49338ms
 
 Write-path impact check (Step 8) for index-cost guardrails:
 
