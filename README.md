@@ -810,7 +810,7 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Benchmark infrastructure and baseline policy: [docs/benchmarking.md](docs/benchmarking.md)
 - Milestone history: [CHANGELOG.md](CHANGELOG.md)
 
-## Roadmap note (v1.6 and beyond)
+## Roadmap note (post-v1.7)
 
 Current status:
 
@@ -818,8 +818,9 @@ Current status:
 - v1.3/v1.4 snapshot-retention correctness and lifecycle clarity are complete.
 - v1.5 chunker-evolution compatibility contract is complete.
 - v1.6 read-only observability and exact GC simulation tooling are complete.
+- v1.7 controlled-execution performance validation and release-readiness hardening are complete.
 
-Near-term focus remains performance profiling, broader repair scopes, and higher-level orchestration while preserving the existing correctness model and CLI contracts.
+Next focus shifts to v1.8 block abstraction while preserving the existing correctness model, restore determinism, and CLI/operator-facing compatibility contracts.
 
 ## Contributing
 
