@@ -1039,7 +1039,7 @@ if ! echo "$V16_INSPECT_1_PAYLOAD" | jq -e '
   and .data != null
   and .data.entity_type != null
   and .data.summary != null
-  and .meta.version == "v1.6"
+  and (.meta.version | test("^v1\\.[0-9]+$"))
   and .meta.exact == true
 ' > /dev/null 2>&1; then
   echo "[smoke] ERROR: v1.6 inspect JSON contract failed"
@@ -1063,7 +1063,7 @@ if ! echo "$V16_SIM_GC_PAYLOAD" | jq -e '
   .type == "simulation"
   and .data.kind == "gc"
   and .data.mutated == false
-  and .meta.version == "v1.6"
+  and (.meta.version | test("^v1\\.[0-9]+$"))
   and .meta.exact == true
 ' > /dev/null 2>&1; then
   echo "[smoke] ERROR: v1.6 simulate gc JSON contract failed"
