@@ -20,22 +20,42 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 14-17 as required release gates after sections 1-13.
 
-## Release Freeze Policy (Phase 10 gate)
+## Release Freeze Policy (v1.7 Phase 9 Step 1)
 
-Before running the technical release checks below, enforce feature freeze.
+Before running the technical release checks below, freeze implementation scope.
 
-Allowed change categories during this gate:
+Phase 9 goal: prove v1.7 is faster while remaining fully Coldkeep-safe across
+deterministic restore, GC safety, snapshot correctness, crash-safety assumptions,
+stable CLI behavior, measurable performance, and no hidden semantic regressions.
 
-- test fixes
-- bug fixes
-- documentation corrections
-- release metadata updates
+Release-positioning note:
 
-Disallowed during this gate:
+- v1.7 improves performance via controlled execution.
+- v1.7 is not a fully concurrent daemon release.
+- v1.7 introduces no storage format change.
+- v1.7 introduces no schema-breaking change.
+- restore determinism is preserved.
+- GC safety is preserved.
+- snapshot semantics are preserved.
 
-- new CDC behavior
-- new CLI features
-- schema expansion
+At this point, do not add new optimizations unless they fix a release blocker.
+
+Allowed during this gate:
+
+- tests
+- docs
+- small correctness fixes
+- benchmark reporting polish
+- release notes
+- minor cleanup
+
+Avoid during this gate:
+
+- new worker behavior
+- new DB indexes
+- new I/O batching model
+- new CLI contract changes
+- new storage/schema changes
 
 Expected:
 
@@ -105,12 +125,21 @@ if [ -n "$unformatted" ]; then
 fi
 
 bash -n scripts/*.sh
+bash scripts/check_smart_quotes.sh
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck scripts/*.sh
+else
+  echo "shellcheck not found. Install it to match CI parity (e.g., apt install shellcheck or brew install shellcheck)."
+  exit 1
+fi
 scripts/validate_validation_matrix.sh
+bash scripts/check_versioned_row_writers.sh
 golangci-lint run ./...
 go vet ./...
 
 COLDKEEP_CODEC=plain go test -race -count=1 ./cmd/... ./internal/...
 COLDKEEP_CODEC=aes-gcm COLDKEEP_KEY="$COLDKEEP_KEY" go test -race -count=1 ./cmd/... ./internal/...
+go test -race -count=1 ./internal/chunk/benchmark -run 'TestFastCDCBetterThanV1_SmallModifications|TestFastCDCBetterThanV1_ShiftedData|TestChunkerDeterminism|TestChunkerDeterminism_RunDatasetTwice|TestChunkCoverage|TestDefaultDatasetsDeterministicAcrossCalls'
 
 go build ./...
 scripts/audit_ci_enforcement.sh --local-only
@@ -127,6 +156,8 @@ under those paths while running this checklist.
 ## 3) Run full required CI matrix locally (all gate jobs, both codecs)
 
 ```bash
+unset COLDKEEP_STORAGE_DIR
+
 for codec in plain aes-gcm; do
   echo "=== Codec: ${codec} ==="
   export COLDKEEP_CODEC="$codec"
@@ -138,10 +169,12 @@ for codec in plain aes-gcm; do
   go test -race -count=1 ./tests/integration/...
 
   # integration-long-run
-  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
 
   # adversarial
+  unset COLDKEEP_STORAGE_DIR
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
+  go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14|TestAdversarialG15|TestAdversarialG16|TestAdversarialG17'
 
   # smoke
   COLDKEEP_SMOKE_RESET_DB=1 \
@@ -151,13 +184,28 @@ for codec in plain aes-gcm; do
   PATH="$PWD:$PATH" \
   scripts/smoke.sh
 done
+
+if [ -f benchmark-baseline.json ]; then
+  cp benchmark-baseline.json benchmark-baseline-committed.json
+fi
+
+./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
+
+if [ -f benchmark-baseline-committed.json ]; then
+  ./coldkeep benchmark run --dataset small --output json --compare benchmark-baseline-committed.json --threshold 100
+fi
 ```
+
+Why `unset COLDKEEP_STORAGE_DIR` first: step 1 exports a manual-check storage path
+for later CLI validation. Leaving that variable set during integration/adversarial
+test runs can force unrelated tests onto a shared storage directory and produce
+false failures that do not reflect CI behavior.
 
 Prerequisite for the smoke leg: `scripts/smoke.sh` shells out to `psql` when
 `COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql` is used. Install a local
 PostgreSQL client first if it is not already available.
 
-Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`) across both codecs.
+Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`, `benchmark`) across both codecs.
 
 For the snapshot contract gate, run the focused integration suite after the matrix loop:
 
@@ -233,6 +281,9 @@ Bootstrap ON (clean schema bootstrap path):
 
 ```bash
 unset COLDKEEP_CODEC
+export DB_NAME=coldkeep_bootstrap_on_probe
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_on_probe;"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_on_probe;"
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ./coldkeep stats
 ```
@@ -240,6 +291,9 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 Bootstrap OFF (fail-fast when schema is missing):
 
 ```bash
+export DB_NAME=coldkeep_bootstrap_off_probe
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_off_probe;"
+docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_off_probe;"
 unset COLDKEEP_DB_AUTO_BOOTSTRAP
 # Point to a fresh DB without schema and confirm command fails fast.
 ./coldkeep stats
@@ -250,6 +304,8 @@ Expected: bootstrap on creates/validates schema path successfully; bootstrap off
 ## 8) Test clean install path
 
 From a clean machine/container flow:
+
+Warning: `docker compose down -v` is destructive and removes PostgreSQL volumes.
 
 ```bash
 docker compose down -v

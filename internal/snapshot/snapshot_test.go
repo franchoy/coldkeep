@@ -103,6 +103,14 @@ func TestSnapshotSourceQueryPostgresAppendsForUpdate(t *testing.T) {
 	}
 }
 
+func TestSnapshotSourceQueryIncludesDeterministicOrderBy(t *testing.T) {
+	dbconn := openTestDB(t)
+	query := snapshotSourceQuery(dbconn)
+	if !strings.Contains(query, "ORDER BY pf.path, pf.logical_file_id") {
+		t.Fatalf("expected deterministic ORDER BY clause in snapshot source query, got %q", query)
+	}
+}
+
 // ---- NormalizeSnapshotPath tests ----
 
 func TestNormalizeSnapshotPathValid(t *testing.T) {
@@ -3910,5 +3918,76 @@ func TestResolveSnapshotRestoreSelectionSizeFilter(t *testing.T) {
 	}
 	if len(selected) != 1 || selected[0].Path != "docs/large.txt" {
 		t.Fatalf("expected only docs/large.txt (size>=100), got %+v", selected)
+	}
+}
+
+// ================================================================
+// Snapshot batch insert error-path tests (Step 10)
+// ================================================================
+// Invariant: a partial batch insert failure must roll back the entire set of
+// snapshot_file rows so no snapshot is left partially populated.
+// ================================================================
+
+// TestInsertSnapshotFilesBatchInsertPartialFailureRollsBackAllRows verifies that when
+// insertSnapshotFilesByPathIDNoReturningBatch encounters an error mid-batch (here: a
+// duplicate (snapshot_id, path_id) constraint violation on the second row), it returns
+// an error and — after the caller rolls back the transaction — zero snapshot_file rows
+// are visible.  This enforces the "failure before durable write publish => no live
+// metadata points to missing data" invariant at the snapshot metadata layer.
+func TestInsertSnapshotFilesBatchInsertPartialFailureRollsBackAllRows(t *testing.T) {
+	dbconn := openTestDB(t)
+	ctx := context.Background()
+
+	// Seed a snapshot and two logical_file rows.
+	s := Snapshot{
+		ID:        "batch-error-snap",
+		CreatedAt: time.Now().UTC(),
+		Type:      "full",
+	}
+	if err := InsertSnapshot(ctx, dbconn, s); err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	lfID1 := insertLogicalFile(t, dbconn, "aaaa0000000000000000000000000000000000000000000000000000000000000001")
+	lfID2 := insertLogicalFile(t, dbconn, "bbbb0000000000000000000000000000000000000000000000000000000000000002")
+
+	// Insert a single snapshot_path row and get its ID.
+	res, err := dbconn.Exec(`INSERT INTO snapshot_path (path) VALUES ('docs/shared.txt')`)
+	if err != nil {
+		t.Fatalf("insert snapshot_path: %v", err)
+	}
+	pathID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+
+	// Build two rows: the second is a duplicate of the first (same snapshot_id + path_id),
+	// which will violate the UNIQUE INDEX idx_snapshot_file_unique.
+	rows := []snapshotFileDBRow{
+		{SnapshotID: s.ID, PathID: pathID, LogicalFileID: lfID1},
+		{SnapshotID: s.ID, PathID: pathID, LogicalFileID: lfID2}, // duplicate → constraint violation
+	}
+	paths := []string{"docs/shared.txt", "docs/shared.txt"}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	batchErr := insertSnapshotFilesByPathIDNoReturningBatch(ctx, tx, rows, paths)
+	if batchErr == nil {
+		_ = tx.Commit()
+		t.Fatal("expected error from duplicate constraint violation, got nil")
+	}
+	// Roll back the entire batch on error — no partial state must survive.
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback after batch error: %v", err)
+	}
+
+	// Assert: no snapshot_file rows are visible after the rollback.
+	var count int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = ?`, s.ID).Scan(&count); err != nil {
+		t.Fatalf("count snapshot_file: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 snapshot_file rows after batch failure + rollback, got %d", count)
 	}
 }

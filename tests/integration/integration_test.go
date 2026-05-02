@@ -236,6 +236,78 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	}
 }
 
+func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	payload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(
+		t,
+		repoRoot,
+		binPath,
+		env,
+		"benchmark",
+		"run",
+		"--dataset", "small",
+		"--workers", "4",
+		"--output", "json",
+	), "benchmark")
+
+	data := testutils.JSONMap(t, payload, "data")
+	aggStats := testutils.JSONMap(t, data, "execution_stats")
+	if workers := testutils.JSONInt64(t, aggStats, "workers_used"); workers <= 0 {
+		t.Fatalf("expected positive aggregate workers_used, got %d", workers)
+	}
+
+	rowsRaw, ok := data["rows"].([]any)
+	if !ok || len(rowsRaw) == 0 {
+		t.Fatalf("expected non-empty benchmark rows, got %v", data["rows"])
+	}
+	firstRow, ok := rowsRaw[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first benchmark row object, got %T", rowsRaw[0])
+	}
+	rowStatsRaw, ok := firstRow["execution_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected row execution_stats object, got %T", firstRow["execution_stats"])
+	}
+	workersUsedRaw, ok := rowStatsRaw["workers_used"].(float64)
+	if !ok || int64(workersUsedRaw) <= 0 {
+		t.Fatalf("expected positive row workers_used, got %v", rowStatsRaw["workers_used"])
+	}
+}
+
 func TestDoctorCommand(t *testing.T) {
 	testgate.RequireDB(t)
 
@@ -8431,6 +8503,46 @@ func TestZeroByteFile(t *testing.T) {
 
 	fileID := testutils.FetchFileIDByHash(t, dbconn, emptyHash)
 
+	var logicalSize int64
+	var logicalHash string
+	var logicalStatus string
+	if err := dbconn.QueryRow(
+		`SELECT total_size, file_hash, status FROM logical_file WHERE id = $1`,
+		fileID,
+	).Scan(&logicalSize, &logicalHash, &logicalStatus); err != nil {
+		t.Fatalf("query logical_file metadata: %v", err)
+	}
+	if logicalSize != 0 {
+		t.Fatalf("logical_file.total_size mismatch: got %d want 0", logicalSize)
+	}
+	if logicalHash != emptyHash {
+		t.Fatalf("logical_file.file_hash mismatch: got %q want %q", logicalHash, emptyHash)
+	}
+	if logicalStatus != string(filestate.LogicalFileCompleted) {
+		t.Fatalf("logical_file.status mismatch: got %q want %q", logicalStatus, filestate.LogicalFileCompleted)
+	}
+
+	var fileChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, fileID).Scan(&fileChunkCount); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if fileChunkCount != 0 {
+		t.Fatalf("expected zero file_chunk rows for empty file, got %d", fileChunkCount)
+	}
+
+	var linkedChunkCount int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN file_chunk fc ON fc.chunk_id = c.id
+		WHERE fc.logical_file_id = $1
+	`, fileID).Scan(&linkedChunkCount); err != nil {
+		t.Fatalf("count linked chunk rows: %v", err)
+	}
+	if linkedChunkCount != 0 {
+		t.Fatalf("expected zero linked chunk rows for empty file, got %d", linkedChunkCount)
+	}
+
 	outDir := filepath.Join(tmp, "out")
 	_ = os.MkdirAll(outDir, 0o755)
 	outPath := filepath.Join(outDir, "empty.restored.bin")
@@ -10381,6 +10493,142 @@ func TestSealFailureAfterPhysicalFinalize(t *testing.T) {
 	}
 
 	testutils.AssertNoProcessingRows(t, dbconn)
+}
+
+func TestSnapshotBatchInsertFailureRecoversAndPreservesVerifyRestoreGC(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	anchorPath := testutils.CreateTempFile(t, inputDir, "snapshot-batch-failure-anchor.bin", 320*1024)
+	anchorHash := testutils.SHA256File(t, anchorPath)
+
+	storeCtx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: container.ContainersDir,
+	}
+	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(storeCtx, anchorPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	const snapshotID = "snap-crash-batch"
+
+	if _, err := dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_snapshot_file_insert_trg ON snapshot_file`); err != nil {
+		t.Fatalf("drop stale snapshot trigger: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_snapshot_file_insert()`); err != nil {
+		t.Fatalf("drop stale snapshot trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE FUNCTION ck_fail_snapshot_file_insert()
+		RETURNS trigger
+		LANGUAGE plpgsql
+		AS $$
+		BEGIN
+			RAISE EXCEPTION 'injected snapshot batch insert failure';
+		END;
+		$$
+	`); err != nil {
+		t.Fatalf("create snapshot trigger function: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE TRIGGER ck_fail_snapshot_file_insert_trg
+		BEFORE INSERT ON snapshot_file
+		FOR EACH ROW
+		EXECUTE FUNCTION ck_fail_snapshot_file_insert()
+	`); err != nil {
+		t.Fatalf("create snapshot trigger: %v", err)
+	}
+	defer func() {
+		_, _ = dbconn.Exec(`DROP TRIGGER IF EXISTS ck_fail_snapshot_file_insert_trg ON snapshot_file`)
+		_, _ = dbconn.Exec(`DROP FUNCTION IF EXISTS ck_fail_snapshot_file_insert()`)
+	}()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	snapCmd := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"snapshot", "create", "--id", snapshotID, "--output", "json")
+	if snapCmd.ExitCode == 0 {
+		t.Fatalf("expected snapshot create to fail under injected batch failure, stdout=%s", snapCmd.Stdout)
+	}
+	if !strings.Contains(strings.ToLower(snapCmd.Stdout+snapCmd.Stderr), "injected snapshot batch insert failure") {
+		t.Fatalf("expected injected snapshot batch failure text in CLI output; stdout=%s stderr=%s", snapCmd.Stdout, snapCmd.Stderr)
+	}
+
+	var snapshotRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = $1`, snapshotID).Scan(&snapshotRows); err != nil {
+		t.Fatalf("count failed snapshot row: %v", err)
+	}
+	if snapshotRows != 0 {
+		t.Fatalf("expected snapshot row rollback after batch insert failure, got %d", snapshotRows)
+	}
+
+	var snapshotFileRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&snapshotFileRows); err != nil {
+		t.Fatalf("count failed snapshot_file rows: %v", err)
+	}
+	if snapshotFileRows != 0 {
+		t.Fatalf("expected no snapshot_file rows after failed batch insert, got %d", snapshotFileRows)
+	}
+
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("system recovery after snapshot batch failure: %v", err)
+	}
+	testutils.AssertNoProcessingRows(t, dbconn)
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull); err != nil {
+		t.Fatalf("verify full after recovery: %v", err)
+	}
+
+	outDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore: %v", err)
+	}
+	outPath := filepath.Join(outDir, "snapshot-batch-failure-anchor.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, storeResult.FileID, outPath); err != nil {
+		t.Fatalf("restore after recovery: %v", err)
+	}
+	if gotHash := testutils.SHA256File(t, outPath); gotHash != anchorHash {
+		t.Fatalf("restored hash mismatch after recovery: want %s got %s", anchorHash, gotHash)
+	}
+
+	if _, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir); err != nil {
+		t.Fatalf("gc dry-run after recovery: %v", err)
+	}
+	if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+		t.Fatalf("gc real run after recovery: %v", err)
+	}
+
+	outPathAfterGC := filepath.Join(outDir, "snapshot-batch-failure-anchor.after-gc.restored.bin")
+	if err := storage.RestoreFileWithDB(dbconn, storeResult.FileID, outPathAfterGC); err != nil {
+		t.Fatalf("restore after gc: %v", err)
+	}
+	if gotHash := testutils.SHA256File(t, outPathAfterGC); gotHash != anchorHash {
+		t.Fatalf("restored hash mismatch after gc: want %s got %s", anchorHash, gotHash)
+	}
 }
 
 func TestRemoveRejectsProcessingLogicalFile(t *testing.T) {
@@ -14230,4 +14478,126 @@ func TestSnapshotRetentionChurnLongRun(t *testing.T) {
 
 	testutils.AssertNoProcessingRows(t, dbconn)
 	testutils.AssertUniqueFileChunkOrders(t, dbconn)
+}
+
+// TestPreparedChunksStoreGraphEquivalence (Phase 4 Step 9) verifies that the prepared/commit path produces
+// identical store results compared to the direct store path (same chunk graph, same file hash,
+// same chunk indexes, sizes, hashes, and chunker versions).
+func TestPreparedChunksStoreGraphEquivalence(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
+
+	inputDir := filepath.Join(tmp, "input")
+	_ = os.MkdirAll(inputDir, 0o755)
+
+	// Create a multi-chunk test file
+	inPath := testutils.CreateTempFile(t, inputDir, "prepare_equivalence.bin", 3*1024*1024)
+
+	ctx := testutils.NewTestContext(dbconn)
+	storeResult, err := storage.StoreFileWithStorageContextAndCodecResult(ctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+	if storeResult.FileID == 0 {
+		t.Fatal("expected FileID > 0")
+	}
+
+	// Verify computed file hash is consistent
+	expectedHash := testutils.SHA256File(t, inPath)
+	if storeResult.FileHash != expectedHash {
+		t.Errorf("store result file hash mismatch: got %q, want %q", storeResult.FileHash, expectedHash)
+	}
+
+	// Query store graph to verify prepared/commit path results
+	fileChunkRecords := testutils.QueryChunkGraph(t, dbconn, storeResult.FileID)
+	if len(fileChunkRecords) == 0 {
+		t.Fatal("expected at least one file_chunk row")
+	}
+
+	// Verify contiguous chunk ordering [0..n-1]
+	for i, rec := range fileChunkRecords {
+		if rec.Order != i {
+			t.Errorf("chunk ordering error at position %d: got order=%d, want=%d", i, rec.Order, i)
+		}
+	}
+
+	// Verify all chunks have non-empty hashes and positive sizes
+	for i, rec := range fileChunkRecords {
+		if rec.Hash == "" {
+			t.Errorf("chunk %d at position %d: hash is empty", i, i)
+		}
+		if rec.Size <= 0 {
+			t.Errorf("chunk %d at position %d: expected size > 0, got %d", i, i, rec.Size)
+		}
+	}
+
+	// Verify logical_file metadata is correctly set
+	var logicalStatus, logicalHash string
+	if err := dbconn.QueryRow(
+		`SELECT status, file_hash FROM logical_file WHERE id = $1`,
+		storeResult.FileID,
+	).Scan(&logicalStatus, &logicalHash); err != nil {
+		t.Fatalf("QueryRow logical_file: %v", err)
+	}
+
+	if logicalStatus != string(filestate.LogicalFileCompleted) {
+		t.Errorf("logical_file status: expected %s, got %s", filestate.LogicalFileCompleted, logicalStatus)
+	}
+
+	if logicalHash != storeResult.FileHash {
+		t.Errorf("logical_file.file_hash mismatch: stored=%q, result=%q", logicalHash, storeResult.FileHash)
+	}
+
+	// Verify total chunk sizes match file size
+	var totalSize int64
+	for _, rec := range fileChunkRecords {
+		totalSize += rec.Size
+	}
+
+	fileBody, err := os.ReadFile(inPath)
+	if err != nil {
+		t.Fatalf("read input file: %v", err)
+	}
+
+	if totalSize != int64(len(fileBody)) {
+		t.Errorf("total chunk size mismatch: chunks=%d, file=%d", totalSize, len(fileBody))
+	}
+
+	// Verify round-trip restore produces identical content
+	restoreDir := filepath.Join(tmp, "restore")
+	_ = os.MkdirAll(restoreDir, 0o755)
+	restorePath := filepath.Join(restoreDir, "restored_prepare_equiv.bin")
+
+	if err := storage.RestoreFileWithDB(dbconn, storeResult.FileID, restorePath); err != nil {
+		t.Fatalf("restore file: %v", err)
+	}
+
+	restoredContent, err := os.ReadFile(restorePath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+
+	if !bytes.Equal(restoredContent, fileBody) {
+		t.Fatal("restored content does not match original")
+	}
+
+	restoredHash := testutils.SHA256File(t, restorePath)
+	if restoredHash != expectedHash {
+		t.Errorf("restored file hash mismatch: got %q, want %q", restoredHash, expectedHash)
+	}
 }

@@ -141,6 +141,120 @@ func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	}
 }
 
+func TestPinLogicalFileRestoreChunksReturnsOrderedChunkRows(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+		 RETURNING id`,
+		"ordered-restore.bin",
+		9,
+		"ordered-restore-file-hash",
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	insertChunkWithContainer := func(name string) (int64, int64) {
+		t.Helper()
+		var containerID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO container (filename, current_size, max_size, sealed)
+			 VALUES ($1, $2, $3, TRUE)
+			 RETURNING id`,
+			name+".bin",
+			4096,
+			1048576,
+		).Scan(&containerID); err != nil {
+			t.Fatalf("insert container %s: %v", name, err)
+		}
+
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, $4, 'v1-simple-rolling')
+			 RETURNING id`,
+			"hash-"+name,
+			3,
+			filestate.ChunkCompleted,
+			1,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk %s: %v", name, err)
+		}
+
+		if _, err := dbconn.Exec(
+			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+			 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+			chunkID,
+			3,
+			3,
+			[]byte{},
+			containerID,
+			0,
+		); err != nil {
+			t.Fatalf("insert block %s: %v", name, err)
+		}
+
+		return chunkID, containerID
+	}
+
+	chunk0, _ := insertChunkWithContainer("c0")
+	chunk1, _ := insertChunkWithContainer("c1")
+	chunk2, _ := insertChunkWithContainer("c2")
+
+	// Intentionally insert out of order; restore pinning must still return
+	// chunk rows ordered by chunk_order ASC.
+	for _, row := range []struct {
+		chunkID    int64
+		chunkOrder int
+	}{
+		{chunkID: chunk2, chunkOrder: 2},
+		{chunkID: chunk0, chunkOrder: 0},
+		{chunkID: chunk1, chunkOrder: 1},
+	} {
+		if _, err := dbconn.Exec(
+			`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+			 VALUES ($1, $2, $3)`,
+			fileID,
+			row.chunkID,
+			row.chunkOrder,
+		); err != nil {
+			t.Fatalf("insert file_chunk order=%d: %v", row.chunkOrder, err)
+		}
+	}
+
+	_, _, chunkRows, pinnedChunkIDs, err := pinLogicalFileRestoreChunks(dbconn, fileID)
+	if err != nil {
+		t.Fatalf("pin restore chunks: %v", err)
+	}
+	if len(chunkRows) != 3 {
+		t.Fatalf("chunk row count mismatch: got %d, want 3", len(chunkRows))
+	}
+
+	wantChunkIDs := []int64{chunk0, chunk1, chunk2}
+	for i := range wantChunkIDs {
+		if chunkRows[i].chunkOrder != int64(i) {
+			t.Fatalf("chunk row order mismatch at %d: got %d, want %d", i, chunkRows[i].chunkOrder, i)
+		}
+		if chunkRows[i].chunkID != wantChunkIDs[i] {
+			t.Fatalf("chunk row chunk id mismatch at %d: got %d, want %d", i, chunkRows[i].chunkID, wantChunkIDs[i])
+		}
+		if pinnedChunkIDs[i] != wantChunkIDs[i] {
+			t.Fatalf("pinned chunk id mismatch at %d: got %d, want %d", i, pinnedChunkIDs[i], wantChunkIDs[i])
+		}
+	}
+}
+
 func TestRestoreFailsWhenLogicalFileNotFound(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -1531,9 +1645,15 @@ func TestRestoreFailsOnChunkOrderDiscontinuity(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected restore to fail for chunk-order discontinuity")
 	}
-	if !strings.Contains(err.Error(), "no restorable chunks found for file") &&
+	// Defensive ordering validation now catches discontinuity early, which is better
+	// than allowing it to slip through to the restore loop. Accept either:
+	// 1. Ordering validation error (preferred - early detection)
+	// 2. Original loop errors (hash-mismatch or no-restorable-chunks)
+	if !strings.Contains(err.Error(), "invalid restore recipe ordering") &&
+		!strings.Contains(err.Error(), "non-contiguous restore chunk order") &&
+		!strings.Contains(err.Error(), "no restorable chunks found for file") &&
 		!strings.Contains(err.Error(), "restored file hash mismatch") {
-		t.Fatalf("expected no-restorable-chunks or hash-mismatch error, got: %v", err)
+		t.Fatalf("expected ordering/hash/restorable-chunks error, got: %v", err)
 	}
 }
 
@@ -2342,4 +2462,231 @@ func setupStoredPathRestoreFixture(
 	}
 
 	return dbconn, StorageContext{DB: dbconn, ContainerDir: containersDir}, storedPath, payload
+}
+
+func setupRestorePinningFixture(t *testing.T, chunkPayloads [][]byte) (*sql.DB, StorageContext, int64, []int64, []byte) {
+	t.Helper()
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	if err := db.RunMigrations(dbconn); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	restoredBytes := make([]byte, 0)
+	for _, payload := range chunkPayloads {
+		restoredBytes = append(restoredBytes, payload...)
+	}
+	fileSum := sha256.Sum256(restoredBytes)
+	fileHash := hex.EncodeToString(fileSum[:])
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, chunker_version)
+		 VALUES ($1, $2, $3, $4, 'v1-simple-rolling') RETURNING id`,
+		"restore-step10-pinning.bin",
+		int64(len(restoredBytes)),
+		fileHash,
+		filestate.LogicalFileCompleted,
+	).Scan(&fileID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	chunkIDs := make([]int64, 0, len(chunkPayloads))
+	for i, payload := range chunkPayloads {
+		containerFilename := fmt.Sprintf("restore-step10-pinning-%d.bin", i)
+		containerPath := filepath.Join(containersDir, containerFilename)
+		if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("write test container file %d: %v", i, err)
+		}
+
+		var containerID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO container (filename, current_size, max_size, sealed)
+			 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+			containerFilename,
+			int64(container.ContainerHdrLen+len(payload)),
+			container.GetContainerMaxSize(),
+		).Scan(&containerID); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("insert container %d: %v", i, err)
+		}
+
+		chunkSum := sha256.Sum256(payload)
+		chunkHash := hex.EncodeToString(chunkSum[:])
+
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
+			chunkHash,
+			int64(len(payload)),
+			filestate.ChunkCompleted,
+		).Scan(&chunkID); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("insert chunk %d: %v", i, err)
+		}
+
+		if _, err := dbconn.Exec(
+			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+			 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+			chunkID,
+			int64(len(payload)),
+			int64(len(payload)),
+			[]byte{},
+			containerID,
+			int64(container.ContainerHdrLen),
+		); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("insert block %d: %v", i, err)
+		}
+
+		if _, err := dbconn.Exec(
+			`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`,
+			fileID,
+			chunkID,
+			i,
+		); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("insert file_chunk %d: %v", i, err)
+		}
+
+		chunkIDs = append(chunkIDs, chunkID)
+	}
+
+	return dbconn, StorageContext{DB: dbconn, ContainerDir: containersDir}, fileID, chunkIDs, restoredBytes
+}
+
+func readChunkPinCountForRestoreTest(t *testing.T, dbconn *sql.DB, chunkID int64) int64 {
+	t.Helper()
+	var pinCount int64
+	if err := dbconn.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCount); err != nil {
+		t.Fatalf("read chunk pin_count for chunk %d: %v", chunkID, err)
+	}
+	return pinCount
+}
+
+func TestRestorePinsChunksBeforeRead(t *testing.T) {
+	dbconn, sgctx, fileID, chunkIDs, _ := setupRestorePinningFixture(t, [][]byte{[]byte("pin-before-read")})
+	defer func() { _ = dbconn.Close() }()
+
+	hookCalled := false
+	TestRestoreBeforeChunkReadHook = func(hookDB *sql.DB, chunkID int64) error {
+		hookCalled = true
+		var pinCount int64
+		if err := hookDB.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, chunkID).Scan(&pinCount); err != nil {
+			return fmt.Errorf("query pin_count in pre-read hook: %w", err)
+		}
+		if pinCount != 1 {
+			return fmt.Errorf("expected chunk %d pin_count=1 before read, got %d", chunkID, pinCount)
+		}
+		return fmt.Errorf("stop before read")
+	}
+	defer func() { TestRestoreBeforeChunkReadHook = nil }()
+
+	outPath := filepath.Join(t.TempDir(), "out.bin")
+	err := RestoreFileWithStorageContext(sgctx, fileID, outPath)
+	if err == nil || !strings.Contains(err.Error(), "test hook before chunk read: stop before read") {
+		t.Fatalf("expected pre-read hook failure, got: %v", err)
+	}
+	if !hookCalled {
+		t.Fatalf("expected pre-read hook to be called")
+	}
+
+	if got := readChunkPinCountForRestoreTest(t, dbconn, chunkIDs[0]); got != 0 {
+		t.Fatalf("expected pin_count=0 after failed restore cleanup, got %d", got)
+	}
+}
+
+func TestRestoreUnpinsAfterSuccess(t *testing.T) {
+	payloads := [][]byte{[]byte("success-a"), []byte("success-b")}
+	dbconn, sgctx, fileID, chunkIDs, restoredBytes := setupRestorePinningFixture(t, payloads)
+	defer func() { _ = dbconn.Close() }()
+
+	outPath := filepath.Join(t.TempDir(), "out-success.bin")
+	if err := RestoreFileWithStorageContext(sgctx, fileID, outPath); err != nil {
+		t.Fatalf("restore success path: %v", err)
+	}
+
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read restored output: %v", err)
+	}
+	if !bytes.Equal(got, restoredBytes) {
+		t.Fatalf("restored output mismatch: got=%q want=%q", string(got), string(restoredBytes))
+	}
+
+	for _, chunkID := range chunkIDs {
+		if pinCount := readChunkPinCountForRestoreTest(t, dbconn, chunkID); pinCount != 0 {
+			t.Fatalf("expected pin_count=0 after successful restore for chunk %d, got %d", chunkID, pinCount)
+		}
+	}
+}
+
+func TestRestoreUnpinsAfterFailure(t *testing.T) {
+	dbconn, sgctx, fileID, chunkIDs, _ := setupRestorePinningFixture(t, [][]byte{[]byte("failure-path")})
+	defer func() { _ = dbconn.Close() }()
+
+	hookCalled := false
+	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+		hookCalled = true
+		return fmt.Errorf("forced failure before rename")
+	}
+	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+
+	err := RestoreFileWithStorageContext(sgctx, fileID, filepath.Join(t.TempDir(), "out-failure.bin"))
+	if err == nil || !strings.Contains(err.Error(), "test hook restore failure") {
+		t.Fatalf("expected restore failure from rename hook, got: %v", err)
+	}
+	if !hookCalled {
+		t.Fatalf("expected rename failure hook to be called")
+	}
+
+	for _, chunkID := range chunkIDs {
+		if pinCount := readChunkPinCountForRestoreTest(t, dbconn, chunkID); pinCount != 0 {
+			t.Fatalf("expected pin_count=0 after failed restore for chunk %d, got %d", chunkID, pinCount)
+		}
+	}
+}
+
+func TestRestoreFailureDoesNotLeaveStalePins(t *testing.T) {
+	payloads := [][]byte{[]byte("stale-a"), []byte("stale-b")}
+	dbconn, sgctx, fileID, chunkIDs, _ := setupRestorePinningFixture(t, payloads)
+	defer func() { _ = dbconn.Close() }()
+
+	hookCalls := 0
+	TestRestoreBeforeChunkReadHook = func(hookDB *sql.DB, _ int64) error {
+		hookCalls++
+		for _, cid := range chunkIDs {
+			var pinCount int64
+			if err := hookDB.QueryRow(`SELECT pin_count FROM chunk WHERE id = $1`, cid).Scan(&pinCount); err != nil {
+				return fmt.Errorf("query pin_count for chunk %d: %w", cid, err)
+			}
+			if pinCount != 1 {
+				return fmt.Errorf("expected chunk %d to be pinned before read, got pin_count=%d", cid, pinCount)
+			}
+		}
+		return fmt.Errorf("forced pre-read failure")
+	}
+	defer func() { TestRestoreBeforeChunkReadHook = nil }()
+
+	err := RestoreFileWithStorageContext(sgctx, fileID, filepath.Join(t.TempDir(), "out-stale.bin"))
+	if err == nil || !strings.Contains(err.Error(), "test hook before chunk read") {
+		t.Fatalf("expected forced pre-read failure, got: %v", err)
+	}
+	if hookCalls == 0 {
+		t.Fatalf("expected pre-read hook to run at least once")
+	}
+
+	for _, chunkID := range chunkIDs {
+		if pinCount := readChunkPinCountForRestoreTest(t, dbconn, chunkID); pinCount != 0 {
+			t.Fatalf("stale pin detected after failed restore for chunk %d: pin_count=%d", chunkID, pinCount)
+		}
+	}
 }

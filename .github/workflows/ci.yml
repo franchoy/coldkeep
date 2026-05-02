@@ -437,10 +437,85 @@ jobs:
           path: ${{ github.workspace }}/.ci-storage/${{ matrix.codec }}
           if-no-files-found: ignore
 
+  benchmark:
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build CLI
+        run: go build -o coldkeep ./cmd/coldkeep
+
+      - name: Preserve committed benchmark baseline for comparison
+        run: |
+          if [ -f benchmark-baseline.json ]; then
+            cp benchmark-baseline.json benchmark-baseline-committed.json
+          fi
+
+      - name: Run benchmark (small dataset) and capture baseline
+        env:
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: ./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
+
+      - name: Compare against committed baseline (100% threshold — disaster check only)
+        env:
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          if [ -f benchmark-baseline-committed.json ]; then
+            ./coldkeep benchmark run --dataset small --output json \
+              --compare benchmark-baseline-committed.json --threshold 100
+          fi
+
+      - name: Upload benchmark baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-baseline
+          path: benchmark-baseline.json
+          if-no-files-found: error
+
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke]
+    needs: [quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke, benchmark]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
@@ -452,6 +527,7 @@ jobs:
           INTEGRATION_LONG_RUN_RESULT: ${{ needs.integration-long-run.result }}
           ADVERSARIAL_RESULT: ${{ needs.adversarial.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
           echo "integration-correctness=${INTEGRATION_CORRECTNESS_RESULT}"
@@ -459,13 +535,15 @@ jobs:
           echo "integration-long-run=${INTEGRATION_LONG_RUN_RESULT}"
           echo "adversarial=${ADVERSARIAL_RESULT}"
           echo "smoke=${SMOKE_RESULT}"
+          echo "benchmark=${BENCHMARK_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
              [ "${INTEGRATION_CORRECTNESS_RESULT}" != "success" ] || \
              [ "${INTEGRATION_STRESS_RESULT}" != "success" ] || \
              [ "${INTEGRATION_LONG_RUN_RESULT}" != "success" ] || \
              [ "${ADVERSARIAL_RESULT}" != "success" ] || \
-             [ "${SMOKE_RESULT}" != "success" ]; then
+             [ "${SMOKE_RESULT}" != "success" ] || \
+             [ "${BENCHMARK_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
             exit 1
           fi

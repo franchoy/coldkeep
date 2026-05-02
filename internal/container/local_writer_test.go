@@ -3,6 +3,7 @@ package container
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -24,18 +25,35 @@ type stubTx struct {
 }
 
 type fakeContainer struct {
-	syncErr  error
-	closeErr error
+	size      int64
+	appendErr error
+	truncErr  error
+	syncErr   error
+	closeErr  error
 }
 
-func (f *fakeContainer) Append(data []byte) (int64, error) { return 0, nil }
+func (f *fakeContainer) Append(data []byte) (int64, error) {
+	if f.appendErr != nil {
+		return 0, f.appendErr
+	}
+	offset := f.size
+	f.size += int64(len(data))
+	return offset, nil
+}
 func (f *fakeContainer) ReadAt(offset int64, size int64) ([]byte, error) {
 	return nil, nil
 }
-func (f *fakeContainer) Size() int64               { return ContainerHdrLen }
-func (f *fakeContainer) Truncate(size int64) error { return nil }
-func (f *fakeContainer) Sync() error               { return f.syncErr }
-func (f *fakeContainer) Close() error              { return f.closeErr }
+func (f *fakeContainer) Size() int64 { return f.size }
+func (f *fakeContainer) Truncate(size int64) error {
+	if f.truncErr != nil {
+		return f.truncErr
+	}
+	f.size = size
+	return nil
+}
+func (f *fakeContainer) Sync() error        { return f.syncErr }
+func (f *fakeContainer) Close() error       { return f.closeErr }
+func (f *fakeContainer) SetSize(size int64) { f.size = size }
 
 func (s *stubTx) Exec(query string, args ...any) (sql.Result, error) {
 	s.queries = append(s.queries, query)
@@ -78,16 +96,16 @@ func TestLockContainerRowNowaitWithRetrySucceedsOnFirstAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected lock acquisition success, got: %v", err)
 	}
-	if tx.execCalls != 1 {
-		t.Fatalf("expected one exec call, got %d", tx.execCalls)
+	if tx.execCalls != 3 {
+		t.Fatalf("expected savepoint + lock + release, got %d exec calls", tx.execCalls)
 	}
-	if len(tx.queries) != 1 || !strings.Contains(tx.queries[0], "FOR UPDATE NOWAIT") {
+	if len(tx.queries) != 3 || !strings.Contains(tx.queries[1], "FOR UPDATE NOWAIT") {
 		t.Fatalf("expected NOWAIT lock query, got: %v", tx.queries)
 	}
 }
 
 func TestLockContainerRowNowaitWithRetryReturnsContentionAfterExhaustion(t *testing.T) {
-	tx := &stubTx{errs: []error{&pq.Error{Code: "55P03"}}}
+	tx := &stubTx{errs: []error{nil, &pq.Error{Code: "55P03"}, nil, nil}}
 
 	err := lockContainerRowNowaitWithRetry(tx, nil, 42, 1, time.Millisecond)
 	if !errors.Is(err, ErrContainerLockContention) {
@@ -95,6 +113,39 @@ func TestLockContainerRowNowaitWithRetryReturnsContentionAfterExhaustion(t *test
 	}
 	if !strings.Contains(err.Error(), "container 42") {
 		t.Fatalf("expected container id in contention error, got: %v", err)
+	}
+}
+
+func TestLockContainerRowNowaitWithRetryUsesSavepointRollbackBetweenLockRetries(t *testing.T) {
+	tx := &stubTx{errs: []error{nil, &pq.Error{Code: "55P03"}, nil, nil, nil, nil}}
+
+	err := lockContainerRowNowaitWithRetry(tx, nil, 42, 2, time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected retry to succeed after lock contention, got: %v", err)
+	}
+	if tx.execCalls != 7 {
+		t.Fatalf("expected 7 exec calls across savepoint retry flow, got %d", tx.execCalls)
+	}
+	if tx.queries[0] != "SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected initial savepoint, got %q", tx.queries[0])
+	}
+	if !strings.Contains(tx.queries[1], "FOR UPDATE NOWAIT") {
+		t.Fatalf("expected NOWAIT lock query, got %q", tx.queries[1])
+	}
+	if tx.queries[2] != "ROLLBACK TO SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected rollback to savepoint after lock contention, got %q", tx.queries[2])
+	}
+	if tx.queries[3] != "RELEASE SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected release after rollback, got %q", tx.queries[3])
+	}
+	if tx.queries[4] != "SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected second savepoint before retry, got %q", tx.queries[4])
+	}
+	if !strings.Contains(tx.queries[5], "FOR UPDATE NOWAIT") {
+		t.Fatalf("expected second NOWAIT lock query, got %q", tx.queries[5])
+	}
+	if tx.queries[6] != "RELEASE SAVEPOINT coldkeep_container_lock_retry" {
+		t.Fatalf("expected final savepoint release after successful retry, got %q", tx.queries[6])
 	}
 }
 
@@ -143,6 +194,65 @@ func TestLockContainerRowNowaitWithRetryZeroAttemptsReturnsContention(t *testing
 	}
 	if !strings.Contains(err.Error(), "container 88") {
 		t.Fatalf("expected error to mention container id, got: %v", err)
+	}
+}
+
+func TestLocalWriterAppendPayloadRefreshesDBSizeBeforeRotationDecision(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY,
+			filename TEXT,
+			current_size INTEGER,
+			max_size INTEGER,
+			sealed BOOLEAN,
+			sealing BOOLEAN,
+			quarantine BOOLEAN
+		)
+	`); err != nil {
+		t.Fatalf("create container table: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO container (id, filename, current_size, max_size, sealed, sealing, quarantine)
+		VALUES (1, 'active.bin', ?, ?, FALSE, FALSE, FALSE)
+	`, ContainerHdrLen+10, ContainerHdrLen+24); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	handle := &fakeContainer{size: ContainerHdrLen + 10}
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), ContainerHdrLen+24, dbconn)
+	w.hasActive = true
+	w.activeID = 1
+	w.activeFile = "active.bin"
+	w.activeHandle = handle
+	w.activeSize = ContainerHdrLen + 20
+
+	placement, err := w.AppendPayload(tx, []byte("12345678"))
+	if err != nil {
+		t.Fatalf("append payload: %v", err)
+	}
+	if placement.Rotated {
+		t.Fatalf("expected no rotation after refreshing db size, got placement=%+v", placement)
+	}
+	if placement.ContainerID != 1 {
+		t.Fatalf("expected append to existing container, got %d", placement.ContainerID)
+	}
+	if placement.Offset != ContainerHdrLen+10 {
+		t.Fatalf("expected offset %d, got %d", ContainerHdrLen+10, placement.Offset)
+	}
+	if placement.NewContainerSize != ContainerHdrLen+18 {
+		t.Fatalf("expected new size %d, got %d", ContainerHdrLen+18, placement.NewContainerSize)
 	}
 }
 
@@ -390,5 +500,275 @@ func TestNewLocalWriterWithDirAndDBPreservesExplicitValues(t *testing.T) {
 	}
 	if w.maxSize != ContainerHdrLen+1234 {
 		t.Fatalf("expected explicit max size %d, got %d", ContainerHdrLen+1234, w.maxSize)
+	}
+}
+
+// ================================================================
+// Error-path invariant tests (Step 10)
+// ================================================================
+// Invariant: failure before durable write publish => no live metadata points to missing bytes.
+// Tests verify that write, sync, and rollback errors all result in:
+//   - container handle closed (no leak)
+//   - active state cleared
+//   - DB row quarantined (when dbconn is set)
+//   - pendingAppend = false (metadata never published)
+// ================================================================
+
+// sanitizeTestName converts a test name to a string safe for use in a SQLite URI.
+func sanitizeTestName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+// openContainerTestDB creates a named shared-cache in-memory SQLite DB so that
+// multiple concurrent connections (e.g. an open tx AND a direct dbconn query from
+// QuarantineContainerInDir) share the same in-memory database without deadlocking.
+// Plain ":memory:" is per-connection and would give each goroutine a separate empty DB.
+func openContainerTestDB(t *testing.T, containerID int64, currentSize, maxSize int64) *sql.DB {
+	t.Helper()
+	// Unique name prevents test interference; cache=shared enables multiple connections.
+	dsn := fmt.Sprintf("file:%s_container_test?mode=memory&cache=shared", sanitizeTestName(t.Name()))
+	dbconn, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+	if _, err := dbconn.Exec(`
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY,
+			filename TEXT,
+			current_size INTEGER,
+			max_size INTEGER,
+			sealed BOOLEAN,
+			sealing BOOLEAN,
+			quarantine BOOLEAN
+		)
+	`); err != nil {
+		t.Fatalf("create container table: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed, sealing, quarantine)
+		 VALUES (?, 'c.bin', ?, ?, FALSE, FALSE, FALSE)`,
+		containerID, currentSize, maxSize,
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+	return dbconn
+}
+
+// TestLocalWriterAppendPayloadWriteErrorQuarantinesAndClearsHandle asserts that when the
+// physical Append call fails (e.g. disk full), the writer quarantines the container,
+// clears all active state (including the handle), and returns an error that names the
+// container — before any DB metadata about the payload is committed.
+func TestLocalWriterAppendPayloadWriteErrorQuarantinesAndClearsHandle(t *testing.T) {
+	const maxSize = ContainerHdrLen + 128
+	dbconn := openContainerTestDB(t, 1, ContainerHdrLen+10, maxSize)
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	fc := &fakeContainer{size: ContainerHdrLen + 10, appendErr: errors.New("disk full")}
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), maxSize, dbconn)
+	w.hasActive = true
+	w.activeID = 1
+	w.activeFile = "c.bin"
+	w.activeHandle = fc
+	w.activeSize = ContainerHdrLen + 10
+
+	_, err = w.AppendPayload(tx, []byte("hello"))
+	if err == nil {
+		t.Fatal("expected error from write failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "append payload to container 1") {
+		t.Fatalf("expected error to name container, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("expected error to contain original cause, got: %v", err)
+	}
+
+	// Active state must be fully released — no handle leak.
+	if w.hasActive {
+		t.Fatalf("expected hasActive=false after quarantine, got true")
+	}
+	if w.activeHandle != nil {
+		t.Fatalf("expected activeHandle=nil after quarantine, got non-nil")
+	}
+	// pendingAppend must be false: Sync was never reached so metadata was never published.
+	if w.pendingAppend {
+		t.Fatalf("expected pendingAppend=false (Sync never reached), got true")
+	}
+}
+
+// TestLocalWriterAppendPayloadSyncErrorTruncatesAndQuarantinesContainer asserts that when
+// the physical Append succeeds but the subsequent Sync (fsync) fails, the writer
+// truncates the appended bytes (rollback), quarantines the container, and returns an
+// error — before any DB metadata about the payload becomes visible.
+func TestLocalWriterAppendPayloadSyncErrorTruncatesAndQuarantinesContainer(t *testing.T) {
+	const maxSize = ContainerHdrLen + 128
+	dbconn := openContainerTestDB(t, 2, ContainerHdrLen+10, maxSize)
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Append succeeds, Sync fails; Truncate succeeds.
+	fc := &fakeContainer{size: ContainerHdrLen + 10, syncErr: errors.New("fsync failed")}
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), maxSize, dbconn)
+	w.hasActive = true
+	w.activeID = 2
+	w.activeFile = "c.bin"
+	w.activeHandle = fc
+	w.activeSize = ContainerHdrLen + 10
+
+	_, err = w.AppendPayload(tx, []byte("hello"))
+	if err == nil {
+		t.Fatal("expected error from sync failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "sync payload in container 2") {
+		t.Fatalf("expected error to mention sync failure, got: %v", err)
+	}
+
+	// pendingAppend must be false: Sync failed so metadata was never published.
+	if w.pendingAppend {
+		t.Fatalf("expected pendingAppend=false after sync error, got true")
+	}
+	// Active state cleared — quarantine fired after truncate succeeded.
+	if w.hasActive {
+		t.Fatalf("expected hasActive=false after quarantine on sync error, got true")
+	}
+	if w.activeHandle != nil {
+		t.Fatalf("expected activeHandle=nil after quarantine, got non-nil")
+	}
+	// File size rolled back to pre-append value via Truncate.
+	if fc.size != ContainerHdrLen+10 {
+		t.Fatalf("expected file size rolled back to %d, got %d", ContainerHdrLen+10, fc.size)
+	}
+}
+
+// TestLocalWriterAppendPayloadSyncAndTruncateErrorBothSurfaceInResult asserts that when
+// both Sync and Truncate fail, the returned error contains both failure messages so the
+// operator has full diagnostic information about the physical inconsistency.
+func TestLocalWriterAppendPayloadSyncAndTruncateErrorBothSurfaceInResult(t *testing.T) {
+	const maxSize = ContainerHdrLen + 128
+	dbconn := openContainerTestDB(t, 3, ContainerHdrLen+10, maxSize)
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	fc := &fakeContainer{
+		size:     ContainerHdrLen + 10,
+		syncErr:  errors.New("fsync failed"),
+		truncErr: errors.New("truncate failed"),
+	}
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), maxSize, dbconn)
+	w.hasActive = true
+	w.activeID = 3
+	w.activeFile = "c.bin"
+	w.activeHandle = fc
+	w.activeSize = ContainerHdrLen + 10
+
+	_, err = w.AppendPayload(tx, []byte("hello"))
+	if err == nil {
+		t.Fatal("expected error from sync+truncate failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "sync payload in container 3") {
+		t.Fatalf("expected sync error in result, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rollback append in container 3") {
+		t.Fatalf("expected truncate/rollback error in result, got: %v", err)
+	}
+
+	if w.pendingAppend {
+		t.Fatalf("expected pendingAppend=false after sync+truncate failure, got true")
+	}
+}
+
+// TestLocalWriterRollbackLastAppendTruncatesOpenHandleToPreAppendSize asserts that when
+// a DB transaction rolls back after a successful Append+Sync, RollbackLastAppend
+// truncates the container file back to the pre-append offset via the open handle, and
+// leaves the writer with no active state so the next write picks a fresh container.
+func TestLocalWriterRollbackLastAppendTruncatesOpenHandleToPreAppendSize(t *testing.T) {
+	const preAppendSize = ContainerHdrLen + 10
+	const postAppendSize = ContainerHdrLen + 20
+
+	fc := &fakeContainer{size: postAppendSize}
+	w := NewLocalWriterWithDir(t.TempDir(), ContainerHdrLen+128)
+	w.hasActive = true
+	w.activeID = 7
+	w.activeFile = "rollback.bin"
+	w.activeHandle = fc
+	w.activeSize = postAppendSize
+	// Simulate a successful append that is now being rolled back.
+	w.pendingAppend = true
+	w.prevAppendSize = preAppendSize
+	w.prevAppendFile = "rollback.bin"
+
+	err := w.RollbackLastAppend()
+	if err != nil {
+		t.Fatalf("RollbackLastAppend: unexpected error: %v", err)
+	}
+
+	// File must be truncated back to pre-append size.
+	if fc.size != preAppendSize {
+		t.Fatalf("expected file truncated to %d (pre-append), got %d", preAppendSize, fc.size)
+	}
+	// Active state must be cleared: the writer must not reference the stale container.
+	if w.hasActive {
+		t.Fatalf("expected hasActive=false after successful rollback")
+	}
+	if w.activeHandle != nil {
+		t.Fatalf("expected activeHandle=nil after rollback clearActive")
+	}
+	if w.pendingAppend {
+		t.Fatalf("expected pendingAppend=false after rollback")
+	}
+}
+
+// TestLocalWriterHandleIsClosedOnQuarantineEvenWithCloseError asserts that even when
+// the container close call returns an error, the writer's active state is fully cleared
+// so the handle reference is not retained. This prevents handle leaks on the error path.
+func TestLocalWriterHandleIsClosedOnQuarantineEvenWithCloseError(t *testing.T) {
+	const maxSize = ContainerHdrLen + 128
+	dbconn := openContainerTestDB(t, 4, ContainerHdrLen+10, maxSize)
+
+	// Close returns an error but the writer must still release all state.
+	fc := &fakeContainer{size: ContainerHdrLen + 10, closeErr: errors.New("close error")}
+	w := NewLocalWriterWithDirAndDB(t.TempDir(), maxSize, dbconn)
+	w.hasActive = true
+	w.activeID = 4
+	w.activeFile = "c.bin"
+	w.activeHandle = fc
+	w.activeSize = ContainerHdrLen + 10
+	w.pendingAppend = true
+	w.prevAppendFile = "c.bin"
+	w.prevAppendSize = ContainerHdrLen + 10
+
+	// QuarantineActiveContainer should still clear state even on close error.
+	_ = w.QuarantineActiveContainer()
+
+	// Handle reference must be gone regardless of close error.
+	if w.activeHandle != nil {
+		t.Fatalf("expected activeHandle=nil after quarantine with close error, got non-nil")
+	}
+	if w.hasActive {
+		t.Fatalf("expected hasActive=false after quarantine with close error, got true")
+	}
+	if w.pendingAppend {
+		t.Fatalf("expected pendingAppend=false after quarantine, got true")
 	}
 }

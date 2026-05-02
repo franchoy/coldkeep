@@ -9,14 +9,20 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/execution"
+	gcpkg "github.com/franchoy/coldkeep/internal/gc"
 
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -1594,6 +1600,803 @@ func TestValidateReusableLogicalFileGraphRejectsCorruptCompletedGraphs(t *testin
 				t.Fatalf("expected validation error containing %q or nil, got: %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsInvalidWorkers(t *testing.T) {
+	err := StoreFolderWithStorageContextAndCodecAndOptions(
+		StorageContext{},
+		t.TempDir(),
+		blocks.CodecPlain,
+		execution.Options{StoreFolderWorkers: 0, PipelineDepth: 1, Deterministic: true},
+	)
+	if err == nil {
+		t.Fatal("expected invalid options error, got nil")
+	}
+	if !strings.Contains(err.Error(), "store folder workers must be >= 1") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsInvalidPipelineDepth(t *testing.T) {
+	err := StoreFolderWithStorageContextAndCodecAndOptions(
+		StorageContext{},
+		t.TempDir(),
+		blocks.CodecPlain,
+		execution.Options{StoreFolderWorkers: 1, PipelineDepth: 0, Deterministic: true},
+	)
+	if err == nil {
+		t.Fatal("expected invalid options error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pipeline depth must be >= 1") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStoreFolderWithStorageContextAndCodecAndOptionsRejectsPipelineDepthGreaterThanOne(t *testing.T) {
+	err := StoreFolderWithStorageContextAndCodecAndOptions(
+		StorageContext{},
+		t.TempDir(),
+		blocks.CodecPlain,
+		execution.Options{StoreFolderWorkers: 1, PipelineDepth: 2, Deterministic: true},
+	)
+	if err == nil {
+		t.Fatal("expected pipeline guardrail error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pipeline depth must be 1 in v1.7 phase 2") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDetermineStoreFolderWorkerCountUsesRequestedForLocalWriter(t *testing.T) {
+	w := container.NewLocalWriterWithDirAndDB(t.TempDir(), container.GetContainerMaxSize(), nil)
+	got, err := determineStoreFolderWorkerCount(w, 4)
+	if err != nil {
+		t.Fatalf("determine worker count: %v", err)
+	}
+	if got != 4 {
+		t.Fatalf("worker count mismatch: got %d, want 4", got)
+	}
+}
+
+func TestDetermineStoreFolderWorkerCountForcesOneForSimulatedWriter(t *testing.T) {
+	w := container.NewSimulatedWriter(container.GetContainerMaxSize())
+	got, err := determineStoreFolderWorkerCount(w, 4)
+	if err != nil {
+		t.Fatalf("determine worker count: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("worker count mismatch: got %d, want 1", got)
+	}
+}
+
+func TestDetermineStoreFolderWorkerCountRejectsUnsupportedWriter(t *testing.T) {
+	_, err := determineStoreFolderWorkerCount(&syncFailWriter{}, 2)
+	if err == nil {
+		t.Fatal("expected unsupported writer error, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support isolated concurrent workers") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDiscoverFilesReturnsSortedPaths(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(root, "zdir"), 0o755); err != nil {
+		t.Fatalf("mkdir zdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "adir", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir adir/nested: %v", err)
+	}
+
+	files := []string{
+		filepath.Join(root, "zdir", "c.txt"),
+		filepath.Join(root, "adir", "nested", "b.txt"),
+		filepath.Join(root, "a.txt"),
+	}
+	for _, p := range files {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	got, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles: %v", err)
+	}
+
+	want := []string{
+		filepath.Join(root, "a.txt"),
+		filepath.Join(root, "adir", "nested", "b.txt"),
+		filepath.Join(root, "zdir", "c.txt"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("path count mismatch: got %d, want %d (got=%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("path[%d]: got %q, want %q (full got=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestDiscoverFilesSkipsDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "only-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir only-dir: %v", err)
+	}
+
+	got, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no files, got %v", got)
+	}
+}
+
+func TestDiscoverFilesStableAcrossRepeatedRuns(t *testing.T) {
+	root := t.TempDir()
+
+	creationOrder := []string{
+		filepath.Join(root, "z", "9.txt"),
+		filepath.Join(root, "a", "2.txt"),
+		filepath.Join(root, "a", "1.txt"),
+		filepath.Join(root, "m.txt"),
+	}
+	for _, p := range creationOrder {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %q: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %q: %v", p, err)
+		}
+	}
+
+	first, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles first run: %v", err)
+	}
+	second, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discoverFiles second run: %v", err)
+	}
+
+	if len(first) != len(second) {
+		t.Fatalf("run-to-run length mismatch: %d != %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("run-to-run mismatch at index %d: %q != %q", i, first[i], second[i])
+		}
+	}
+}
+
+func TestBuildFileJobsDeterministicAfterRandomizedPreSort(t *testing.T) {
+	base := []string{"z/9.txt", "a/2.txt", "a/1.txt", "m.txt"}
+	left := append([]string(nil), base...)
+	right := append([]string(nil), base...)
+
+	leftRng := rand.New(rand.NewSource(11))
+	rightRng := rand.New(rand.NewSource(42))
+	leftRng.Shuffle(len(left), func(i, j int) { left[i], left[j] = left[j], left[i] })
+	rightRng.Shuffle(len(right), func(i, j int) { right[i], right[j] = right[j], right[i] })
+
+	sort.Strings(left)
+	sort.Strings(right)
+
+	jobsLeft := buildFileJobs(left)
+	jobsRight := buildFileJobs(right)
+	if len(jobsLeft) != len(jobsRight) {
+		t.Fatalf("job count mismatch: left=%d right=%d", len(jobsLeft), len(jobsRight))
+	}
+	for i := range jobsLeft {
+		if jobsLeft[i].Index != jobsRight[i].Index {
+			t.Fatalf("index mismatch at %d: left=%d right=%d", i, jobsLeft[i].Index, jobsRight[i].Index)
+		}
+		if jobsLeft[i].Path != jobsRight[i].Path {
+			t.Fatalf("path mismatch at %d: left=%q right=%q", i, jobsLeft[i].Path, jobsRight[i].Path)
+		}
+	}
+}
+
+func TestBuildFileJobsPreservesOrderAndIndex(t *testing.T) {
+	paths := []string{"/tmp/b.txt", "/tmp/c.txt", "/tmp/d.txt"}
+
+	jobs := buildFileJobs(paths)
+	if len(jobs) != len(paths) {
+		t.Fatalf("job count mismatch: got %d, want %d", len(jobs), len(paths))
+	}
+
+	for i := range paths {
+		if jobs[i].Index != i {
+			t.Fatalf("job[%d].Index mismatch: got %d, want %d", i, jobs[i].Index, i)
+		}
+		if jobs[i].Path != paths[i] {
+			t.Fatalf("job[%d].Path mismatch: got %q, want %q", i, jobs[i].Path, paths[i])
+		}
+	}
+}
+
+func TestStoreFolderWorkersOneCompletesSuccessfully(t *testing.T) {
+	r := runStoreFolderAndRestoreTree(t, 1)
+	if r.completedCount != 4 {
+		t.Fatalf("completed logical file count mismatch: got %d, want 4", r.completedCount)
+	}
+}
+
+func TestStoreFolderWithStatsAggregatesFilesAndBytes(t *testing.T) {
+	root := t.TempDir()
+	containersDir := t.TempDir()
+
+	sourceFiles := map[string]string{
+		"a.txt":        "alpha",
+		"nested/b.txt": "bravo",
+		"nested/c.txt": "charlie",
+		"deep/d/e.txt": "echo",
+	}
+	expectedBytes := int64(0)
+	for rel, content := range sourceFiles {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir source parent for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write source file %q: %v", rel, err)
+		}
+		expectedBytes += int64(len(content))
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		t.Fatal("expected non-nil local writer")
+	}
+
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+	opts := execution.Options{StoreFolderWorkers: 2, PipelineDepth: 1, Deterministic: true}
+
+	stats, err := StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx, root, blocks.CodecPlain, opts)
+	if err != nil {
+		t.Fatalf("store folder with stats: %v", err)
+	}
+	if stats.TotalFilesProcessed != len(sourceFiles) {
+		t.Fatalf("files processed mismatch: got %d, want %d", stats.TotalFilesProcessed, len(sourceFiles))
+	}
+	if stats.TotalBytesProcessed != expectedBytes {
+		t.Fatalf("bytes processed mismatch: got %d, want %d", stats.TotalBytesProcessed, expectedBytes)
+	}
+	if stats.WorkersUsed != 2 {
+		t.Fatalf("workers used mismatch: got %d, want 2", stats.WorkersUsed)
+	}
+}
+
+func TestStoreFolderWithStatsConsistentForWorkerOne(t *testing.T) {
+	stats, expectedFiles, expectedBytes := runStoreFolderWithStatsForDataset(t, 1)
+	if stats.TotalFilesProcessed != expectedFiles {
+		t.Fatalf("files processed mismatch: got %d, want %d", stats.TotalFilesProcessed, expectedFiles)
+	}
+	if stats.TotalBytesProcessed != expectedBytes {
+		t.Fatalf("bytes processed mismatch: got %d, want %d", stats.TotalBytesProcessed, expectedBytes)
+	}
+	if stats.WorkersUsed != 1 {
+		t.Fatalf("workers used mismatch: got %d, want 1", stats.WorkersUsed)
+	}
+}
+
+func TestStoreFolderWithStatsConsistentForWorkerFour(t *testing.T) {
+	stats, expectedFiles, expectedBytes := runStoreFolderWithStatsForDataset(t, 4)
+	if stats.TotalFilesProcessed != expectedFiles {
+		t.Fatalf("files processed mismatch: got %d, want %d", stats.TotalFilesProcessed, expectedFiles)
+	}
+	if stats.TotalBytesProcessed != expectedBytes {
+		t.Fatalf("bytes processed mismatch: got %d, want %d", stats.TotalBytesProcessed, expectedBytes)
+	}
+	if stats.WorkersUsed != 4 {
+		t.Fatalf("workers used mismatch: got %d, want 4", stats.WorkersUsed)
+	}
+}
+
+func TestStoreFolderWithStatsDoesNotLeakAcrossRuns(t *testing.T) {
+	runOnce := func() execution.ExecutionStats {
+		t.Helper()
+
+		root := t.TempDir()
+		containersDir := t.TempDir()
+		sourceFiles := map[string]string{
+			"a.txt":        "alpha",
+			"nested/b.txt": "bravo",
+		}
+		expectedBytes := int64(0)
+		for rel, content := range sourceFiles {
+			abs := filepath.Join(root, rel)
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				t.Fatalf("mkdir source parent for %q: %v", rel, err)
+			}
+			if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+				t.Fatalf("write source file %q: %v", rel, err)
+			}
+			expectedBytes += int64(len(content))
+		}
+
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			t.Fatalf("open sqlite db: %v", err)
+		}
+		dbconn.SetMaxOpenConns(1)
+		dbconn.SetMaxIdleConns(1)
+		t.Cleanup(func() { _ = dbconn.Close() })
+
+		if err := db.RunMigrations(dbconn); err != nil {
+			t.Fatalf("run migrations: %v", err)
+		}
+
+		writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+		if writer == nil {
+			t.Fatal("expected non-nil local writer")
+		}
+
+		sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+		opts := execution.Options{StoreFolderWorkers: 2, PipelineDepth: 1, Deterministic: true}
+
+		stats, err := StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx, root, blocks.CodecPlain, opts)
+		if err != nil {
+			t.Fatalf("store folder with stats: %v", err)
+		}
+		if stats.TotalFilesProcessed != len(sourceFiles) {
+			t.Fatalf("files processed mismatch: got %d, want %d", stats.TotalFilesProcessed, len(sourceFiles))
+		}
+		if stats.TotalBytesProcessed != expectedBytes {
+			t.Fatalf("bytes processed mismatch: got %d, want %d", stats.TotalBytesProcessed, expectedBytes)
+		}
+		if stats.WorkersUsed != 2 {
+			t.Fatalf("workers used mismatch: got %d, want 2", stats.WorkersUsed)
+		}
+		return stats
+	}
+
+	first := runOnce()
+	second := runOnce()
+	if first != second {
+		t.Fatalf("expected per-run stats isolation, got first=%+v second=%+v", first, second)
+	}
+}
+
+func TestStoreFolderWorkersTwoCompletesSuccessfully(t *testing.T) {
+	r := runStoreFolderAndRestoreTree(t, 2)
+	if r.completedCount != 4 {
+		t.Fatalf("completed logical file count mismatch: got %d, want 4", r.completedCount)
+	}
+}
+
+func runStoreFolderWithStatsForDataset(t *testing.T, workers int) (execution.ExecutionStats, int, int64) {
+	t.Helper()
+
+	root := t.TempDir()
+	containersDir := t.TempDir()
+	sourceFiles := map[string]string{
+		"a.txt":        "alpha",
+		"nested/b.txt": "bravo",
+		"nested/c.txt": "charlie",
+		"deep/d/e.txt": "echo",
+	}
+	expectedBytes := int64(0)
+	for rel, content := range sourceFiles {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir source parent for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write source file %q: %v", rel, err)
+		}
+		expectedBytes += int64(len(content))
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		t.Fatal("expected non-nil local writer")
+	}
+
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+	opts := execution.Options{StoreFolderWorkers: workers, PipelineDepth: 1, Deterministic: true}
+
+	stats, err := StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx, root, blocks.CodecPlain, opts)
+	if err != nil {
+		t.Fatalf("store folder with stats: %v", err)
+	}
+
+	return stats, len(sourceFiles), expectedBytes
+}
+
+func TestStoreFolderWorkersOneAndFourProduceSameRestoredTreeHash(t *testing.T) {
+	r1 := runStoreFolderAndRestoreTree(t, 1)
+	r4 := runStoreFolderAndRestoreTree(t, 4)
+
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(r1.hashes, r4.hashes); !ok {
+		t.Fatalf("restored tree hash mismatch for workers 1 vs 4: %s", reason)
+	}
+	if r1.chunkCount != r4.chunkCount {
+		t.Fatalf("chunk count mismatch for workers 1 vs 4: %d != %d", r1.chunkCount, r4.chunkCount)
+	}
+	if r1.completedCount != r4.completedCount {
+		t.Fatalf("completed logical file count mismatch for workers 1 vs 4: %d != %d", r1.completedCount, r4.completedCount)
+	}
+	if len(r1.logicalFileHashes) != len(r4.logicalFileHashes) {
+		t.Fatalf("logical file hash count mismatch for workers 1 vs 4: %d != %d", len(r1.logicalFileHashes), len(r4.logicalFileHashes))
+	}
+	for i := range r1.logicalFileHashes {
+		if r1.logicalFileHashes[i] != r4.logicalFileHashes[i] {
+			t.Fatalf("logical file hash mismatch at index %d: %q != %q", i, r1.logicalFileHashes[i], r4.logicalFileHashes[i])
+		}
+	}
+}
+
+func TestStoreFolderWorkersFourRepeatConsistency(t *testing.T) {
+	runA := runStoreFolderAndRestoreTree(t, 4)
+	runB := runStoreFolderAndRestoreTree(t, 4)
+
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(runA.hashes, runB.hashes); !ok {
+		t.Fatalf("restored tree hash mismatch for repeated workers=4 runs: %s", reason)
+	}
+	if runA.completedCount != runB.completedCount {
+		t.Fatalf("completed logical file count mismatch for repeated workers=4 runs: %d != %d", runA.completedCount, runB.completedCount)
+	}
+	if len(runA.logicalFileHashes) != len(runB.logicalFileHashes) {
+		t.Fatalf("logical file hash count mismatch for repeated workers=4 runs: %d != %d", len(runA.logicalFileHashes), len(runB.logicalFileHashes))
+	}
+	for i := range runA.logicalFileHashes {
+		if runA.logicalFileHashes[i] != runB.logicalFileHashes[i] {
+			t.Fatalf("logical file hash mismatch at index %d: %q != %q", i, runA.logicalFileHashes[i], runB.logicalFileHashes[i])
+		}
+	}
+}
+
+func TestStoreFolderUnreadableFileFailsFastWithoutPartialExposure(t *testing.T) {
+	root := t.TempDir()
+	containersDir := t.TempDir()
+
+	deniedPath := filepath.Join(root, "000-denied.txt")
+	if err := os.WriteFile(deniedPath, []byte("denied"), 0o600); err != nil {
+		t.Fatalf("write denied file: %v", err)
+	}
+	if err := os.Chmod(deniedPath, 0); err != nil {
+		t.Fatalf("chmod denied file: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(deniedPath, 0o600) })
+
+	if f, err := os.Open(deniedPath); err == nil {
+		_ = f.Close()
+		t.Skip("environment allows reading chmod 000 file; skipping unreadable-file propagation assertion")
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		t.Fatal("expected non-nil local writer")
+	}
+
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+	opts := execution.Options{StoreFolderWorkers: 4, PipelineDepth: 1, Deterministic: true}
+
+	err = StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, blocks.CodecPlain, opts)
+	if err == nil {
+		t.Fatal("expected store-folder error for unreadable file, got nil")
+	}
+
+	var completedCount int
+	if qerr := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = ?`, filestate.LogicalFileCompleted).Scan(&completedCount); qerr != nil {
+		t.Fatalf("query completed logical files: %v", qerr)
+	}
+	if completedCount != 0 {
+		t.Fatalf("expected zero completed logical files after fail-fast unreadable path, got %d", completedCount)
+	}
+
+	var physicalCount int
+	if qerr := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file`).Scan(&physicalCount); qerr != nil {
+		t.Fatalf("query physical_file count: %v", qerr)
+	}
+	if physicalCount != 0 {
+		t.Fatalf("expected zero physical_file rows after fail-fast error, got %d", physicalCount)
+	}
+
+	var chunkCount int
+	if qerr := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkCount); qerr != nil {
+		t.Fatalf("query chunk count: %v", qerr)
+	}
+	if chunkCount != 0 {
+		t.Fatalf("expected zero chunk rows after fail-fast error, got %d", chunkCount)
+	}
+
+	var quarantinedContainers int
+	if qerr := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE quarantine = TRUE`).Scan(&quarantinedContainers); qerr != nil {
+		t.Fatalf("query quarantined containers: %v", qerr)
+	}
+	if quarantinedContainers != 0 {
+		t.Fatalf("expected zero quarantined containers for unreadable input failure, got %d", quarantinedContainers)
+	}
+}
+
+func TestStoreFolderWorkersFourWithConcurrentGCPlanNoCorruption(t *testing.T) {
+	root := t.TempDir()
+	containersDir := t.TempDir()
+	restoreRoot := t.TempDir()
+
+	sourceFiles := map[string]string{
+		"a.txt":        "alpha",
+		"nested/b.txt": "bravo",
+		"nested/c.txt": "charlie",
+		"deep/d/e.txt": "echo",
+	}
+	for rel, content := range sourceFiles {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir source parent for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write source file %q: %v", rel, err)
+		}
+	}
+
+	dbconn, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(8)
+	dbconn.SetMaxIdleConns(8)
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	if _, preflightErr := gcpkg.BuildPlan(context.Background(), dbconn, gcpkg.PlanOptions{}); preflightErr != nil {
+		msg := strings.ToLower(preflightErr.Error())
+		if strings.Contains(msg, "no such table: physical_file") {
+			t.Skip("concurrent GC overlap test requires GC plan support on active DB backend")
+		}
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		t.Fatal("expected non-nil local writer")
+	}
+
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+	opts := execution.Options{StoreFolderWorkers: 4, PipelineDepth: 1, Deterministic: true}
+
+	storeErrCh := make(chan error, 1)
+	go func() {
+		storeErrCh <- StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, blocks.CodecPlain, opts)
+	}()
+
+	for {
+		select {
+		case storeErr := <-storeErrCh:
+			if storeErr != nil {
+				msg := strings.ToLower(storeErr.Error())
+				if strings.Contains(msg, "locked") || strings.Contains(msg, "busy") {
+					t.Skip("concurrent store+GC overlap not supported on active DB locking mode")
+				}
+				t.Fatalf("store-folder with concurrent GC plan: %v", storeErr)
+			}
+			goto verify
+		default:
+			_, planErr := gcpkg.BuildPlan(context.Background(), dbconn, gcpkg.PlanOptions{})
+			if planErr != nil {
+				msg := strings.ToLower(planErr.Error())
+				if strings.Contains(msg, "no such table: physical_file") {
+					t.Skip("concurrent GC overlap test requires GC plan support on active DB backend")
+				}
+				if strings.Contains(msg, "database is locked") || strings.Contains(msg, "busy") || strings.Contains(msg, "locked") {
+					continue
+				}
+				t.Fatalf("concurrent gc plan failed unexpectedly: %v", planErr)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+verify:
+	storedPaths, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discover source files: %v", err)
+	}
+	for _, storedPath := range storedPaths {
+		rel, relErr := filepath.Rel(root, storedPath)
+		if relErr != nil {
+			t.Fatalf("relative path for %q: %v", storedPath, relErr)
+		}
+		destination := filepath.Join(restoreRoot, rel)
+		if mkErr := os.MkdirAll(filepath.Dir(destination), 0o755); mkErr != nil {
+			t.Fatalf("mkdir restore parent for %q: %v", rel, mkErr)
+		}
+		_, restoreErr := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+			Overwrite:       true,
+			DestinationMode: RestoreDestinationOverride,
+			Destination:     destination,
+		})
+		if restoreErr != nil {
+			t.Fatalf("restore by stored path %q: %v", storedPath, restoreErr)
+		}
+	}
+
+	sourceHashes, err := corebenchmark.HashRestoredTree(root)
+	if err != nil {
+		t.Fatalf("hash source tree: %v", err)
+	}
+	restoredHashes, err := corebenchmark.HashRestoredTree(restoreRoot)
+	if err != nil {
+		t.Fatalf("hash restored tree: %v", err)
+	}
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(sourceHashes, restoredHashes); !ok {
+		t.Fatalf("concurrent gc-plan run produced corruption/loss: %s", reason)
+	}
+}
+
+func TestStoreFolderWorkersOneAndTwoProduceSameRestoredTreeHash(t *testing.T) {
+	r1 := runStoreFolderAndRestoreTree(t, 1)
+	r2 := runStoreFolderAndRestoreTree(t, 2)
+
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(r1.hashes, r2.hashes); !ok {
+		t.Fatalf("restored tree hash mismatch for workers 1 vs 2: %s", reason)
+	}
+	if r1.chunkCount != r2.chunkCount {
+		t.Fatalf("chunk count mismatch for workers 1 vs 2: %d != %d", r1.chunkCount, r2.chunkCount)
+	}
+	if len(r1.logicalFileHashes) != len(r2.logicalFileHashes) {
+		t.Fatalf("logical file hash count mismatch for workers 1 vs 2: %d != %d", len(r1.logicalFileHashes), len(r2.logicalFileHashes))
+	}
+	for i := range r1.logicalFileHashes {
+		if r1.logicalFileHashes[i] != r2.logicalFileHashes[i] {
+			t.Fatalf("logical file hash mismatch at index %d: %q != %q", i, r1.logicalFileHashes[i], r2.logicalFileHashes[i])
+		}
+	}
+}
+
+type storeFolderRunSummary struct {
+	hashes            map[string]string
+	completedCount    int
+	chunkCount        int
+	logicalFileHashes []string
+}
+
+func runStoreFolderAndRestoreTree(t *testing.T, workers int) storeFolderRunSummary {
+	t.Helper()
+
+	root := t.TempDir()
+	containersDir := t.TempDir()
+	restoreRoot := t.TempDir()
+
+	sourceFiles := map[string]string{
+		"a.txt":        "alpha",
+		"nested/b.txt": "bravo",
+		"nested/c.txt": "charlie",
+		"deep/d/e.txt": "echo",
+	}
+	for rel, content := range sourceFiles {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir source parent for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+			t.Fatalf("write source file %q: %v", rel, err)
+		}
+	}
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	if writer == nil {
+		t.Fatal("expected non-nil local writer")
+	}
+
+	sgctx := StorageContext{DB: dbconn, Writer: writer, ContainerDir: containersDir}
+
+	opts := execution.Options{StoreFolderWorkers: workers, PipelineDepth: 1, Deterministic: true}
+	if err := StoreFolderWithStorageContextAndCodecAndOptions(sgctx, root, blocks.CodecPlain, opts); err != nil {
+		t.Fatalf("store folder with workers=%d: %v", workers, err)
+	}
+
+	storedPaths, err := discoverFiles(root)
+	if err != nil {
+		t.Fatalf("discover source files: %v", err)
+	}
+	for _, storedPath := range storedPaths {
+		rel, err := filepath.Rel(root, storedPath)
+		if err != nil {
+			t.Fatalf("relative path for %q: %v", storedPath, err)
+		}
+		destination := filepath.Join(restoreRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			t.Fatalf("mkdir restore parent for %q: %v", rel, err)
+		}
+		_, err = RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+			Overwrite:       true,
+			DestinationMode: RestoreDestinationOverride,
+			Destination:     destination,
+		})
+		if err != nil {
+			t.Fatalf("restore by stored path %q: %v", storedPath, err)
+		}
+	}
+
+	hashes, err := corebenchmark.HashRestoredTree(restoreRoot)
+	if err != nil {
+		t.Fatalf("hash restored tree: %v", err)
+	}
+
+	var completedCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = ?`, filestate.LogicalFileCompleted).Scan(&completedCount); err != nil {
+		t.Fatalf("query completed logical_file count: %v", err)
+	}
+	var chunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkCount); err != nil {
+		t.Fatalf("query chunk count: %v", err)
+	}
+	rows, err := dbconn.Query(`SELECT file_hash FROM logical_file WHERE status = ? ORDER BY file_hash ASC, id ASC`, filestate.LogicalFileCompleted)
+	if err != nil {
+		t.Fatalf("query logical file hashes: %v", err)
+	}
+	logicalFileHashes := make([]string, 0)
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan logical file hash: %v", err)
+		}
+		logicalFileHashes = append(logicalFileHashes, hash)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close logical file hash rows: %v", err)
+	}
+
+	return storeFolderRunSummary{
+		hashes:            hashes,
+		completedCount:    completedCount,
+		chunkCount:        chunkCount,
+		logicalFileHashes: logicalFileHashes,
 	}
 }
 

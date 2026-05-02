@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -113,6 +114,9 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 	if err := w.ensureActive(tx); err != nil {
 		return LocalPlacement{}, fmt.Errorf("ensure active container: %w", err)
 	}
+	if err := w.lockAndRefreshActiveContainer(tx); err != nil {
+		return LocalPlacement{}, err
+	}
 
 	rotated := false
 	var previousID int64
@@ -139,46 +143,10 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 		if err := w.ensureActiveExcluding(tx, previousID); err != nil {
 			return LocalPlacement{}, fmt.Errorf("rotate ensure new active container: %w", err)
 		}
-		rotated = true
-	}
-
-	// Lock the container row that will actually receive the append payload.
-	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
-		return LocalPlacement{}, err
-	}
-	// Multiple worker-local writers can target the same open container row.
-	// Refresh offset from the locked DB row so stale per-writer state cannot
-	// reuse an old block_offset and overlap payloads.
-	var dbCurrentSize int64
-	if err := tx.QueryRow(`SELECT current_size FROM container WHERE id = $1`, w.activeID).Scan(&dbCurrentSize); err != nil {
-		if err != sql.ErrNoRows {
-			return LocalPlacement{}, fmt.Errorf("query current size for active container %d: %w", w.activeID, err)
-		}
-		// Container was externally removed (e.g. fully-dead GC cleanup while this writer
-		// held a stale reference). Reset active state and recycle to a new container.
-		// Do NOT set rotated=true: there is no previous container to seal.
-		w.clearActive()
-		if err := w.ensureActive(tx); err != nil {
-			return LocalPlacement{}, fmt.Errorf("ensure active container after external removal: %w", err)
-		}
-		if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
+		if err := w.lockAndRefreshActiveContainer(tx); err != nil {
 			return LocalPlacement{}, err
 		}
-		if err := tx.QueryRow(`SELECT current_size FROM container WHERE id = $1`, w.activeID).Scan(&dbCurrentSize); err != nil {
-			return LocalPlacement{}, fmt.Errorf("query current size for recycled active container %d: %w", w.activeID, err)
-		}
-	}
-	if dbCurrentSize < ContainerHdrLen {
-		dbCurrentSize = ContainerHdrLen
-	}
-	if dbCurrentSize != w.activeSize {
-		type sizeSetter interface {
-			SetSize(int64)
-		}
-		if handle, ok := w.activeHandle.(sizeSetter); ok {
-			handle.SetSize(dbCurrentSize)
-		}
-		w.activeSize = dbCurrentSize
+		rotated = true
 	}
 
 	// Record pre-write state for rollback path cleanup. pendingAppend is set to true
@@ -254,11 +222,30 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 	} else {
 		lockQuery += " FOR UPDATE NOWAIT"
 	}
+	useSavepoint := strings.Contains(lockQuery, "FOR UPDATE NOWAIT")
 
 	for attempt := 0; attempt < attempts; attempt++ {
+		if useSavepoint {
+			if _, err := tx.Exec("SAVEPOINT coldkeep_container_lock_retry"); err != nil {
+				return fmt.Errorf("create savepoint for container %d lock retry: %w", containerID, err)
+			}
+		}
 		_, err := tx.Exec(lockQuery, containerID)
 		if err == nil {
+			if useSavepoint {
+				if _, releaseErr := tx.Exec("RELEASE SAVEPOINT coldkeep_container_lock_retry"); releaseErr != nil {
+					return fmt.Errorf("release savepoint for container %d lock retry: %w", containerID, releaseErr)
+				}
+			}
 			return nil
+		}
+		if useSavepoint {
+			if _, rollbackErr := tx.Exec("ROLLBACK TO SAVEPOINT coldkeep_container_lock_retry"); rollbackErr != nil {
+				return fmt.Errorf("rollback savepoint for container %d lock retry: %w", containerID, rollbackErr)
+			}
+			if _, releaseErr := tx.Exec("RELEASE SAVEPOINT coldkeep_container_lock_retry"); releaseErr != nil {
+				return fmt.Errorf("release savepoint for container %d lock retry: %w", containerID, releaseErr)
+			}
 		}
 		if !isLockNotAvailable(err) {
 			return err
@@ -330,6 +317,55 @@ func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 
 }
 
+func (w *LocalWriter) lockAndRefreshActiveContainer(tx db.DBTX) error {
+	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
+		return err
+	}
+
+	var dbCurrentSize int64
+	var sealed bool
+	var sealing bool
+	var quarantine bool
+	if err := tx.QueryRow(`SELECT current_size, sealed, sealing, quarantine FROM container WHERE id = $1`, w.activeID).Scan(&dbCurrentSize, &sealed, &sealing, &quarantine); err != nil {
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("query active container state for %d: %w", w.activeID, err)
+		}
+		if closeErr := w.closeAndClearActive(); closeErr != nil {
+			return fmt.Errorf("close stale active container after external removal: %w", closeErr)
+		}
+		if err := w.ensureActive(tx); err != nil {
+			return fmt.Errorf("ensure active container after external removal: %w", err)
+		}
+		return w.lockAndRefreshActiveContainer(tx)
+	}
+
+	if sealed || sealing || quarantine {
+		staleID := w.activeID
+		if closeErr := w.closeAndClearActive(); closeErr != nil {
+			return fmt.Errorf("close stale active container %d: %w", staleID, closeErr)
+		}
+		if err := w.ensureActiveExcluding(tx, staleID); err != nil {
+			return fmt.Errorf("refresh active container after stale state %d: %w", staleID, err)
+		}
+		return w.lockAndRefreshActiveContainer(tx)
+	}
+
+	if dbCurrentSize < ContainerHdrLen {
+		dbCurrentSize = ContainerHdrLen
+	}
+	if dbCurrentSize != w.activeSize {
+		type sizeSetter interface {
+			SetSize(int64)
+		}
+		if handle, ok := w.activeHandle.(sizeSetter); ok {
+			handle.SetSize(dbCurrentSize)
+		}
+		w.activeSize = dbCurrentSize
+	}
+
+	return nil
+}
+
 func (w *LocalWriter) finalizePhysicalOnly() error {
 	if !w.hasActive {
 		return nil
@@ -358,6 +394,15 @@ func (w *LocalWriter) clearActive() {
 	w.activeFile = ""
 	w.activeHandle = nil
 
+}
+
+func (w *LocalWriter) closeAndClearActive() error {
+	var err error
+	if w.activeHandle != nil {
+		err = w.activeHandle.Close()
+	}
+	w.clearActive()
+	return err
 }
 
 // FinalizeContainer performs physical sync/close for the active container and clears

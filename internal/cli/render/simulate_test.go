@@ -95,7 +95,7 @@ func TestRenderSimulationJSONUsesStableEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing meta object: %v", payload)
 	}
-	if got, _ := meta["version"].(string); got != "v1.6" {
+	if got, _ := meta["version"].(string); got != "v1.7" {
 		t.Fatalf("unexpected meta.version: %v", meta["version"])
 	}
 	if got, _ := meta["exact"].(bool); got != false {

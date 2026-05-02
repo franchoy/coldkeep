@@ -190,20 +190,14 @@ func (s *Service) inspectSnapshot(ctx context.Context, id string, opts InspectOp
 		return nil, fmt.Errorf("inspect snapshot %s: %w", snapshotID, err)
 	}
 
-	var fileCount int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&fileCount); err != nil {
-		return nil, fmt.Errorf("inspect snapshot %s file count: %w", snapshotID, err)
+	logicalFileRefs, err := s.loadSnapshotLogicalFileRefs(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("inspect snapshot %s load logical references: %w", snapshotID, err)
 	}
 
-	var totalSizeBytes int64
-	if err := s.db.QueryRowContext(
-		ctx,
-		`SELECT COALESCE(SUM(lf.total_size), 0)
-		 FROM snapshot_file sf
-		 JOIN logical_file lf ON lf.id = sf.logical_file_id
-		 WHERE sf.snapshot_id = $1`,
-		snapshotID,
-	).Scan(&totalSizeBytes); err != nil {
+	fileCount := int64(len(logicalFileRefs))
+	totalSizeBytes, err := s.sumLogicalFileSizesByReferenceIDs(ctx, logicalFileRefs)
+	if err != nil {
 		return nil, fmt.Errorf("inspect snapshot %s total size: %w", snapshotID, err)
 	}
 
@@ -397,23 +391,28 @@ func (s *Service) inspectContainer(ctx context.Context, id string, opts InspectO
 	var quarantine int64
 	var currentSize int64
 	var maxSize int64
+	var chunkCount int64
 	err = s.db.QueryRowContext(
 		ctx,
-		`SELECT filename, CAST(sealed AS INTEGER), CAST(sealing AS INTEGER), CAST(quarantine AS INTEGER), current_size, max_size
-		 FROM container
-		 WHERE id = $1`,
+		`SELECT
+			c.filename,
+			CAST(c.sealed AS INTEGER),
+			CAST(c.sealing AS INTEGER),
+			CAST(c.quarantine AS INTEGER),
+			c.current_size,
+			c.max_size,
+			COALESCE(COUNT(b.chunk_id), 0)
+		 FROM container c
+		 LEFT JOIN blocks b ON b.container_id = c.id
+		 WHERE c.id = $1
+		 GROUP BY c.id, c.filename, c.sealed, c.sealing, c.quarantine, c.current_size, c.max_size`,
 		containerID,
-	).Scan(&filename, &sealed, &sealing, &quarantine, &currentSize, &maxSize)
+	).Scan(&filename, &sealed, &sealing, &quarantine, &currentSize, &maxSize, &chunkCount)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: container %d", ErrNotFound, containerID)
 		}
 		return nil, fmt.Errorf("inspect container %d: %w", containerID, err)
-	}
-
-	var chunkCount int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM blocks WHERE container_id = $1`, containerID).Scan(&chunkCount); err != nil {
-		return nil, fmt.Errorf("inspect container %d chunk count: %w", containerID, err)
 	}
 
 	result := &InspectResult{
@@ -737,4 +736,95 @@ func nullableInt64(v sql.NullInt64) any {
 		return nil
 	}
 	return v.Int64
+}
+
+func (s *Service) loadSnapshotLogicalFileRefs(ctx context.Context, snapshotID string) ([]int64, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT logical_file_id FROM snapshot_file WHERE snapshot_id = $1`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	logicalFileIDs := make([]int64, 0)
+	for rows.Next() {
+		var logicalFileID int64
+		if err := rows.Scan(&logicalFileID); err != nil {
+			return nil, err
+		}
+		logicalFileIDs = append(logicalFileIDs, logicalFileID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return logicalFileIDs, nil
+}
+
+func (s *Service) sumLogicalFileSizesByReferenceIDs(ctx context.Context, referenceIDs []int64) (int64, error) {
+	if s == nil || s.db == nil || len(referenceIDs) == 0 {
+		return 0, nil
+	}
+
+	const maxBatchSize = 500
+
+	uniqueIDs := make(map[int64]struct{}, len(referenceIDs))
+	for _, id := range referenceIDs {
+		uniqueIDs[id] = struct{}{}
+	}
+
+	ids := make([]int64, 0, len(uniqueIDs))
+	for id := range uniqueIDs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	sizeByID := make(map[int64]int64, len(ids))
+	for start := 0; start < len(ids); start += maxBatchSize {
+		end := start + maxBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+
+		batch := ids[start:end]
+		placeholders := make([]string, len(batch))
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+			args[i] = id
+		}
+
+		query := `SELECT id, total_size FROM logical_file WHERE id IN (` + strings.Join(placeholders, ", ") + `)`
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return 0, err
+		}
+
+		for rows.Next() {
+			var id int64
+			var totalSize int64
+			if err := rows.Scan(&id, &totalSize); err != nil {
+				_ = rows.Close()
+				return 0, err
+			}
+			sizeByID[id] = totalSize
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		if err := rows.Close(); err != nil {
+			return 0, err
+		}
+	}
+
+	var total int64
+	for _, id := range referenceIDs {
+		total += sizeByID[id]
+	}
+
+	return total, nil
 }

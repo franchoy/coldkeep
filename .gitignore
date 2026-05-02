@@ -88,3 +88,13 @@ out/
 # test output
 # =========================
 # cmd/coldkeep/testdata/ — golden files are tracked; do not ignore
+
+# =========================
+# benchmark output
+# =========================
+.bench_*
+
+# =========================
+# phase output
+# =========================
+.phase_*

@@ -42,7 +42,11 @@ func TestPlainTransformerEncodePopulatesDescriptorAndPayload(t *testing.T) {
 	}
 }
 
-func TestPlainTransformerEncodeCopiesPayload(t *testing.T) {
+func TestPlainTransformerEncodeDoesNotCopyPayload(t *testing.T) {
+	// Phase 6 Step 8: Avoid unnecessary byte copies
+	// Plaintext is used once during encode and never mutated by codec.
+	// Store operation chain: read → encode → write; plaintext not accessed after encode.
+	// This optimization avoids allocating and copying memory for each plain codec encode.
 	transformer := &PlainTransformer{}
 	plaintext := []byte("immutable-check")
 
@@ -51,13 +55,17 @@ func TestPlainTransformerEncodeCopiesPayload(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 
-	plaintext[0] = 'X'
-	if encoded.Payload[0] == 'X' {
-		t.Fatalf("expected encoded payload to be copied, but mutation leaked")
+	// Verify the payload content matches
+	if !bytes.Equal(encoded.Payload, plaintext) {
+		t.Fatalf("payload mismatch: got %q want %q", encoded.Payload, plaintext)
 	}
 }
 
-func TestPlainTransformerDecodeCopiesPayload(t *testing.T) {
+func TestPlainTransformerDecodeDoesNotCopyPayload(t *testing.T) {
+	// Phase 6 Step 8: Avoid unnecessary byte copies
+	// Payload is decoded and immediately used for hash verification and write,
+	// never mutated by the restore operation. This optimization avoids allocating
+	// and copying memory for each plain codec decode during restore.
 	transformer := &PlainTransformer{}
 	payload := []byte("decode-copy-check")
 
@@ -66,8 +74,8 @@ func TestPlainTransformerDecodeCopiesPayload(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	payload[0] = 'X'
-	if decoded[0] == 'X' {
-		t.Fatalf("expected decoded payload to be copied, but mutation leaked")
+	// Verify the decoded payload content matches
+	if !bytes.Equal(decoded, payload) {
+		t.Fatalf("payload mismatch: got %q want %q", decoded, payload)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -24,15 +25,18 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
-	"github.com/franchoy/coldkeep/internal/chunk/benchmark"
+	chunkbenchmark "github.com/franchoy/coldkeep/internal/chunk/benchmark"
 	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
 	"github.com/franchoy/coldkeep/internal/chunk/simplecdc"
 	clirender "github.com/franchoy/coldkeep/internal/cli/render"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
+	"github.com/franchoy/coldkeep/internal/iodebug"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -80,6 +84,11 @@ var flagsWithValues = map[string]bool{
 	"delete-snapshot": true,
 	"modified-after":  true,
 	"modified-before": true,
+	"dataset":         true,
+	"repeat":          true,
+	"compare":         true,
+	"threshold":       true,
+	"workers":         true,
 }
 
 type cliOutputMode string
@@ -180,6 +189,8 @@ var runObservabilityInspectPhase = func(entity observability.EntityType, id stri
 	return r, nil
 }
 var runChunkerBenchmarkPhase = runChunkerBenchmark
+var runCoreBenchmarkPhase = runCoreBenchmark
+var runBenchmarkDeterminismPhase = validateBenchmarkDeterminism
 var isDeprecatedChunkerVersionPhase = func(v chunk.Version) (bool, string) {
 	// Future-proof policy hook: no deprecated chunkers currently.
 	return false, ""
@@ -323,6 +334,15 @@ func runCLI(args []string) int {
 	if err != nil {
 		return printCLIError(err, startupMode)
 	}
+
+	ioSubcommand := ""
+	if len(parsed.positionals) > 0 {
+		ioSubcommand = strings.TrimSpace(parsed.positionals[0])
+	}
+	iodebug.StartOperation()
+	defer func() {
+		_ = iodebug.FlushProcessCounters(parsed.method, ioSubcommand)
+	}()
 
 	outputMode, err := resolveOutputMode(parsed)
 	if err != nil {
@@ -772,10 +792,19 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	switch normalized {
 	case "", "text", "human":
 		return outputModeText, nil
+	case "table":
+		if parsed.method == "benchmark" {
+			return outputModeText, nil
+		}
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	case "json":
 		return outputModeJSON, nil
 	default:
-		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
+		allowed := "human, text, json"
+		if parsed.method == "benchmark" {
+			allowed = "human, text, table, json"
+		}
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: %s)", value, allowed)
 	}
 }
 
@@ -951,11 +980,13 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	path := parsed.positionals[0]
 	codecName, _ := parsed.lastFlagValue("codec")
 
+	perf := newPerfTimer()
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	perf.Mark("setup")
 
 	var result storage.StoreFileResult
 	if codecName == "" {
@@ -972,9 +1003,11 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 
 		result, err = storage.StoreFileWithStorageContextAndCodecResult(sgctx, path, codec)
 	}
+	perf.Mark("operation")
 	if sgctx.Writer != nil {
 		_ = sgctx.Writer.FinalizeContainer()
 	}
+	perf.Mark("finalize")
 	if err != nil {
 		return err
 	}
@@ -989,6 +1022,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 				"file_id":        result.FileID,
 				"file_hash":      result.FileHash,
 				"already_stored": result.AlreadyStored,
+				"perf_spans":     perf.Spans(),
 			},
 		}
 		encoded, _ := json.Marshal(payload)
@@ -1008,15 +1042,26 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output", "workers"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return usageErrorf("Usage: coldkeep store-folder [--codec <plain|aes-gcm>] <folderPath>")
+		return usageErrorf("Usage: coldkeep store-folder [--codec <plain|aes-gcm>] [--workers <N>] <folderPath>")
 	}
 
 	path := parsed.positionals[0]
 	codecName, _ := parsed.lastFlagValue("codec")
+	opts, err := execution.FromEnv(execution.DefaultOptions())
+	if err != nil {
+		return fmt.Errorf("store-folder execution options: %w", err)
+	}
+	if rawWorkers, hasWorkers := parsed.lastFlagValue("workers"); hasWorkers {
+		workers, convErr := strconv.Atoi(strings.TrimSpace(rawWorkers))
+		if convErr != nil || workers <= 0 {
+			return usageErrorf("invalid --workers value %q (must be integer > 0)", rawWorkers)
+		}
+		opts.StoreFolderWorkers = workers
+	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
@@ -1025,7 +1070,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 	defer func() { _ = sgctx.Close() }()
 
 	if codecName == "" {
-		err = storage.StoreFolderWithStorageContext(sgctx, path)
+		err = storage.StoreFolderWithStorageContextAndOptions(sgctx, path, opts)
 	} else {
 		if codecName == "plain" {
 			_, _ = fmt.Fprintln(os.Stderr, "WARNING: data would be stored without encryption")
@@ -1036,7 +1081,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 			return parseErr
 		}
 
-		err = storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
+		err = storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, path, codec, opts)
 	}
 	if err != nil {
 		return err
@@ -1097,11 +1142,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 			return usageErrorf("--destination is required with --mode %s", destinationMode)
 		}
 
+		perf := newPerfTimer()
 		sgctx, err := storage.LoadDefaultStorageContext()
 		if err != nil {
 			return fmt.Errorf("load storage context: %w", err)
 		}
 		defer func() { _ = sgctx.Close() }()
+		perf.Mark("setup")
 
 		result, err := storage.RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, storage.RestoreOptions{
 			Overwrite:       overwrite,
@@ -1113,6 +1160,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		if err != nil {
 			return err
 		}
+		perf.Mark("operation")
 
 		if outputMode == outputModeJSON {
 			payload := map[string]any{
@@ -1124,6 +1172,7 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 					"file_id":       result.FileID,
 					"restored_hash": result.RestoredHash,
 					"mode":          destinationMode,
+					"perf_spans":    perf.Spans(),
 				},
 			}
 			encoded, _ := json.Marshal(payload)
@@ -1182,11 +1231,13 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 		return err
 	}
 
+	restorePerf := newPerfTimer()
 	sgctx, err := storage.LoadDefaultStorageContext()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	restorePerf.Mark("setup")
 
 	execFunc := func(fileID int64) batch.ItemResult {
 		if dryRun {
@@ -1196,7 +1247,8 @@ func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 	}
 
 	report := batch.ExecutePrepared(batch.OperationRestore, dryRun, failFast, preparedTargets, execFunc)
-	return emitBatchCommandReport("restore", report, outputMode)
+	restorePerf.Mark("operation")
+	return emitBatchCommandReport("restore", report, outputMode, restorePerf.Spans())
 }
 
 func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDestinationMode, error) {
@@ -1655,7 +1707,7 @@ func executeRemoveStoredPathItem(sgctx *storage.StorageContext, storedPath strin
 	}
 }
 
-func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode) error {
+func emitBatchCommandReport(command string, report batch.Report, outputMode cliOutputMode, spans ...[]perfSpan) error {
 	executionMode := report.ExecutionMode
 	if executionMode == "" {
 		executionMode = batch.ExecutionModeContinueOnError
@@ -1706,6 +1758,9 @@ func emitBatchCommandReport(command string, report batch.Report, outputMode cliO
 			"execution_mode": executionMode,
 			"summary":        report.Summary,
 			"results":        jsonResults,
+		}
+		if len(spans) > 0 && len(spans[0]) > 0 {
+			payload["perf_spans"] = spans[0]
 		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
@@ -1776,10 +1831,12 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 		return usageErrorf("Usage: coldkeep gc [--dry-run]")
 	}
 
+	perf := newPerfTimer()
 	result, err := runGCPhase(dryRun, container.ContainersDir)
 	if err != nil {
 		return err
 	}
+	perf.Mark("operation")
 
 	if outputMode == outputModeJSON {
 		payload := map[string]any{
@@ -1787,6 +1844,7 @@ func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 			"command": "gc",
 			"data":    result,
 		}
+		payload["perf_spans"] = perf.Spans()
 		encoded, _ := json.Marshal(payload)
 		fmt.Println(string(encoded))
 		return nil
@@ -2427,21 +2485,117 @@ type BenchmarkChunkersReportRecord struct {
 	WinnerVersion string  `json:"winner_version"`
 }
 
+// ---- Phase 1 performance measurement ----
+// perfSpan is a named, sequential timing span within a single command invocation.
+// Spans are emitted as perf_spans in --output json responses.
+// Phase 1 records three coarse phases per command:
+//
+//	setup      – storage context / DB bootstrap
+//	operation  – the primary work (store / restore / gc / snapshot-create)
+//	finalize   – container sealing (store only)
+//
+// No changes to internal packages (db, container, chunk, storage) are made;
+// all timings are taken at the command-handler boundary.
+type perfSpan struct {
+	Name       string `json:"name"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// perfTimer records sequential named spans. Call Mark after each sub-phase.
+type perfTimer struct {
+	spans []perfSpan
+	last  time.Time
+}
+
+func newPerfTimer() *perfTimer {
+	return &perfTimer{last: time.Now()}
+}
+
+// Mark ends the current span and starts the next.
+func (p *perfTimer) Mark(name string) {
+	now := time.Now()
+	p.spans = append(p.spans, perfSpan{
+		Name:       name,
+		DurationMs: now.Sub(p.last).Milliseconds(),
+	})
+	p.last = now
+}
+
+// Spans returns all recorded spans in order.
+func (p *perfTimer) Spans() []perfSpan { return p.spans }
+
+// BenchmarkRunReport is the output payload for `coldkeep benchmark run`.
+type BenchmarkRunReport struct {
+	GeneratedAtUTC string                  `json:"generated_at_utc"`
+	Dataset        string                  `json:"dataset"`
+	Repeat         int                     `json:"repeat"`
+	Execution      BenchmarkExecution      `json:"execution"`
+	ExecutionStats BenchmarkExecutionStats `json:"execution_stats"`
+	Rows           []BenchmarkRunCaseRow   `json:"rows"`
+}
+
+// BenchmarkExecution captures execution policy knobs used for this run.
+type BenchmarkExecution struct {
+	StoreFolderWorkers int  `json:"store_folder_workers"`
+	PipelineDepth      int  `json:"pipeline_depth"`
+	Deterministic      bool `json:"deterministic"`
+}
+
+type BenchmarkExecutionStats struct {
+	TotalFiles            int                `json:"total_files"`
+	TotalBytes            int64              `json:"total_bytes"`
+	WorkersUsed           int                `json:"workers_used"`
+	ContainerAppendCount  int64              `json:"container_append_count,omitempty"`
+	FsyncCount            int64              `json:"fsync_count,omitempty"`
+	ContainerOpenCount    int64              `json:"container_open_count,omitempty"`
+	ContainerCloseCount   int64              `json:"container_close_count,omitempty"`
+	SnapshotMetadataWrite int64              `json:"snapshot_metadata_write_count,omitempty"`
+	IO                    BenchmarkIOMetrics `json:"io"`
+}
+
+type BenchmarkIOMetrics struct {
+	ContainerOpens   int64 `json:"container_opens"`
+	ContainerAppends int64 `json:"container_appends"`
+	Fsyncs           int64 `json:"fsyncs"`
+	BytesWritten     int64 `json:"bytes_written"`
+	BytesRead        int64 `json:"bytes_read"`
+}
+
+// BenchmarkRunCaseRow is one per-case benchmark summary row.
+type BenchmarkRunCaseRow struct {
+	Case           string                  `json:"case"`
+	DurationMs     int64                   `json:"duration_ms"`
+	ThroughputMBps float64                 `json:"throughput_mbps"`
+	Execution      BenchmarkExecution      `json:"execution"`
+	ExecutionStats BenchmarkExecutionStats `json:"execution_stats"`
+}
+
 func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "dataset", "repeat", "compare", "threshold", "workers"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
-		return usageErrorf("Usage: coldkeep benchmark <chunkers> [--output <text|json>]")
-	}
-	if len(parsed.positionals) > 1 {
-		return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+		return usageErrorf("Usage: coldkeep benchmark <chunkers|run> [options]")
 	}
 
 	subcommand := parsed.positionals[0]
-	if subcommand != "chunkers" {
-		return usageErrorf("unknown benchmark subcommand %q (expected: chunkers)", subcommand)
+	switch subcommand {
+	case "chunkers":
+		if len(parsed.positionals) > 1 {
+			return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+		}
+		return runBenchmarkChunkersCommand(outputMode)
+	case "run":
+		if len(parsed.positionals) > 1 {
+			return usageErrorf("unexpected benchmark arguments: %s", strings.Join(parsed.positionals[1:], " "))
+		}
+		return runBenchmarkRunCommand(parsed, outputMode)
+	default:
+		return usageErrorf("unknown benchmark subcommand %q (expected: chunkers, run)", subcommand)
 	}
+}
+
+func runBenchmarkChunkersCommand(outputMode cliOutputMode) error {
 
 	report, err := runChunkerBenchmarkPhase()
 	if err != nil {
@@ -2487,19 +2641,634 @@ func runBenchmarkCommand(parsed parsedCommandLine, outputMode cliOutputMode) err
 	return nil
 }
 
+func runBenchmarkRunCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
+	rawPreset, _ := parsed.lastFlagValue("dataset")
+	preset, err := corebenchmark.ParseDatasetPreset(rawPreset)
+	if err != nil {
+		return usageErrorf("%s", err.Error())
+	}
+
+	opts := execution.DefaultOptions()
+	if rawWorkers, hasWorkers := parsed.lastFlagValue("workers"); hasWorkers {
+		workers, err := strconv.Atoi(strings.TrimSpace(rawWorkers))
+		if err != nil || workers <= 0 {
+			return usageErrorf("invalid --workers value %q (must be integer > 0)", rawWorkers)
+		}
+		opts.StoreFolderWorkers = workers
+	}
+	opts, err = execution.FromEnv(opts)
+	if err != nil {
+		return fmt.Errorf("benchmark execution options: %w", err)
+	}
+
+	repeat := 1
+	if rawRepeat, hasRepeat := parsed.lastFlagValue("repeat"); hasRepeat {
+		repeat, err = strconv.Atoi(strings.TrimSpace(rawRepeat))
+		if err != nil || repeat <= 0 {
+			return usageErrorf("invalid --repeat value %q (must be integer > 0)", rawRepeat)
+		}
+	}
+
+	report, err := runCoreBenchmarkPhase(preset, repeat, opts)
+	if err != nil {
+		return fmt.Errorf("benchmark run: %w", err)
+	}
+	report.Execution = BenchmarkExecution{
+		StoreFolderWorkers: opts.StoreFolderWorkers,
+		PipelineDepth:      opts.PipelineDepth,
+		Deterministic:      opts.Deterministic,
+	}
+
+	if outputMode == outputModeJSON {
+		payload := map[string]any{
+			"status":  "ok",
+			"command": "benchmark",
+			"data":    report,
+		}
+		encoded, _ := json.Marshal(payload)
+		fmt.Println(string(encoded))
+	} else {
+		fmt.Printf("Benchmark run (%s preset, repeat=%d)\n", report.Dataset, report.Repeat)
+		fmt.Printf(
+			"Execution: workers=%d pipeline_depth=%d deterministic=%t\n",
+			report.Execution.StoreFolderWorkers,
+			report.Execution.PipelineDepth,
+			report.Execution.Deterministic,
+		)
+		fmt.Println()
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "CASE\tTIME\tMB/s\tW_CFG\tW_USED\tFILES")
+		for _, row := range report.Rows {
+			_, _ = fmt.Fprintf(
+				tw,
+				"%s\t%.1fs\t%.0f\t%d\t%d\t%d\n",
+				row.Case,
+				float64(row.DurationMs)/1000.0,
+				row.ThroughputMBps,
+				row.Execution.StoreFolderWorkers,
+				row.ExecutionStats.WorkersUsed,
+				row.ExecutionStats.TotalFiles,
+			)
+		}
+		_ = tw.Flush()
+	}
+
+	if baselinePath, hasCompare := parsed.lastFlagValue("compare"); hasCompare {
+		threshold := 20.0
+		if rawThreshold, hasThreshold := parsed.lastFlagValue("threshold"); hasThreshold {
+			v, err := strconv.ParseFloat(strings.TrimSpace(rawThreshold), 64)
+			if err != nil || v <= 0 {
+				return usageErrorf("invalid --threshold value %q (must be a positive number representing a percentage, e.g. 20 or 100)", rawThreshold)
+			}
+			threshold = v
+		}
+		if err := compareWithBaseline(report, baselinePath, threshold); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// compareWithBaseline reads a baseline JSON file produced by a previous
+// `benchmark run --output json` invocation and reports any cases whose
+// duration or throughput has regressed beyond thresholdPct percent.
+// Use thresholdPct=20 for local dev work and thresholdPct=100 for CI
+// (fail only if a scenario becomes more than 2× slower).
+func compareWithBaseline(current BenchmarkRunReport, baselinePath string, thresholdPct float64) error {
+
+	raw, err := os.ReadFile(baselinePath)
+	if err != nil {
+		return fmt.Errorf("read baseline %q: %w", baselinePath, err)
+	}
+
+	// The baseline file is the full JSON envelope written by --output json.
+	var envelope struct {
+		Data BenchmarkRunReport `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("parse baseline %q: %w", baselinePath, err)
+	}
+	baseline := envelope.Data
+
+	baselineByCase := make(map[string]BenchmarkRunCaseRow, len(baseline.Rows))
+	for _, row := range baseline.Rows {
+		baselineByCase[row.Case] = row
+	}
+
+	type regressionEntry struct {
+		caseName string
+		field    string
+		baseline float64
+		current  float64
+		pct      float64
+	}
+	var regressions []regressionEntry
+
+	for _, row := range current.Rows {
+		base, ok := baselineByCase[row.Case]
+		if !ok {
+			continue // new case added since baseline was captured; skip
+		}
+		if base.DurationMs > 0 {
+			delta := float64(row.DurationMs-base.DurationMs) / float64(base.DurationMs) * 100.0
+			if delta > thresholdPct {
+				regressions = append(regressions, regressionEntry{
+					caseName: row.Case,
+					field:    "duration_ms",
+					baseline: float64(base.DurationMs),
+					current:  float64(row.DurationMs),
+					pct:      delta,
+				})
+			}
+		}
+		if base.ThroughputMBps > 0 {
+			delta := (base.ThroughputMBps - row.ThroughputMBps) / base.ThroughputMBps * 100.0
+			if delta > thresholdPct {
+				regressions = append(regressions, regressionEntry{
+					caseName: row.Case,
+					field:    "throughput_mbps",
+					baseline: base.ThroughputMBps,
+					current:  row.ThroughputMBps,
+					pct:      delta,
+				})
+			}
+		}
+	}
+
+	if len(regressions) == 0 {
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Benchmark regressions detected (>%.0f%% threshold):\n\n", thresholdPct)
+	tw := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "CASE\tFIELD\tBASELINE\tCURRENT\tDEGRADATION")
+	for _, r := range regressions {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%.2f\t%.2f\t+%.1f%%\n", r.caseName, r.field, r.baseline, r.current, r.pct)
+	}
+	_ = tw.Flush()
+
+	return fmt.Errorf("benchmark regression: %d case(s) exceeded the %.0f%% degradation threshold", len(regressions), thresholdPct)
+}
+
+func runCoreBenchmark(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+	if err := runBenchmarkDeterminismPhase(preset, opts); err != nil {
+		return BenchmarkRunReport{}, err
+	}
+
+	report, err := runPresetInTemporaryDatabase(preset, repeat, opts, "report")
+	if err != nil {
+		return BenchmarkRunReport{}, err
+	}
+
+	out := BenchmarkRunReport{
+		GeneratedAtUTC: report.GeneratedAtUTC,
+		Dataset:        string(report.Dataset),
+		Repeat:         report.Repeat,
+		Execution: BenchmarkExecution{
+			StoreFolderWorkers: opts.StoreFolderWorkers,
+			PipelineDepth:      opts.PipelineDepth,
+			Deterministic:      opts.Deterministic,
+		},
+		Rows: make([]BenchmarkRunCaseRow, 0),
+	}
+
+	type runAgg struct {
+		durationMs int64
+		bytes      int64
+		files      int
+		execution  BenchmarkExecution
+		stats      BenchmarkExecutionStats
+	}
+	caseAgg := make(map[string]runAgg)
+	caseOrder := make([]string, 0)
+	for _, iteration := range report.Iterations {
+		for _, result := range iteration.Results {
+			agg := caseAgg[result.Name]
+			if _, seen := caseAgg[result.Name]; !seen {
+				caseOrder = append(caseOrder, result.Name)
+				agg.execution = BenchmarkExecution{
+					StoreFolderWorkers: result.Execution.StoreFolderWorkers,
+					PipelineDepth:      result.Execution.PipelineDepth,
+					Deterministic:      result.Execution.Deterministic,
+				}
+				agg.stats.WorkersUsed = result.ExecStats.WorkersUsed
+			}
+			agg.durationMs += result.Metrics.Duration.Milliseconds()
+			agg.bytes += result.Metrics.BytesProcessed
+			agg.files += result.Metrics.FilesProcessed
+			agg.stats.TotalBytes += result.ExecStats.TotalBytesProcessed
+			agg.stats.TotalFiles += result.ExecStats.TotalFilesProcessed
+			agg.stats.ContainerAppendCount += result.ExecStats.ContainerAppendCount
+			agg.stats.FsyncCount += result.ExecStats.FsyncCount
+			agg.stats.ContainerOpenCount += result.ExecStats.ContainerOpenCount
+			agg.stats.ContainerCloseCount += result.ExecStats.ContainerCloseCount
+			agg.stats.IO.ContainerAppends += result.ExecStats.ContainerAppendCount
+			agg.stats.IO.Fsyncs += result.ExecStats.FsyncCount
+			agg.stats.IO.ContainerOpens += result.ExecStats.ContainerOpenCount
+			agg.stats.IO.BytesWritten += result.ExecStats.BytesWritten
+			agg.stats.IO.BytesRead += result.ExecStats.BytesRead
+			agg.stats.SnapshotMetadataWrite += result.ExecStats.SnapshotMetadataWrites
+			caseAgg[result.Name] = agg
+		}
+	}
+
+	for _, caseName := range caseOrder {
+		agg := caseAgg[caseName]
+		throughput := 0.0
+		if agg.durationMs > 0 && agg.bytes > 0 {
+			seconds := float64(agg.durationMs) / 1000.0
+			throughput = (float64(agg.bytes) / (1024.0 * 1024.0)) / seconds
+		}
+		out.Rows = append(out.Rows, BenchmarkRunCaseRow{
+			Case:           caseName,
+			DurationMs:     agg.durationMs,
+			ThroughputMBps: throughput,
+			Execution:      agg.execution,
+			ExecutionStats: agg.stats,
+		})
+		out.ExecutionStats.TotalFiles += agg.stats.TotalFiles
+		out.ExecutionStats.TotalBytes += agg.stats.TotalBytes
+		if agg.stats.WorkersUsed > out.ExecutionStats.WorkersUsed {
+			out.ExecutionStats.WorkersUsed = agg.stats.WorkersUsed
+		}
+		out.ExecutionStats.ContainerAppendCount += agg.stats.ContainerAppendCount
+		out.ExecutionStats.FsyncCount += agg.stats.FsyncCount
+		out.ExecutionStats.ContainerOpenCount += agg.stats.ContainerOpenCount
+		out.ExecutionStats.ContainerCloseCount += agg.stats.ContainerCloseCount
+		out.ExecutionStats.SnapshotMetadataWrite += agg.stats.SnapshotMetadataWrite
+		out.ExecutionStats.IO.ContainerOpens += agg.stats.IO.ContainerOpens
+		out.ExecutionStats.IO.ContainerAppends += agg.stats.IO.ContainerAppends
+		out.ExecutionStats.IO.Fsyncs += agg.stats.IO.Fsyncs
+		out.ExecutionStats.IO.BytesWritten += agg.stats.IO.BytesWritten
+		out.ExecutionStats.IO.BytesRead += agg.stats.IO.BytesRead
+	}
+
+	return out, nil
+}
+
+type benchmarkStateSnapshot struct {
+	ChunkCount        int64
+	LogicalFileHashes []string
+	SnapshotContent   []string
+}
+
+func validateBenchmarkDeterminism(preset corebenchmark.DatasetPreset, opts execution.Options) error {
+	firstReport, firstState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, opts, "determinism-a")
+	if err != nil {
+		return fmt.Errorf("determinism run A failed: %w", err)
+	}
+	_ = firstReport
+
+	secondReport, secondState, err := runPresetAndCaptureStateInTemporaryDatabase(preset, 1, opts, "determinism-b")
+	if err != nil {
+		return fmt.Errorf("determinism run B failed: %w", err)
+	}
+	_ = secondReport
+
+	if firstState.ChunkCount != secondState.ChunkCount {
+		return fmt.Errorf("determinism validation failed: chunk count mismatch (%d != %d)", firstState.ChunkCount, secondState.ChunkCount)
+	}
+	if !equalStringSlices(firstState.LogicalFileHashes, secondState.LogicalFileHashes) {
+		return fmt.Errorf("determinism validation failed: logical file hash set mismatch")
+	}
+	if !equalStringSlices(firstState.SnapshotContent, secondState.SnapshotContent) {
+		return fmt.Errorf("determinism validation failed: snapshot content mismatch")
+	}
+
+	// Verify that the user-visible restore output is also bit-for-bit identical
+	// across independent runs. This is a stronger guarantee than DB hash
+	// equality: it proves store→restore→hash(bytes) is stable.
+	firstTree, err := runRestoreDeterminismCheck("restore-det-a")
+	if err != nil {
+		return fmt.Errorf("restore determinism run A failed: %w", err)
+	}
+	secondTree, err := runRestoreDeterminismCheck("restore-det-b")
+	if err != nil {
+		return fmt.Errorf("restore determinism run B failed: %w", err)
+	}
+	if ok, reason := corebenchmark.EqualRestoredTreeHashes(firstTree, secondTree); !ok {
+		return fmt.Errorf("determinism validation failed: restored tree mismatch: %s", reason)
+	}
+	return nil
+}
+
+// runRestoreDeterminismCheck performs a minimal store→restore cycle in an
+// isolated temporary database and returns a map of relative path → SHA-256
+// digest for all files in the restored output directory. The same fixed seed
+// and file size are used on every call so that two independent invocations
+// should produce identical maps.
+func runRestoreDeterminismCheck(runLabel string) (map[string]string, error) {
+	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cleanup() }()
+
+	workDir, err := os.MkdirTemp("", "coldkeep-restore-det-*")
+	if err != nil {
+		return nil, fmt.Errorf("create work dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(workDir) }()
+
+	storageDir := filepath.Join(workDir, "storage", "containers")
+	if err := os.MkdirAll(storageDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create storage dir: %w", err)
+	}
+
+	// Write a small deterministic file (fixed seed, fixed size).
+	srcFile := filepath.Join(workDir, "source.bin")
+	if err := corebenchmark.WriteDeterministicFile(srcFile, 256*1024, 0xDEADBEEF); err != nil {
+		return nil, fmt.Errorf("write deterministic source file: %w", err)
+	}
+
+	exe := resolveSelfExecutable()
+	baseEnv := buildDeterminismEnv(dbName, storageDir)
+
+	if err := runSubprocess(exe, []string{"store", srcFile}, workDir, baseEnv); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+
+	restoreDir := filepath.Join(workDir, "restore-output")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create restore output dir: %w", err)
+	}
+	restoreDest := filepath.Join(restoreDir, "source.bin")
+	if err := runSubprocess(exe, []string{
+		"restore",
+		"--stored-path", srcFile,
+		"--mode", "override",
+		"--destination", restoreDest,
+		"--overwrite",
+	}, workDir, baseEnv); err != nil {
+		return nil, fmt.Errorf("restore: %w", err)
+	}
+
+	return corebenchmark.HashRestoredTree(restoreDir)
+}
+
+func buildDeterminismEnv(dbName, storageDir string) []string {
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	port := strings.TrimSpace(os.Getenv("DB_PORT"))
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	password := os.Getenv("DB_PASSWORD")
+	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	codec := strings.TrimSpace(os.Getenv("COLDKEEP_CODEC"))
+	key := os.Getenv("COLDKEEP_KEY")
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	if codec == "" {
+		codec = "plain"
+	}
+	if strings.EqualFold(codec, "aes-gcm") && strings.TrimSpace(key) == "" {
+		codec = "plain"
+	}
+
+	env := os.Environ()
+	overrides := map[string]string{
+		"DB_HOST":                    host,
+		"DB_PORT":                    port,
+		"DB_USER":                    user,
+		"DB_PASSWORD":                password,
+		"DB_SSLMODE":                 sslMode,
+		"DB_NAME":                    dbName,
+		"COLDKEEP_DB_AUTO_BOOTSTRAP": "true",
+		"COLDKEEP_STORAGE_DIR":       storageDir,
+		"COLDKEEP_CODEC":             codec,
+	}
+	if strings.TrimSpace(key) != "" {
+		overrides["COLDKEEP_KEY"] = key
+	}
+	// Build a deduplicated env slice: start from os.Environ(), then apply overrides.
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(env)+len(overrides))
+	for k, v := range overrides {
+		result = append(result, k+"="+v)
+		seen[k] = true
+	}
+	for _, kv := range env {
+		key := kv
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			key = kv[:idx]
+		}
+		if !seen[key] {
+			result = append(result, kv)
+		}
+	}
+	return result
+}
+
+func runSubprocess(exe string, args []string, workDir string, env []string) error {
+	cmd := exec.Command(exe, args...) // #nosec G204 — exe is always resolveSelfExecutable()
+	cmd.Dir = workDir
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if len(out) > 0 {
+			return fmt.Errorf("%w\n%s", err, out)
+		}
+		return err
+	}
+	return nil
+}
+
+func resolveSelfExecutable() string {
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	// Fall back to argv[0] if os.Executable() fails (should not happen in practice).
+	return os.Args[0]
+}
+
+func runPresetInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (corebenchmark.RunReport, error) {
+	report, _, err := runPresetAndCaptureStateInTemporaryDatabase(preset, repeat, opts, runLabel)
+	return report, err
+}
+
+func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options, runLabel string) (corebenchmark.RunReport, benchmarkStateSnapshot, error) {
+	dbName, cleanup, err := createTemporaryBenchmarkDatabase(runLabel)
+	if err != nil {
+		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
+	}
+	defer func() { _ = cleanup() }()
+
+	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
+		ColdkeepExecutable: resolveSelfExecutable(),
+		Execution:          opts,
+		ExtraEnv: map[string]string{
+			"DB_NAME":                       dbName,
+			"COLDKEEP_DB_AUTO_BOOTSTRAP":    "true",
+			"COLDKEEP_STORE_FOLDER_WORKERS": strconv.Itoa(opts.StoreFolderWorkers),
+		},
+	})
+	if err != nil {
+		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
+	}
+
+	state, err := captureBenchmarkState(dbName)
+	if err != nil {
+		return corebenchmark.RunReport{}, benchmarkStateSnapshot{}, err
+	}
+
+	return report, state, nil
+}
+
+func createTemporaryBenchmarkDatabase(label string) (string, func() error, error) {
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	port := strings.TrimSpace(os.Getenv("DB_PORT"))
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	password := os.Getenv("DB_PASSWORD")
+	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	if host == "" || port == "" || user == "" {
+		return "", nil, fmt.Errorf("determinism validation requires DB_HOST, DB_PORT, and DB_USER")
+	}
+
+	maintenanceDB := strings.TrimSpace(os.Getenv("COLDKEEP_TEST_DB_MAINTENANCE"))
+	if maintenanceDB == "" {
+		maintenanceDB = "postgres"
+	}
+
+	name := fmt.Sprintf("coldkeep_bench_%s_%d", sanitizeDBNamePart(label), time.Now().UnixNano())
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, maintenanceDB, sslMode)
+	adminDB, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return "", nil, fmt.Errorf("open maintenance DB: %w", err)
+	}
+	defer func() { _ = adminDB.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := adminDB.PingContext(ctx); err != nil {
+		return "", nil, fmt.Errorf("ping maintenance DB: %w", err)
+	}
+	if _, err := adminDB.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s", name)); err != nil {
+		return "", nil, fmt.Errorf("create benchmark DB %q: %w", name, err)
+	}
+
+	cleanup := func() error {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = adminDB.ExecContext(cleanupCtx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name)
+		if _, err := adminDB.ExecContext(cleanupCtx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)); err != nil {
+			return fmt.Errorf("drop benchmark DB %q: %w", name, err)
+		}
+		return nil
+	}
+
+	return name, cleanup, nil
+}
+
+func sanitizeDBNamePart(label string) string {
+	label = strings.ToLower(strings.TrimSpace(label))
+	if label == "" {
+		return "run"
+	}
+	var b strings.Builder
+	for _, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func captureBenchmarkState(dbName string) (benchmarkStateSnapshot, error) {
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	port := strings.TrimSpace(os.Getenv("DB_PORT"))
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	password := os.Getenv("DB_PASSWORD")
+	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, dbName, sslMode)
+	dbconn, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("open benchmark DB %q: %w", dbName, err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	state := benchmarkStateSnapshot{}
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunk`).Scan(&state.ChunkCount); err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("query chunk count: %w", err)
+	}
+
+	hashRows, err := dbconn.QueryContext(ctx, `SELECT file_hash FROM logical_file WHERE status = 'COMPLETED' ORDER BY file_hash ASC, id ASC`)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("query logical file hashes: %w", err)
+	}
+	for hashRows.Next() {
+		var hash string
+		if err := hashRows.Scan(&hash); err != nil {
+			_ = hashRows.Close()
+			return benchmarkStateSnapshot{}, fmt.Errorf("scan logical file hash: %w", err)
+		}
+		state.LogicalFileHashes = append(state.LogicalFileHashes, hash)
+	}
+	if err := hashRows.Close(); err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("close logical file hash rows: %w", err)
+	}
+
+	snapshotRows, err := dbconn.QueryContext(ctx, `
+		SELECT lf.file_hash
+		FROM snapshot_file sf
+		JOIN logical_file lf ON lf.id = sf.logical_file_id
+		ORDER BY lf.file_hash ASC, sf.snapshot_id ASC, sf.path_id ASC
+	`)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("query snapshot content: %w", err)
+	}
+	for snapshotRows.Next() {
+		var hash string
+		if err := snapshotRows.Scan(&hash); err != nil {
+			_ = snapshotRows.Close()
+			return benchmarkStateSnapshot{}, fmt.Errorf("scan snapshot content row: %w", err)
+		}
+		state.SnapshotContent = append(state.SnapshotContent, hash)
+	}
+	if err := snapshotRows.Close(); err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("close snapshot content rows: %w", err)
+	}
+
+	return state, nil
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 	type metricSpec struct {
 		datasetName string
 		metricName  string
-		compute     func(base, candidate benchmark.Result) (float64, error)
+		compute     func(base, candidate chunkbenchmark.Result) (float64, error)
 	}
 
 	metrics := []metricSpec{
 		{
 			datasetName: "slight-modifications",
 			metricName:  "reuse-after-small-edit",
-			compute: func(base, candidate benchmark.Result) (float64, error) {
-				reuse, err := benchmark.CompareReuse(base, candidate)
+			compute: func(base, candidate chunkbenchmark.Result) (float64, error) {
+				reuse, err := chunkbenchmark.CompareReuse(base, candidate)
 				if err != nil {
 					return 0, err
 				}
@@ -2509,8 +3278,8 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 		{
 			datasetName: "shifted-data",
 			metricName:  "reuse-after-shift",
-			compute: func(base, candidate benchmark.Result) (float64, error) {
-				stability, err := benchmark.CompareBoundaryStability(base, candidate)
+			compute: func(base, candidate chunkbenchmark.Result) (float64, error) {
+				stability, err := chunkbenchmark.CompareBoundaryStability(base, candidate)
 				if err != nil {
 					return 0, err
 				}
@@ -2519,8 +3288,8 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 		},
 	}
 
-	index := make(map[string]benchmark.Dataset)
-	for _, dataset := range benchmark.DefaultDatasets() {
+	index := make(map[string]chunkbenchmark.Dataset)
+	for _, dataset := range chunkbenchmark.DefaultDatasets() {
 		index[dataset.Name] = dataset
 	}
 
@@ -2537,12 +3306,12 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 			return BenchmarkChunkersReport{}, fmt.Errorf("benchmark dataset %q has no mutation variants", spec.datasetName)
 		}
 
-		baseV1 := benchmark.RunChunker(v1, dataset.Base.Data)
-		candidateV1 := benchmark.RunChunker(v1, dataset.Mutations[0].Data)
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV1); err != nil {
+		baseV1 := chunkbenchmark.RunChunker(v1, dataset.Base.Data)
+		candidateV1 := chunkbenchmark.RunChunker(v1, dataset.Mutations[0].Data)
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV1); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v1: %w", spec.datasetName, err)
 		}
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV1); err != nil {
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV1); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v1: %w", spec.datasetName, err)
 		}
 		v1Pct, err := spec.compute(baseV1, candidateV1)
@@ -2550,12 +3319,12 @@ func runChunkerBenchmark() (BenchmarkChunkersReport, error) {
 			return BenchmarkChunkersReport{}, fmt.Errorf("compute %s for %q v1: %w", spec.metricName, spec.datasetName, err)
 		}
 
-		baseV2 := benchmark.RunChunker(v2, dataset.Base.Data)
-		candidateV2 := benchmark.RunChunker(v2, dataset.Mutations[0].Data)
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV2); err != nil {
+		baseV2 := chunkbenchmark.RunChunker(v2, dataset.Base.Data)
+		candidateV2 := chunkbenchmark.RunChunker(v2, dataset.Mutations[0].Data)
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Base.Data)), baseV2); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate base coverage for %q v2: %w", spec.datasetName, err)
 		}
-		if err := benchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV2); err != nil {
+		if err := chunkbenchmark.ValidateCoverageInvariants(int64(len(dataset.Mutations[0].Data)), candidateV2); err != nil {
 			return BenchmarkChunkersReport{}, fmt.Errorf("validate candidate coverage for %q v2: %w", spec.datasetName, err)
 		}
 		v2Pct, err := spec.compute(baseV2, candidateV2)
@@ -2651,10 +3420,14 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 			}
 			return storage.StoreFileWithStorageContextAndCodec(sgctx, path, codec)
 		case "store-folder":
-			if codecName == "" {
-				return storage.StoreFolderWithStorageContext(sgctx, path)
+			opts, optsErr := execution.FromEnv(execution.DefaultOptions())
+			if optsErr != nil {
+				return fmt.Errorf("store-folder execution options: %w", optsErr)
 			}
-			return storage.StoreFolderWithStorageContextAndCodec(sgctx, path, codec)
+			if codecName == "" {
+				return storage.StoreFolderWithStorageContextAndOptions(sgctx, path, opts)
+			}
+			return storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, path, codec, opts)
 		}
 		return nil
 	})
@@ -3728,7 +4501,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 }
 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	startedAt := time.Now()
+	perf := newPerfTimer()
 
 	if err := ensureAllowedFlags(parsed, "id", "label", "from", "output"); err != nil {
 		return err
@@ -3776,6 +4549,7 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 		return fmt.Errorf("load storage context: %w", err)
 	}
 	defer func() { _ = sgctx.Close() }()
+	perf.Mark("setup")
 
 	if sgctx.DB == nil {
 		return errors.New("storage context DB is nil")
@@ -3793,22 +4567,27 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	}); err != nil {
 		return err
 	}
+	perf.Mark("operation")
 
 	var (
-		filesInserted      int64
-		hasFilesInserted   bool
-		snapshotDurationMS = time.Since(startedAt).Milliseconds()
+		filesInserted    int64
+		hasFilesInserted bool
 	)
 	if err := sgctx.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot_file WHERE snapshot_id = $1`, snapshotID).Scan(&filesInserted); err == nil {
 		hasFilesInserted = true
 	}
 
 	if outputMode == outputModeJSON {
+		totalMs := int64(0)
+		for _, s := range perf.Spans() {
+			totalMs += s.DurationMs
+		}
 		data := map[string]any{
 			"snapshot_id": snapshotID,
 			"type":        snapshotType,
 			"paths_count": len(paths),
-			"duration_ms": snapshotDurationMS,
+			"duration_ms": totalMs,
+			"perf_spans":  perf.Spans(),
 		}
 		payload := map[string]any{
 			"status":  "ok",
@@ -3839,7 +4618,11 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 	if hasFilesInserted {
 		_, _ = fmt.Fprintf(os.Stdout, "  Files: %d\n", filesInserted)
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", snapshotDurationMS)
+	totalMs := int64(0)
+	for _, s := range perf.Spans() {
+		totalMs += s.DurationMs
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "  Duration: %dms\n", totalMs)
 	_, _ = fmt.Fprintln(os.Stdout, "  Hint: "+doctorOperationalHint)
 	return nil
 }
@@ -3981,6 +4764,7 @@ func printHelp() {
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
 		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
+		{"  benchmark run [--dataset <small|medium|large>] [--repeat <N>] [--workers <N>] [--output <table|json>]", "Run full benchmark scenario suite using dataset presets"},
 		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
 		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},

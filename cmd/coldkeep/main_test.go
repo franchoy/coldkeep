@@ -18,9 +18,11 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/batch"
+	corebenchmark "github.com/franchoy/coldkeep/internal/benchmark"
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	dbpkg "github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/observability"
@@ -379,8 +381,8 @@ func assertJSONEnvelopeShape(t *testing.T, payload map[string]any, wantType stri
 	if !ok {
 		t.Fatalf("expected meta object, got %T", payload["meta"])
 	}
-	if got, _ := meta["version"].(string); got != "v1.6" {
-		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	if got, _ := meta["version"].(string); got != "v1.7" {
+		t.Fatalf("expected meta.version=v1.7, got %v", meta["version"])
 	}
 	if _, ok := meta["exact"].(bool); !ok {
 		t.Fatalf("expected meta.exact bool, got %T", meta["exact"])
@@ -2099,6 +2101,346 @@ func TestRunBenchmarkCommandTextOutputIncludesRows(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if preset != corebenchmark.DatasetPresetSmall {
+			t.Fatalf("unexpected preset: %q", preset)
+		}
+		if repeat != 2 {
+			t.Fatalf("unexpected repeat: %d", repeat)
+		}
+		if opts.StoreFolderWorkers != 1 {
+			t.Fatalf("unexpected default workers: %d", opts.StoreFolderWorkers)
+		}
+		return BenchmarkRunReport{
+			GeneratedAtUTC: "2026-04-29T00:00:00Z",
+			Dataset:        "small",
+			Repeat:         2,
+			Execution: BenchmarkExecution{
+				StoreFolderWorkers: opts.StoreFolderWorkers,
+				PipelineDepth:      opts.PipelineDepth,
+				Deterministic:      opts.Deterministic,
+			},
+			ExecutionStats: BenchmarkExecutionStats{
+				TotalFiles:  100,
+				TotalBytes:  104857600,
+				WorkersUsed: opts.StoreFolderWorkers,
+			},
+			Rows: []BenchmarkRunCaseRow{{
+				Case:           "store-large",
+				DurationMs:     2300,
+				ThroughputMBps: 120,
+				Execution: BenchmarkExecution{
+					StoreFolderWorkers: opts.StoreFolderWorkers,
+					PipelineDepth:      opts.PipelineDepth,
+					Deterministic:      opts.Deterministic,
+				},
+				ExecutionStats: BenchmarkExecutionStats{
+					TotalFiles:  100,
+					TotalBytes:  104857600,
+					WorkersUsed: opts.StoreFolderWorkers,
+				},
+			}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"output":  {"json"},
+				"dataset": {"small"},
+				"repeat":  {"2"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse benchmark run JSON payload: %v output=%q", err, output)
+	}
+	if got, _ := payload["status"].(string); got != "ok" {
+		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
+	}
+	if got, _ := payload["command"].(string); got != "benchmark" {
+		t.Fatalf("command mismatch: got=%v payload=%v", payload["command"], payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object in benchmark run payload, got=%v", payload)
+	}
+	if got, _ := data["dataset"].(string); got != "small" {
+		t.Fatalf("dataset mismatch: got=%v data=%v", data["dataset"], data)
+	}
+	if got, _ := data["repeat"].(float64); int(got) != 2 {
+		t.Fatalf("repeat mismatch: got=%v data=%v", data["repeat"], data)
+	}
+	executionData, ok := data["execution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution object in benchmark run payload, got=%v", data["execution"])
+	}
+	if got, _ := executionData["store_folder_workers"].(float64); int(got) != 1 {
+		t.Fatalf("store_folder_workers mismatch: got=%v execution=%v", executionData["store_folder_workers"], executionData)
+	}
+	if got, _ := executionData["pipeline_depth"].(float64); int(got) != 1 {
+		t.Fatalf("pipeline_depth mismatch: got=%v execution=%v", executionData["pipeline_depth"], executionData)
+	}
+	if got, _ := executionData["deterministic"].(bool); !got {
+		t.Fatalf("deterministic mismatch: got=%v execution=%v", executionData["deterministic"], executionData)
+	}
+	aggregateStats, ok := data["execution_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected top-level execution_stats object in benchmark run payload, got=%v", data["execution_stats"])
+	}
+	if got, _ := aggregateStats["total_files"].(float64); int(got) != 100 {
+		t.Fatalf("aggregate total_files mismatch: got=%v stats=%v", aggregateStats["total_files"], aggregateStats)
+	}
+	if got, _ := aggregateStats["total_bytes"].(float64); int64(got) != 104857600 {
+		t.Fatalf("aggregate total_bytes mismatch: got=%v stats=%v", aggregateStats["total_bytes"], aggregateStats)
+	}
+	if got, _ := aggregateStats["workers_used"].(float64); int(got) != 1 {
+		t.Fatalf("aggregate workers_used mismatch: got=%v stats=%v", aggregateStats["workers_used"], aggregateStats)
+	}
+	rows, ok := data["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("expected one benchmark row, got=%v", data["rows"])
+	}
+	row, ok := rows[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected row object, got=%v", rows[0])
+	}
+	rowExecution, ok := row["execution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution object in row payload, got=%v", row["execution"])
+	}
+	if got, _ := rowExecution["store_folder_workers"].(float64); int(got) != 1 {
+		t.Fatalf("row store_folder_workers mismatch: got=%v execution=%v", rowExecution["store_folder_workers"], rowExecution)
+	}
+	rowStats, ok := row["execution_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected execution_stats object in row payload, got=%v", row["execution_stats"])
+	}
+	if got, _ := rowStats["total_files"].(float64); int(got) != 100 {
+		t.Fatalf("row total_files mismatch: got=%v stats=%v", rowStats["total_files"], rowStats)
+	}
+	if got, _ := rowStats["total_bytes"].(float64); int64(got) != 104857600 {
+		t.Fatalf("row total_bytes mismatch: got=%v stats=%v", rowStats["total_bytes"], rowStats)
+	}
+	if got, _ := rowStats["workers_used"].(float64); int(got) != 1 {
+		t.Fatalf("row workers_used mismatch: got=%v stats=%v", rowStats["workers_used"], rowStats)
+	}
+}
+
+func TestRunBenchmarkRunCommandTableOutputIncludesRows(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if opts.StoreFolderWorkers != 1 {
+			t.Fatalf("unexpected default workers: %d", opts.StoreFolderWorkers)
+		}
+		return BenchmarkRunReport{
+			GeneratedAtUTC: "2026-04-29T00:00:00Z",
+			Dataset:        string(preset),
+			Repeat:         repeat,
+			Execution: BenchmarkExecution{
+				StoreFolderWorkers: opts.StoreFolderWorkers,
+				PipelineDepth:      opts.PipelineDepth,
+				Deterministic:      opts.Deterministic,
+			},
+			Rows: []BenchmarkRunCaseRow{{
+				Case:           "store-large",
+				DurationMs:     2300,
+				ThroughputMBps: 120,
+				Execution: BenchmarkExecution{
+					StoreFolderWorkers: opts.StoreFolderWorkers,
+					PipelineDepth:      opts.PipelineDepth,
+					Deterministic:      opts.Deterministic,
+				},
+				ExecutionStats: BenchmarkExecutionStats{
+					TotalFiles:  100,
+					TotalBytes:  104857600,
+					WorkersUsed: opts.StoreFolderWorkers,
+				},
+			}},
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags:       map[string][]string{"dataset": {"medium"}, "output": {"table"}},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand returned error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Benchmark run (medium preset") {
+		t.Fatalf("expected benchmark run heading, got=%q", output)
+	}
+	if !strings.Contains(output, "Execution: workers=1 pipeline_depth=1 deterministic=true") {
+		t.Fatalf("expected execution summary line, got=%q", output)
+	}
+	if !strings.Contains(output, "CASE") || !strings.Contains(output, "MB/s") || !strings.Contains(output, "W_CFG") || !strings.Contains(output, "W_USED") || !strings.Contains(output, "FILES") {
+		t.Fatalf("expected concise table headers, got=%q", output)
+	}
+	if !strings.Contains(output, "store-large") || !strings.Contains(output, "2.3s") || !strings.Contains(output, "120") || !strings.Contains(output, "100") {
+		t.Fatalf("expected scenario table row, got=%q", output)
+	}
+}
+
+func TestRunBenchmarkRunCommandRejectsInvalidDatasetAndRepeat(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"dataset": {"invalid"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid dataset preset") {
+		t.Fatalf("expected invalid dataset preset usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	err = runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"repeat": {"0"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --repeat") {
+		t.Fatalf("expected invalid --repeat usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+
+	err = runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"workers": {"0"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "invalid --workers") {
+		t.Fatalf("expected invalid --workers usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersFlag(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if opts.StoreFolderWorkers != 4 {
+			t.Fatalf("workers mismatch: got %d, want 4", opts.StoreFolderWorkers)
+		}
+		return BenchmarkRunReport{Dataset: string(preset), Repeat: repeat}, nil
+	}
+
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags: map[string][]string{
+			"dataset": {"small"},
+			"workers": {"4"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runBenchmarkCommand with --workers returned error: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersEnvOverridesFlag(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "6")
+
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		if opts.StoreFolderWorkers != 6 {
+			t.Fatalf("workers mismatch: got %d, want 6 from env override", opts.StoreFolderWorkers)
+		}
+		return BenchmarkRunReport{Dataset: string(preset), Repeat: repeat}, nil
+	}
+
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags: map[string][]string{
+			"dataset": {"small"},
+			"workers": {"4"},
+		},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runBenchmarkCommand with env override returned error: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersEnvInvalidFails(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "bad")
+
+	runCoreBenchmarkPhase = func(_ corebenchmark.DatasetPreset, _ int, _ execution.Options) (BenchmarkRunReport, error) {
+		t.Fatal("runCoreBenchmarkPhase should not run when env parsing fails")
+		return BenchmarkRunReport{}, nil
+	}
+
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"dataset": {"small"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "benchmark execution options") {
+		t.Fatalf("expected benchmark execution options error, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWorkersEnvDeterministicAcrossInvocations(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "6")
+
+	seen := make([]int, 0, 2)
+	runCoreBenchmarkPhase = func(preset corebenchmark.DatasetPreset, repeat int, opts execution.Options) (BenchmarkRunReport, error) {
+		seen = append(seen, opts.StoreFolderWorkers)
+		return BenchmarkRunReport{Dataset: string(preset), Repeat: repeat}, nil
+	}
+
+	run := func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"dataset": {"small"},
+				"workers": {"4"},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("runBenchmarkCommand with env override returned error: %v", err)
+		}
+	}
+
+	run()
+	run()
+
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 benchmark invocations, got %d", len(seen))
+	}
+	if seen[0] != 6 || seen[1] != 6 {
+		t.Fatalf("expected deterministic env override (6,6), got (%d,%d)", seen[0], seen[1])
+	}
+}
+
 func TestRunListCommandInvalidLimitClassifiesAsUsage(t *testing.T) {
 	err := runListCommand(parsedCommandLine{
 		method: "list",
@@ -2246,6 +2588,32 @@ func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
 	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
+	}
+
+	mode = inferOutputModeFromArgs([]string{"benchmark", "run", "--output", "json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected benchmark run --output json to infer json mode, got %q", mode)
+	}
+}
+
+func TestResolveOutputModeAllowsBenchmarkTableOnly(t *testing.T) {
+	mode, err := resolveOutputMode(parsedCommandLine{
+		method: "benchmark",
+		flags:  map[string][]string{"output": {"table"}},
+	})
+	if err != nil {
+		t.Fatalf("expected benchmark table output to be accepted, got %v", err)
+	}
+	if mode != outputModeText {
+		t.Fatalf("expected benchmark table output to map to text mode, got %q", mode)
+	}
+
+	_, err = resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags:  map[string][]string{"output": {"table"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid --output value") {
+		t.Fatalf("expected non-benchmark table output to be rejected, got %v", err)
 	}
 }
 
@@ -7980,8 +8348,8 @@ func TestRunSimulateGCCommandTextAndJSONStayConsistent(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected meta object, got %T", payload["meta"])
 	}
-	if got, _ := meta["version"].(string); got != "v1.6" {
-		t.Fatalf("expected meta.version=v1.6, got %v", meta["version"])
+	if got, _ := meta["version"].(string); got != "v1.7" {
+		t.Fatalf("expected meta.version=v1.7, got %v", meta["version"])
 	}
 	if got, _ := meta["exact"].(bool); !got {
 		t.Fatalf("expected meta.exact=true, got %v", meta["exact"])
@@ -8250,4 +8618,354 @@ func TestBackwardCompatibilitySimulateStoreCLI(t *testing.T) {
 	if !strings.Contains(stdout, "dry run") {
 		t.Fatalf("expected dry-run wording in simulate store output, got:\n%s", stdout)
 	}
+}
+
+// ---- Step 8: --compare baseline tests ----
+
+func TestCompareWithBaselineNoRegression(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Dataset: "small",
+		Repeat:  1,
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 2000, ThroughputMBps: 120},
+			{Case: "restore-large", DurationMs: 1500, ThroughputMBps: 160},
+		},
+	}
+	current := BenchmarkRunReport{
+		Dataset: "small",
+		Repeat:  1,
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 2100, ThroughputMBps: 115},   // ~5% slower — within threshold
+			{Case: "restore-large", DurationMs: 1450, ThroughputMBps: 162}, // faster — OK
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	if err := compareWithBaseline(current, baselineFile, 20.0); err != nil {
+		t.Fatalf("expected no regression, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineDurationRegression(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1300, ThroughputMBps: 200}, // 30% slower
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	err := compareWithBaseline(current, baselineFile, 20.0)
+	if err == nil {
+		t.Fatal("expected regression error, got nil")
+	}
+	if !strings.Contains(err.Error(), "regression") {
+		t.Fatalf("expected 'regression' in error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineThroughputRegression(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 120}, // 40% throughput drop
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	err := compareWithBaseline(current, baselineFile, 20.0)
+	if err == nil {
+		t.Fatal("expected regression error, got nil")
+	}
+	if !strings.Contains(err.Error(), "regression") {
+		t.Fatalf("expected 'regression' in error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineNewCaseIgnored(t *testing.T) {
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 1000, ThroughputMBps: 200},
+			{Case: "new-case", DurationMs: 99999, ThroughputMBps: 0.001}, // not in baseline — ignored
+		},
+	}
+
+	baselineFile := writeBaselineJSON(t, baseline)
+	if err := compareWithBaseline(current, baselineFile, 20.0); err != nil {
+		t.Fatalf("expected no regression for new cases, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineMissingFileError(t *testing.T) {
+	current := BenchmarkRunReport{}
+	err := compareWithBaseline(current, "/nonexistent/baseline.json", 20.0)
+	if err == nil || !strings.Contains(err.Error(), "read baseline") {
+		t.Fatalf("expected read-baseline error, got: %v", err)
+	}
+}
+
+func TestCompareWithBaselineHighThresholdToleratesModerateRegression(t *testing.T) {
+	// 30% regression should pass at threshold=100 (CI policy) but fail at threshold=20 (dev policy).
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "snapshot-creation", DurationMs: 1000, ThroughputMBps: 100},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "snapshot-creation", DurationMs: 1300, ThroughputMBps: 100}, // 30% slower
+		},
+	}
+	baselineFile := writeBaselineJSON(t, baseline)
+
+	if err := compareWithBaseline(current, baselineFile, 100.0); err != nil {
+		t.Fatalf("30%% regression should pass at 100%% (CI) threshold, got: %v", err)
+	}
+	if err := compareWithBaseline(current, baselineFile, 20.0); err == nil {
+		t.Fatal("30%% regression should fail at 20%% (dev) threshold")
+	}
+}
+
+func TestCompareWithBaselineHighThresholdCatchesDisaster(t *testing.T) {
+	// 120% regression (>2x slower) must fail even at the relaxed CI threshold of 100%.
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "gc-after-churn", DurationMs: 1000, ThroughputMBps: 50},
+		},
+	}
+	current := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "gc-after-churn", DurationMs: 2200, ThroughputMBps: 50}, // 120% slower
+		},
+	}
+	baselineFile := writeBaselineJSON(t, baseline)
+
+	err := compareWithBaseline(current, baselineFile, 100.0)
+	if err == nil {
+		t.Fatal("120%% regression should fail at 100%% threshold")
+	}
+	if !strings.Contains(err.Error(), "regression") {
+		t.Fatalf("expected 'regression' in error, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkRunCommandWithCompareFlag(t *testing.T) {
+	originalPhase := runCoreBenchmarkPhase
+	t.Cleanup(func() { runCoreBenchmarkPhase = originalPhase })
+
+	runCoreBenchmarkPhase = func(_ corebenchmark.DatasetPreset, _ int, _ execution.Options) (BenchmarkRunReport, error) {
+		return BenchmarkRunReport{
+			Dataset: "small",
+			Repeat:  1,
+			Rows: []BenchmarkRunCaseRow{
+				{Case: "store-large", DurationMs: 2000, ThroughputMBps: 120},
+			},
+		}, nil
+	}
+
+	// Write a baseline with matching numbers (no regression)
+	baseline := BenchmarkRunReport{
+		Rows: []BenchmarkRunCaseRow{
+			{Case: "store-large", DurationMs: 2000, ThroughputMBps: 120},
+		},
+	}
+	baselineFile := writeBaselineJSON(t, baseline)
+
+	output := captureStdout(t, func() {
+		err := runBenchmarkCommand(parsedCommandLine{
+			method:      "benchmark",
+			positionals: []string{"run"},
+			flags: map[string][]string{
+				"dataset": {"small"},
+				"compare": {baselineFile},
+			},
+		}, outputModeText)
+		if err != nil {
+			t.Fatalf("expected no error with passing baseline compare, got: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "Benchmark run") {
+		t.Fatalf("expected benchmark run output, got: %q", output)
+	}
+}
+
+func TestRunGCCommandJSONIncludesPerfSpans(t *testing.T) {
+	originalRunGC := runGCPhase
+	t.Cleanup(func() { runGCPhase = originalRunGC })
+
+	runGCPhase = func(_ bool, _ string) (maintenance.GCResult, error) {
+		return maintenance.GCResult{DryRun: false, AffectedContainers: 0}, nil
+	}
+
+	output := captureStdout(t, func() {
+		if err := runGCCommand(parsedCommandLine{method: "gc", flags: map[string][]string{}}, outputModeJSON); err != nil {
+			t.Fatalf("runGCCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse gc JSON payload: %v output=%q", err, output)
+	}
+
+	spans, ok := payload["perf_spans"].([]any)
+	if !ok || len(spans) == 0 {
+		t.Fatalf("expected top-level perf_spans array in gc payload, got=%v", payload)
+	}
+	first, ok := spans[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected perf span object, got=%T", spans[0])
+	}
+	if got, _ := first["name"].(string); got != "operation" {
+		t.Fatalf("expected first perf span name=operation, got=%v", first)
+	}
+}
+
+func TestRunSnapshotCreateCommandJSONIncludesPerfSpans(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := dbpkg.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+	createSnapshotPhase = func(ctx context.Context, db *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		if opts.ID != "phase1-perf-test" {
+			t.Fatalf("unexpected snapshot id: %q", opts.ID)
+		}
+		if db == nil {
+			t.Fatal("expected non-nil db")
+		}
+		return nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCreateCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"create"},
+			flags: map[string][]string{
+				"id": {"phase1-perf-test"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCreateCommand JSON returned error: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot JSON payload: %v output=%q", err, output)
+	}
+
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got=%v", payload)
+	}
+	spans, ok := data["perf_spans"].([]any)
+	if !ok || len(spans) < 2 {
+		t.Fatalf("expected data.perf_spans with at least setup+operation, got=%v", data["perf_spans"])
+	}
+}
+
+// writeBaselineJSON writes a BenchmarkRunReport as the full JSON envelope to a
+// temp file and returns the path.
+func writeBaselineJSON(t *testing.T, report BenchmarkRunReport) string {
+	t.Helper()
+	payload := map[string]any{
+		"status":  "ok",
+		"command": "benchmark",
+		"data":    report,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal baseline JSON: %v", err)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "baseline-*.json")
+	if err != nil {
+		t.Fatalf("create baseline temp file: %v", err)
+	}
+	if _, err := f.Write(encoded); err != nil {
+		t.Fatalf("write baseline temp file: %v", err)
+	}
+	_ = f.Close()
+	return f.Name()
+}
+
+func TestBuildDeterminismEnvFallsBackToPlainWhenAESKeyMissing(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "coldkeep")
+	t.Setenv("DB_PASSWORD", "coldkeep")
+	t.Setenv("DB_SSLMODE", "disable")
+	t.Setenv("COLDKEEP_CODEC", "aes-gcm")
+	t.Setenv("COLDKEEP_KEY", "")
+
+	env := buildDeterminismEnv("coldkeep_bench_test", "/tmp/storage")
+	lookup := envSliceToMap(env)
+
+	if got := lookup["COLDKEEP_CODEC"]; got != "plain" {
+		t.Fatalf("expected fallback codec plain when key missing, got=%q", got)
+	}
+	if got := lookup["COLDKEEP_KEY"]; strings.TrimSpace(got) != "" {
+		t.Fatalf("expected empty COLDKEEP_KEY when key is missing, got=%q", got)
+	}
+}
+
+func TestBuildDeterminismEnvKeepsAESWhenKeyPresent(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "coldkeep")
+	t.Setenv("DB_PASSWORD", "coldkeep")
+	t.Setenv("DB_SSLMODE", "disable")
+	t.Setenv("COLDKEEP_CODEC", "aes-gcm")
+	t.Setenv("COLDKEEP_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	env := buildDeterminismEnv("coldkeep_bench_test", "/tmp/storage")
+	lookup := envSliceToMap(env)
+
+	if got := lookup["COLDKEEP_CODEC"]; got != "aes-gcm" {
+		t.Fatalf("expected codec aes-gcm when key present, got=%q", got)
+	}
+	if got := lookup["COLDKEEP_KEY"]; got == "" {
+		t.Fatalf("expected non-empty COLDKEEP_KEY when key present")
+	}
+}
+
+func envSliceToMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, kv := range env {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		out[parts[0]] = parts[1]
+	}
+	return out
 }

@@ -1039,7 +1039,7 @@ if ! echo "$V16_INSPECT_1_PAYLOAD" | jq -e '
   and .data != null
   and .data.entity_type != null
   and .data.summary != null
-  and .meta.version == "v1.6"
+  and (.meta.version | test("^v1\\.[0-9]+$"))
   and .meta.exact == true
 ' > /dev/null 2>&1; then
   echo "[smoke] ERROR: v1.6 inspect JSON contract failed"
@@ -1063,7 +1063,7 @@ if ! echo "$V16_SIM_GC_PAYLOAD" | jq -e '
   .type == "simulation"
   and .data.kind == "gc"
   and .data.mutated == false
-  and .meta.version == "v1.6"
+  and (.meta.version | test("^v1\\.[0-9]+$"))
   and .meta.exact == true
 ' > /dev/null 2>&1; then
   echo "[smoke] ERROR: v1.6 simulate gc JSON contract failed"
@@ -1098,7 +1098,7 @@ V16_SIM_TRACE_ERR=$(mktemp)
 coldkeep stats --trace-json --output json >"$V16_STATS_TRACE_OUT" 2>"$V16_STATS_TRACE_ERR"
 V16_STATS_TRACE_PAYLOAD=$(grep -E '^\{.*\}$' "$V16_STATS_TRACE_OUT" | tail -n1)
 V16_STATS_TRACE_LINE=$(grep -E '^\{.*\}$' "$V16_STATS_TRACE_ERR" | tail -n1)
-if ! echo "$V16_STATS_TRACE_PAYLOAD" | jq -e '.type == "stats" and .meta.version == "v1.6"' > /dev/null 2>&1; then
+if ! echo "$V16_STATS_TRACE_PAYLOAD" | jq -e '.type == "stats" and (.meta.version | test("^v1\\.[0-9]+$"))' > /dev/null 2>&1; then
   echo "[smoke] ERROR: stats --trace-json did not keep stats payload on stdout"
   exit 1
 fi
