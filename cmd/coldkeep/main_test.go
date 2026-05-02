@@ -2124,6 +2124,11 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 				PipelineDepth:      opts.PipelineDepth,
 				Deterministic:      opts.Deterministic,
 			},
+			ExecutionStats: BenchmarkExecutionStats{
+				TotalFiles:  100,
+				TotalBytes:  104857600,
+				WorkersUsed: opts.StoreFolderWorkers,
+			},
 			Rows: []BenchmarkRunCaseRow{{
 				Case:           "store-large",
 				DurationMs:     2300,
@@ -2189,6 +2194,19 @@ func TestRunBenchmarkRunCommandJSONOutputSchema(t *testing.T) {
 	}
 	if got, _ := executionData["deterministic"].(bool); !got {
 		t.Fatalf("deterministic mismatch: got=%v execution=%v", executionData["deterministic"], executionData)
+	}
+	aggregateStats, ok := data["execution_stats"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected top-level execution_stats object in benchmark run payload, got=%v", data["execution_stats"])
+	}
+	if got, _ := aggregateStats["total_files"].(float64); int(got) != 100 {
+		t.Fatalf("aggregate total_files mismatch: got=%v stats=%v", aggregateStats["total_files"], aggregateStats)
+	}
+	if got, _ := aggregateStats["total_bytes"].(float64); int64(got) != 104857600 {
+		t.Fatalf("aggregate total_bytes mismatch: got=%v stats=%v", aggregateStats["total_bytes"], aggregateStats)
+	}
+	if got, _ := aggregateStats["workers_used"].(float64); int(got) != 1 {
+		t.Fatalf("aggregate workers_used mismatch: got=%v stats=%v", aggregateStats["workers_used"], aggregateStats)
 	}
 	rows, ok := data["rows"].([]any)
 	if !ok || len(rows) != 1 {
