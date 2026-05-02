@@ -12,6 +12,17 @@ Release framing for v1.7:
 - Restore determinism, GC safety, and snapshot semantics remain preserved.
 - Migration note: none required for v1.7.
 
+## Performance model change in v1.7
+
+v1.7 introduces a deterministic, scalable execution model.
+
+Single-worker performance may be lower than v1.6 in some scenarios due to
+additional correctness boundaries and explicit execution structure.
+
+However, multi-worker execution shows significant improvements across
+real-world workloads and is the recommended operating mode for performance
+evaluation in v1.7.
+
 ## Running benchmarks
 
 ```bash
