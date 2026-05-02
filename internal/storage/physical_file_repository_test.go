@@ -252,7 +252,7 @@ func TestStoreFileMaintainsPhysicalFileAndLogicalRefCountInvariants(t *testing.T
 		t.Fatalf("overwrite pathA content: %v", err)
 	}
 
-	_, err = StoreFileWithStorageContextAndCodecResult(sgctx, pathA, codec)
+	_, err = StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, pathA, codec, false)
 	if err == nil {
 		t.Fatalf("expected same-path different-content store to fail without replace")
 	}
