@@ -469,6 +469,12 @@ jobs:
       - name: Build CLI
         run: go build -o coldkeep ./cmd/coldkeep
 
+      - name: Preserve committed benchmark baseline for comparison
+        run: |
+          if [ -f benchmark-baseline.json ]; then
+            cp benchmark-baseline.json benchmark-baseline-committed.json
+          fi
+
       - name: Run benchmark (small dataset) and capture baseline
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
@@ -490,9 +496,9 @@ jobs:
           DB_NAME: coldkeep
           DB_SSLMODE: disable
         run: |
-          if [ -f benchmark-baseline.json ]; then
+          if [ -f benchmark-baseline-committed.json ]; then
             ./coldkeep benchmark run --dataset small --output json \
-              --compare benchmark-baseline.json --threshold 100
+              --compare benchmark-baseline-committed.json --threshold 100
           fi
 
       - name: Upload benchmark baseline
