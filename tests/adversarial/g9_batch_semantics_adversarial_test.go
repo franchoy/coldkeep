@@ -600,5 +600,24 @@ func TestAdversarialG9BatchSemanticsOrchestration(t *testing.T) {
 		if summaryCount(t, payload, "failed") < 1 {
 			t.Fatalf("expected at least 1 failure in fail-fast mode: summary=%v", payload)
 		}
+
+		results, ok := payload["results"].([]any)
+		if !ok || len(results) != 1 {
+			t.Fatalf("fail-fast restore should stop after first failed item: results=%v payload=%v", results, payload)
+		}
+		first, _ := results[0].(map[string]any)
+		if status, _ := first["status"].(string); status != "failed" {
+			t.Fatalf("fail-fast restore first item should be failed: %v", first)
+		}
+		if gotID, ok := first["id"].(float64); !ok || int64(gotID) != id1 {
+			t.Fatalf("fail-fast restore should report first failed id=%d: %v", id1, first)
+		}
+
+		// The second target must remain unaffected because execution stopped at the first failure.
+		verifyDir := filepath.Join(tmp, "g9-ff-verify-survivor")
+		if err := os.MkdirAll(verifyDir, 0o755); err != nil {
+			t.Fatalf("mkdir survivor verify dir: %v", err)
+		}
+		expectRestoreSucceeds(t, repoRoot, binPath, env, id2, verifyDir)
 	})
 }
