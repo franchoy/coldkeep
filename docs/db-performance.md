@@ -1,5 +1,17 @@
 # DB Performance
 
+v1.7 DB performance work is intentionally conservative: controlled execution,
+query-shape cleanup, and measured validation rather than daemon-style
+concurrency expansion.
+
+Compatibility guardrails for this work:
+
+- no storage format change
+- no schema-breaking change
+- restore determinism preserved
+- GC safety preserved
+- snapshot semantics preserved
+
 ## Step 3 recommendation
 
 Proceed with:

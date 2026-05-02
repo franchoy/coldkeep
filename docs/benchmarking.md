@@ -3,6 +3,14 @@
 v1.7 introduces repository-level benchmarks to measure performance without
 changing correctness guarantees.
 
+Release framing for v1.7:
+
+- Performance is improved through controlled execution and conservative tuning.
+- v1.7 is not a fully concurrent daemon design.
+- No storage format change is introduced.
+- No schema-breaking change is introduced.
+- Restore determinism, GC safety, and snapshot semantics remain preserved.
+
 ## Running benchmarks
 
 ```bash

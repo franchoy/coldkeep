@@ -3,6 +3,9 @@
 This document tracks I/O-focused performance work and the corresponding safety
 contracts.
 
+v1.7 improves performance through controlled execution and conservative I/O
+cleanup. It is not a fully concurrent daemon release.
+
 ## Phase 8 -- Conservative I/O Optimization
 
 Phase 8 optimizes I/O behavior while preserving crash-safety guarantees.
@@ -11,6 +14,8 @@ The ordering remains:
 `write bytes -> flush/fsync -> publish metadata`
 
 No storage format, schema, GC, snapshot, or restore semantics changed.
+Restore determinism is preserved. GC safety is preserved. Snapshot semantics
+are preserved.
 
 ### Safe optimizations list (Phase 8 candidates)
 

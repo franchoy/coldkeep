@@ -23,6 +23,12 @@ project, do not start here; start with [README.md](README.md).
 
 Performance measurement milestone.
 
+v1.7 improves performance through controlled execution and conservative
+measurement-guided cleanup. It is not a fully concurrent daemon release.
+Restore determinism, GC safety, and snapshot semantics remain preserved, and
+this milestone does not introduce a storage-format change or schema-breaking
+change.
+
 ### Added (v1.7)
 
 - **Benchmark infrastructure** — `coldkeep benchmark run` with eight built-in
@@ -37,6 +43,14 @@ Performance measurement milestone.
 - **CI benchmark job** — runs the small dataset on every push; result uploaded
   as a `benchmark-baseline` artifact for trend tracking.
 - **Benchmark documentation** — see [docs/benchmarking.md](docs/benchmarking.md).
+
+### Compatibility notes (v1.7)
+
+- No storage format change.
+- No schema-breaking change.
+- Restore remains deterministic and byte-identical.
+- GC safety model remains conservative and reference-safe.
+- Snapshot creation, retention, diff, and restore semantics remain unchanged.
 
 ------------------------------------------------------------------------
 

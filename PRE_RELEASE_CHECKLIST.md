@@ -28,6 +28,16 @@ Phase 9 goal: prove v1.7 is faster while remaining fully Coldkeep-safe across
 deterministic restore, GC safety, snapshot correctness, crash-safety assumptions,
 stable CLI behavior, measurable performance, and no hidden semantic regressions.
 
+Release-positioning note:
+
+- v1.7 improves performance via controlled execution.
+- v1.7 is not a fully concurrent daemon release.
+- v1.7 introduces no storage format change.
+- v1.7 introduces no schema-breaking change.
+- restore determinism is preserved.
+- GC safety is preserved.
+- snapshot semantics are preserved.
+
 At this point, do not add new optimizations unless they fix a release blocker.
 
 Allowed during this gate:

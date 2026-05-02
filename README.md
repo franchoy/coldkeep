@@ -21,10 +21,10 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.6%20observability%20%26%20tooling-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.7%20performance%20validation%20%26%20release%20readiness-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.6 adds read-only observability and exact GC simulation tooling (`stats`, `inspect`, `simulate gc`) while preserving the v1.3/v1.4 snapshot-retention safety model.
+> Status: v1.7 adds controlled-execution performance measurement and validation while preserving restore determinism, GC safety, and snapshot semantics. It is not a fully concurrent daemon release, and it does not change the storage format or introduce a schema-breaking migration.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -44,6 +44,11 @@ Unlike traditional backup tools, it emphasizes:
 - machine-readable CLI behavior suitable for automation
 
 The goal is confidence and recoverability over maximum throughput.
+
+v1.7 performance work follows the existing execution model: bounded worker-based
+commands under explicit safety constraints. It does not turn coldkeep into a
+fully concurrent daemon, and it does not change on-disk format, chunk layout,
+or operator-visible schema compatibility.
 
 ## Features
 
@@ -67,6 +72,7 @@ Coldkeep has seven explicit correctness layers:
 - v1.4: snapshot clarity and lifecycle hardening (explicit lineage semantics, safer dry-run wording, stricter pre-release verification guidance)
 - v1.5: chunker-evolution compatibility contract clarity (mixed-version repositories, explicit new-writes-only chunker policy)
 - v1.6: observability and simulation contract hardening (read-only introspection, exact GC simulation parity, trace channel behavior)
+- v1.7: controlled-execution performance validation (benchmarking, deterministic comparison, and release-readiness safety proof without storage-format or schema-breaking change)
 
 Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
 
