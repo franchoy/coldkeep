@@ -29,6 +29,31 @@ Restore determinism, GC safety, and snapshot semantics remain preserved, and
 this milestone does not introduce a storage-format change or schema-breaking
 change.
 
+### Release highlights (v1.7)
+
+- **Execution options** — benchmark runs now expose and document execution
+  controls such as configured workers, effectively used workers, pipeline
+  depth, and deterministic mode so comparisons stay explicit and repeatable.
+- **Store-folder worker hardening** — `store-folder` worker handling was
+  tightened for safer multi-worker operation, including explicit worker-path
+  support and clearer behavior under parallel load.
+- **Store prepare/commit split** — store execution now separates deterministic
+  chunk preparation from the commit phase so CPU-side work happens before DB
+  mutation and publish boundaries remain explicit.
+- **Single-pass preparation** — prepared store paths now carry the metadata
+  and chunk payload information needed for commit without redundant re-hashing,
+  re-reading, or duplicate metadata construction.
+- **Restore recipe/cache/buffer work** — restore-path cleanup kept replay
+  recipe ordering explicit, hardened restore-local reader-cache lifecycle, and
+  made buffered-writer finalization/close behavior safer on success and error
+  paths.
+- **Stats/inspect query cleanup** — read-only observability paths were cleaned
+  up to remove N+1 aggregation patterns and replace them with more set-based
+  query shapes where measured gains were demonstrated.
+- **Conservative I/O counters/buffering** — v1.7 adds measured I/O-path
+  cleanup with operation-scoped counters, conservative buffering, and explicit
+  durability boundaries rather than high-risk write-path weakening.
+
 ### Added (v1.7)
 
 - **Benchmark infrastructure** — `coldkeep benchmark run` with eight built-in
