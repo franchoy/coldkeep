@@ -51,18 +51,18 @@ Validation rule:
 Candidate results:
 
 - Candidate A: `snapshot_file(snapshot_id, logical_file_id)` -> rejected.
-	Plans continued to use `snapshot_id` scans from existing indexes; this new
-	composite index was not selected for the tested query shapes.
+  Plans continued to use `snapshot_id` scans from existing indexes; this new
+  composite index was not selected for the tested query shapes.
 - Candidate B: `snapshot_file(path_id, logical_file_id, snapshot_id)` -> rejected.
-	Delete-preview still used a hash anti-join with a broad `snapshot_file`
-	scan on the anti-join side; no stable planner adoption of this composite index
-	was observed in the validated query set.
+  Delete-preview still used a hash anti-join with a broad `snapshot_file`
+  scan on the anti-join side; no stable planner adoption of this composite index
+  was observed in the validated query set.
 
 Decision:
 
 - Do not add either candidate index to schema at this time.
 - Keep focusing on query-shape cleanup and re-test indexes only when plans
-	demonstrate clear usage and measurable end-to-end gains.
+  demonstrate clear usage and measurable end-to-end gains.
 
 ## Phase 7 - DB Optimization (2026-05-01)
 
@@ -76,11 +76,11 @@ Added indexes:
 Rejected indexes:
 
 - `idx_snapshot_file_snapshot_logical` (`snapshot_file(snapshot_id, logical_file_id)`):
-	no stable planner adoption or measurable end-to-end gain in validated query
-	shapes.
+  no stable planner adoption or measurable end-to-end gain in validated query
+  shapes.
 - `idx_snapshot_file_path_logical_snapshot`
-	(`snapshot_file(path_id, logical_file_id, snapshot_id)`): no measurable gain
-	in delete-preview and related anti-join shapes.
+  (`snapshot_file(path_id, logical_file_id, snapshot_id)`): no measurable gain
+  in delete-preview and related anti-join shapes.
 
 Stats improvements:
 
@@ -91,11 +91,11 @@ Stats improvements:
 Result summary:
 
 - `stats-inspect` improved versus the v1.6 small baseline
-	(workers=1: 1060ms -> 903ms, workers=4: 1060ms -> 635ms).
+  (workers=1: 1060ms -> 903ms, workers=4: 1060ms -> 635ms).
 - `gc-after-churn` improved versus baseline
-	(workers=1: 2624ms -> 2462ms, workers=4: 2624ms -> 1733ms).
+  (workers=1: 2624ms -> 2462ms, workers=4: 2624ms -> 1733ms).
 - `snapshot-creation` regressed versus baseline
-	(workers=1: 520ms -> 672ms, workers=4: 520ms -> 631ms).
+  (workers=1: 520ms -> 672ms, workers=4: 520ms -> 631ms).
 - Store-path impact is mixed (some store scenarios improved under workers=4,
-	while `store-large-file` regressed in the measured local run); no new
-	snapshot candidate index was introduced in this phase.
+  while `store-large-file` regressed in the measured local run); no new
+  snapshot candidate index was introduced in this phase.
