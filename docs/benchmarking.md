@@ -559,7 +559,7 @@ Medium dataset:
 There is currently no `restore-mixed-dataset` benchmark scenario.
 The closest available mixed scenario is `store-mixed-dataset`.
 
-#### Interpretation
+#### Restore interpretation
 
 Phase 6 improved restore behavior clearly on the small dataset and remained
 neutral on the medium dataset. No major restore regression was observed.
