@@ -123,3 +123,63 @@ This section locks explicit decisions for the optimization pass so choices are n
 ### Locked Invariant (Applies to All Keep/Reject/Defer Decisions)
 
 Failure before durable write publish must never leave live metadata pointing at bytes that are not durably present.
+
+## Phase 9 Step 6 - v1.7 vs v1.6 Baseline Comparison
+
+Comparison source of truth:
+
+- Baseline: `benchmark-baseline.json` (v1.6, small dataset, workers=1)
+- Final: `benchmarks/v1.7/final-small-w1.json` (v1.7, small dataset, workers=1)
+
+No baseline rebasing was performed in this step.
+
+### Delta Table (Duration; lower is better)
+
+| Scenario | Baseline (ms) | v1.7 Final (ms) | Delta vs Baseline |
+| --- | ---: | ---: | ---: |
+| `store-large-file` | 1608 | 10483 | +551% |
+| `store-many-small-files` | 1176 | 4902 | +316% |
+| `store-mixed-dataset` | 399 | 2513 | +529% |
+| `restore-large-file` | 1790 | 10641 | +494% |
+| `restore-many-files` | 5707 | 15298 | +168% |
+| `snapshot-creation` | 520 | 2984 | +473% |
+| `gc-after-churn` | 2624 | 7314 | +178% |
+| `stats-inspect` | 1060 | 3998 | +277% |
+
+### Classification
+
+Improved:
+
+- none in the baseline-comparable (`small`, workers=1) release comparison
+
+Neutral:
+
+- none in the baseline-comparable (`small`, workers=1) release comparison
+
+Regressed:
+
+- `store-large-file`
+- `store-many-small-files`
+- `store-mixed-dataset`
+- `restore-large-file`
+- `restore-many-files`
+- `snapshot-creation`
+- `gc-after-churn`
+- `stats-inspect`
+
+Accepted neutral:
+
+- none
+
+Accepted remaining debt:
+
+- All eight regressions above remain accepted release debt for v1.7.
+- Rationale: this release intentionally preserves conservative durability, rollback,
+  recovery, and deterministic behavior boundaries while deferring higher-risk
+  throughput work (for example restore parallelism and deeper SQL batching).
+
+### Release-policy note
+
+Regressions are explicitly documented and not hidden by rebasing the baseline in
+this step. Any baseline refresh should be an intentional, explicitly called out
+release decision.
