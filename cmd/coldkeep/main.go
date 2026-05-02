@@ -1042,11 +1042,11 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output", "workers"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
-		return usageErrorf("Usage: coldkeep store-folder [--codec <plain|aes-gcm>] <folderPath>")
+		return usageErrorf("Usage: coldkeep store-folder [--codec <plain|aes-gcm>] [--workers <N>] <folderPath>")
 	}
 
 	path := parsed.positionals[0]
@@ -1054,6 +1054,13 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 	opts, err := execution.FromEnv(execution.DefaultOptions())
 	if err != nil {
 		return fmt.Errorf("store-folder execution options: %w", err)
+	}
+	if rawWorkers, hasWorkers := parsed.lastFlagValue("workers"); hasWorkers {
+		workers, convErr := strconv.Atoi(strings.TrimSpace(rawWorkers))
+		if convErr != nil || workers <= 0 {
+			return usageErrorf("invalid --workers value %q (must be integer > 0)", rawWorkers)
+		}
+		opts.StoreFolderWorkers = workers
 	}
 
 	sgctx, err := storage.LoadDefaultStorageContext()

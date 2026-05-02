@@ -125,12 +125,21 @@ if [ -n "$unformatted" ]; then
 fi
 
 bash -n scripts/*.sh
+bash scripts/check_smart_quotes.sh
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck scripts/*.sh
+else
+  echo "shellcheck not found. Install it to match CI parity (e.g., apt install shellcheck or brew install shellcheck)."
+  exit 1
+fi
 scripts/validate_validation_matrix.sh
+bash scripts/check_versioned_row_writers.sh
 golangci-lint run ./...
 go vet ./...
 
 COLDKEEP_CODEC=plain go test -race -count=1 ./cmd/... ./internal/...
 COLDKEEP_CODEC=aes-gcm COLDKEEP_KEY="$COLDKEEP_KEY" go test -race -count=1 ./cmd/... ./internal/...
+go test -race -count=1 ./internal/chunk/benchmark -run 'TestFastCDCBetterThanV1_SmallModifications|TestFastCDCBetterThanV1_ShiftedData|TestChunkerDeterminism|TestChunkerDeterminism_RunDatasetTwice|TestChunkCoverage|TestDefaultDatasetsDeterministicAcrossCalls'
 
 go build ./...
 scripts/audit_ci_enforcement.sh --local-only
@@ -147,6 +156,8 @@ under those paths while running this checklist.
 ## 3) Run full required CI matrix locally (all gate jobs, both codecs)
 
 ```bash
+unset COLDKEEP_STORAGE_DIR
+
 for codec in plain aes-gcm; do
   echo "=== Codec: ${codec} ==="
   export COLDKEEP_CODEC="$codec"
@@ -158,10 +169,12 @@ for codec in plain aes-gcm; do
   go test -race -count=1 ./tests/integration/...
 
   # integration-long-run
-  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak'
+  COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
 
   # adversarial
+  unset COLDKEEP_STORAGE_DIR
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
+  go test -race -count=1 ./tests/adversarial/... -run 'TestAdversarialG14|TestAdversarialG15|TestAdversarialG16|TestAdversarialG17'
 
   # smoke
   COLDKEEP_SMOKE_RESET_DB=1 \
@@ -171,13 +184,28 @@ for codec in plain aes-gcm; do
   PATH="$PWD:$PATH" \
   scripts/smoke.sh
 done
+
+if [ -f benchmark-baseline.json ]; then
+  cp benchmark-baseline.json benchmark-baseline-committed.json
+fi
+
+./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
+
+if [ -f benchmark-baseline-committed.json ]; then
+  ./coldkeep benchmark run --dataset small --output json --compare benchmark-baseline-committed.json --threshold 100
+fi
 ```
+
+Why `unset COLDKEEP_STORAGE_DIR` first: step 1 exports a manual-check storage path
+for later CLI validation. Leaving that variable set during integration/adversarial
+test runs can force unrelated tests onto a shared storage directory and produce
+false failures that do not reflect CI behavior.
 
 Prerequisite for the smoke leg: `scripts/smoke.sh` shells out to `psql` when
 `COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql` is used. Install a local
 PostgreSQL client first if it is not already available.
 
-Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`) across both codecs.
+Expected: this mirrors required GitHub Actions jobs (`quality`, `integration-correctness`, `integration-stress`, `integration-long-run`, `adversarial`, `smoke`, `benchmark`) across both codecs.
 
 For the snapshot contract gate, run the focused integration suite after the matrix loop:
 
@@ -270,6 +298,8 @@ Expected: bootstrap on creates/validates schema path successfully; bootstrap off
 ## 8) Test clean install path
 
 From a clean machine/container flow:
+
+Warning: `docker compose down -v` is destructive and removes PostgreSQL volumes.
 
 ```bash
 docker compose down -v

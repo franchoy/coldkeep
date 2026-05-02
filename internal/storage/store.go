@@ -2036,7 +2036,7 @@ func StoreFileWithStorageContextAndCodec(sgctx StorageContext, path string, code
 // StoreFileWithStorageContextAndCodecResult stores one file and returns
 // metadata suitable for CLI text and JSON output.
 func StoreFileWithStorageContextAndCodecResult(sgctx StorageContext, path string, codec blocks.Codec) (result StoreFileResult, err error) {
-	return StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, path, codec, false)
+	return StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, path, codec, true)
 }
 
 // StoreFileWithStorageContextAndCodecResultWithPolicy stores one file and returns
@@ -2348,7 +2348,7 @@ func StoreFolderWithStorageContextAndCodecAndOptionsWithStats(sgctx StorageConte
 				workerCtx.Writer = workerWriter
 			}
 
-			_, err := storeFileWithStorageContextAndRuntimeResultWithPolicy(*workerCtx, job.Path, false, info, runtime)
+			_, err := storeFileWithStorageContextAndRuntimeResultWithPolicy(*workerCtx, job.Path, true, info, runtime)
 			return err
 		})
 		if err != nil {

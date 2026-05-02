@@ -426,29 +426,6 @@ func insertSnapshotFileByPathID(ctx context.Context, exec sqlExecutor, row snaps
 	return id, nil
 }
 
-// insertSnapshotFileByPathIDNoReturning inserts a snapshot_file row using an
-// already-resolved path_id without needing RETURNING support (SQLite-compatible).
-func insertSnapshotFileByPathIDNoReturning(ctx context.Context, exec sqlExecutor, row snapshotFileDBRow, normalizedPath string) error {
-	_, err := exec.ExecContext(
-		ctx,
-		`INSERT INTO snapshot_file (snapshot_id, path_id, logical_file_id, size, mode, mtime)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		row.SnapshotID,
-		row.PathID,
-		row.LogicalFileID,
-		row.Size,
-		row.Mode,
-		row.MTime,
-	)
-	if err != nil {
-		return fmt.Errorf("insert snapshot_file snapshot_id=%s path=%q: %w", row.SnapshotID, normalizedPath, err)
-	}
-	iodebug.IncSnapshotMetadataWrite()
-
-	log.Printf("snapshot: inserted snapshot_file snapshot_id=%s path=%q", row.SnapshotID, normalizedPath)
-	return nil
-}
-
 func insertSnapshotFilesByPathIDNoReturningBatch(ctx context.Context, tx *sql.Tx, rows []snapshotFileDBRow, normalizedPaths []string) error {
 	if len(rows) != len(normalizedPaths) {
 		return fmt.Errorf("snapshot_file batch rows/paths mismatch: %d rows vs %d paths", len(rows), len(normalizedPaths))
