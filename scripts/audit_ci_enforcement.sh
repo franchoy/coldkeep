@@ -85,7 +85,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness\]' 'smoke job depends on quality and integration-correctness' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke\]' 'required gate depends on all upstream jobs including long-run and adversarial' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke, benchmark\]' 'required gate depends on all upstream jobs including long-run, adversarial, and benchmark' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -118,6 +118,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_LONG_RUN_RESULT.*!= "success"' 'required gate rejects skipped integration long-run job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'SMOKE_RESULT.*!= "success"' 'required gate rejects skipped smoke job' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'BENCHMARK_RESULT.*!= "success"' 'required gate rejects skipped benchmark job' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^# (v1\.0 )?Validation Matrix$' 'validation matrix artifact (legacy or current style)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G1 \|' 'validation matrix deterministic restore row (G1)' || check_status=1
   require_pattern "$VALIDATION_MATRIX_FILE" '^\| G2 \|' 'validation matrix repeat store does not drift chunk graph row (G2)' || check_status=1
