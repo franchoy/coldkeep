@@ -2,7 +2,9 @@ package verify
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -415,6 +417,9 @@ func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
 		if err := verifyDecodedBlockHeaderAndTable(b.id, b.formatVersion, b.codec, decoded); err != nil {
 			return err
 		}
+		if err := verifyDecodedChunkSliceHashes(ctx, dbconn, b.id, decoded); err != nil {
+			return err
+		}
 
 		if err := verifyDecodedBlockSegmentsAgainstRefs(ctx, dbconn, b.id, decoded, strictMode); err != nil {
 			return err
@@ -493,6 +498,32 @@ func verifyDecodedBlockHeaderAndTable(blockID int64, formatVersion int64, codec 
 	}
 	if expectedOffset != payloadSize {
 		return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk table bounds invalid final_end=%d payload=%d", blockID, expectedOffset, payloadSize)
+	}
+
+	return nil
+}
+
+func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID int64, decoded *blocks.EncodedBlock) error {
+	for i, entry := range decoded.Entries {
+		chunkBytes, err := blocks.SliceChunkFromPayload(decoded.Payload, entry)
+		if err != nil {
+			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d slice failed at entry=%d: %w", blockID, entry.ChunkID, i, err)
+		}
+
+		sum := sha256.Sum256(chunkBytes)
+		computed := hex.EncodeToString(sum[:])
+
+		var expected string
+		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, int64(entry.ChunkID)).Scan(&expected); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i)
+			}
+			return fmt.Errorf("verifyBlockPayloads: block %d load chunk hash for chunk %d: %w", blockID, entry.ChunkID, err)
+		}
+
+		if !strings.EqualFold(strings.TrimSpace(expected), computed) {
+			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected))
+		}
 	}
 
 	return nil

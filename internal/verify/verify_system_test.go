@@ -2,10 +2,11 @@ package verify
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -404,9 +405,10 @@ func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir st
 
 	chunkIDs := make([]int64, 0, len(chunkPayloads))
 	packedChunks := make([]blocks.PackedChunk, 0, len(chunkPayloads))
-	for i, payload := range chunkPayloads {
+	for _, payload := range chunkPayloads {
 		var chunkID int64
-		hash := strings.Repeat(strconv.Itoa((i%9)+1), 64)
+		sum := sha256.Sum256(payload)
+		hash := hex.EncodeToString(sum[:])
 		if err := dbconn.QueryRow(
 			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
 			 VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling')
@@ -582,6 +584,23 @@ func TestVerifyBlockPayloadsDetectsDecodedChunkCountMismatchAgainstRefs(t *testi
 	err := verifyBlockPayloads(dbconn, containersDir)
 	if err == nil || !strings.Contains(err.Error(), "chunk count mismatch") {
 		t.Fatalf("expected decoded/ref chunk count mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsDecodedChunkSliceHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("alpha"), []byte("beta")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("0", 64), chunkIDs[0]); err != nil {
+		t.Fatalf("mutate chunk hash: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("expected decoded chunk slice hash mismatch error, got: %v", err)
 	}
 }
 
