@@ -209,6 +209,77 @@ func TestSweepUnreachableChunksDeletesPackedMappings(t *testing.T) {
 	}
 }
 
+func TestSweepUnreachableChunksKeepsPackedBlockWhenAnyChunkIsLive(t *testing.T) {
+	dbconn := openPackedGCUnitDB(t)
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('sweep-packed-mixed-live.bin', 1, 0, 128, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerRes.LastInsertId()
+
+	liveChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('packed-live-ref', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live chunk: %v", err)
+	}
+	liveChunkID, _ := liveChunkRes.LastInsertId()
+
+	deadChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('packed-dead-ref', 64, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert dead chunk: %v", err)
+	}
+	deadChunkID, _ := deadChunkRes.LastInsertId()
+
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 128, 128, ?, 0, x'22')`, containerID)
+	if err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+	blockID, _ := blockRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 64)`, liveChunkID, blockID); err != nil {
+		t.Fatalf("insert live chunk_block_ref: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 64, 64)`, deadChunkID, blockID); err != nil {
+		t.Fatalf("insert dead chunk_block_ref: %v", err)
+	}
+
+	if err := SweepUnreachableChunks(context.Background(), dbconn, containerID); err != nil {
+		t.Fatalf("SweepUnreachableChunks: %v", err)
+	}
+
+	var blocks int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = ?`, blockID).Scan(&blocks); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+	if blocks != 1 {
+		t.Fatalf("storage_blocks remaining = %d, want 1", blocks)
+	}
+
+	var refs int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE block_id = ?`, blockID).Scan(&refs); err != nil {
+		t.Fatalf("count chunk_block_refs: %v", err)
+	}
+	if refs != 2 {
+		t.Fatalf("chunk_block_refs remaining = %d, want 2", refs)
+	}
+
+	var liveChunks int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE id = ?`, liveChunkID).Scan(&liveChunks); err != nil {
+		t.Fatalf("count live chunk: %v", err)
+	}
+	if liveChunks != 1 {
+		t.Fatalf("live chunk rows remaining = %d, want 1", liveChunks)
+	}
+
+	var deadChunks int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE id = ?`, deadChunkID).Scan(&deadChunks); err != nil {
+		t.Fatalf("count dead chunk: %v", err)
+	}
+	if deadChunks != 1 {
+		t.Fatalf("dead chunk rows remaining = %d, want 1", deadChunks)
+	}
+}
+
 func TestContainerHasLivePhysicalUnitsSupportsLegacyPackedAndMixed(t *testing.T) {
 	dbconn := openPackedGCUnitDB(t)
 
