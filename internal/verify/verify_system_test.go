@@ -534,6 +534,57 @@ func TestVerifyBlockPayloadsDetectsChunkSizeMismatch(t *testing.T) {
 	}
 }
 
+func TestVerifyBlockPayloadsRequiresBlockHashMatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("HASH")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate block hash: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("expected mandatory block hash mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsDecodedPayloadSizeMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("SIZE")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET plaintext_size = plaintext_size + 1 WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate plaintext_size metadata: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "plaintext size mismatch") {
+		t.Fatalf("expected decoded payload size mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsDecodedChunkCountMismatchAgainstRefs(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("aa"), []byte("bb")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE block_id = $1 AND chunk_id = $2`, blockID, chunkIDs[0]); err != nil {
+		t.Fatalf("delete one chunk ref: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "chunk count mismatch") {
+		t.Fatalf("expected decoded/ref chunk count mismatch error, got: %v", err)
+	}
+}
+
 func TestVerifyBlockPayloadsStrictModeRequiresExactEncodedChunkTable(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
