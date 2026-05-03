@@ -149,3 +149,19 @@ Forward-compatibility intent:
 - Reader abstraction must branch by effective format version and fail closed on unsupported versions.
 - This mapping is reserved to enable future v1.9+ format evolution without rewriting v1.7/v1.8 data.
 
+## Phase 1 Step 10 No-Behavior-Change Rule (Locked)
+
+Phase 1 is preparation-only. At the end of Phase 1, runtime behavior must remain v1.7-equivalent.
+
+Mandatory constraints:
+
+- System behavior must match v1.7 for store, restore, verify, and GC execution paths.
+- No block packing is enabled in Phase 1.
+- No restore/read-path block-abstraction switching is enabled in Phase 1.
+- New v1.8 schema/types/interfaces are foundational and must not alter runtime decisions yet.
+
+Release gate for Phase 1 completion:
+
+- Existing v1.7 repositories continue to operate unchanged.
+- New Phase 1 artifacts exist for later phases but remain behaviorally inert.
+
