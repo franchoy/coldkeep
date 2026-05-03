@@ -28,6 +28,7 @@ var (
 	ErrBlockFormatUnsupported   = errors.New("block format: unsupported header values")
 	ErrBlockFormatInvalidLayout = errors.New("block format: invalid table/payload layout")
 	ErrBlockFormatInvalidCount  = errors.New("block format: invalid chunk_count")
+	ErrBlockFormatEmptyBlock    = errors.New("block format: empty block is not allowed")
 	ErrNilEncodedBlock          = errors.New("block format: nil encoded block")
 )
 
@@ -107,6 +108,9 @@ func EncodeBlock(b *EncodedBlock) ([]byte, error) {
 	if b == nil {
 		return nil, ErrNilEncodedBlock
 	}
+	if b.Header.ChunkCount == 0 {
+		return nil, ErrBlockFormatEmptyBlock
+	}
 	if b.Header.ChunkCount != uint32(len(b.Entries)) {
 		return nil, ErrBlockFormatInvalidLayout
 	}
@@ -148,6 +152,10 @@ func HashPlaintextEncodedBlock(encoded []byte) []byte {
 // EncodePackedBlockV1FromChunks builds a v1 encoded block from an ordered chunk
 // sequence, creating chunk table segmentation and payload deterministically.
 func EncodePackedBlockV1FromChunks(chunks []PackedChunk) (*EncodedPackedBlockV1, error) {
+	if len(chunks) == 0 {
+		return nil, ErrBlockFormatEmptyBlock
+	}
+
 	entries := make([]ChunkEntry, 0, len(chunks))
 	payloadSize := uint64(0)
 
@@ -172,6 +180,10 @@ func EncodePackedBlockV1FromChunks(chunks []PackedChunk) (*EncodedPackedBlockV1,
 // EncodePackedBlockV1 encodes block bytes using deterministic v1 layout:
 // | HEADER | CHUNK_TABLE | PAYLOAD |
 func EncodePackedBlockV1(entries []ChunkEntry, payload []byte) (*EncodedPackedBlockV1, error) {
+	if len(entries) == 0 {
+		return nil, ErrBlockFormatEmptyBlock
+	}
+
 	header := BlockHeader{
 		Magic:         BlockMagicV1,
 		Version:       BlockFormatVersionV1,
@@ -212,6 +224,9 @@ func DecodeBlock(data []byte) (*EncodedBlock, error) {
 	header := readBlockHeader(data[:blockHeaderSizeV1])
 	if header.Magic != BlockMagicV1 || header.Version != BlockFormatVersionV1 || header.Codec != BlockCodecNoneV1 {
 		return nil, fmt.Errorf("%w: magic=%x version=%d codec=%d", ErrBlockFormatUnsupported, header.Magic, header.Version, header.Codec)
+	}
+	if header.ChunkCount == 0 {
+		return nil, ErrBlockFormatInvalidCount
 	}
 
 	_, totalMin, err := validateChunkCountSane(header.ChunkCount, len(data))

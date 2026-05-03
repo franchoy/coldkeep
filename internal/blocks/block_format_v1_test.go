@@ -99,22 +99,13 @@ func TestDecodeBlockReadsHeaderTableAndPayload(t *testing.T) {
 }
 
 func TestDecodeBlockRejectsUnsupportedVersion(t *testing.T) {
-	b := &EncodedBlock{
-		Header: BlockHeader{
-			Magic:         BlockMagicV1,
-			Version:       999,
-			Codec:         BlockCodecNoneV1,
-			ChunkCount:    0,
-			PlaintextSize: 0,
-		},
-		Entries: nil,
-		Payload: nil,
-	}
-
-	raw, err := EncodeBlock(b)
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{{ChunkID: 1, Data: []byte("x")}})
 	if err != nil {
 		t.Fatalf("encode block: %v", err)
 	}
+
+	raw := append([]byte(nil), enc.Bytes...)
+	binary.LittleEndian.PutUint16(raw[4:6], 999)
 
 	if _, err := DecodeBlock(raw); err == nil {
 		t.Fatal("expected unsupported-version decode error")
@@ -122,22 +113,14 @@ func TestDecodeBlockRejectsUnsupportedVersion(t *testing.T) {
 }
 
 func TestDecodeBlockRejectsInvalidChunkCount(t *testing.T) {
-	b := &EncodedBlock{
-		Header: BlockHeader{
-			Magic:         BlockMagicV1,
-			Version:       BlockFormatVersionV1,
-			Codec:         BlockCodecNoneV1,
-			ChunkCount:    1,
-			PlaintextSize: 0,
-		},
-		Entries: nil,
-		Payload: nil,
-	}
-
-	raw, err := EncodeBlock(b)
-	if err != nil {
-		t.Fatalf("encode malformed shape: %v", err)
-	}
+	raw := make([]byte, blockHeaderSizeV1)
+	writeBlockHeader(raw, BlockHeader{
+		Magic:         BlockMagicV1,
+		Version:       BlockFormatVersionV1,
+		Codec:         BlockCodecNoneV1,
+		ChunkCount:    0,
+		PlaintextSize: 0,
+	})
 
 	if _, err := DecodeBlock(raw); err == nil || !errors.Is(err, ErrBlockFormatInvalidCount) {
 		t.Fatalf("expected invalid-count decode error, got: %v", err)
@@ -169,25 +152,149 @@ func TestDecodeBlockRejectsPayloadLengthMismatch(t *testing.T) {
 }
 
 func TestDecodeBlockRejectsInvalidOffsets(t *testing.T) {
-	b := &EncodedBlock{
-		Header: BlockHeader{
-			Magic:         BlockMagicV1,
-			Version:       BlockFormatVersionV1,
-			Codec:         BlockCodecNoneV1,
-			ChunkCount:    1,
-			PlaintextSize: 3,
-		},
-		Entries: []ChunkEntry{{ChunkID: 1, Offset: 2, Size: 2}},
-		Payload: []byte("abc"),
-	}
-
-	raw, err := EncodeBlock(b)
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{{ChunkID: 1, Data: []byte("abc")}})
 	if err != nil {
 		t.Fatalf("encode block: %v", err)
 	}
 
+	raw := append([]byte(nil), enc.Bytes...)
+	// Corrupt first entry size from 3 -> 4 so offset+size exceeds plaintext_size.
+	binary.LittleEndian.PutUint64(raw[36:44], 4)
+
 	if _, err := DecodeBlock(raw); err == nil {
 		t.Fatal("expected invalid-offset decode error")
+	}
+}
+
+func TestStep8SingleChunkEncodeDecodeCompareBytes(t *testing.T) {
+	original := []byte("single-chunk-payload")
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{{ChunkID: 9001, Data: original}})
+	if err != nil {
+		t.Fatalf("encode single chunk: %v", err)
+	}
+
+	decoded, err := DecodeBlock(enc.Bytes)
+	if err != nil {
+		t.Fatalf("decode single chunk: %v", err)
+	}
+	got := decoded.GetChunk(0)
+	if !bytes.Equal(got, original) {
+		t.Fatalf("single chunk roundtrip mismatch: got %q want %q", got, original)
+	}
+}
+
+func TestStep8MultipleChunksOrderAndSlicing(t *testing.T) {
+	chunks := []PackedChunk{
+		{ChunkID: 1, Data: []byte("a")},
+		{ChunkID: 2, Data: []byte("bb")},
+		{ChunkID: 3, Data: []byte("ccc")},
+		{ChunkID: 4, Data: []byte("dddd")},
+		{ChunkID: 5, Data: []byte("eeeee")},
+		{ChunkID: 6, Data: []byte("ffffff")},
+	}
+
+	enc, err := EncodePackedBlockV1FromChunks(chunks)
+	if err != nil {
+		t.Fatalf("encode multi-chunk: %v", err)
+	}
+
+	decoded, err := DecodeBlock(enc.Bytes)
+	if err != nil {
+		t.Fatalf("decode multi-chunk: %v", err)
+	}
+
+	if len(decoded.Entries) != len(chunks) {
+		t.Fatalf("entries len mismatch: got %d want %d", len(decoded.Entries), len(chunks))
+	}
+
+	for i, ch := range chunks {
+		if decoded.Entries[i].ChunkID != ch.ChunkID {
+			t.Fatalf("chunk order mismatch at %d: got id=%d want id=%d", i, decoded.Entries[i].ChunkID, ch.ChunkID)
+		}
+		if got := decoded.GetChunk(i); !bytes.Equal(got, ch.Data) {
+			t.Fatalf("chunk slice mismatch at %d: got %q want %q", i, got, ch.Data)
+		}
+	}
+}
+
+func TestStep8BoundarySizesZeroChunksFails(t *testing.T) {
+	if _, err := EncodePackedBlockV1FromChunks(nil); err == nil {
+		t.Fatal("expected zero-chunk encode to fail")
+	}
+}
+
+func TestStep8BoundarySizesMaxAndUneven(t *testing.T) {
+	maxPayload := bytes.Repeat([]byte{'x'}, 1024*1024)
+	enc, err := EncodePackedBlockV1(
+		[]ChunkEntry{{ChunkID: 1, Offset: 0, Size: uint64(len(maxPayload))}},
+		maxPayload,
+	)
+	if err != nil {
+		t.Fatalf("encode max-size-ish block: %v", err)
+	}
+	decoded, err := DecodeBlock(enc.Bytes)
+	if err != nil {
+		t.Fatalf("decode max-size-ish block: %v", err)
+	}
+	if got := decoded.GetChunk(0); !bytes.Equal(got, maxPayload) {
+		t.Fatal("max-size chunk mismatch")
+	}
+
+	uneven := []PackedChunk{
+		{ChunkID: 10, Data: []byte("a")},
+		{ChunkID: 11, Data: bytes.Repeat([]byte{'b'}, 17)},
+		{ChunkID: 12, Data: []byte("ccc")},
+	}
+	enc2, err := EncodePackedBlockV1FromChunks(uneven)
+	if err != nil {
+		t.Fatalf("encode uneven block: %v", err)
+	}
+	decoded2, err := DecodeBlock(enc2.Bytes)
+	if err != nil {
+		t.Fatalf("decode uneven block: %v", err)
+	}
+	for i := range uneven {
+		if got := decoded2.GetChunk(i); !bytes.Equal(got, uneven[i].Data) {
+			t.Fatalf("uneven chunk mismatch at %d", i)
+		}
+	}
+}
+
+func TestStep8CorruptionCasesFailDecode(t *testing.T) {
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{{ChunkID: 1, Data: []byte("payload")}})
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+
+	badMagic := append([]byte(nil), enc.Bytes...)
+	badMagic[0] ^= 0xFF
+	if _, err := DecodeBlock(badMagic); err == nil {
+		t.Fatal("expected bad-magic decode failure")
+	}
+
+	truncated := enc.Bytes[:len(enc.Bytes)-1]
+	if _, err := DecodeBlock(truncated); err == nil {
+		t.Fatal("expected truncated-payload decode failure")
+	}
+
+	invalidOffset := append([]byte(nil), enc.Bytes...)
+	binary.LittleEndian.PutUint64(invalidOffset[28:36], 9999) // first entry offset
+	if _, err := DecodeBlock(invalidOffset); err == nil {
+		t.Fatal("expected invalid-offset decode failure")
+	}
+}
+
+func TestStep8HashValidationRecomputeMatches(t *testing.T) {
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{
+		{ChunkID: 1, Data: []byte("hash")},
+		{ChunkID: 2, Data: []byte("-validation")},
+	})
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+	recomputed := ComputeBlockHash(enc.Bytes)
+	if !bytes.Equal(recomputed, enc.BlockHash) {
+		t.Fatal("recomputed hash mismatch")
 	}
 }
 

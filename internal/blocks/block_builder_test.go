@@ -59,20 +59,8 @@ func TestBlockBuilderBuildMultiChunk(t *testing.T) {
 
 func TestBlockBuilderBuildEmpty(t *testing.T) {
 	var b BlockBuilder
-	encoded, hash, err := b.Build()
-	if err != nil {
-		t.Fatalf("build empty block: %v", err)
-	}
-	if encoded.Header.ChunkCount != 0 {
-		t.Fatalf("unexpected empty chunk count: got %d want 0", encoded.Header.ChunkCount)
-	}
-	if encoded.Header.PlaintextSize != 0 {
-		t.Fatalf("unexpected empty plaintext size: got %d want 0", encoded.Header.PlaintextSize)
-	}
-	if len(encoded.Payload) != 0 {
-		t.Fatalf("unexpected payload length: got %d want 0", len(encoded.Payload))
-	}
-	if len(hash) == 0 {
-		t.Fatal("expected non-empty hash for encoded header-only block")
+	_, _, err := b.Build()
+	if err == nil {
+		t.Fatal("expected build empty block to fail")
 	}
 }
