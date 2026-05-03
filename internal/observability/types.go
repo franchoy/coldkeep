@@ -185,12 +185,17 @@ type GCSimulationAssumptions struct {
 }
 
 type GCSimulationSummary struct {
-	ReachableChunks            int64 `json:"reachable_chunks"`
-	UnreachableChunks          int64 `json:"unreachable_chunks"`
-	LogicallyReclaimableBytes  int64 `json:"logically_reclaimable_bytes"`
-	PhysicallyReclaimableBytes int64 `json:"physically_reclaimable_bytes"`
-	FullyReclaimableContainers int64 `json:"fully_reclaimable_containers"`
-	PartiallyDeadContainers    int64 `json:"partially_dead_containers"`
+	ReachableChunks                    int64 `json:"reachable_chunks"`
+	UnreachableChunks                  int64 `json:"unreachable_chunks"`
+	LogicallyReclaimableBytes          int64 `json:"logically_reclaimable_bytes"`
+	PhysicallyReclaimableBytes         int64 `json:"physically_reclaimable_bytes"`
+	FullyReclaimableContainers         int64 `json:"fully_reclaimable_containers"`
+	PartiallyDeadContainers            int64 `json:"partially_dead_containers"`
+	PackedBlocksLive                   int64 `json:"packed_blocks_live"`
+	PackedBlocksDead                   int64 `json:"packed_blocks_dead"`
+	PackedBytesLive                    int64 `json:"packed_bytes_live"`
+	PackedBytesReclaimable             int64 `json:"packed_bytes_reclaimable"`
+	RetainedDeadBytesDueToPackedBlocks int64 `json:"retained_dead_bytes_due_to_packed_blocks"`
 }
 
 // ContainerSimulationImpact is the per-container summary within a GC simulation.

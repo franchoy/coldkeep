@@ -42,11 +42,16 @@ type ContainerImpact struct {
 }
 
 type SimulationSummary struct {
-	UnreachableChunks          int64 `json:"unreachable_chunks"`
-	LogicallyReclaimableBytes  int64 `json:"logically_reclaimable_bytes"`
-	PhysicallyReclaimableBytes int64 `json:"physically_reclaimable_bytes"`
-	FullyReclaimableContainers int64 `json:"fully_reclaimable_containers"`
-	PartiallyDeadContainers    int64 `json:"partially_dead_containers"`
+	UnreachableChunks                  int64 `json:"unreachable_chunks"`
+	LogicallyReclaimableBytes          int64 `json:"logically_reclaimable_bytes"`
+	PhysicallyReclaimableBytes         int64 `json:"physically_reclaimable_bytes"`
+	FullyReclaimableContainers         int64 `json:"fully_reclaimable_containers"`
+	PartiallyDeadContainers            int64 `json:"partially_dead_containers"`
+	PackedBlocksLive                   int64 `json:"packed_blocks_live"`
+	PackedBlocksDead                   int64 `json:"packed_blocks_dead"`
+	PackedBytesLive                    int64 `json:"packed_bytes_live"`
+	PackedBytesReclaimable             int64 `json:"packed_bytes_reclaimable"`
+	RetainedDeadBytesDueToPackedBlocks int64 `json:"retained_dead_bytes_due_to_packed_blocks"`
 }
 
 type Warning struct {
@@ -299,6 +304,10 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 	if err != nil {
 		return nil, err
 	}
+	packedBlocksLive, packedBlocksDead, packedBytesLive, packedBytesReclaimable, retainedDeadBytesDueToPackedBlocks, err := computePackedSimulationMetrics(ctx, dbconn, livePackedBlockIDs)
+	if err != nil {
+		return nil, err
+	}
 	unknown := make([]string, 0, len(unknownVersions))
 	for version := range unknownVersions {
 		unknown = append(unknown, version)
@@ -319,15 +328,84 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 		ReclaimableBytes:           logicalReclaimableBytes,
 		PhysicallyReclaimableBytes: physicalReclaimableBytes,
 		Summary: SimulationSummary{
-			UnreachableChunks:          int64(len(unreachable)),
-			LogicallyReclaimableBytes:  logicalReclaimableBytes,
-			PhysicallyReclaimableBytes: physicalReclaimableBytes,
-			FullyReclaimableContainers: fullyReclaimableContainers,
-			PartiallyDeadContainers:    partiallyDeadContainers,
+			UnreachableChunks:                  int64(len(unreachable)),
+			LogicallyReclaimableBytes:          logicalReclaimableBytes,
+			PhysicallyReclaimableBytes:         physicalReclaimableBytes,
+			FullyReclaimableContainers:         fullyReclaimableContainers,
+			PartiallyDeadContainers:            partiallyDeadContainers,
+			PackedBlocksLive:                   packedBlocksLive,
+			PackedBlocksDead:                   packedBlocksDead,
+			PackedBytesLive:                    packedBytesLive,
+			PackedBytesReclaimable:             packedBytesReclaimable,
+			RetainedDeadBytesDueToPackedBlocks: retainedDeadBytesDueToPackedBlocks,
 		},
 		AffectedContainers: affectedContainers,
 		Warnings:           warnings,
 	}, nil
+}
+
+func computePackedSimulationMetrics(ctx context.Context, dbconn *sql.DB, livePackedBlockIDs map[int64]struct{}) (int64, int64, int64, int64, int64, error) {
+	blockRows, err := dbconn.QueryContext(ctx, `
+		SELECT id, stored_size
+		FROM storage_blocks
+	`)
+	if err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+	defer func() { _ = blockRows.Close() }()
+
+	var packedBlocksLive int64
+	var packedBlocksDead int64
+	var packedBytesLive int64
+	var packedBytesReclaimable int64
+
+	for blockRows.Next() {
+		var blockID int64
+		var storedSize int64
+		if err := blockRows.Scan(&blockID, &storedSize); err != nil {
+			return 0, 0, 0, 0, 0, err
+		}
+		if _, live := livePackedBlockIDs[blockID]; live {
+			packedBlocksLive++
+			packedBytesLive += storedSize
+			continue
+		}
+		packedBlocksDead++
+		packedBytesReclaimable += storedSize
+	}
+	if err := blockRows.Err(); err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+
+	deadInLiveRows, err := dbconn.QueryContext(ctx, `
+		SELECT cbr.block_id, cbr.size_in_block
+		FROM chunk_block_refs cbr
+		JOIN chunk ch ON ch.id = cbr.chunk_id
+		WHERE ch.status = 'COMPLETED'
+		AND ch.live_ref_count = 0
+		AND ch.pin_count = 0
+	`)
+	if err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+	defer func() { _ = deadInLiveRows.Close() }()
+
+	var retainedDeadBytesDueToPackedBlocks int64
+	for deadInLiveRows.Next() {
+		var blockID int64
+		var sizeInBlock int64
+		if err := deadInLiveRows.Scan(&blockID, &sizeInBlock); err != nil {
+			return 0, 0, 0, 0, 0, err
+		}
+		if _, live := livePackedBlockIDs[blockID]; live {
+			retainedDeadBytesDueToPackedBlocks += sizeInBlock
+		}
+	}
+	if err := deadInLiveRows.Err(); err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+
+	return packedBlocksLive, packedBlocksDead, packedBytesLive, packedBytesReclaimable, retainedDeadBytesDueToPackedBlocks, nil
 }
 
 // planContainerImpact scans sealed non-quarantined containers and returns the

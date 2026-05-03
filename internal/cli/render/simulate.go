@@ -70,6 +70,28 @@ func (HumanRenderer) RenderSimulation(w io.Writer, r *SimulationResult) error {
 			return err
 		}
 
+		if _, err := fmt.Fprintln(w, "Packed"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  packed_blocks_live: %d\n", r.GC.Summary.PackedBlocksLive); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  packed_blocks_dead: %d\n", r.GC.Summary.PackedBlocksDead); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  packed_bytes_live: %s\n", formatMiB(r.GC.Summary.PackedBytesLive)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  packed_bytes_reclaimable: %s\n", formatMiB(r.GC.Summary.PackedBytesReclaimable)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  retained_dead_bytes_due_to_packed_blocks: %s\n", formatMiB(r.GC.Summary.RetainedDeadBytesDueToPackedBlocks)); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+
 		if _, err := fmt.Fprintln(w, "Containers"); err != nil {
 			return err
 		}

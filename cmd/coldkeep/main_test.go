@@ -7747,12 +7747,17 @@ func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
 					DeletedSnapshots: opts.AssumeDeletedSnapshots,
 				},
 				Summary: observability.GCSimulationSummary{
-					ReachableChunks:            10,
-					UnreachableChunks:          2,
-					LogicallyReclaimableBytes:  200,
-					PhysicallyReclaimableBytes: 100,
-					FullyReclaimableContainers: 1,
-					PartiallyDeadContainers:    1,
+					ReachableChunks:                    10,
+					UnreachableChunks:                  2,
+					LogicallyReclaimableBytes:          200,
+					PhysicallyReclaimableBytes:         100,
+					FullyReclaimableContainers:         1,
+					PartiallyDeadContainers:            1,
+					PackedBlocksLive:                   3,
+					PackedBlocksDead:                   2,
+					PackedBytesLive:                    300,
+					PackedBytesReclaimable:             120,
+					RetainedDeadBytesDueToPackedBlocks: 40,
 				},
 				Containers: []observability.ContainerSimulationImpact{{
 					ContainerID:        7,
@@ -7822,6 +7827,11 @@ func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
 	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
 	assertJSONNumber(t, summary, "fully_reclaimable_containers", 1)
 	assertJSONNumber(t, summary, "partially_dead_containers", 1)
+	assertJSONNumber(t, summary, "packed_blocks_live", 3)
+	assertJSONNumber(t, summary, "packed_blocks_dead", 2)
+	assertJSONNumber(t, summary, "packed_bytes_live", 300)
+	assertJSONNumber(t, summary, "packed_bytes_reclaimable", 120)
+	assertJSONNumber(t, summary, "retained_dead_bytes_due_to_packed_blocks", 40)
 	if _, exists := gcNode["containers"]; exists {
 		t.Fatalf("expected gc.containers omitted without --containers flag, got %v", gcNode["containers"])
 	}
@@ -7841,12 +7851,17 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 				Exact:   true,
 				Mutated: false,
 				Summary: observability.GCSimulationSummary{
-					ReachableChunks:            3,
-					UnreachableChunks:          2,
-					LogicallyReclaimableBytes:  150 * 1024 * 1024,
-					PhysicallyReclaimableBytes: 100 * 1024 * 1024,
-					FullyReclaimableContainers: 1,
-					PartiallyDeadContainers:    1,
+					ReachableChunks:                    3,
+					UnreachableChunks:                  2,
+					LogicallyReclaimableBytes:          150 * 1024 * 1024,
+					PhysicallyReclaimableBytes:         100 * 1024 * 1024,
+					FullyReclaimableContainers:         1,
+					PartiallyDeadContainers:            1,
+					PackedBlocksLive:                   2,
+					PackedBlocksDead:                   1,
+					PackedBytesLive:                    90 * 1024 * 1024,
+					PackedBytesReclaimable:             20 * 1024 * 1024,
+					RetainedDeadBytesDueToPackedBlocks: 10 * 1024 * 1024,
 				},
 				Containers: []observability.ContainerSimulationImpact{
 					{ContainerID: 1, Filename: "full.bin", ReclaimableBytes: 100, LiveBytesAfterGC: 0, ReclaimableChunks: 2, TotalChunks: 2, FullyReclaimable: true},
@@ -7882,6 +7897,9 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 	}
 	if !strings.Contains(output, "Reclaimable") || !strings.Contains(output, "logical_bytes: 150 MiB") || !strings.Contains(output, "physical_bytes_now: 100 MiB") {
 		t.Fatalf("expected reclaimable section with MiB formatting, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Packed") || !strings.Contains(output, "packed_blocks_live: 2") || !strings.Contains(output, "packed_blocks_dead: 1") || !strings.Contains(output, "packed_bytes_live: 90 MiB") || !strings.Contains(output, "packed_bytes_reclaimable: 20 MiB") || !strings.Contains(output, "retained_dead_bytes_due_to_packed_blocks: 10 MiB") {
+		t.Fatalf("expected packed metrics section, got:\n%s", output)
 	}
 	if !strings.Contains(output, "Containers") || !strings.Contains(output, "fully_reclaimable: 1") || !strings.Contains(output, "partially_dead: 1") {
 		t.Fatalf("expected containers summary section, got:\n%s", output)

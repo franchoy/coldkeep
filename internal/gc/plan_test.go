@@ -620,6 +620,65 @@ func TestBuildPlanPackedPlacementDoesNotTriggerMissingContainerWarning(t *testin
 	}
 }
 
+func TestBuildPlanPackedDryRunMetrics(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	// Live packed block with one live and one dead chunk.
+	liveChunkID := insertChunk(t, dbconn, "packed-metrics-live", 80, 1, 0)
+	deadInLiveBlockChunkID := insertChunk(t, dbconn, "packed-metrics-dead-in-live", 120, 0, 0)
+	liveContainerID := insertContainer(t, dbconn, "c-packed-metrics-live.bin", 200)
+	liveBlockRes, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'plain', 200, 200, ?, 0, ?)`,
+		liveContainerID,
+		[]byte{0x01, 0x23, 0x45},
+	)
+	if err != nil {
+		t.Fatalf("insert live packed block: %v", err)
+	}
+	liveBlockID, _ := liveBlockRes.LastInsertId()
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 80)`,
+		liveChunkID,
+		liveBlockID,
+	); err != nil {
+		t.Fatalf("insert live chunk ref: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 80, 120)`,
+		deadInLiveBlockChunkID,
+		liveBlockID,
+	); err != nil {
+		t.Fatalf("insert dead-in-live-block ref: %v", err)
+	}
+
+	// Dead packed block with one dead chunk.
+	deadBlockChunkID := insertChunk(t, dbconn, "packed-metrics-dead", 50, 0, 0)
+	deadContainerID := insertContainer(t, dbconn, "c-packed-metrics-dead.bin", 50)
+	insertStorageBlockRef(t, dbconn, deadBlockChunkID, deadContainerID, 50, []byte{0x67, 0x89, 0xAB})
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	if plan.Summary.PackedBlocksLive != 1 {
+		t.Fatalf("PackedBlocksLive = %d, want 1", plan.Summary.PackedBlocksLive)
+	}
+	if plan.Summary.PackedBlocksDead != 1 {
+		t.Fatalf("PackedBlocksDead = %d, want 1", plan.Summary.PackedBlocksDead)
+	}
+	if plan.Summary.PackedBytesLive != 200 {
+		t.Fatalf("PackedBytesLive = %d, want 200", plan.Summary.PackedBytesLive)
+	}
+	if plan.Summary.PackedBytesReclaimable != 50 {
+		t.Fatalf("PackedBytesReclaimable = %d, want 50", plan.Summary.PackedBytesReclaimable)
+	}
+	if plan.Summary.RetainedDeadBytesDueToPackedBlocks != 120 {
+		t.Fatalf("RetainedDeadBytesDueToPackedBlocks = %d, want 120", plan.Summary.RetainedDeadBytesDueToPackedBlocks)
+	}
+}
+
 func TestBuildPlanWarningsForMissingContainerUnknownVersionAndQuarantine(t *testing.T) {
 	dbconn := openTestDB(t)
 

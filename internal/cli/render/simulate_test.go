@@ -65,6 +65,40 @@ func TestRenderSimulationHumanFormatsContainerImpactBytes(t *testing.T) {
 	}
 }
 
+func TestRenderSimulationHumanIncludesPackedMetrics(t *testing.T) {
+	r := &SimulationResult{
+		Kind: "gc",
+		GC: &observability.GCSimulationResult{
+			Kind: "gc",
+			Summary: observability.GCSimulationSummary{
+				PackedBlocksLive:                   3,
+				PackedBlocksDead:                   2,
+				PackedBytesLive:                    3 * 1024 * 1024,
+				PackedBytesReclaimable:             2 * 1024 * 1024,
+				RetainedDeadBytesDueToPackedBlocks: 512 * 1024,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := (HumanRenderer{}).RenderSimulation(&buf, r); err != nil {
+		t.Fatalf("RenderSimulation human: %v", err)
+	}
+	out := buf.String()
+	for _, expected := range []string{
+		"Packed",
+		"packed_blocks_live: 3",
+		"packed_blocks_dead: 2",
+		"packed_bytes_live: 3 MiB",
+		"packed_bytes_reclaimable: 2 MiB",
+		"retained_dead_bytes_due_to_packed_blocks: 0 MiB",
+	} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("expected %q in output, got: %s", expected, out)
+		}
+	}
+}
+
 func TestRenderSimulationJSONUsesStableEnvelope(t *testing.T) {
 	r := &SimulationResult{
 		Kind: "gc",
