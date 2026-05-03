@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -178,6 +179,15 @@ func commitPreparedChunksWithContext(
 			return StoreFileResult{}, err
 		}
 		return result, nil
+	}
+
+	// Step 8 invariant: the commit/pack/write path must consume an ordered chunk
+	// stream. Worker completion order from any upstream parallel prep is not a
+	// valid source of layout order.
+	for i, ch := range preparedChunks {
+		if ch.Index != i {
+			return StoreFileResult{}, fmt.Errorf("prepared chunks out of order: got index %d at position %d", ch.Index, i)
+		}
 	}
 
 	// Deterministic sequential commit of all prepared chunks
@@ -696,6 +706,10 @@ type preparedChunk struct {
 	Data           []byte
 }
 
+// Test hook: lets tests inject per-index delay/behavior to emulate
+// out-of-order worker completion. Keep nil in production.
+var testPrepareChunksWorkerHook func(index int)
+
 // prepareChunksWithContext materializes chunk metadata deterministically.
 // It computes hashes for chunkers that didn't provide them.
 func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunkerVersion string) ([]preparedChunk, error) {
@@ -703,36 +717,84 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 		return []preparedChunk{}, nil
 	}
 
-	prepared := make([]preparedChunk, 0, len(results))
-	chunkHasher := sha256.New()
-	hashBuf := make([]byte, 0, sha256.Size)
-	for i, res := range results {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		data := res.Data
-		hash := res.Info.Hash
-		if strings.TrimSpace(hash) == "" {
-			chunkHasher.Reset()
-			_, _ = chunkHasher.Write(data)
-			hashBuf = chunkHasher.Sum(hashBuf[:0])
-			hash = hex.EncodeToString(hashBuf)
-		}
-
-		prepared = append(prepared, preparedChunk{
-			Index:          i,
-			Offset:         res.Info.Offset,
-			Size:           len(data),
-			Hash:           hash,
-			ChunkerVersion: chunkerVersion,
-			Data:           data,
-		})
+	type preparedResult struct {
+		idx int
+		ch  preparedChunk
+		err error
 	}
 
-	sort.Slice(prepared, func(i, j int) bool {
-		return prepared[i].Index < prepared[j].Index
-	})
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(results) {
+		workerCount = len(results)
+	}
+
+	jobs := make(chan int)
+	resultsCh := make(chan preparedResult, len(results))
+
+	var wg sync.WaitGroup
+	worker := func() {
+		defer wg.Done()
+		chunkHasher := sha256.New()
+		hashBuf := make([]byte, 0, sha256.Size)
+		for i := range jobs {
+			if err := ctx.Err(); err != nil {
+				resultsCh <- preparedResult{err: err}
+				continue
+			}
+			if testPrepareChunksWorkerHook != nil {
+				testPrepareChunksWorkerHook(i)
+			}
+
+			res := results[i]
+			data := res.Data
+			hash := res.Info.Hash
+			if strings.TrimSpace(hash) == "" {
+				chunkHasher.Reset()
+				_, _ = chunkHasher.Write(data)
+				hashBuf = chunkHasher.Sum(hashBuf[:0])
+				hash = hex.EncodeToString(hashBuf)
+			}
+
+			resultsCh <- preparedResult{
+				idx: i,
+				ch: preparedChunk{
+					Index:          i,
+					Offset:         res.Info.Offset,
+					Size:           len(data),
+					Hash:           hash,
+					ChunkerVersion: chunkerVersion,
+					Data:           data,
+				},
+			}
+		}
+	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	go func() {
+		defer close(jobs)
+		for i := range results {
+			jobs <- i
+		}
+	}()
+
+	prepared := make([]preparedChunk, len(results))
+	for i := 0; i < len(results); i++ {
+		item := <-resultsCh
+		if item.err != nil {
+			wg.Wait()
+			return nil, item.err
+		}
+		prepared[item.idx] = item.ch
+	}
+	wg.Wait()
+
 	for i, ch := range prepared {
 		if ch.Index != i {
 			return nil, fmt.Errorf("non-contiguous chunk index: got %d want %d", ch.Index, i)
