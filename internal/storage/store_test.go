@@ -226,6 +226,30 @@ func TestStoreDedupCheckHappensBeforeWriteBoundary(t *testing.T) {
 		t.Fatalf("expected two file_chunk references for duplicate recipe entries, got %d", fileChunkRows)
 	}
 
+	rows, err := dbconn.Query(
+		`SELECT chunk_order FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`,
+		result.FileID,
+	)
+	if err != nil {
+		t.Fatalf("query file_chunk recipe order: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	chunkOrders := make([]int, 0, 2)
+	for rows.Next() {
+		var order int
+		if err := rows.Scan(&order); err != nil {
+			t.Fatalf("scan file_chunk chunk_order: %v", err)
+		}
+		chunkOrders = append(chunkOrders, order)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate file_chunk chunk_order rows: %v", err)
+	}
+	if len(chunkOrders) != 2 || chunkOrders[0] != 0 || chunkOrders[1] != 1 {
+		t.Fatalf("file recipe order must remain source-of-truth [0,1], got %v", chunkOrders)
+	}
+
 	var blockRows int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&blockRows); err != nil {
 		t.Fatalf("count blocks rows: %v", err)

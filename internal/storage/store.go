@@ -202,6 +202,7 @@ func commitPreparedChunksWithContext(
 				return StoreFileResult{}, err
 			}
 
+			// Preserve logical recipe order: file_chunk.chunk_order comes from prepared.Index.
 			if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
 				_ = tx.Rollback()
 				return StoreFileResult{}, err
@@ -374,6 +375,7 @@ func commitPreparedChunksWithContext(
 			}
 
 			// Link file ↔ chunk using prepared index for deterministic order
+			// Preserve logical recipe order: file_chunk.chunk_order comes from prepared.Index.
 			if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
 				_ = tx.Rollback()
 				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {

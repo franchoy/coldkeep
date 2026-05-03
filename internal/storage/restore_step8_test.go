@@ -265,6 +265,29 @@ func TestStep8RestoreSyntheticPackedBlock(t *testing.T) {
 	}
 }
 
+// Step 7 invariant: restore output order is driven by file recipe (chunk_index),
+// not by physical packed entry order inside a storage block.
+func TestStep7RestoreRecipeOrderOverridesPhysicalPackedOrder(t *testing.T) {
+	dbconn := setupStep8DB(t)
+	defer func() { _ = dbconn.Close() }()
+	containersDir := t.TempDir()
+
+	chunkA := insertChunkForRestore(t, dbconn, []byte("recipe-A"), "v2-fastcdc")
+	chunkB := insertChunkForRestore(t, dbconn, []byte("recipe-B"), "v2-fastcdc")
+
+	// Physical block entry order: B then A.
+	insertPackedStorageBlock(t, dbconn, containersDir, "step7-physical-order.bin", []restoreChunkSeed{chunkB, chunkA})
+
+	// Logical file recipe order: A then B (source of truth for restore output).
+	fileID := insertLogicalFileForRestore(t, dbconn, "step7-recipe-order.bin", []restoreChunkSeed{chunkA, chunkB}, "v2-fastcdc")
+
+	got := restoreAndReadBytes(t, dbconn, fileID, containersDir)
+	want := []byte("recipe-Arecipe-B")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("restore must follow file recipe order, got=%q want=%q", string(got), string(want))
+	}
+}
+
 // Step 8 / Test 3: mixed repository (legacy chunks + packed blocks) restores both files correctly.
 func TestStep8RestoreMixedRepoV17AndV18(t *testing.T) {
 	dbconn := setupStep8DB(t)
