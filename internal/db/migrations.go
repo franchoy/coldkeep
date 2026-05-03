@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 11
+const requiredPostgresSchemaVersion = 12
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -581,6 +581,61 @@ func runSQLiteRepositoryConfigMigration(dbconn sqliteContextExecutor, ctx contex
 	return nil
 }
 
+func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS storage_blocks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			format_version INTEGER NOT NULL CHECK (format_version > 0),
+			codec TEXT NOT NULL,
+			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
+			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+			container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
+			block_hash BLOB NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return fmt.Errorf("create storage_blocks table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_storage_blocks_container_id ON storage_blocks(container_id)
+	`); err != nil {
+		return fmt.Errorf("create idx_storage_blocks_container_id: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS chunk_block_refs (
+			chunk_id INTEGER NOT NULL PRIMARY KEY REFERENCES chunk(id) ON DELETE RESTRICT,
+			block_id INTEGER NOT NULL REFERENCES storage_blocks(id) ON DELETE RESTRICT,
+			offset_in_block INTEGER NOT NULL CHECK (offset_in_block >= 0),
+			size_in_block INTEGER NOT NULL CHECK (size_in_block > 0)
+		)
+	`); err != nil {
+		return fmt.Errorf("create chunk_block_refs table: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(block_id)
+	`); err != nil {
+		return fmt.Errorf("create idx_chunk_block_refs_block_id: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 12
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 12: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (12)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 12: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -735,6 +790,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteRepositoryConfigMigration(tx, ctx, desiredDefaultChunker, preSchemaState.hadDefaultChunkerBeforeSchema); err != nil {
+		return err
+	}
+
+	if err := runSQLiteBlockAbstractionFoundationMigration(tx, ctx); err != nil {
 		return err
 	}
 

@@ -450,4 +450,30 @@ ON CONFLICT (key) DO NOTHING;
 
 UPDATE schema_version SET version = 11 WHERE version < 11;
 
+-- Schema version 12: v1.8 block abstraction foundation tables.
+CREATE TABLE IF NOT EXISTS storage_blocks (
+  id BIGSERIAL PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version > 0),
+  codec TEXT NOT NULL,
+  plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+  stored_size BIGINT NOT NULL CHECK (stored_size > 0),
+  container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+  container_offset BIGINT NOT NULL CHECK (container_offset >= 0),
+  block_hash BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_storage_blocks_container_id ON storage_blocks(container_id);
+
+CREATE TABLE IF NOT EXISTS chunk_block_refs (
+  chunk_id BIGINT NOT NULL PRIMARY KEY REFERENCES chunk(id) ON DELETE RESTRICT,
+  block_id BIGINT NOT NULL REFERENCES storage_blocks(id) ON DELETE RESTRICT,
+  offset_in_block BIGINT NOT NULL CHECK (offset_in_block >= 0),
+  size_in_block BIGINT NOT NULL CHECK (size_in_block > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(block_id);
+
+UPDATE schema_version SET version = 12 WHERE version < 12;
+
 COMMIT;
