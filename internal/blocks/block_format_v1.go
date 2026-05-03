@@ -22,6 +22,7 @@ var (
 	ErrBlockFormatTooSmall      = errors.New("block format: payload too small for header")
 	ErrBlockFormatUnsupported   = errors.New("block format: unsupported header values")
 	ErrBlockFormatInvalidLayout = errors.New("block format: invalid table/payload layout")
+	ErrNilEncodedBlock          = errors.New("block format: nil encoded block")
 )
 
 // BlockHeader is the fixed-size binary block header for v1 format.
@@ -79,6 +80,38 @@ type EncodedPackedBlockV1 struct {
 	Entries   []ChunkEntry
 }
 
+// EncodeBlock serializes one in-memory encoded block using deterministic v1
+// binary layout with little-endian fields:
+// | HEADER | CHUNK_TABLE | PAYLOAD |
+func EncodeBlock(b *EncodedBlock) ([]byte, error) {
+	if b == nil {
+		return nil, ErrNilEncodedBlock
+	}
+	if b.Header.ChunkCount != uint32(len(b.Entries)) {
+		return nil, ErrBlockFormatInvalidLayout
+	}
+	if b.Header.PlaintextSize != uint64(len(b.Payload)) {
+		return nil, ErrBlockFormatInvalidLayout
+	}
+	if err := validateChunkEntries(b.Entries, b.Header.PlaintextSize); err != nil {
+		return nil, err
+	}
+
+	tableSize := uint64(len(b.Entries)) * chunkEntrySizeV1
+	encoded := make([]byte, int(uint64(blockHeaderSizeV1)+tableSize+b.Header.PlaintextSize))
+
+	writeBlockHeader(encoded[:blockHeaderSizeV1], b.Header)
+
+	offset := blockHeaderSizeV1
+	for _, entry := range b.Entries {
+		writeChunkEntry(encoded[offset:offset+chunkEntrySizeV1], entry)
+		offset += chunkEntrySizeV1
+	}
+
+	copy(encoded[offset:], b.Payload)
+	return encoded, nil
+}
+
 // HashPlaintextEncodedBlock returns SHA-256 over the full plaintext encoded block
 // bytes. This is the mandatory v1.8 block hash identity.
 func HashPlaintextEncodedBlock(encoded []byte) []byte {
@@ -121,22 +154,14 @@ func EncodePackedBlockV1(entries []ChunkEntry, payload []byte) (*EncodedPackedBl
 		PlaintextSize: uint64(len(payload)),
 	}
 
-	if err := validateChunkEntries(entries, header.PlaintextSize); err != nil {
+	encoded, err := EncodeBlock(&EncodedBlock{
+		Header:  header,
+		Entries: entries,
+		Payload: payload,
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	tableSize := uint64(len(entries)) * chunkEntrySizeV1
-	encoded := make([]byte, int(uint64(blockHeaderSizeV1)+tableSize+header.PlaintextSize))
-
-	writeBlockHeader(encoded[:blockHeaderSizeV1], header)
-
-	offset := blockHeaderSizeV1
-	for _, entry := range entries {
-		writeChunkEntry(encoded[offset:offset+chunkEntrySizeV1], entry)
-		offset += chunkEntrySizeV1
-	}
-
-	copy(encoded[offset:], payload)
 
 	return &EncodedPackedBlockV1{
 		Bytes:     encoded,

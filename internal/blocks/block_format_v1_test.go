@@ -2,8 +2,68 @@ package blocks
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
+
+func TestEncodeBlockSerializesHeaderEntriesPayloadLittleEndian(t *testing.T) {
+	b := &EncodedBlock{
+		Header: BlockHeader{
+			Magic:         BlockMagicV1,
+			Version:       BlockFormatVersionV1,
+			Codec:         BlockCodecNoneV1,
+			ChunkCount:    2,
+			PlaintextSize: 3,
+		},
+		Entries: []ChunkEntry{
+			{ChunkID: 10, Offset: 0, Size: 1},
+			{ChunkID: 20, Offset: 1, Size: 2},
+		},
+		Payload: []byte("abc"),
+	}
+
+	raw, err := EncodeBlock(b)
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+
+	if got := binary.LittleEndian.Uint32(raw[0:4]); got != BlockMagicV1 {
+		t.Fatalf("magic mismatch: got %x want %x", got, BlockMagicV1)
+	}
+	if got := binary.LittleEndian.Uint16(raw[4:6]); got != BlockFormatVersionV1 {
+		t.Fatalf("version mismatch: got %d want %d", got, BlockFormatVersionV1)
+	}
+	if got := binary.LittleEndian.Uint16(raw[6:8]); got != BlockCodecNoneV1 {
+		t.Fatalf("codec mismatch: got %d want %d", got, BlockCodecNoneV1)
+	}
+	if got := binary.LittleEndian.Uint32(raw[8:12]); got != 2 {
+		t.Fatalf("chunk_count mismatch: got %d want 2", got)
+	}
+	if got := binary.LittleEndian.Uint64(raw[12:20]); got != 3 {
+		t.Fatalf("plaintext_size mismatch: got %d want 3", got)
+	}
+
+	decoded, err := DecodePackedBlockV1(raw)
+	if err != nil {
+		t.Fatalf("decode encoded bytes: %v", err)
+	}
+	if !bytes.Equal(decoded.Payload, []byte("abc")) {
+		t.Fatalf("payload mismatch: got %q want %q", decoded.Payload, "abc")
+	}
+}
+
+func TestEncodeBlockRejectsInconsistentShape(t *testing.T) {
+	_, err := EncodeBlock(&EncodedBlock{
+		Header: BlockHeader{ChunkCount: 2, PlaintextSize: 1},
+		Entries: []ChunkEntry{
+			{ChunkID: 1, Offset: 0, Size: 1},
+		},
+		Payload: []byte("x"),
+	})
+	if err == nil {
+		t.Fatal("expected error for inconsistent chunk_count")
+	}
+}
 
 func TestEncodeDecodePackedBlockV1RoundTripFromChunks(t *testing.T) {
 	encoded, err := EncodePackedBlockV1FromChunks([]PackedChunk{
