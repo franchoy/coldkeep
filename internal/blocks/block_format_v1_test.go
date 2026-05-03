@@ -521,3 +521,52 @@ func TestComputeBlockHashTargetsPlaintextEncodedBytes(t *testing.T) {
 		t.Fatal("expected transformed-bytes hash to differ from plaintext-encoded hash")
 	}
 }
+func validOneChunkEncodedBlock() *EncodedBlock {
+	return &EncodedBlock{
+		Header: BlockHeader{
+			Magic:         BlockMagicV1,
+			Version:       BlockFormatVersionV1,
+			Codec:         BlockCodecNoneV1,
+			ChunkCount:    1,
+			PlaintextSize: 5,
+		},
+		Entries:  []ChunkEntry{{ChunkID: 1, Offset: 0, Size: 5}},
+		Payload:  []byte("hello"),
+	}
+}
+func TestVerifyBlockHashValidPasses(t *testing.T) {
+b := validOneChunkEncodedBlock()
+encoded, err := EncodeBlock(b)
+if err != nil {
+t.Fatalf("encode: %v", err)
+}
+hash := ComputeBlockHash(encoded)
+if err := VerifyBlockHash(encoded, hash); err != nil {
+t.Fatalf("expected nil error, got %v", err)
+}
+}
+
+func TestVerifyBlockHashWrongHashFails(t *testing.T) {
+b := validOneChunkEncodedBlock()
+encoded, err := EncodeBlock(b)
+if err != nil {
+t.Fatalf("encode: %v", err)
+}
+wrong := make([]byte, 32)
+if err := VerifyBlockHash(encoded, wrong); !errors.Is(err, ErrBlockHashMismatch) {
+t.Fatalf("expected ErrBlockHashMismatch, got %v", err)
+}
+}
+
+func TestVerifyBlockHashNilOrEmptyExpectedFails(t *testing.T) {
+b := validOneChunkEncodedBlock()
+encoded, err := EncodeBlock(b)
+if err != nil {
+t.Fatalf("encode: %v", err)
+}
+for _, tc := range [][]byte{nil, {}} {
+if err := VerifyBlockHash(encoded, tc); !errors.Is(err, ErrBlockHashExpectedNil) {
+t.Fatalf("expected ErrBlockHashExpectedNil, got %v", err)
+}
+}
+}

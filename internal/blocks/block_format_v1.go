@@ -1,6 +1,7 @@
 package blocks
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -29,6 +30,8 @@ var (
 	ErrBlockFormatInvalidLayout = errors.New("block format: invalid table/payload layout")
 	ErrBlockFormatInvalidCount  = errors.New("block format: invalid chunk_count")
 	ErrBlockFormatEmptyBlock    = errors.New("block format: empty block is not allowed")
+	ErrBlockHashMismatch        = errors.New("block format: hash mismatch")
+	ErrBlockHashExpectedNil     = errors.New("block format: expected hash must not be nil or empty")
 	ErrNilEncodedBlock          = errors.New("block format: nil encoded block")
 )
 
@@ -137,6 +140,20 @@ func EncodeBlock(b *EncodedBlock) ([]byte, error) {
 
 	copy(encoded[offset:], b.Payload)
 	return encoded, nil
+}
+
+// VerifyBlockHash verifies that the SHA-256 hash of encoded matches expected.
+// Returns ErrBlockHashExpectedNil if expected is nil or empty.
+// Returns ErrBlockHashMismatch (wrapping details) if hashes do not match.
+func VerifyBlockHash(encoded []byte, expected []byte) error {
+	if len(expected) == 0 {
+		return ErrBlockHashExpectedNil
+	}
+	actual := ComputeBlockHash(encoded)
+	if !bytes.Equal(actual, expected) {
+		return fmt.Errorf("%w: got %x want %x", ErrBlockHashMismatch, actual, expected)
+	}
+	return nil
 }
 
 // ComputeBlockHash returns block hash over plaintext encoded block bytes.
