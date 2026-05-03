@@ -2,11 +2,12 @@ package blocks
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
 func TestBlockBuilderBuildMultiChunk(t *testing.T) {
-	var b BlockBuilder
+	b := NewBlockBuilder(64)
 
 	if err := b.AddChunk(11, []byte("hello")); err != nil {
 		t.Fatalf("add first chunk: %v", err)
@@ -58,9 +59,76 @@ func TestBlockBuilderBuildMultiChunk(t *testing.T) {
 }
 
 func TestBlockBuilderBuildEmpty(t *testing.T) {
-	var b BlockBuilder
+	b := NewBlockBuilder(64)
 	_, _, err := b.Build()
 	if err == nil {
 		t.Fatal("expected build empty block to fail")
+	}
+}
+
+func TestBlockBuilderCanFitAndAddRules(t *testing.T) {
+	b := NewBlockBuilder(8)
+
+	if !b.CanFit(8) {
+		t.Fatal("expected empty builder to fit exact target-size chunk")
+	}
+	if !b.CanFit(9) {
+		t.Fatal("expected empty builder to allow oversized chunk to be written alone")
+	}
+
+	if err := b.Add(PendingChunk{ChunkID: 1, Data: []byte("abc"), Size: 3}); err != nil {
+		t.Fatalf("add first chunk: %v", err)
+	}
+	if b.CanFit(9) {
+		t.Fatal("did not expect oversized chunk to fit non-empty builder")
+	}
+	if err := b.Add(PendingChunk{ChunkID: 2, Data: []byte("012345678"), Size: 9}); !errors.Is(err, ErrBlockBuilderCannotFit) {
+		t.Fatalf("expected ErrBlockBuilderCannotFit, got: %v", err)
+	}
+}
+
+func TestBlockBuilderRejectsZeroSizeChunk(t *testing.T) {
+	b := NewBlockBuilder(32)
+	err := b.Add(PendingChunk{ChunkID: 1, Data: []byte{}, Size: 0})
+	if !errors.Is(err, ErrBlockBuilderZeroChunkSize) {
+		t.Fatalf("expected ErrBlockBuilderZeroChunkSize, got: %v", err)
+	}
+}
+
+func TestBlockBuilderOversizedChunkAlone(t *testing.T) {
+	b := NewBlockBuilder(4)
+	err := b.Add(PendingChunk{ChunkID: 1, Data: []byte("oversized"), Size: int64(len("oversized"))})
+	if err != nil {
+		t.Fatalf("expected oversized chunk to be allowed when builder empty, got: %v", err)
+	}
+
+	enc, _, err := b.Build()
+	if err != nil {
+		t.Fatalf("build oversized-alone block: %v", err)
+	}
+	if enc.Header.ChunkCount != 1 {
+		t.Fatalf("expected one chunk in oversized-alone block, got %d", enc.Header.ChunkCount)
+	}
+	if string(enc.Payload) != "oversized" {
+		t.Fatalf("unexpected payload: got %q", string(enc.Payload))
+	}
+}
+
+func TestBlockBuilderReset(t *testing.T) {
+	b := NewBlockBuilder(64)
+	if err := b.Add(PendingChunk{ChunkID: 1, Data: []byte("abc"), Size: 3}); err != nil {
+		t.Fatalf("add before reset: %v", err)
+	}
+	if b.Empty() {
+		t.Fatal("builder should be non-empty after Add")
+	}
+
+	b.Reset()
+	if !b.Empty() {
+		t.Fatal("builder should be empty after Reset")
+	}
+
+	if err := b.Add(PendingChunk{ChunkID: 2, Data: []byte("xy"), Size: 2}); err != nil {
+		t.Fatalf("add after reset: %v", err)
 	}
 }

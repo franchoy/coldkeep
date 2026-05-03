@@ -3,26 +3,106 @@ package blocks
 import "errors"
 
 var ErrBlockBuilderSizeOverflow = errors.New("block builder: size overflow")
+var ErrBlockBuilderInvalidTargetSize = errors.New("block builder: invalid target size")
+var ErrBlockBuilderZeroChunkSize = errors.New("block builder: zero-size chunk is not allowed")
+var ErrBlockBuilderChunkSizeMismatch = errors.New("block builder: chunk size does not match data length")
+var ErrBlockBuilderCannotFit = errors.New("block builder: chunk does not fit current block")
 
-// BlockBuilder incrementally accumulates chunk data for one v1 encoded block.
-// MaxBlockSize enforcement is intentionally deferred to higher-level packing
-// policy in later phases.
+// PendingChunk is one chunk candidate waiting to be packed into a block.
+// Hash contains the chunk identity hash over plaintext bytes.
+type PendingChunk struct {
+	ChunkID int64
+	Hash    []byte
+	Data    []byte
+	Size    int64
+}
+
+// BlockBuilder incrementally accumulates pending chunks for one packed block.
+// Packing is deterministic: insertion order defines entry order.
 type BlockBuilder struct {
-	chunks [][]byte
-	ids    []uint64
-	size   int64
+	targetSize int64
+	chunks     []PendingChunk
+	size       int64
+}
+
+// NewBlockBuilder creates a builder with the given target block size.
+func NewBlockBuilder(targetSize int64) *BlockBuilder {
+	return &BlockBuilder{targetSize: targetSize}
+}
+
+// CanFit reports whether a chunk of given size can be added without splitting.
+// Oversized chunks are allowed only when the builder is empty so they can be
+// emitted alone after a caller flushes any current block.
+func (b *BlockBuilder) CanFit(size int64) bool {
+	if b == nil || size <= 0 || b.targetSize <= 0 {
+		return false
+	}
+	if size > b.targetSize {
+		return b.Empty()
+	}
+	if b.size > (1<<63-1)-size {
+		return false
+	}
+	return b.size+size <= b.targetSize
+}
+
+// Add appends one pending chunk to the current block candidate.
+func (b *BlockBuilder) Add(chunk PendingChunk) error {
+	if b == nil {
+		return ErrBlockBuilderInvalidTargetSize
+	}
+	if b.targetSize <= 0 {
+		return ErrBlockBuilderInvalidTargetSize
+	}
+	if chunk.Size <= 0 {
+		return ErrBlockBuilderZeroChunkSize
+	}
+	if int64(len(chunk.Data)) != chunk.Size {
+		return ErrBlockBuilderChunkSizeMismatch
+	}
+	if b.size > (1<<63-1)-chunk.Size {
+		return ErrBlockBuilderSizeOverflow
+	}
+	if !b.CanFit(chunk.Size) {
+		return ErrBlockBuilderCannotFit
+	}
+
+	b.chunks = append(b.chunks, PendingChunk{
+		ChunkID: chunk.ChunkID,
+		Hash:    append([]byte(nil), chunk.Hash...),
+		Data:    append([]byte(nil), chunk.Data...),
+		Size:    chunk.Size,
+	})
+	b.size += chunk.Size
+	return nil
+}
+
+// Empty reports whether there are no pending chunks.
+func (b *BlockBuilder) Empty() bool {
+	return b == nil || len(b.chunks) == 0
+}
+
+// Reset clears current pending chunks so the builder can start a new block.
+func (b *BlockBuilder) Reset() {
+	if b == nil {
+		return
+	}
+	b.chunks = b.chunks[:0]
+	b.size = 0
 }
 
 // AddChunk appends one chunk and updates aggregate plaintext size.
+// Compatibility helper while write path migrates to PendingChunk API.
 func (b *BlockBuilder) AddChunk(id uint64, data []byte) error {
-	if int64(len(data)) < 0 || b.size > (1<<63-1)-int64(len(data)) {
-		return ErrBlockBuilderSizeOverflow
+	if b == nil {
+		return ErrBlockBuilderInvalidTargetSize
 	}
-
-	b.ids = append(b.ids, id)
-	b.chunks = append(b.chunks, append([]byte(nil), data...))
-	b.size += int64(len(data))
-	return nil
+	if b.targetSize <= 0 {
+		// Backward-compatible fallback for existing tests/callers:
+		// when target is unset, treat it as unlimited.
+		b.targetSize = 1<<63 - 1
+	}
+	return b.Add(PendingChunk{ChunkID: int64(id), Data: data, Size: int64(len(data))})
 }
 
 // Build constructs encoded block in-memory representation plus mandatory
@@ -35,13 +115,13 @@ func (b *BlockBuilder) Build() (*EncodedBlock, []byte, error) {
 	for i := range b.chunks {
 		chunk := b.chunks[i]
 		entry := ChunkEntry{
-			ChunkID: b.ids[i],
+			ChunkID: uint64(chunk.ChunkID),
 			Offset:  offset,
-			Size:    uint64(len(chunk)),
+			Size:    uint64(chunk.Size),
 		}
 		entries = append(entries, entry)
 		offset += entry.Size
-		payload = append(payload, chunk...)
+		payload = append(payload, chunk.Data...)
 	}
 
 	serialized, err := EncodePackedBlockV1(entries, payload)
