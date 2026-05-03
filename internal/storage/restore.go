@@ -108,7 +108,7 @@ type restoreChunk struct {
 	PlaintextSize int64
 	// StoredSize: compressed/encrypted size on disk
 	StoredSize int64
-	// Offset: byte offset into container file
+	// Offset: byte offset into container file (v1.7 legacy) OR byte offset within decoded block (v1.8)
 	Offset int64
 	// Codec: block encoding (e.g., "aesgcm", "plain")
 	Codec string
@@ -124,6 +124,8 @@ type restoreChunk struct {
 	ContainerMaxSize int64
 	// Status: chunk status (should be ChunkCompleted)
 	Status string
+	// BlockID: v1.8 block ID (0 for v1.7 legacy)
+	BlockID int64
 }
 
 // restoreRecipe represents a complete restore plan for one logical file.
@@ -827,32 +829,63 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 
 	// ================================================================
-	// STAGE 5b: Restore chunk by chunk (ordered, sequential)
+	// STAGE 5b: v1.8 Block-based restore flow
 	// ================================================================
-	// CRITICAL: This loop iterates pre-loaded recipe.Chunks
-	// - Recipe was loaded ONCE in pinLogicalFileRestoreChunksWithContext
-	// - Loop performs 0 additional DB queries
-	// - All per-file state (order, offsets, hashes, codec) pre-fetched
-	// - Performance: O(n) file I/O + CPU only, O(1) DB operations per file
+	// NEW MODEL: Group chunks by block_id and read blocks once
+	// CRITICAL: Preserve output order by chunk_index
 	//
-	// For each pinned chunk (in order):
-	//   - Validate: chunk_order is monotonically contiguous
-	//   - Locate: container file + block offset
-	//   - Read: fetch compressed block from container
-	//   - Decode: decompress/decrypt using codec + nonce
-	//   - Verify: SHA-256(plaintext) == expected_chunk_hash
-	//   - Append: plaintext bytes to temp output
-	//   - Update: running file hash
+	// 1. Load file_chunk ordered
+	// 2. Resolve each chunk → segment (determines block_id)
+	// 3. Group by block_id
+	// 4. For each block:
+	//    - read block once
+	//    - slice needed chunks
+	//    - emit in correct order
 	//
-	// Error handling: skip unreliable chunks but fail if none succeeded
-	// and file is not empty.
+	// IMPORTANT: Output MUST follow chunk_index order even if grouped by block
+	// Never reorder output by block
 	//
+	// Initialize RestoreService for v1.8 block-based reads
+	restoreService := &RestoreService{
+		ChunkResolver: NewDualCompatChunkResolver(dbconn),
+		BlockReader:   NewStorageBlockReader(dbconn, containersDir),
+	}
+
+	// Group chunks by BlockID for efficient block reading
+	// Map: BlockID -> list of chunk indices with that BlockID
+	blockToChunkIndices := make(map[int64][]int)
+	chunkSegments := make([]*blocks.ChunkSegment, len(recipe.Chunks))
+
+	// Resolve all chunks to their block segments
+	for i, chunk := range recipe.Chunks {
+		// Resolve chunk location (determines BlockID for v1.8)
+		seg, err := restoreService.ResolveChunkLocation(ctx, chunk.ID)
+		if err != nil {
+			log.Printf("event=restore_chunk_resolution_failed action=resolve chunk_id=%d file_id=%d err=%v", chunk.ID, fileID, err)
+			continue
+		}
+		if seg == nil {
+			log.Printf("event=restore_chunk_not_found action=resolve chunk_id=%d file_id=%d", chunk.ID, fileID)
+			continue
+		}
+
+		chunkSegments[i] = seg
+		// Group by BlockID
+		blockToChunkIndices[seg.BlockID] = append(blockToChunkIndices[seg.BlockID], i)
+	}
+
+	// Read blocks and extract chunks, emitting in original chunk index order
 	var expectedOrder int64 = 0
 	validChunks := 0
 	var firstRestoreError error
 	const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	isExpectedEmptyFile := len(recipe.Chunks) == 0 && recipe.ExpectedHash == emptyFileSHA256
-	for _, chunk := range recipe.Chunks {
+
+	// Cache of BlockID -> decoded block bytes to avoid repeated reads
+	blockCache := make(map[int64][]byte)
+
+	// Process chunks in original order to preserve output sequence
+	for chunkIdx, chunk := range recipe.Chunks {
 		if err := ctx.Err(); err != nil {
 			return RestoreFileResult{}, err
 		}
@@ -861,9 +894,10 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			continue // skip incomplete chunks (should not happen)
 		}
 
-		// If the container is missing (quarantined), skip this chunk but continue restoring others
-		if chunk.ContainerName == "" {
-			log.Printf("event=restore_skip_chunk action=missing_container file_id=%d chunk_id=%d", fileID, chunk.ID)
+		// Get chunk segment (resolved block placement)
+		seg := chunkSegments[chunkIdx]
+		if seg == nil {
+			log.Printf("event=restore_skip_chunk action=segment_not_resolved file_id=%d chunk_id=%d", fileID, chunk.ID)
 			continue
 		}
 
@@ -874,100 +908,184 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 		expectedOrder++
 
-		// Phase 6 Step 6: Get container reader from cache (reduces open/close overhead)
-		containerPath := filepath.Join(containersDir, chunk.ContainerName)
-		filecontainer, err := readerCache.GetReader(containerPath, chunk.ContainerMaxSize)
-		if err != nil {
-			log.Printf("event=restore_skip_chunk action=container_read_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
-			continue
-		}
+		// v1.8 block-based path: Read block once and slice chunk from it
+		if seg.BlockID > 0 {
+			// Check if we've already read this block
+			blockBytes, cachedOK := blockCache[seg.BlockID]
+			if !cachedOK {
+				// Block not yet cached: read it now
+				block, err := restoreService.BlockReader.ReadBlock(ctx, seg.BlockID)
+				if err != nil {
+					log.Printf("event=restore_skip_chunk action=block_read_failed file_id=%d chunk_id=%d block_id=%d err=%v", fileID, chunk.ID, seg.BlockID, err)
+					if firstRestoreError == nil {
+						firstRestoreError = err
+					}
+					continue
+				}
 
-		// TEST HOOK: assert state just before first payload read.
-		if TestRestoreBeforeChunkReadHook != nil {
-			if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
-				return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
+				if block == nil || block.Payload == nil {
+					log.Printf("event=restore_skip_chunk action=block_payload_nil file_id=%d chunk_id=%d block_id=%d", fileID, chunk.ID, seg.BlockID)
+					continue
+				}
+
+				// Cache the block bytes
+				blockBytes = block.Payload
+				blockCache[seg.BlockID] = blockBytes
+
+				// TEST HOOK: assert state just before first block read.
+				if TestRestoreBeforeChunkReadHook != nil {
+					if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+						return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
+					}
+				}
 			}
-		}
 
-		// Read block payload
-		payload, err := container.ReadPayloadAt(filecontainer, chunk.Offset, chunk.StoredSize)
-		if err != nil {
-			log.Printf("event=restore_skip_chunk action=read_payload_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
-			continue
-		}
+			// Slice chunk from the block payload
+			if seg.Offset+seg.Size > int64(len(blockBytes)) {
+				log.Printf("event=restore_skip_chunk action=segment_out_of_bounds file_id=%d chunk_id=%d block_id=%d offset=%d size=%d block_size=%d", fileID, chunk.ID, seg.BlockID, seg.Offset, seg.Size, len(blockBytes))
+				continue
+			}
 
-		// Use cached transformer to avoid repeated allocations
-		codec := blocks.Codec(chunk.Codec)
-		transformer, ok := transformerCache[codec]
-		if !ok {
-			var err error
-			transformer, err = blocks.GetBlockTransformer(codec)
+			plaintext := blockBytes[seg.Offset : seg.Offset+seg.Size]
+
+			// Validate plaintext size
+			if int64(len(plaintext)) != chunk.PlaintextSize {
+				sizeErr := fmt.Errorf("plaintext size mismatch for chunk %d: expected %d got %d", chunk.ID, chunk.PlaintextSize, len(plaintext))
+				log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunk.ID, chunk.PlaintextSize, len(plaintext))
+				if firstRestoreError == nil {
+					firstRestoreError = sizeErr
+				}
+				continue
+			}
+
+			// Validate hashes
+			sum := sha256.Sum256(plaintext)
+			gotHash := hex.EncodeToString(sum[:])
+			if gotHash != chunk.Hash {
+				hashErr := fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunk.Hash, gotHash)
+				log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunk.ID, chunk.Hash, gotHash)
+				if firstRestoreError == nil {
+					firstRestoreError = hashErr
+				}
+				continue
+			}
+
+			// Write to buffered output
+			if _, err := bufw.Write(plaintext); err != nil {
+				log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
+				continue
+			}
+
+			// Update file hash
+			if _, err := hasher.Write(plaintext); err != nil {
+				log.Printf("event=restore_skip_chunk action=hash_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
+				continue
+			}
+			validChunks++
+
+		} else {
+			// v1.7 legacy path (BlockID == 0)
+			// If the container is missing (quarantined), skip this chunk but continue restoring others
+			if chunk.ContainerName == "" {
+				log.Printf("event=restore_skip_chunk action=missing_container file_id=%d chunk_id=%d", fileID, chunk.ID)
+				continue
+			}
+
+			// Phase 6 Step 6: Get container reader from cache (reduces open/close overhead)
+			containerPath := filepath.Join(containersDir, chunk.ContainerName)
+			filecontainer, err := readerCache.GetReader(containerPath, chunk.ContainerMaxSize)
 			if err != nil {
-				log.Printf("event=restore_skip_chunk action=transformer_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunk.ID, chunk.Codec, err)
+				log.Printf("event=restore_skip_chunk action=container_read_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
+				continue
+			}
+
+			// TEST HOOK: assert state just before first payload read.
+			if TestRestoreBeforeChunkReadHook != nil {
+				if hookErr := TestRestoreBeforeChunkReadHook(dbconn, chunk.ID); hookErr != nil {
+					return RestoreFileResult{}, fmt.Errorf("test hook before chunk read: %w", hookErr)
+				}
+			}
+
+			// Read block payload
+			payload, err := container.ReadPayloadAt(filecontainer, chunk.Offset, chunk.StoredSize)
+			if err != nil {
+				log.Printf("event=restore_skip_chunk action=read_payload_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
+				continue
+			}
+
+			// Use cached transformer to avoid repeated allocations
+			codec := blocks.Codec(chunk.Codec)
+			transformer, ok := transformerCache[codec]
+			if !ok {
+				var err error
+				transformer, err = blocks.GetBlockTransformer(codec)
+				if err != nil {
+					log.Printf("event=restore_skip_chunk action=transformer_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunk.ID, chunk.Codec, err)
+					if firstRestoreError == nil {
+						firstRestoreError = err
+					}
+					continue
+				}
+				transformerCache[codec] = transformer
+			}
+
+			plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
+				ChunkHash: chunk.Hash,
+				Descriptor: blocks.Descriptor{
+					ChunkID:       chunk.ID,
+					Codec:         codec,
+					FormatVersion: chunk.FormatVersion,
+					PlaintextSize: chunk.PlaintextSize,
+					StoredSize:    chunk.StoredSize,
+					Nonce:         chunk.Nonce,
+					ContainerID:   chunk.ContainerID,
+					BlockOffset:   chunk.Offset,
+				},
+				Payload: payload,
+			})
+			if err != nil {
+				log.Printf("event=restore_skip_chunk action=decode_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunk.ID, chunk.Codec, err)
 				if firstRestoreError == nil {
 					firstRestoreError = err
 				}
 				continue
 			}
-			transformerCache[codec] = transformer
-		}
 
-		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-			ChunkHash: chunk.Hash,
-			Descriptor: blocks.Descriptor{
-				ChunkID:       chunk.ID,
-				Codec:         codec,
-				FormatVersion: chunk.FormatVersion,
-				PlaintextSize: chunk.PlaintextSize,
-				StoredSize:    chunk.StoredSize,
-				Nonce:         chunk.Nonce,
-				ContainerID:   chunk.ContainerID,
-				BlockOffset:   chunk.Offset,
-			},
-			Payload: payload,
-		})
-		if err != nil {
-			log.Printf("event=restore_skip_chunk action=decode_failed file_id=%d chunk_id=%d codec=%s err=%v", fileID, chunk.ID, chunk.Codec, err)
-			if firstRestoreError == nil {
-				firstRestoreError = err
+			// Validate plaintext size
+			if int64(len(plaintext)) != chunk.PlaintextSize {
+				sizeErr := fmt.Errorf("plaintext size mismatch for chunk %d: expected %d got %d", chunk.ID, chunk.PlaintextSize, len(plaintext))
+				log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunk.ID, chunk.PlaintextSize, len(plaintext))
+				if firstRestoreError == nil {
+					firstRestoreError = sizeErr
+				}
+				continue
 			}
-			continue
-		}
 
-		// Validate plaintext size
-		if int64(len(plaintext)) != chunk.PlaintextSize {
-			sizeErr := fmt.Errorf("plaintext size mismatch for chunk %d: expected %d got %d", chunk.ID, chunk.PlaintextSize, len(plaintext))
-			log.Printf("event=restore_skip_chunk action=plaintext_size_mismatch file_id=%d chunk_id=%d expected=%d got=%d", fileID, chunk.ID, chunk.PlaintextSize, len(plaintext))
-			if firstRestoreError == nil {
-				firstRestoreError = sizeErr
+			// Validate hashes (DB hash and on-disk record hash)
+			sum := sha256.Sum256(plaintext)
+			gotHash := hex.EncodeToString(sum[:])
+			if gotHash != chunk.Hash {
+				hashErr := fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunk.Hash, gotHash)
+				log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunk.ID, chunk.Hash, gotHash)
+				if firstRestoreError == nil {
+					firstRestoreError = hashErr
+				}
+				continue
 			}
-			continue
-		}
 
-		// Validate hashes (DB hash and on-disk record hash)
-		sum := sha256.Sum256(plaintext)
-		gotHash := hex.EncodeToString(sum[:])
-		if gotHash != chunk.Hash {
-			hashErr := fmt.Errorf("restored chunk hash mismatch: expected %s got %s", chunk.Hash, gotHash)
-			log.Printf("event=restore_skip_chunk action=hash_mismatch file_id=%d chunk_id=%d expected=%s got=%s", fileID, chunk.ID, chunk.Hash, gotHash)
-			if firstRestoreError == nil {
-				firstRestoreError = hashErr
+			// Write to buffered output
+			if _, err := bufw.Write(plaintext); err != nil {
+				log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
+				continue
 			}
-			continue
-		}
 
-		// Write to buffered output
-		if _, err := bufw.Write(plaintext); err != nil {
-			log.Printf("event=restore_skip_chunk action=write_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
-			continue
+			// Update file hash
+			if _, err := hasher.Write(plaintext); err != nil {
+				log.Printf("event=restore_skip_chunk action=hash_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
+				continue
+			}
+			validChunks++
 		}
-
-		// Update file hash
-		if _, err := hasher.Write(plaintext); err != nil {
-			log.Printf("event=restore_skip_chunk action=hash_failed file_id=%d chunk_id=%d err=%v", fileID, chunk.ID, err)
-			continue
-		}
-		validChunks++
 	}
 
 	if validChunks == 0 {
