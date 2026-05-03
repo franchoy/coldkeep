@@ -1087,13 +1087,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 				}
 			}
 
-			// Slice chunk from the block payload
-			if seg.Offset+seg.Size > int64(len(cachedBlock.Payload)) {
-				log.Printf("event=restore_skip_chunk action=segment_out_of_bounds file_id=%d chunk_id=%d block_id=%d offset=%d size=%d block_size=%d", fileID, chunk.ID, seg.BlockID, seg.Offset, seg.Size, len(cachedBlock.Payload))
+			// Step 7: Integrate chunk slicing from decoded block payload.
+			plaintext, err := blocks.SliceChunkFromPayload(cachedBlock.Payload, blocks.ChunkEntry{
+				Offset: uint64(seg.Offset),
+				Size:   uint64(seg.Size),
+			})
+			if err != nil {
+				log.Printf("event=restore_skip_chunk action=segment_out_of_bounds file_id=%d chunk_id=%d block_id=%d offset=%d size=%d block_size=%d err=%v", fileID, chunk.ID, seg.BlockID, seg.Offset, seg.Size, len(cachedBlock.Payload), err)
+				if firstRestoreError == nil {
+					firstRestoreError = err
+				}
 				continue
 			}
-
-			plaintext := cachedBlock.Payload[seg.Offset : seg.Offset+seg.Size]
 
 			// Validate plaintext size
 			if int64(len(plaintext)) != chunk.PlaintextSize {
