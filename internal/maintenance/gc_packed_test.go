@@ -620,3 +620,101 @@ func TestContainerHasLivePhysicalUnitsSupportsLegacyPackedAndMixed(t *testing.T)
 		t.Fatal("expected mixed container to be live")
 	}
 }
+
+func TestContainerHasLivePhysicalUnitsFalseWhenNoLiveLegacyOrPacked(t *testing.T) {
+	dbconn := openPackedGCUnitDB(t)
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('dead-container.bin', 1, 0, 64, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerRes.LastInsertId()
+
+	deadChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('dead-only', 64, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert dead chunk: %v", err)
+	}
+	deadChunkID, _ := deadChunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 64, 64, ?, 0)`, deadChunkID, containerID); err != nil {
+		t.Fatalf("insert dead legacy block: %v", err)
+	}
+
+	deadPackedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'66')`, containerID)
+	if err != nil {
+		t.Fatalf("insert dead packed block: %v", err)
+	}
+	deadPackedBlockID, _ := deadPackedBlockRes.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 64)`, deadChunkID, deadPackedBlockID); err != nil {
+		t.Fatalf("insert dead packed ref: %v", err)
+	}
+
+	liveLegacyContainers, err := LoadLiveLegacyContainerIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLiveLegacyContainerIDs: %v", err)
+	}
+	livePackedBlocks, err := LoadLivePackedBlockIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLivePackedBlockIDs: %v", err)
+	}
+	liveUnits := livePhysicalUnits{
+		LegacyLiveContainerIDs: liveLegacyContainers,
+		PackedLiveBlockIDs:     livePackedBlocks,
+	}
+
+	hasLiveUnits, err := containerHasLivePhysicalUnits(context.Background(), dbconn, containerID, liveUnits)
+	if err != nil {
+		t.Fatalf("containerHasLivePhysicalUnits: %v", err)
+	}
+	if hasLiveUnits {
+		t.Fatal("expected container to be deletable (no live legacy refs and no live packed blocks)")
+	}
+}
+
+func TestContainerHasLivePhysicalUnitsUsesLivePackedBlockIDsForContainerRetention(t *testing.T) {
+	dbconn := openPackedGCUnitDB(t)
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('packed-retained-container.bin', 1, 0, 64, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerRes.LastInsertId()
+
+	liveChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('packed-live-only', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live chunk: %v", err)
+	}
+	liveChunkID, _ := liveChunkRes.LastInsertId()
+
+	packedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'77')`, containerID)
+	if err != nil {
+		t.Fatalf("insert packed block: %v", err)
+	}
+	packedBlockID, _ := packedBlockRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 64)`, liveChunkID, packedBlockID); err != nil {
+		t.Fatalf("insert packed ref: %v", err)
+	}
+
+	// Build live units from source-of-truth loaders (equivalent to GC runtime behavior).
+	liveLegacyContainers, err := LoadLiveLegacyContainerIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLiveLegacyContainerIDs: %v", err)
+	}
+	livePackedBlocks, err := LoadLivePackedBlockIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLivePackedBlockIDs: %v", err)
+	}
+	liveUnits := livePhysicalUnits{
+		LegacyLiveContainerIDs: liveLegacyContainers,
+		PackedLiveBlockIDs:     livePackedBlocks,
+	}
+
+	hasLiveUnits, err := containerHasLivePhysicalUnits(context.Background(), dbconn, containerID, liveUnits)
+	if err != nil {
+		t.Fatalf("containerHasLivePhysicalUnits: %v", err)
+	}
+	if !hasLiveUnits {
+		t.Fatal("expected container retained because it contains a live storage_block")
+	}
+}
