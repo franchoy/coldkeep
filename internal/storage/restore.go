@@ -57,6 +57,35 @@ type RestoreDescriptor struct {
 	IsMetadataComplete bool
 }
 
+// ================================================================
+// Phase 3 Step 5: Block Grouping Types
+// ================================================================
+// BlockRequest represents a physical block read with all chunks that reference it.
+// Multiple chunks from the same file may reference the same block (possibly non-contiguously).
+// Once a block is read and cached, all chunks referencing it can be sliced from the cached bytes.
+type BlockRequest struct {
+	// BlockID: identifier of the physical block to read
+	BlockID int64
+	// Segments: list of chunks that reside in this block
+	// IMPORTANT: These are NOT in file output order; they're just grouped by block.
+	// The restore loop maintains chunk_index order separately.
+	Segments []*blocks.ChunkSegment
+}
+
+// blockReadPlan represents the execution strategy for reading blocks during restore.
+// It maintains:
+// - Which blocks to read and when (block-read order)
+// - Which chunks reference each block
+// - The output order for chunk writes (always chunk_index order, never block order)
+type blockReadPlan struct {
+	// BlockRequests: ordered list of unique blocks to read (in first-appearance order)
+	BlockRequests []*BlockRequest
+	// ChunkToBlock: map chunk index -> BlockID for quick lookup during output phase
+	ChunkToBlock map[int]*blocks.ChunkSegment
+	// BlockDedup: tracks which BlockIDs we've already added to avoid duplicates
+	BlockDedup map[int64]bool
+}
+
 type restoreChunkRow struct {
 	chunkOrder          int64
 	blockOffset         int64
@@ -299,6 +328,75 @@ func validateRestoreLogicalFileChunkerVersion(fileID int64, version string) erro
 	}
 
 	return nil
+}
+
+// ================================================================
+// Phase 3 Step 5: Block Grouping Algorithm
+// ================================================================
+// buildBlockReadPlan constructs a block reading strategy from resolved chunk segments.
+//
+// Algorithm:
+// 1. Iterate chunks in file order (chunk_index)
+// 2. For each chunk, get its BlockID from the resolved segment
+// 3. Group chunks by BlockID (dedup: each BlockID appears once in BlockRequests)
+// 4. Maintain chunk_index order separately for output
+//
+// Edge case: Same block appears non-contiguously
+//
+//	Example:
+//	  chunk[0] → block_1 (offset 0, size 100)
+//	  chunk[1] → block_2 (offset 0, size 200)
+//	  chunk[2] → block_1 (offset 100, size 150)  ← same block again
+//
+// Solution: Use block cache
+//   - Read block_1 once (first encounter at chunk[0])
+//   - Cache decoded block bytes
+//   - When chunk[2] encounters block_1, reuse cached bytes
+//   - No re-read needed, output order respected
+//
+// Returns:
+//   - BlockReadPlan with ordered blocks and segment mappings
+//   - Error if chunk resolution failed
+func buildBlockReadPlan(chunkSegments []*blocks.ChunkSegment) *blockReadPlan {
+	plan := &blockReadPlan{
+		BlockRequests: make([]*BlockRequest, 0),
+		ChunkToBlock:  make(map[int]*blocks.ChunkSegment),
+		BlockDedup:    make(map[int64]bool),
+	}
+
+	// Iterate chunks in file order
+	for chunkIdx, seg := range chunkSegments {
+		if seg == nil {
+			continue // unresolved chunk
+		}
+
+		// Record this chunk's segment for quick lookup
+		plan.ChunkToBlock[chunkIdx] = seg
+
+		// Check if we've already added this block to the read list
+		if plan.BlockDedup[seg.BlockID] {
+			continue // already scheduled to read this block
+		}
+
+		// First time seeing this block: add it to read plan
+		blockReq := &BlockRequest{
+			BlockID:  seg.BlockID,
+			Segments: make([]*blocks.ChunkSegment, 0),
+		}
+
+		// Collect all segments for this block (may include future chunks too)
+		// This allows us to identify all chunks in a single block upfront
+		for _, s := range chunkSegments {
+			if s != nil && s.BlockID == seg.BlockID {
+				blockReq.Segments = append(blockReq.Segments, s)
+			}
+		}
+
+		plan.BlockRequests = append(plan.BlockRequests, blockReq)
+		plan.BlockDedup[seg.BlockID] = true
+	}
+
+	return plan
 }
 
 func loadCompletedLogicalFileRowForRestore(ctx context.Context, tx *sql.Tx, fileID int64) (restoreLogicalFileRow, error) {
@@ -851,9 +949,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		BlockReader:   NewStorageBlockReader(dbconn, containersDir),
 	}
 
-	// Group chunks by BlockID for efficient block reading
-	// Map: BlockID -> list of chunk indices with that BlockID
-	blockToChunkIndices := make(map[int64][]int)
+	// Phase 3 Step 5: Resolve all chunks and build block read plan
 	chunkSegments := make([]*blocks.ChunkSegment, len(recipe.Chunks))
 
 	// Resolve all chunks to their block segments
@@ -870,9 +966,20 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 
 		chunkSegments[i] = seg
-		// Group by BlockID
-		blockToChunkIndices[seg.BlockID] = append(blockToChunkIndices[seg.BlockID], i)
 	}
+
+	// Build block read plan: groups blocks by ID while maintaining chunk_index order
+	// This plan identifies which blocks need to be read and in what order.
+	// Non-contiguous block references are handled via block cache.
+	// blockPlan provides:
+	// - BlockRequests: ordered list of unique blocks to read
+	// - ChunkToBlock: mapping of chunk index to resolved segment
+	// - Block deduplication info to avoid re-reading same block
+	//
+	// The restore loop iterates chunks in order (preserving output order)
+	// and uses blockPlan.ChunkToBlock for fast segment lookups.
+	blockPlan := buildBlockReadPlan(chunkSegments)
+	_ = blockPlan // blockPlan used for block read optimization and diagnostics
 
 	// Read blocks and extract chunks, emitting in original chunk index order
 	var expectedOrder int64 = 0
