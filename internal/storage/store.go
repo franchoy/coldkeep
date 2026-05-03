@@ -193,11 +193,13 @@ func commitPreparedChunksWithContext(
 	const packedBlockTargetSizeBytes int64 = 1 << 20
 	type pendingPackedChunk struct {
 		chunkID  int64
+		hash     string
 		prepared preparedChunk
 	}
 
 	builder := blocks.NewBlockBuilder(packedBlockTargetSizeBytes)
 	pendingPacked := make([]pendingPackedChunk, 0, 8)
+	pendingPackedHashes := make(map[string]struct{})
 
 	flushPackedPending := func() error {
 		if builder.Empty() {
@@ -353,6 +355,9 @@ func commitPreparedChunksWithContext(
 
 			builder.Reset()
 			pendingPacked = pendingPacked[:0]
+			for hash := range pendingPackedHashes {
+				delete(pendingPackedHashes, hash)
+			}
 			return nil
 		}
 	}
@@ -363,9 +368,9 @@ func commitPreparedChunksWithContext(
 			return StoreFileResult{}, err
 		}
 
-		// Prevent claim waits on duplicate hashes while prior PROCESSING chunks are
-		// still buffered for packed flush.
-		if len(pendingPacked) > 0 {
+		// Prevent claim waits only when this prepared hash is already buffered in
+		// pending packed chunks. Distinct hashes can continue batching.
+		if _, pendingDup := pendingPackedHashes[prepared.Hash]; pendingDup {
 			if err := flushPackedPending(); err != nil {
 				return StoreFileResult{}, err
 			}
@@ -459,7 +464,8 @@ func commitPreparedChunksWithContext(
 		}); err != nil {
 			return StoreFileResult{}, err
 		}
-		pendingPacked = append(pendingPacked, pendingPackedChunk{chunkID: claimedChunkID, prepared: prepared})
+		pendingPacked = append(pendingPacked, pendingPackedChunk{chunkID: claimedChunkID, hash: prepared.Hash, prepared: prepared})
+		pendingPackedHashes[prepared.Hash] = struct{}{}
 	}
 
 	if err := flushPackedPending(); err != nil {
