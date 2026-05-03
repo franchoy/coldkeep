@@ -41,6 +41,32 @@ func verifyChunkReachability(dbconn *sql.DB) error {
 	if err := runPhysicalIntegrityChecks(dbconn); err != nil {
 		return fmt.Errorf("verifyChunkReachability: %w", err)
 	}
+	if err := verifyFileChunkRelationships(dbconn); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyFileChunkRelationships(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking file_chunk -> chunk relationships...")
+
+	var missingChunkRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM file_chunk fc
+		LEFT JOIN chunk c ON c.id = fc.chunk_id
+		WHERE c.id IS NULL
+	`).Scan(&missingChunkRows); err != nil {
+		return fmt.Errorf("verifyFileChunkRelationships: query missing chunk refs: %w", err)
+	}
+	if missingChunkRows > 0 {
+		return fmt.Errorf("verifyFileChunkRelationships: file_chunk rows with missing chunk refs=%d", missingChunkRows)
+	}
+
+	log.Println(" SUCCESS ")
 	return nil
 }
 
@@ -123,8 +149,117 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 		return fmt.Errorf("verifyChunkBlockRefs: invalid chunk_block_refs ranges=%d", invalidRanges)
 	}
 
+	if err := verifyChunkPhysicalLocationRules(ctx, dbconn); err != nil {
+		return err
+	}
+
 	log.Println(" SUCCESS ")
 	return nil
+}
+
+func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error {
+	type chunkLocationShape struct {
+		chunkID    int64
+		chunkSize  int64
+		hasPacked  bool
+		legacyRows int64
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT
+			c.id,
+			c.size,
+			EXISTS(SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id) AS has_packed,
+			(SELECT COUNT(*) FROM blocks b WHERE b.chunk_id = c.id) AS legacy_rows
+		FROM chunk c
+		WHERE c.status = 'COMPLETED'
+	`)
+	if err != nil {
+		return fmt.Errorf("verifyChunkBlockRefs: query chunk location shape: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	shapes := make([]chunkLocationShape, 0)
+	for rows.Next() {
+		var s chunkLocationShape
+		if err := rows.Scan(&s.chunkID, &s.chunkSize, &s.hasPacked, &s.legacyRows); err != nil {
+			return fmt.Errorf("verifyChunkBlockRefs: scan chunk location shape: %w", err)
+		}
+		shapes = append(shapes, s)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verifyChunkBlockRefs: iterate chunk location shape: %w", err)
+	}
+
+	for _, s := range shapes {
+
+		switch {
+		case s.hasPacked && s.legacyRows == 0:
+			// Pure v1.8 mapping is valid.
+			continue
+		case !s.hasPacked && s.legacyRows == 1:
+			// Pure legacy mapping is valid.
+			continue
+		case s.hasPacked && s.legacyRows == 1:
+			ok, err := isValidMigrationCompanionMapping(ctx, dbconn, s.chunkID, s.chunkSize)
+			if err != nil {
+				return fmt.Errorf("verifyChunkBlockRefs: check migration companion for chunk %d: %w", s.chunkID, err)
+			}
+			if !ok {
+				return fmt.Errorf("verifyChunkBlockRefs: chunk %d has both packed and legacy mappings outside migration companion contract", s.chunkID)
+			}
+		default:
+			return fmt.Errorf("verifyChunkBlockRefs: chunk %d has invalid physical location shape packed=%t legacy_rows=%d", s.chunkID, s.hasPacked, s.legacyRows)
+		}
+	}
+
+	return nil
+}
+
+func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunkID, chunkSize int64) (bool, error) {
+	var blockID int64
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT block_id FROM chunk_block_refs WHERE chunk_id = $1`,
+		chunkID,
+	).Scan(&blockID); err != nil {
+		return false, err
+	}
+
+	var packedContainerID int64
+	var packedContainerOffset int64
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT container_id, container_offset FROM storage_blocks WHERE id = $1`,
+		blockID,
+	).Scan(&packedContainerID, &packedContainerOffset); err != nil {
+		return false, err
+	}
+
+	var codec string
+	var formatVersion int64
+	var plaintextSize int64
+	var storedSize int64
+	var legacyContainerID int64
+	var legacyOffset int64
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT codec, format_version, plaintext_size, stored_size, container_id, block_offset
+		 FROM blocks
+		 WHERE chunk_id = $1`,
+		chunkID,
+	).Scan(&codec, &formatVersion, &plaintextSize, &storedSize, &legacyContainerID, &legacyOffset); err != nil {
+		return false, err
+	}
+
+	if codec != "plain" || formatVersion != 1 {
+		return false, nil
+	}
+	if plaintextSize != chunkSize || storedSize != chunkSize {
+		return false, nil
+	}
+	if legacyContainerID != packedContainerID || legacyOffset != packedContainerOffset {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {

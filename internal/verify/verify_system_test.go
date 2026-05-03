@@ -18,6 +18,8 @@ func openVerifyTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
 	if err := db.RunMigrations(dbconn); err != nil {
 		_ = dbconn.Close()
 		t.Fatalf("run migrations: %v", err)
@@ -202,5 +204,116 @@ func TestVerifyRepositoryDetectsChunkBlockRefMissingStorageBlock(t *testing.T) {
 	err := VerifyRepository(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "missing storage_blocks") {
 		t.Fatalf("expected verifyChunkBlockRefs missing storage_blocks error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDetectsFileChunkMissingChunkRef(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable sqlite foreign_keys: %v", err)
+	}
+
+	var fileID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id`,
+		"missing-chunk-ref.bin",
+		int64(17),
+		strings.Repeat("a", 64),
+		filestate.LogicalFileCompleted,
+		int64(0),
+		"v1-simple-rolling",
+	).Scan(&fileID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		 VALUES ($1, $2, $3)`,
+		fileID,
+		int64(9999),
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert invalid file_chunk row: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "verifyFileChunkRelationships") || !strings.Contains(err.Error(), "missing chunk refs") {
+		t.Fatalf("expected verifyFileChunkRelationships missing chunk ref error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsInvalidDualLegacyPackedMapping(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"verify-dual-mapping.bin",
+		int64(1<<20),
+		int64(1<<20),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		strings.Repeat("b", 64),
+		int64(64),
+		filestate.ChunkCompleted,
+		int64(0),
+		int64(0),
+		int64(0),
+		"v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	var storageBlockID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', 80, 80, $1, $2, x'01')
+		 RETURNING id`,
+		containerID,
+		int64(256),
+	).Scan(&storageBlockID); err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, 0, $3)`,
+		chunkID,
+		storageBlockID,
+		int64(64),
+	); err != nil {
+		t.Fatalf("insert chunk_block_refs row: %v", err)
+	}
+
+	// Invalid dual mapping: legacy container placement doesn't match packed block placement.
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, x'', $4, $5)`,
+		chunkID,
+		int64(64),
+		int64(64),
+		containerID,
+		int64(1024),
+	); err != nil {
+		t.Fatalf("insert invalid legacy companion row: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "outside migration companion contract") {
+		t.Fatalf("expected invalid dual mapping error, got: %v", err)
 	}
 }

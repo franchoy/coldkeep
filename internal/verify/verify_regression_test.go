@@ -17,6 +17,8 @@ func openPreV15MigratedVerifyDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
 
 	legacySchema := `
 		PRAGMA foreign_keys = ON;
