@@ -28,6 +28,29 @@ type Descriptor struct {
 	UpdatedAt     time.Time
 }
 
+// Block represents a physical stored block unit for v1.8 packed-block model.
+// It is intentionally introduced early in Phase 1 and may remain unused until
+// later phases wire write/read/verify paths.
+type Block struct {
+	ID              int64
+	FormatVersion   int
+	Codec           string
+	PlaintextSize   int64
+	StoredSize      int64
+	ContainerID     int64
+	ContainerOffset int64
+	BlockHash       []byte
+}
+
+// ChunkSegment represents one chunk placement inside a physical block.
+// Offset and Size are relative to decoded plaintext block bytes.
+type ChunkSegment struct {
+	ChunkID int64
+	BlockID int64
+	Offset  int64
+	Size    int64
+}
+
 type EncodeInput struct {
 	ChunkID   int64
 	ChunkHash string
