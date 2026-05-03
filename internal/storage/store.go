@@ -2557,6 +2557,8 @@ type packedBlockPersistResult struct {
 	StoredSize int64
 }
 
+const packedStorageBlockCodecNone = "none"
+
 // storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
 //
 // Atomic order (single transaction boundary):
@@ -2602,6 +2604,9 @@ func storePackedBlockWithWriter(
 	if err != nil {
 		return packedBlockPersistResult{}, err
 	}
+	if transformed.Descriptor.Codec != blocks.CodecPlain {
+		return packedBlockPersistResult{}, fmt.Errorf("packed block storage_blocks codec=%q requires plain transformed payload, got %q", packedStorageBlockCodecNone, transformed.Descriptor.Codec)
+	}
 
 	// 4) Append transformed payload to container.
 	placement, err := writer.AppendPayload(tx, transformed.Payload)
@@ -2618,8 +2623,8 @@ func storePackedBlockWithWriter(
 			container_id, container_offset, block_hash
 		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
-		int(encodedBlock.Header.Version),
-		string(transformed.Descriptor.Codec),
+		1,
+		packedStorageBlockCodecNone,
 		int64(len(plaintextEncoded)),
 		int64(len(transformed.Payload)),
 		placement.ContainerID,

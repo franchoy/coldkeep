@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -291,6 +292,17 @@ func TestStorePackedBlockWithWriterCommitWritesBlockAndRefsAtomically(t *testing
 		_ = tx.Rollback()
 		t.Fatalf("store packed block: %v", err)
 	}
+
+	encodedBlock, _, err := builder.Build()
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("rebuild expected encoded block: %v", err)
+	}
+	encodedPlaintext, err := blocks.EncodeBlock(encodedBlock)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("encode expected plaintext block: %v", err)
+	}
 	if result.BlockID <= 0 {
 		_ = tx.Rollback()
 		t.Fatalf("expected persisted storage_blocks id, got %d", result.BlockID)
@@ -308,12 +320,75 @@ func TestStorePackedBlockWithWriterCommitWritesBlockAndRefsAtomically(t *testing
 		t.Fatalf("expected one storage_blocks row, got %d", storageBlockRows)
 	}
 
+	var formatVersion int
+	var codec string
+	var plaintextSize int64
+	var storedSize int64
+	var containerID int64
+	var containerOffset int64
+	var blockHash []byte
+	if err := dbconn.QueryRow(
+		`SELECT format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash
+		 FROM storage_blocks
+		 WHERE id = $1`,
+		result.BlockID,
+	).Scan(&formatVersion, &codec, &plaintextSize, &storedSize, &containerID, &containerOffset, &blockHash); err != nil {
+		t.Fatalf("read storage_blocks metadata: %v", err)
+	}
+	if formatVersion != 1 {
+		t.Fatalf("storage_blocks.format_version: got %d want 1", formatVersion)
+	}
+	if codec != "none" {
+		t.Fatalf("storage_blocks.codec: got %q want %q", codec, "none")
+	}
+	if plaintextSize != int64(len(encodedPlaintext)) {
+		t.Fatalf("storage_blocks.plaintext_size: got %d want %d", plaintextSize, len(encodedPlaintext))
+	}
+	if storedSize != result.StoredSize {
+		t.Fatalf("storage_blocks.stored_size: got %d want %d", storedSize, result.StoredSize)
+	}
+	if containerID != result.Placement.ContainerID {
+		t.Fatalf("storage_blocks.container_id: got %d want %d", containerID, result.Placement.ContainerID)
+	}
+	if containerOffset != result.Placement.Offset {
+		t.Fatalf("storage_blocks.container_offset: got %d want %d", containerOffset, result.Placement.Offset)
+	}
+	if !bytes.Equal(blockHash, result.BlockHash) {
+		t.Fatalf("storage_blocks.block_hash mismatch")
+	}
+
 	var refRows int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRows); err != nil {
 		t.Fatalf("count chunk_block_refs: %v", err)
 	}
 	if refRows != 2 {
 		t.Fatalf("expected two chunk_block_refs rows, got %d", refRows)
+	}
+
+	var c1BlockID, c1Offset, c1Size int64
+	if err := dbconn.QueryRow(
+		`SELECT block_id, offset_in_block, size_in_block
+		 FROM chunk_block_refs
+		 WHERE chunk_id = $1`,
+		chunk1,
+	).Scan(&c1BlockID, &c1Offset, &c1Size); err != nil {
+		t.Fatalf("read chunk1 refs: %v", err)
+	}
+	if c1BlockID != result.BlockID || c1Offset != 0 || c1Size != 3 {
+		t.Fatalf("chunk1 refs mismatch: block_id=%d offset=%d size=%d", c1BlockID, c1Offset, c1Size)
+	}
+
+	var c2BlockID, c2Offset, c2Size int64
+	if err := dbconn.QueryRow(
+		`SELECT block_id, offset_in_block, size_in_block
+		 FROM chunk_block_refs
+		 WHERE chunk_id = $1`,
+		chunk2,
+	).Scan(&c2BlockID, &c2Offset, &c2Size); err != nil {
+		t.Fatalf("read chunk2 refs: %v", err)
+	}
+	if c2BlockID != result.BlockID || c2Offset != 3 || c2Size != 4 {
+		t.Fatalf("chunk2 refs mismatch: block_id=%d offset=%d size=%d", c2BlockID, c2Offset, c2Size)
 	}
 
 	var danglingRefs int
