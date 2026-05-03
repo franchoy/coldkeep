@@ -503,6 +503,10 @@ type gcSweepExecer interface {
 //   - GC never rewrites packed blocks.
 //   - GC never removes individual chunk bytes from packed blocks.
 //   - GC only deletes whole storage_blocks when they have no live chunk refs.
+//   - For retained storage_blocks, keep all chunk_block_refs for chunks
+//     physically present in the block. Never delete per-chunk refs from a
+//     retained block, otherwise DB metadata can diverge from encoded block
+//     tables and break verification invariants.
 //
 // Any future block compaction/rewriting must be implemented as a separate
 // feature and is intentionally out of scope here.

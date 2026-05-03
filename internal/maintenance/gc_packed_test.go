@@ -280,6 +280,95 @@ func TestSweepUnreachableChunksKeepsPackedBlockWhenAnyChunkIsLive(t *testing.T) 
 	}
 }
 
+func TestSweepUnreachableChunksMixedPackedBlockKeepsAllRefsAndChunks(t *testing.T) {
+	dbconn := openPackedGCUnitDB(t)
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('sweep-packed-mixed-three.bin', 1, 0, 192, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, _ := containerRes.LastInsertId()
+
+	liveChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('mixed-live-c1', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live chunk c1: %v", err)
+	}
+	c1ID, _ := liveChunkRes.LastInsertId()
+
+	deadChunk2Res, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('mixed-dead-c2', 64, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert dead chunk c2: %v", err)
+	}
+	c2ID, _ := deadChunk2Res.LastInsertId()
+
+	deadChunk3Res, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('mixed-dead-c3', 64, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert dead chunk c3: %v", err)
+	}
+	c3ID, _ := deadChunk3Res.LastInsertId()
+
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 192, 192, ?, 0, x'55')`, containerID)
+	if err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+	blockID, _ := blockRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 64)`, c1ID, blockID); err != nil {
+		t.Fatalf("insert c1 ref: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 64, 64)`, c2ID, blockID); err != nil {
+		t.Fatalf("insert c2 ref: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 128, 64)`, c3ID, blockID); err != nil {
+		t.Fatalf("insert c3 ref: %v", err)
+	}
+
+	if err := SweepUnreachableChunks(context.Background(), dbconn, containerID); err != nil {
+		t.Fatalf("SweepUnreachableChunks: %v", err)
+	}
+
+	var blockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = ?`, blockID).Scan(&blockCount); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+	if blockCount != 1 {
+		t.Fatalf("storage_blocks remaining = %d, want 1", blockCount)
+	}
+
+	var blockRefs int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE block_id = ?`, blockID).Scan(&blockRefs); err != nil {
+		t.Fatalf("count block refs: %v", err)
+	}
+	if blockRefs != 3 {
+		t.Fatalf("chunk_block_refs remaining for retained block = %d, want 3", blockRefs)
+	}
+
+	for _, tc := range []struct {
+		chunkID int64
+		name    string
+	}{
+		{chunkID: c1ID, name: "c1"},
+		{chunkID: c2ID, name: "c2"},
+		{chunkID: c3ID, name: "c3"},
+	} {
+		var chunkCount int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE id = ?`, tc.chunkID).Scan(&chunkCount); err != nil {
+			t.Fatalf("count %s chunk: %v", tc.name, err)
+		}
+		if chunkCount != 1 {
+			t.Fatalf("%s chunk rows remaining = %d, want 1", tc.name, chunkCount)
+		}
+
+		var chunkRefCount int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE chunk_id = ? AND block_id = ?`, tc.chunkID, blockID).Scan(&chunkRefCount); err != nil {
+			t.Fatalf("count %s ref: %v", tc.name, err)
+		}
+		if chunkRefCount != 1 {
+			t.Fatalf("%s ref rows remaining = %d, want 1", tc.name, chunkRefCount)
+		}
+	}
+}
+
 func TestSweepUnreachableChunksDeletesWholePackedBlockWhenAllChunksDead(t *testing.T) {
 	dbconn := openPackedGCUnitDB(t)
 
