@@ -132,3 +132,50 @@ func TestBlockBuilderReset(t *testing.T) {
 		t.Fatalf("add after reset: %v", err)
 	}
 }
+
+func TestBlockBuilderFlushRuleByTargetOverflow(t *testing.T) {
+	b := NewBlockBuilder(10)
+	if err := b.Add(PendingChunk{ChunkID: 1, Data: []byte("1234567"), Size: 7}); err != nil {
+		t.Fatalf("add seed chunk: %v", err)
+	}
+
+	if !b.ShouldFlushBeforeAdd(4) {
+		t.Fatal("expected flush when current_size + next_size exceeds target")
+	}
+	if b.ShouldFlushBeforeAdd(3) {
+		t.Fatal("did not expect flush when current_size + next_size equals target")
+	}
+}
+
+func TestBlockBuilderFlushRuleOversizedChunkMustBeAlone(t *testing.T) {
+	b := NewBlockBuilder(8)
+	if err := b.Add(PendingChunk{ChunkID: 1, Data: []byte("abc"), Size: 3}); err != nil {
+		t.Fatalf("add seed chunk: %v", err)
+	}
+
+	if !b.ShouldFlushBeforeAdd(9) {
+		t.Fatal("expected flush when next chunk is oversized and builder is non-empty")
+	}
+
+	b.Reset()
+	if b.ShouldFlushBeforeAdd(9) {
+		t.Fatal("did not expect pre-add flush on empty builder for oversized chunk")
+	}
+	if !b.CanFit(9) {
+		t.Fatal("expected empty builder to accept oversized chunk alone")
+	}
+}
+
+func TestBlockBuilderFlushRuleAtOperationEnd(t *testing.T) {
+	b := NewBlockBuilder(16)
+	if b.ShouldFlushAtEnd() {
+		t.Fatal("did not expect end flush for empty builder")
+	}
+
+	if err := b.Add(PendingChunk{ChunkID: 1, Data: []byte("data"), Size: 4}); err != nil {
+		t.Fatalf("add chunk: %v", err)
+	}
+	if !b.ShouldFlushAtEnd() {
+		t.Fatal("expected end flush when builder has pending chunks")
+	}
+}
