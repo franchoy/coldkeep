@@ -132,6 +132,22 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 	return nil
 }
 
+func VerifySystemFastWithContainersDir(dbconn *sql.DB, containersDir string) error {
+	log.Printf("Starting fast system verification...")
+
+	if err := printCounters(dbconn); err != nil {
+		return err
+	}
+
+	if err := VerifyRepositoryFast(dbconn, containersDir); err != nil {
+		return err
+	}
+
+	log.Printf("Fast system verification completed successfully.")
+
+	return nil
+}
+
 func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	// full = standard checks + extended physical storage checks.
 	//

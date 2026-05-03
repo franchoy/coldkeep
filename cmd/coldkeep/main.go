@@ -757,6 +757,8 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 func verifyLevelToString(level verify.VerifyLevel) string {
 	switch level {
+	case verify.VerifyFast:
+		return "fast"
 	case verify.VerifyStandard:
 		return "standard"
 	case verify.VerifyFull:
@@ -2273,11 +2275,11 @@ func printFileRecordsTable(records []listing.FileRecord) {
 // online checker during active writes, where transient metadata/data divergence
 // can produce false positives.
 func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "fast", "standard", "full", "deep", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) == 0 {
-		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--standard|--full|--deep]\nDid you mean: coldkeep verify system --standard")
+		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--fast|--standard|--full|--deep]\nDid you mean: coldkeep verify system --fast")
 	}
 
 	verifyLevel, err := parseVerifyLevel(parsed)
@@ -2289,7 +2291,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	switch target {
 	case "system":
 		if len(parsed.positionals) > 2 {
-			return usageErrorf("Usage: coldkeep verify system [--standard|--full|--deep]")
+			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
 		}
 		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
 		if verifyErr != nil {
@@ -2301,7 +2303,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return nil
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
-			return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+			return usageErrorf("Usage: coldkeep verify file <fileID> [--fast|--standard|--full|--deep]")
 		}
 
 		fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
@@ -5155,6 +5157,9 @@ func searchArgs(parsed parsedCommandLine) []string {
 
 func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 	selected := make([]verify.VerifyLevel, 0, 1)
+	if parsed.hasFlag("fast") {
+		selected = append(selected, verify.VerifyFast)
+	}
 	if parsed.hasFlag("standard") {
 		selected = append(selected, verify.VerifyStandard)
 	}
@@ -5183,6 +5188,8 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 		}
 
 		switch positionalLevel {
+		case "fast":
+			return verify.VerifyFast, nil
 		case "standard":
 			return verify.VerifyStandard, nil
 		case "full":

@@ -2702,7 +2702,7 @@ func TestRunVerifyCommandNoTargetIncludesDidYouMeanHint(t *testing.T) {
 	if !strings.Contains(msg, "Usage: coldkeep verify <system|file <fileID>>") {
 		t.Fatalf("expected verify usage in error message, got: %q", msg)
 	}
-	if !strings.Contains(msg, "Did you mean: coldkeep verify system --standard") {
+	if !strings.Contains(msg, "Did you mean: coldkeep verify system --fast") {
 		t.Fatalf("expected did-you-mean hint in error message, got: %q", msg)
 	}
 }

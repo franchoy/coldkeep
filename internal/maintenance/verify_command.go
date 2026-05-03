@@ -62,6 +62,10 @@ func VerifyCommandWithContainersDir(containersDir string, target string, fileID 
 func verifySystem(dbconn *sql.DB, containersDir string, verifyLevel verify.VerifyLevel) error {
 
 	switch verifyLevel {
+	case verify.VerifyFast:
+		if err := verify.VerifySystemFastWithContainersDir(dbconn, containersDir); err != nil {
+			return fmt.Errorf("system fast verification failed: %w", err)
+		}
 	case verify.VerifyStandard:
 		if err := verify.VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
 			return fmt.Errorf("system standard verification failed: %w", err)
@@ -96,6 +100,10 @@ func verifyFile(dbconn *sql.DB, containersDir string, fileID int, verifyLevel ve
 	}
 
 	switch verifyLevel {
+	case verify.VerifyFast:
+		if err := verify.VerifyFileStandardWithContainersDir(dbconn, fileID, containersDir); err != nil {
+			return fmt.Errorf("file fast verification failed: %w", err)
+		}
 	case verify.VerifyStandard:
 		if err := verify.VerifyFileStandardWithContainersDir(dbconn, fileID, containersDir); err != nil {
 			return fmt.Errorf("file standard verification failed: %w", err)

@@ -63,6 +63,25 @@ func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 	return nil
 }
 
+// VerifyRepositoryFast runs the lightweight repository checks.
+// Fast mode is intended for quick operational health checks:
+// metadata graph + packed block hash integrity.
+func VerifyRepositoryFast(dbconn *sql.DB, containersDir string) error {
+	if err := verifyChunkReachability(dbconn); err != nil {
+		return err
+	}
+	if err := verifyStorageBlocks(dbconn); err != nil {
+		return err
+	}
+	if err := verifyChunkBlockRefs(dbconn); err != nil {
+		return err
+	}
+	if err := verifyBlockPayloadsFast(dbconn, containersDir); err != nil {
+		return err
+	}
+	return nil
+}
+
 func verifyChunkReachability(dbconn *sql.DB) error {
 	if err := runPhysicalIntegrityChecks(dbconn); err != nil {
 		return fmt.Errorf("verifyChunkReachability: %w", err)
@@ -361,6 +380,14 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 }
 
 func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
+	return verifyBlockPayloadsMode(dbconn, containersDir, true)
+}
+
+func verifyBlockPayloadsFast(dbconn *sql.DB, containersDir string) error {
+	return verifyBlockPayloadsMode(dbconn, containersDir, false)
+}
+
+func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepContentChecks bool) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -458,6 +485,10 @@ func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
 
 		if err := blocks.VerifyBlockHash(plaintextEncoded, b.blockHash); err != nil {
 			return verifyCategoryError(verifyErrBlockHashMismatch, fmt.Sprintf("verifyBlockPayloads: block %d hash mismatch", b.id), err)
+		}
+
+		if !includeDeepContentChecks {
+			continue
 		}
 
 		decoded, err := blocks.DecodeBlock(plaintextEncoded)
