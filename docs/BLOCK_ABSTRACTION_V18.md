@@ -109,3 +109,25 @@ chunk_block_refs (
 - `chunk` identity remains plaintext-based (`chunk_hash = plaintext identity`).
 - `file_chunk` restore recipe remains the same logical ordered mapping.
 
+## Phase 1 Step 5 Compatibility Strategy (Locked)
+
+v1.8 compatibility must support all of the following:
+
+- v1.7 data (single-chunk blocks)
+- v1.8 data (multi-chunk packed blocks)
+- mixed repositories containing both layouts
+
+Chosen implementation strategy for v1.8: Option A (cleanest).
+
+- Read-path compatibility will treat each legacy v1.7 `blocks` row as an adapter-level storage block view with:
+	- one chunk,
+	- `offset_in_block = 0`,
+	- `size_in_block = chunk/plaintext size`.
+- New v1.8 packed data will use `storage_blocks` + `chunk_block_refs` directly.
+- Mixed repositories are resolved through unified read abstraction that can load either legacy adapted layout or native packed layout.
+
+Explicit Phase 1 decision:
+
+- Option B (bulk migration converting legacy `blocks` into packed-table rows during upgrade) is deferred and is not part of Phase 1.
+- No forced rewrite of existing physical payloads or metadata is allowed in Phase 1.
+
