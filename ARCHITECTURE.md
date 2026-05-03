@@ -14,6 +14,7 @@ Companion documents:
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
+- [docs/BLOCK_ABSTRACTION_V18.md](docs/BLOCK_ABSTRACTION_V18.md) for v1.8 packed-block design lock constants and invariants
 
 ## System Overview
 
