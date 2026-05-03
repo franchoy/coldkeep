@@ -3,6 +3,7 @@ package blocks
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 )
 
@@ -117,6 +118,76 @@ func TestDecodeBlockRejectsUnsupportedVersion(t *testing.T) {
 
 	if _, err := DecodeBlock(raw); err == nil {
 		t.Fatal("expected unsupported-version decode error")
+	}
+}
+
+func TestDecodeBlockRejectsInvalidChunkCount(t *testing.T) {
+	b := &EncodedBlock{
+		Header: BlockHeader{
+			Magic:         BlockMagicV1,
+			Version:       BlockFormatVersionV1,
+			Codec:         BlockCodecNoneV1,
+			ChunkCount:    1,
+			PlaintextSize: 0,
+		},
+		Entries: nil,
+		Payload: nil,
+	}
+
+	raw, err := EncodeBlock(b)
+	if err != nil {
+		t.Fatalf("encode malformed shape: %v", err)
+	}
+
+	if _, err := DecodeBlock(raw); err == nil || !errors.Is(err, ErrBlockFormatInvalidCount) {
+		t.Fatalf("expected invalid-count decode error, got: %v", err)
+	}
+}
+
+func TestDecodeBlockRejectsPayloadLengthMismatch(t *testing.T) {
+	b := &EncodedBlock{
+		Header: BlockHeader{
+			Magic:         BlockMagicV1,
+			Version:       BlockFormatVersionV1,
+			Codec:         BlockCodecNoneV1,
+			ChunkCount:    1,
+			PlaintextSize: 4,
+		},
+		Entries: []ChunkEntry{{ChunkID: 1, Offset: 0, Size: 4}},
+		Payload: []byte("data"),
+	}
+
+	raw, err := EncodeBlock(b)
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+
+	truncated := raw[:len(raw)-1]
+	if _, err := DecodeBlock(truncated); err == nil {
+		t.Fatal("expected payload-length mismatch decode error")
+	}
+}
+
+func TestDecodeBlockRejectsInvalidOffsets(t *testing.T) {
+	b := &EncodedBlock{
+		Header: BlockHeader{
+			Magic:         BlockMagicV1,
+			Version:       BlockFormatVersionV1,
+			Codec:         BlockCodecNoneV1,
+			ChunkCount:    1,
+			PlaintextSize: 3,
+		},
+		Entries: []ChunkEntry{{ChunkID: 1, Offset: 2, Size: 2}},
+		Payload: []byte("abc"),
+	}
+
+	raw, err := EncodeBlock(b)
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+
+	if _, err := DecodeBlock(raw); err == nil {
+		t.Fatal("expected invalid-offset decode error")
 	}
 }
 

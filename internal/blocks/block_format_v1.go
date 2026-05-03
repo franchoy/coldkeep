@@ -27,6 +27,7 @@ var (
 	ErrBlockFormatTooSmall      = errors.New("block format: payload too small for header")
 	ErrBlockFormatUnsupported   = errors.New("block format: unsupported header values")
 	ErrBlockFormatInvalidLayout = errors.New("block format: invalid table/payload layout")
+	ErrBlockFormatInvalidCount  = errors.New("block format: invalid chunk_count")
 	ErrNilEncodedBlock          = errors.New("block format: nil encoded block")
 )
 
@@ -213,8 +214,10 @@ func DecodeBlock(data []byte) (*EncodedBlock, error) {
 		return nil, fmt.Errorf("%w: magic=%x version=%d codec=%d", ErrBlockFormatUnsupported, header.Magic, header.Version, header.Codec)
 	}
 
-	tableSize := uint64(header.ChunkCount) * chunkEntrySizeV1
-	totalMin := uint64(blockHeaderSizeV1) + tableSize
+	_, totalMin, err := validateChunkCountSane(header.ChunkCount, len(data))
+	if err != nil {
+		return nil, err
+	}
 	if uint64(len(data)) < totalMin {
 		return nil, ErrBlockFormatInvalidLayout
 	}
@@ -240,6 +243,26 @@ func DecodeBlock(data []byte) (*EncodedBlock, error) {
 		Entries: entries,
 		Payload: payload,
 	}, nil
+}
+
+func validateChunkCountSane(chunkCount uint32, totalDataLen int) (tableSize uint64, totalMin uint64, err error) {
+	totalLen := uint64(totalDataLen)
+	tableSize = uint64(chunkCount) * chunkEntrySizeV1
+	totalMin = uint64(blockHeaderSizeV1) + tableSize
+
+	if totalMin < uint64(blockHeaderSizeV1) || totalMin < tableSize {
+		return 0, 0, ErrBlockFormatInvalidCount
+	}
+	if totalMin > totalLen {
+		return 0, 0, ErrBlockFormatInvalidCount
+	}
+
+	maxEntriesByBytes := (totalLen - uint64(blockHeaderSizeV1)) / chunkEntrySizeV1
+	if uint64(chunkCount) > maxEntriesByBytes {
+		return 0, 0, ErrBlockFormatInvalidCount
+	}
+
+	return tableSize, totalMin, nil
 }
 
 // SliceChunkFromPayload returns chunk bytes for one table entry.
