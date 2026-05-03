@@ -303,7 +303,7 @@ func validateChunkCountSane(chunkCount uint32, totalDataLen int) (tableSize uint
 // SliceChunkFromPayload returns chunk bytes for one table entry.
 func SliceChunkFromPayload(payload []byte, entry ChunkEntry) ([]byte, error) {
 	end := entry.Offset + entry.Size
-	if end > uint64(len(payload)) {
+	if end < entry.Offset || end > uint64(len(payload)) {
 		return nil, ErrBlockFormatInvalidLayout
 	}
 	return payload[entry.Offset:end], nil

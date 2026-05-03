@@ -566,7 +566,16 @@ t.Fatalf("encode: %v", err)
 }
 for _, tc := range [][]byte{nil, {}} {
 if err := VerifyBlockHash(encoded, tc); !errors.Is(err, ErrBlockHashExpectedNil) {
-t.Fatalf("expected ErrBlockHashExpectedNil, got %v", err)
+			t.Fatalf("expected ErrBlockHashExpectedNil, got %v", err)
+		}
+	}
 }
-}
+
+func TestSliceChunkFromPayloadOverflowRejected(t *testing.T) {
+	payload := []byte("hello")
+	// Offset + Size wraps around uint64.
+	overflowEntry := ChunkEntry{ChunkID: 1, Offset: ^uint64(0), Size: 2}
+	if _, err := SliceChunkFromPayload(payload, overflowEntry); !errors.Is(err, ErrBlockFormatInvalidLayout) {
+		t.Fatalf("expected ErrBlockFormatInvalidLayout on overflow, got %v", err)
+	}
 }
