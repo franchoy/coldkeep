@@ -200,6 +200,36 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 		return fmt.Errorf("verifyChunkBlockRefs: invalid chunk_block_refs ranges=%d", invalidRanges)
 	}
 
+	var completedNoPhysicalRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM chunk c
+		WHERE c.status = 'COMPLETED'
+		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id)
+		  AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.chunk_id = c.id)
+	`).Scan(&completedNoPhysicalRows); err != nil {
+		return fmt.Errorf("verifyChunkBlockRefs: query completed chunks without physical location: %w", err)
+	}
+	if completedNoPhysicalRows > 0 {
+		return fmt.Errorf("verifyChunkBlockRefs: completed chunks with no physical location=%d", completedNoPhysicalRows)
+	}
+
+	var multiplePackedRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT chunk_id
+			FROM chunk_block_refs
+			GROUP BY chunk_id
+			HAVING COUNT(*) > 1
+		) t
+	`).Scan(&multiplePackedRows); err != nil {
+		return fmt.Errorf("verifyChunkBlockRefs: query chunks with multiple packed refs: %w", err)
+	}
+	if multiplePackedRows > 0 {
+		return fmt.Errorf("verifyChunkBlockRefs: chunks with multiple packed refs=%d", multiplePackedRows)
+	}
+
 	if err := verifyChunkPhysicalLocationRules(ctx, dbconn); err != nil {
 		return err
 	}
@@ -570,8 +600,36 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("verifyBlockPayloads: iterate chunk refs for block %d: %w", blockID, err)
 	}
-	if len(segments) != len(decoded.Entries) {
-		return fmt.Errorf("verifyBlockPayloads: block %d chunk count mismatch decoded=%d refs=%d", blockID, len(decoded.Entries), len(segments))
+	decodedEntriesByKey := make(map[verifyChunkRefSegment]struct{}, len(decoded.Entries))
+	for _, e := range decoded.Entries {
+		decodedEntriesByKey[verifyChunkRefSegment{
+			chunkID: int64(e.ChunkID),
+			offset:  e.Offset,
+			size:    e.Size,
+		}] = struct{}{}
+	}
+
+	refsByKey := make(map[verifyChunkRefSegment]struct{}, len(segments))
+	for _, s := range segments {
+		refsByKey[verifyChunkRefSegment{
+			chunkID: s.chunkID,
+			offset:  s.offset,
+			size:    s.size,
+		}] = struct{}{}
+	}
+
+	for _, s := range segments {
+		k := verifyChunkRefSegment{chunkID: s.chunkID, offset: s.offset, size: s.size}
+		if _, ok := decodedEntriesByKey[k]; !ok {
+			return fmt.Errorf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size)
+		}
+	}
+
+	for _, e := range decoded.Entries {
+		k := verifyChunkRefSegment{chunkID: int64(e.ChunkID), offset: e.Offset, size: e.Size}
+		if _, ok := refsByKey[k]; !ok {
+			return fmt.Errorf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size)
+		}
 	}
 
 	payloadSize := uint64(len(decoded.Payload))

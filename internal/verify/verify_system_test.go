@@ -394,6 +394,30 @@ func TestVerifyRepositoryDetectsImpossibleStorageBlockContainerRange(t *testing.
 	}
 }
 
+func TestVerifyRepositoryDetectsCompletedChunkWithoutPhysicalLocation(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		strings.Repeat("c", 64),
+		int64(17),
+		filestate.ChunkCompleted,
+		int64(0),
+		int64(0),
+		int64(0),
+		"v1-simple-rolling",
+	); err != nil {
+		t.Fatalf("insert completed chunk without location: %v", err)
+	}
+
+	err := verifyChunkBlockRefs(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "no physical location") {
+		t.Fatalf("expected no-physical-location error, got: %v", err)
+	}
+}
+
 type verifyPackedRefSeed struct {
 	chunkID int64
 	offset  int64
@@ -616,8 +640,8 @@ func TestVerifyBlockPayloadsDetectsSegmentOutOfBounds(t *testing.T) {
 	}
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "segment out of payload bounds") {
-		t.Fatalf("expected out-of-bounds segment error, got: %v", err)
+	if err == nil || (!strings.Contains(err.Error(), "segment out of payload bounds") && !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table")) {
+		t.Fatalf("expected out-of-bounds-or-table-mismatch error, got: %v", err)
 	}
 }
 
@@ -689,8 +713,47 @@ func TestVerifyBlockPayloadsDetectsDecodedChunkCountMismatchAgainstRefs(t *testi
 	}
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "chunk count mismatch") {
-		t.Fatalf("expected decoded/ref chunk count mismatch error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "encoded block table contains chunk not in chunk_block_refs") {
+		t.Fatalf("expected encoded-table missing-ref error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsChunkBlockRefChunkNotInEncodedTable(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	var otherChunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling')
+		 RETURNING id`,
+		strings.Repeat("9", 64),
+		int64(4),
+		filestate.ChunkAborted,
+	).Scan(&otherChunkID); err != nil {
+		t.Fatalf("insert non-encoded chunk for ref mismatch: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkIDs[0]); err != nil {
+		t.Fatalf("delete original chunk ref: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		otherChunkID,
+		blockID,
+		int64(0),
+		int64(4),
+	); err != nil {
+		t.Fatalf("insert chunk ref not present in encoded table: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table") {
+		t.Fatalf("expected chunk_block_ref-not-in-table error, got: %v", err)
 	}
 }
 
@@ -772,7 +835,7 @@ func TestVerifyBlockPayloadsStrictModeRequiresExactEncodedChunkTable(t *testing.
 	}
 
 	err = verifyBlockPayloads(dbconn, filepath.Clean(containersDir))
-	if err == nil || !strings.Contains(err.Error(), "strict mode") || !strings.Contains(err.Error(), "entry mismatch") {
-		t.Fatalf("expected strict-mode entry mismatch error, got: %v", err)
+	if err == nil || (!strings.Contains(err.Error(), "strict mode") && !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table")) {
+		t.Fatalf("expected strict-or-mandatory table mismatch error, got: %v", err)
 	}
 }
