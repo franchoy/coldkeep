@@ -188,11 +188,13 @@ func commitPreparedChunksWithContext(
 
 		// Use precomputed hash and data; no re-allocation or re-hashing in this loop.
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, commitInfo.validationContainerDir)
+		claimedChunkID, chunkStatus, isNewChunkClaim, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, commitInfo.validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 
+		// Phase 4 Step 2 invariant: dedup decision happens before packing/writing.
+		// If chunk is already COMPLETED, never write/pack again; only link reference.
 		if chunkStatus == filestate.ChunkCompleted {
 			// Chunk already stored and ready: just link it to the logical file
 			tx, err := dbconn.BeginTx(ctx, nil)
@@ -213,7 +215,18 @@ func commitPreparedChunksWithContext(
 			continue // Move to next chunk
 		}
 
+		if chunkStatus != filestate.ChunkProcessing {
+			return StoreFileResult{}, fmt.Errorf("unexpected chunk status %q for chunk_id=%d before write boundary", chunkStatus, claimedChunkID)
+		}
+
+		if !isNewChunkClaim {
+			// This is a reclaimed processing claim (e.g. previously aborted/corrupted chunk).
+			// It is intentionally rewritten to repair state, not a dedup duplicate write.
+			log.Printf("event=store_chunk_reclaim action=write_rebuild file_id=%d chunk_id=%d hash=%s", commitInfo.fileID, claimedChunkID, prepared.Hash)
+		}
+
 		// At this point, we have a chunk row in "PROCESSING" status.
+		// Only PROCESSING claims cross this write boundary.
 		// Append payload and complete the chunk.
 		for {
 			if err := ctx.Err(); err != nil {

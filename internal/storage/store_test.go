@@ -31,6 +31,7 @@ import (
 
 type syncFailWriter struct {
 	offset          int64
+	appendCalls     int
 	quarantineErr   error
 	quarantineCalls int
 	db              *sql.DB
@@ -41,6 +42,7 @@ func (w *syncFailWriter) FinalizeContainer() error {
 }
 
 func (w *syncFailWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {
+	w.appendCalls++
 	offset := w.offset
 	w.offset += int64(len(payload))
 	return container.LocalPlacement{
@@ -129,6 +131,24 @@ func (c fixedBoundaryChunker) ChunkFile(path string) ([]chunk.Result, error) {
 	}, nil
 }
 
+type duplicateChunker struct {
+	version chunk.Version
+	payload []byte
+}
+
+func (c duplicateChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c duplicateChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	left := append([]byte(nil), c.payload...)
+	right := append([]byte(nil), c.payload...)
+	return []chunk.Result{
+		{Info: chunk.Info{Size: int64(len(left)), Offset: 0}, Data: left},
+		{Info: chunk.Info{Size: int64(len(right)), Offset: int64(len(left))}, Data: right},
+	}, nil
+}
+
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	service := NewStoreService(nil, nil)
 	resolved, err := service.ResolveActiveChunker()
@@ -145,6 +165,72 @@ func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	}
 	if service.Repository() != nil {
 		t.Fatal("expected nil repository when constructor is given nil")
+	}
+}
+
+func TestStoreDedupCheckHappensBeforeWriteBoundary(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "dup.txt")
+	if err := os.WriteFile(inPath, []byte("placeholder-file-content"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn)
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	chunkPayload := []byte("same-chunk-bytes")
+	dupChunker := duplicateChunker{version: chunk.VersionV1SimpleRolling, payload: chunkPayload}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: workDir,
+		Chunker:      dupChunker,
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, codec)
+	if err != nil {
+		t.Fatalf("store file with duplicate chunks: %v", err)
+	}
+	if result.FileID <= 0 {
+		t.Fatalf("expected valid file id, got %d", result.FileID)
+	}
+
+	var chunkRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRows); err != nil {
+		t.Fatalf("count chunk rows: %v", err)
+	}
+	if chunkRows != 1 {
+		t.Fatalf("expected one deduplicated chunk row, got %d", chunkRows)
+	}
+
+	var fileChunkRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&fileChunkRows); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if fileChunkRows != 2 {
+		t.Fatalf("expected two file_chunk references for duplicate recipe entries, got %d", fileChunkRows)
+	}
+
+	var blockRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&blockRows); err != nil {
+		t.Fatalf("count blocks rows: %v", err)
+	}
+	if blockRows != 1 {
+		t.Fatalf("expected one persisted block row for deduplicated chunk, got %d", blockRows)
 	}
 }
 
