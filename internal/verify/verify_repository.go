@@ -40,7 +40,7 @@ func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
 		return err
 	}
-	if err := verifyLegacyCompatibility(dbconn); err != nil {
+	if err := verifyLegacyCompatibility(dbconn, containersDir); err != nil {
 		return err
 	}
 	return nil
@@ -628,7 +628,126 @@ func verifyStrictPackedSegmentsEnabled() bool {
 	return false
 }
 
-func verifyLegacyCompatibility(dbconn *sql.DB) error {
+func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking legacy block payload hash integrity...")
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT
+			b.chunk_id,
+			b.block_offset,
+			b.stored_size,
+			b.plaintext_size,
+			c.chunk_hash,
+			b.codec,
+			b.format_version,
+			b.nonce,
+			cctr.filename,
+			cctr.max_size
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		JOIN container cctr ON cctr.id = b.container_id
+		WHERE c.status = 'COMPLETED'
+		ORDER BY cctr.id, b.block_offset
+	`)
+	if err != nil {
+		return fmt.Errorf("verifyLegacyChunkHashes: query legacy blocks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	transformers := make(map[blocks.Codec]blocks.Transformer)
+	openContainers := make(map[string]*container.FileContainer)
+	defer func() {
+		for _, fc := range openContainers {
+			_ = fc.Close()
+		}
+	}()
+
+	for rows.Next() {
+		var chunkID int64
+		var blockOffset int64
+		var storedSize int64
+		var plaintextSize int64
+		var expectedChunkHash string
+		var codecRaw string
+		var formatVersion int
+		var nonce []byte
+		var filename string
+		var maxSize int64
+
+		if err := rows.Scan(&chunkID, &blockOffset, &storedSize, &plaintextSize, &expectedChunkHash, &codecRaw, &formatVersion, &nonce, &filename, &maxSize); err != nil {
+			return fmt.Errorf("verifyLegacyChunkHashes: scan legacy block row: %w", err)
+		}
+
+		codec, err := blocks.ParseCodec(strings.ToLower(strings.TrimSpace(codecRaw)))
+		if err != nil {
+			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d invalid codec=%q: %w", chunkID, codecRaw, err)
+		}
+
+		transformer := transformers[codec]
+		if transformer == nil {
+			transformer, err = blocks.GetBlockTransformer(codec)
+			if err != nil {
+				return fmt.Errorf("verifyLegacyChunkHashes: chunk %d get transformer codec=%s: %w", chunkID, codec, err)
+			}
+			transformers[codec] = transformer
+		}
+
+		fc := openContainers[filename]
+		if fc == nil {
+			fc, err = container.OpenReadOnlyContainer(filepath.Join(containersDir, filename), maxSize)
+			if err != nil {
+				return fmt.Errorf("verifyLegacyChunkHashes: open container %q: %w", filename, err)
+			}
+			openContainers[filename] = fc
+		}
+
+		payload, err := container.ReadPayloadAt(fc, blockOffset, storedSize)
+		if err != nil {
+			return fmt.Errorf("verifyLegacyChunkHashes: read chunk %d payload: %w", chunkID, err)
+		}
+
+		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
+			ChunkHash: expectedChunkHash,
+			Descriptor: blocks.Descriptor{
+				ChunkID:       chunkID,
+				Codec:         codec,
+				FormatVersion: formatVersion,
+				PlaintextSize: plaintextSize,
+				StoredSize:    storedSize,
+				Nonce:         nonce,
+				ContainerID:   0,
+				BlockOffset:   blockOffset,
+			},
+			Payload: payload,
+		})
+		if err != nil {
+			return fmt.Errorf("verifyLegacyChunkHashes: decode chunk %d payload: %w", chunkID, err)
+		}
+		if int64(len(plaintext)) != plaintextSize {
+			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d plaintext size mismatch metadata=%d decoded=%d", chunkID, plaintextSize, len(plaintext))
+		}
+
+		sum := sha256.Sum256(plaintext)
+		computed := hex.EncodeToString(sum[:])
+		if !strings.EqualFold(strings.TrimSpace(expectedChunkHash), computed) {
+			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d hash mismatch computed=%s expected=%s", chunkID, computed, strings.TrimSpace(expectedChunkHash))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verifyLegacyChunkHashes: iterate legacy block rows: %w", err)
+	}
+
+	log.Println(" SUCCESS ")
+	return nil
+}
+
+func verifyLegacyCompatibility(dbconn *sql.DB, containersDir string) error {
+	if err := verifyLegacyChunkHashes(dbconn, containersDir); err != nil {
+		return fmt.Errorf("verifyLegacyCompatibility: %w", err)
+	}
 	if err := runLogicalReconstructionChecks(dbconn); err != nil {
 		return fmt.Errorf("verifyLegacyCompatibility: %w", err)
 	}

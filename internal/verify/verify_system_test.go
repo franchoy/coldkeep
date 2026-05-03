@@ -487,6 +487,113 @@ func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir st
 	return blockID, chunkIDs
 }
 
+func seedVerifyLegacyBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, payload []byte) int64 {
+	t.Helper()
+
+	sum := sha256.Sum256(payload)
+	hash := hex.EncodeToString(sum[:])
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling')
+		 RETURNING id`,
+		hash,
+		int64(len(payload)),
+		filestate.ChunkCompleted,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert legacy verify chunk: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer for legacy fixture: %v", err)
+	}
+	encoded, err := transformer.Encode(context.Background(), blocks.EncodeInput{
+		ChunkID:   chunkID,
+		ChunkHash: hash,
+		Plaintext: payload,
+	})
+	if err != nil {
+		t.Fatalf("encode legacy payload: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	tx, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin tx for legacy fixture: %v", err)
+	}
+	placement, err := writer.AppendPayload(tx, encoded.Payload)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("append legacy payload: %v", err)
+	}
+	if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("update container size for legacy fixture: %v", err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		chunkID,
+		string(encoded.Descriptor.Codec),
+		encoded.Descriptor.FormatVersion,
+		encoded.Descriptor.PlaintextSize,
+		encoded.Descriptor.StoredSize,
+		encoded.Descriptor.Nonce,
+		placement.ContainerID,
+		placement.Offset,
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert legacy blocks row: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("commit legacy fixture: %v", err)
+	}
+
+	return chunkID
+}
+
+func TestVerifyRepositorySupportsLegacyOnlyRepo(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_ = seedVerifyLegacyBlockFixture(t, dbconn, containersDir, []byte("legacy-only-chunk"))
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected VerifyRepository to pass for legacy-only repo, got: %v", err)
+	}
+}
+
+func TestVerifyRepositorySupportsPackedOnlyRepo(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("packed-only")}, nil)
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected VerifyRepository to pass for packed-only repo, got: %v", err)
+	}
+}
+
+func TestVerifyRepositorySupportsMixedRepo(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_ = seedVerifyLegacyBlockFixture(t, dbconn, containersDir, []byte("legacy-mixed"))
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("packed-mixed")}, nil)
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected VerifyRepository to pass for mixed repo, got: %v", err)
+	}
+}
+
 func TestVerifyBlockPayloadsDetectsSegmentOutOfBounds(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()

@@ -1,16 +1,21 @@
 package verify
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func openPreV15MigratedVerifyDB(t *testing.T) *sql.DB {
+func openPreV15MigratedVerifyDB(t *testing.T, containersDir string) *sql.DB {
 	t.Helper()
 
 	dbconn, err := sql.Open("sqlite3", ":memory:")
@@ -101,18 +106,6 @@ func openPreV15MigratedVerifyDB(t *testing.T) *sql.DB {
 		t.Fatalf("create legacy pre-v1.5 schema: %v", err)
 	}
 
-	var containerID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO container (filename, sealed, current_size, max_size)
-		 VALUES ($1, 1, $2, $3) RETURNING id`,
-		"verify-legacy.bin",
-		int64(128),
-		int64(1048576),
-	).Scan(&containerID); err != nil {
-		_ = dbconn.Close()
-		t.Fatalf("insert legacy container: %v", err)
-	}
-
 	var logicalFileID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count)
@@ -127,12 +120,16 @@ func openPreV15MigratedVerifyDB(t *testing.T) *sql.DB {
 		t.Fatalf("insert legacy logical_file: %v", err)
 	}
 
+	chunkPayload := []byte("legacy-data")
+	chunkSum := sha256.Sum256(chunkPayload)
+	chunkHash := hex.EncodeToString(chunkSum[:])
+
 	var chunkID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count)
 		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		strings.Repeat("b", 64),
-		int64(11),
+		chunkHash,
+		int64(len(chunkPayload)),
 		filestate.ChunkCompleted,
 		int64(1),
 		int64(0),
@@ -150,14 +147,61 @@ func openPreV15MigratedVerifyDB(t *testing.T) *sql.DB {
 		t.Fatalf("insert legacy file_chunk: %v", err)
 	}
 
-	if _, err := dbconn.Exec(
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("get plain transformer for legacy fixture: %v", err)
+	}
+	encoded, err := transformer.Encode(context.Background(), blocks.EncodeInput{
+		ChunkID:   chunkID,
+		ChunkHash: chunkHash,
+		Plaintext: chunkPayload,
+	})
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("encode legacy payload: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	tx, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("begin tx for legacy fixture: %v", err)
+	}
+	placement, err := writer.AppendPayload(tx, encoded.Payload)
+	if err != nil {
+		_ = tx.Rollback()
+		_ = dbconn.Close()
+		t.Fatalf("append legacy payload: %v", err)
+	}
+	if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
+		_ = tx.Rollback()
+		_ = dbconn.Close()
+		t.Fatalf("update container size for legacy fixture: %v", err)
+	}
+
+	if _, err := tx.ExecContext(
+		context.Background(),
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-		 VALUES ($1, 'plain', 1, 11, 11, x'', $2, 0)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		chunkID,
-		containerID,
+		string(encoded.Descriptor.Codec),
+		encoded.Descriptor.FormatVersion,
+		encoded.Descriptor.PlaintextSize,
+		encoded.Descriptor.StoredSize,
+		encoded.Descriptor.Nonce,
+		placement.ContainerID,
+		placement.Offset,
 	); err != nil {
+		_ = tx.Rollback()
 		_ = dbconn.Close()
 		t.Fatalf("insert legacy block: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		_ = dbconn.Close()
+		t.Fatalf("commit legacy payload fixture: %v", err)
 	}
 
 	if err := db.RunMigrations(dbconn); err != nil {
@@ -169,10 +213,11 @@ func openPreV15MigratedVerifyDB(t *testing.T) *sql.DB {
 }
 
 func TestVerifySystemStandardPassesOnMigratedPreV15Repository(t *testing.T) {
-	dbconn := openPreV15MigratedVerifyDB(t)
+	containersDir := t.TempDir()
+	dbconn := openPreV15MigratedVerifyDB(t, containersDir)
 	defer func() { _ = dbconn.Close() }()
 
-	if err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir()); err != nil {
+	if err := VerifySystemStandardWithContainersDir(dbconn, containersDir); err != nil {
 		t.Fatalf("verify should pass on healthy migrated pre-v1.5 repository: %v", err)
 	}
 }
@@ -230,20 +275,21 @@ func TestVerifySystemFullDetectsMissingContainerFileForReferencedChunk(t *testin
 	}
 
 	err := VerifySystemFullWithContainersDir(dbconn, t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "checkContainersFileExistence") {
+	if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
 		t.Fatalf("expected full verify to fail for missing referenced container file, got: %v", err)
 	}
 }
 
 func TestVerifySystemStandardRejectsBlankVersionMetadataAfterMigration(t *testing.T) {
-	dbconn := openPreV15MigratedVerifyDB(t)
+	containersDir := t.TempDir()
+	dbconn := openPreV15MigratedVerifyDB(t, containersDir)
 	defer func() { _ = dbconn.Close() }()
 
 	if _, err := dbconn.Exec(`UPDATE logical_file SET chunker_version = '   '`); err != nil {
 		t.Fatalf("blank logical_file.chunker_version after migration: %v", err)
 	}
 
-	err := VerifySystemStandardWithContainersDir(dbconn, t.TempDir())
+	err := VerifySystemStandardWithContainersDir(dbconn, containersDir)
 	if err == nil || !strings.Contains(err.Error(), "empty logical_file chunker_version rows=1") {
 		t.Fatalf("expected chunker_version sanity failure after migration metadata tamper, got: %v", err)
 	}
