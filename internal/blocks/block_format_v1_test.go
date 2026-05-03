@@ -170,8 +170,31 @@ func TestHashPlaintextEncodedBlockMatchesEncodedResult(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 
-	got := HashPlaintextEncodedBlock(enc.Bytes)
+	got := ComputeBlockHash(enc.Bytes)
 	if !bytes.Equal(got, enc.BlockHash) {
 		t.Fatal("block hash mismatch: expected hash over plaintext encoded block bytes")
+	}
+}
+
+func TestComputeBlockHashTargetsPlaintextEncodedBytes(t *testing.T) {
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{{ChunkID: 1, Data: []byte("hello")}})
+	if err != nil {
+		t.Fatalf("encode from chunks: %v", err)
+	}
+
+	plainHash := ComputeBlockHash(enc.Bytes)
+	if !bytes.Equal(plainHash, enc.BlockHash) {
+		t.Fatal("expected block hash to match plaintext encoded bytes")
+	}
+
+	// Simulate post-encoding transformation bytes (e.g. encrypted representation)
+	// and ensure hash target stays plaintext encoded bytes.
+	transformed := append([]byte(nil), enc.Bytes...)
+	for i := range transformed {
+		transformed[i] ^= 0xA5
+	}
+	transformedHash := ComputeBlockHash(transformed)
+	if bytes.Equal(transformedHash, plainHash) {
+		t.Fatal("expected transformed-bytes hash to differ from plaintext-encoded hash")
 	}
 }

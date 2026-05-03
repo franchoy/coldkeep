@@ -16,6 +16,11 @@ const (
 
 	blockHeaderSizeV1 = 20
 	chunkEntrySizeV1  = 24
+
+	// BlockHashAlgorithm is the current project hash algorithm used for
+	// plaintext encoded block hashing. v1.8 policy hashes encoded plaintext
+	// block bytes (not encrypted bytes).
+	BlockHashAlgorithm = "sha256"
 )
 
 var (
@@ -112,11 +117,17 @@ func EncodeBlock(b *EncodedBlock) ([]byte, error) {
 	return encoded, nil
 }
 
-// HashPlaintextEncodedBlock returns SHA-256 over the full plaintext encoded block
-// bytes. This is the mandatory v1.8 block hash identity.
-func HashPlaintextEncodedBlock(encoded []byte) []byte {
+// ComputeBlockHash returns block hash over plaintext encoded block bytes.
+//
+// IMPORTANT: hash target is encoded plaintext block bytes, before encryption.
+func ComputeBlockHash(encoded []byte) []byte {
 	sum := sha256.Sum256(encoded)
 	return sum[:]
+}
+
+// HashPlaintextEncodedBlock remains as compatibility alias.
+func HashPlaintextEncodedBlock(encoded []byte) []byte {
+	return ComputeBlockHash(encoded)
 }
 
 // EncodePackedBlockV1FromChunks builds a v1 encoded block from an ordered chunk
@@ -165,7 +176,7 @@ func EncodePackedBlockV1(entries []ChunkEntry, payload []byte) (*EncodedPackedBl
 
 	return &EncodedPackedBlockV1{
 		Bytes:     encoded,
-		BlockHash: HashPlaintextEncodedBlock(encoded),
+		BlockHash: ComputeBlockHash(encoded),
 		Header:    header,
 		Entries:   append([]ChunkEntry(nil), entries...),
 	}, nil

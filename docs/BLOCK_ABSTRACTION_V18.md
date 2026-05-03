@@ -221,3 +221,22 @@ Phase boundary note:
 - Step 1 introduces isolated encode/decode/hash logic and format validation only.
 - Runtime store/restore integration remains deferred to later Phase 2 steps.
 
+## Phase 2 Step 5 Hashing Rule (Locked)
+
+Block hash target for v1.8:
+
+```text
+block_hash = hash(encoded_plaintext_block_bytes)
+```
+
+Current project algorithm choice:
+
+```text
+sha256
+```
+
+Rules:
+
+- Hash must be computed from encoded plaintext block bytes.
+- Hash must not be computed from encrypted/transformed stored bytes.
+
