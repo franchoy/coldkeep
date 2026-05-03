@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +18,22 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 )
+
+const (
+	verifyErrMetadataMissing   = "metadata_missing"
+	verifyErrMetadataInvalid   = "metadata_invalid"
+	verifyErrPhysicalMissing   = "physical_missing"
+	verifyErrBlockHashMismatch = "block_hash_mismatch"
+	verifyErrChunkHashMismatch = "chunk_hash_mismatch"
+	verifyErrUnsupportedBlock  = "unsupported_block_format"
+)
+
+func verifyCategoryError(category, detail string, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%s: %s", category, detail)
+	}
+	return fmt.Errorf("%s: %s: %w", category, detail, cause)
+}
 
 // VerifyRepository provides the Phase 5 layered verification orchestration for
 // repositories that may include v1.8 packed-block storage.
@@ -92,10 +109,10 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		LEFT JOIN container c ON c.id = sb.container_id
 		WHERE c.id IS NULL
 	`).Scan(&missingContainerRows); err != nil {
-		return fmt.Errorf("verifyStorageBlocks: query missing containers: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query missing containers", err)
 	}
 	if missingContainerRows > 0 {
-		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with missing container refs=%d", missingContainerRows)
+		return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with missing container refs=%d", missingContainerRows), nil)
 	}
 
 	var invalidFieldRows int64
@@ -108,10 +125,10 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		   OR stored_size <= 0
 		   OR container_offset < 0
 	`).Scan(&invalidFieldRows); err != nil {
-		return fmt.Errorf("verifyStorageBlocks: query invalid field rows: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid field rows", err)
 	}
 	if invalidFieldRows > 0 {
-		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with invalid metadata fields=%d", invalidFieldRows)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid metadata fields=%d", invalidFieldRows), nil)
 	}
 
 	var missingHashRows int64
@@ -120,10 +137,10 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		FROM storage_blocks
 		WHERE block_hash IS NULL OR length(block_hash) = 0
 	`).Scan(&missingHashRows); err != nil {
-		return fmt.Errorf("verifyStorageBlocks: query missing block_hash rows: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query missing block_hash rows", err)
 	}
 	if missingHashRows > 0 {
-		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with empty block_hash=%d", missingHashRows)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with empty block_hash=%d", missingHashRows), nil)
 	}
 
 	const expectedBlockHashLen = 32
@@ -133,10 +150,10 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		FROM storage_blocks
 		WHERE length(block_hash) != $1
 	`, expectedBlockHashLen).Scan(&invalidHashLenRows); err != nil {
-		return fmt.Errorf("verifyStorageBlocks: query invalid block_hash length rows: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid block_hash length rows", err)
 	}
 	if invalidHashLenRows > 0 {
-		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with invalid block_hash length=%d expected=%d", invalidHashLenRows, expectedBlockHashLen)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid block_hash length=%d expected=%d", invalidHashLenRows, expectedBlockHashLen), nil)
 	}
 
 	var impossibleLocationRows int64
@@ -146,10 +163,10 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		JOIN container c ON c.id = sb.container_id
 		WHERE sb.container_offset + sb.stored_size > c.current_size
 	`).Scan(&impossibleLocationRows); err != nil {
-		return fmt.Errorf("verifyStorageBlocks: query impossible container locations: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query impossible container locations", err)
 	}
 	if impossibleLocationRows > 0 {
-		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with impossible container ranges=%d", impossibleLocationRows)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with impossible container ranges=%d", impossibleLocationRows), nil)
 	}
 
 	log.Println(" SUCCESS ")
@@ -169,10 +186,10 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
 		WHERE sb.id IS NULL
 	`).Scan(&missingBlockRows); err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: query missing storage_blocks: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: query missing storage_blocks", err)
 	}
 	if missingBlockRows > 0 {
-		return fmt.Errorf("verifyChunkBlockRefs: chunk_block_refs rows with missing storage_blocks=%d", missingBlockRows)
+		return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyChunkBlockRefs: chunk_block_refs rows with missing storage_blocks=%d", missingBlockRows), nil)
 	}
 
 	var missingChunkRows int64
@@ -182,10 +199,10 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 		LEFT JOIN chunk c ON c.id = r.chunk_id
 		WHERE c.id IS NULL
 	`).Scan(&missingChunkRows); err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: query missing chunk rows: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: query missing chunk rows", err)
 	}
 	if missingChunkRows > 0 {
-		return fmt.Errorf("verifyChunkBlockRefs: chunk_block_refs rows with missing chunks=%d", missingChunkRows)
+		return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyChunkBlockRefs: chunk_block_refs rows with missing chunks=%d", missingChunkRows), nil)
 	}
 
 	var invalidRanges int64
@@ -194,10 +211,10 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 		FROM chunk_block_refs
 		WHERE offset_in_block < 0 OR size_in_block <= 0
 	`).Scan(&invalidRanges); err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: query invalid ranges: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: query invalid ranges", err)
 	}
 	if invalidRanges > 0 {
-		return fmt.Errorf("verifyChunkBlockRefs: invalid chunk_block_refs ranges=%d", invalidRanges)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: invalid chunk_block_refs ranges=%d", invalidRanges), nil)
 	}
 
 	var completedNoPhysicalRows int64
@@ -208,10 +225,10 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id)
 		  AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.chunk_id = c.id)
 	`).Scan(&completedNoPhysicalRows); err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: query completed chunks without physical location: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: query completed chunks without physical location", err)
 	}
 	if completedNoPhysicalRows > 0 {
-		return fmt.Errorf("verifyChunkBlockRefs: completed chunks with no physical location=%d", completedNoPhysicalRows)
+		return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyChunkBlockRefs: completed chunks with no physical location=%d", completedNoPhysicalRows), nil)
 	}
 
 	var multiplePackedRows int64
@@ -224,10 +241,10 @@ func verifyChunkBlockRefs(dbconn *sql.DB) error {
 			HAVING COUNT(*) > 1
 		) t
 	`).Scan(&multiplePackedRows); err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: query chunks with multiple packed refs: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: query chunks with multiple packed refs", err)
 	}
 	if multiplePackedRows > 0 {
-		return fmt.Errorf("verifyChunkBlockRefs: chunks with multiple packed refs=%d", multiplePackedRows)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: chunks with multiple packed refs=%d", multiplePackedRows), nil)
 	}
 
 	if err := verifyChunkPhysicalLocationRules(ctx, dbconn); err != nil {
@@ -391,16 +408,19 @@ func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
 		path := filepath.Join(containersDir, b.filename)
 		fc, err := container.OpenReadOnlyContainer(path, b.maxSize)
 		if err != nil {
-			return fmt.Errorf("verifyBlockPayloads: open container for block %d: %w", b.id, err)
+			if errors.Is(err, os.ErrNotExist) {
+				return verifyCategoryError(verifyErrPhysicalMissing, fmt.Sprintf("verifyBlockPayloads: open container for block %d", b.id), err)
+			}
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: open container for block %d", b.id), err)
 		}
 
 		storedBytes, readErr := container.ReadPayloadAt(fc, b.containerOffset, b.storedSize)
 		closeErr := fc.Close()
 		if readErr != nil {
-			return fmt.Errorf("verifyBlockPayloads: read payload for block %d: %w", b.id, readErr)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: read payload for block %d", b.id), readErr)
 		}
 		if closeErr != nil {
-			return fmt.Errorf("verifyBlockPayloads: close container for block %d: %w", b.id, closeErr)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: close container for block %d", b.id), closeErr)
 		}
 
 		codec, err := resolveVerifyStorageBlockCodec(b.codec)
@@ -437,12 +457,12 @@ func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
 		}
 
 		if err := blocks.VerifyBlockHash(plaintextEncoded, b.blockHash); err != nil {
-			return fmt.Errorf("verifyBlockPayloads: block %d hash mismatch: %w", b.id, err)
+			return verifyCategoryError(verifyErrBlockHashMismatch, fmt.Sprintf("verifyBlockPayloads: block %d hash mismatch", b.id), err)
 		}
 
 		decoded, err := blocks.DecodeBlock(plaintextEncoded)
 		if err != nil {
-			return fmt.Errorf("verifyBlockPayloads: decode block %d: %w", b.id, err)
+			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: decode block %d", b.id), err)
 		}
 		if err := verifyDecodedBlockHeaderAndTable(b.id, b.formatVersion, b.codec, decoded); err != nil {
 			return err
@@ -552,7 +572,7 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 		}
 
 		if !strings.EqualFold(strings.TrimSpace(expected), computed) {
-			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected))
+			return verifyCategoryError(verifyErrChunkHashMismatch, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected)), nil)
 		}
 	}
 
@@ -757,7 +777,10 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		if fc == nil {
 			fc, err = container.OpenReadOnlyContainer(filepath.Join(containersDir, filename), maxSize)
 			if err != nil {
-				return fmt.Errorf("verifyLegacyChunkHashes: open container %q: %w", filename, err)
+				if errors.Is(err, os.ErrNotExist) {
+					return verifyCategoryError(verifyErrPhysicalMissing, fmt.Sprintf("verifyLegacyChunkHashes: open container %q", filename), err)
+				}
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: open container %q", filename), err)
 			}
 			openContainers[filename] = fc
 		}
@@ -791,7 +814,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		sum := sha256.Sum256(plaintext)
 		computed := hex.EncodeToString(sum[:])
 		if !strings.EqualFold(strings.TrimSpace(expectedChunkHash), computed) {
-			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d hash mismatch computed=%s expected=%s", chunkID, computed, strings.TrimSpace(expectedChunkHash))
+			return verifyCategoryError(verifyErrChunkHashMismatch, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d hash mismatch computed=%s expected=%s", chunkID, computed, strings.TrimSpace(expectedChunkHash)), nil)
 		}
 	}
 	if err := rows.Err(); err != nil {

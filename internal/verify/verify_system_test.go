@@ -1156,3 +1156,176 @@ func TestVerifyBlockPayloadsStrictModeRequiresExactEncodedChunkTable(t *testing.
 		t.Fatalf("expected strict-or-mandatory table mismatch error, got: %v", err)
 	}
 }
+
+func TestVerifyRepositoryErrorCategoryMetadataMissing(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable sqlite foreign_keys: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		strings.Repeat("a", 64),
+		int64(17),
+		filestate.ChunkAborted,
+		int64(0),
+		int64(0),
+		int64(0),
+		"v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES ($1, 9999, 0, 17)`, chunkID); err != nil {
+		t.Fatalf("insert orphan chunk_block_ref: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_missing:") {
+		t.Fatalf("expected metadata_missing category prefix, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryErrorCategoryMetadataInvalid(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"verify-invalid-storage-metadata-category.bin",
+		int64(4096),
+		int64(4096),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		2,
+		"plain",
+		int64(16),
+		int64(16),
+		containerID,
+		int64(0),
+		[]byte{0x01, 0x02},
+	); err != nil {
+		t.Fatalf("insert invalid storage_blocks row: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") {
+		t.Fatalf("expected metadata_invalid category prefix, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryErrorCategoryBlockHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("HASH")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate block hash: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), "block_hash_mismatch:") {
+		t.Fatalf("expected block_hash_mismatch category prefix, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryErrorCategoryChunkHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("alpha"), []byte("beta")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("0", 64), chunkIDs[0]); err != nil {
+		t.Fatalf("mutate chunk hash: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), "chunk_hash_mismatch:") {
+		t.Fatalf("expected chunk_hash_mismatch category prefix, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryErrorCategoryUnsupportedBlockFormat(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	binary.LittleEndian.PutUint32(payload[0:4], uint32(0x00000000))
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), "unsupported_block_format:") {
+		t.Fatalf("expected unsupported_block_format category prefix, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryErrorCategoryPhysicalMissing(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"missing-legacy-container.bin",
+		int64(1024),
+		int64(1024),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		strings.Repeat("a", 64),
+		int64(16),
+		filestate.ChunkCompleted,
+		int64(0),
+		int64(0),
+		int64(0),
+		"v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, x'', $4, $5)`,
+		chunkID,
+		int64(16),
+		int64(16),
+		containerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert legacy block row: %v", err)
+	}
+
+	err := verifyLegacyChunkHashes(dbconn, t.TempDir())
+	if err == nil || !strings.HasPrefix(err.Error(), "physical_missing:") {
+		t.Fatalf("expected physical_missing category prefix, got: %v", err)
+	}
+}
