@@ -281,7 +281,7 @@ func TestVerifyRepositoryRejectsInvalidDualLegacyPackedMapping(t *testing.T) {
 	var storageBlockID int64
 	if err := dbconn.QueryRow(
 		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		 VALUES (1, 'none', 80, 80, $1, $2, x'01')
+		 VALUES (1, 'none', 80, 80, $1, $2, zeroblob(32))
 		 RETURNING id`,
 		containerID,
 		int64(256),
@@ -315,5 +315,74 @@ func TestVerifyRepositoryRejectsInvalidDualLegacyPackedMapping(t *testing.T) {
 	err := VerifyRepository(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "outside migration companion contract") {
 		t.Fatalf("expected invalid dual mapping error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDetectsInvalidStorageBlockMetadataFields(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"verify-invalid-storage-metadata.bin",
+		int64(4096),
+		int64(4096),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		2,       // invalid by verify policy: must be 1
+		"plain", // invalid by verify policy: must be none
+		int64(16),
+		int64(16),
+		containerID,
+		int64(0),
+		[]byte{0x01, 0x02}, // invalid: expected 32 bytes
+	); err != nil {
+		t.Fatalf("insert invalid storage_blocks row: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "verifyStorageBlocks") || !strings.Contains(err.Error(), "invalid metadata fields") {
+		t.Fatalf("expected verifyStorageBlocks invalid metadata fields error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDetectsImpossibleStorageBlockContainerRange(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"verify-impossible-range.bin",
+		int64(128),
+		int64(128),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', $1, $2, $3, $4, zeroblob(32))`,
+		int64(64),
+		int64(100),
+		containerID,
+		int64(64), // 64 + 100 > 128
+	); err != nil {
+		t.Fatalf("insert impossible-range storage block: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "verifyStorageBlocks") || !strings.Contains(err.Error(), "impossible container ranges") {
+		t.Fatalf("expected impossible range error, got: %v", err)
 	}
 }

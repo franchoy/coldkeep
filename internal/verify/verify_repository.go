@@ -89,6 +89,22 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with missing container refs=%d", missingContainerRows)
 	}
 
+	var invalidFieldRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE format_version != 1
+		   OR codec != 'none'
+		   OR plaintext_size <= 0
+		   OR stored_size <= 0
+		   OR container_offset < 0
+	`).Scan(&invalidFieldRows); err != nil {
+		return fmt.Errorf("verifyStorageBlocks: query invalid field rows: %w", err)
+	}
+	if invalidFieldRows > 0 {
+		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with invalid metadata fields=%d", invalidFieldRows)
+	}
+
 	var missingHashRows int64
 	if err := dbconn.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -99,6 +115,32 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 	}
 	if missingHashRows > 0 {
 		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with empty block_hash=%d", missingHashRows)
+	}
+
+	const expectedBlockHashLen = 32
+	var invalidHashLenRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE length(block_hash) != $1
+	`, expectedBlockHashLen).Scan(&invalidHashLenRows); err != nil {
+		return fmt.Errorf("verifyStorageBlocks: query invalid block_hash length rows: %w", err)
+	}
+	if invalidHashLenRows > 0 {
+		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with invalid block_hash length=%d expected=%d", invalidHashLenRows, expectedBlockHashLen)
+	}
+
+	var impossibleLocationRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE sb.container_offset + sb.stored_size > c.current_size
+	`).Scan(&impossibleLocationRows); err != nil {
+		return fmt.Errorf("verifyStorageBlocks: query impossible container locations: %w", err)
+	}
+	if impossibleLocationRows > 0 {
+		return fmt.Errorf("verifyStorageBlocks: storage_blocks rows with impossible container ranges=%d", impossibleLocationRows)
 	}
 
 	log.Println(" SUCCESS ")
