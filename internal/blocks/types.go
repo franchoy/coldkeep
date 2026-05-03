@@ -51,6 +51,18 @@ type ChunkSegment struct {
 	Size    int64
 }
 
+// BlockStore is the minimal storage-block retrieval boundary for v1.8+.
+// It is intentionally small in Phase 1 and will be extended in later phases.
+type BlockStore interface {
+	GetBlock(blockID int64) (*Block, error)
+}
+
+// ChunkLocator resolves chunk placement inside a physical block.
+// This abstraction is introduced early as part of the future engine boundary.
+type ChunkLocator interface {
+	GetChunkSegment(chunkID int64) (*ChunkSegment, error)
+}
+
 type EncodeInput struct {
 	ChunkID   int64
 	ChunkHash string
