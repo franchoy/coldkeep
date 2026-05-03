@@ -2550,6 +2550,108 @@ func storeChunkAsPlainBlockWithWriter(
 	return placement, &encoded.Descriptor, nil
 }
 
+type packedBlockPersistResult struct {
+	BlockID    int64
+	BlockHash  []byte
+	Placement  container.LocalPlacement
+	StoredSize int64
+}
+
+// storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
+//
+// Atomic order (single transaction boundary):
+//  1. Encode plaintext block bytes
+//  2. Compute mandatory block hash on plaintext encoded bytes
+//  3. Transform/encrypt encoded block bytes
+//  4. Append transformed bytes to container
+//  5. Insert storage_blocks row
+//  6. Insert chunk_block_refs rows
+//
+// Invariant: no chunk_block_refs row is written before a successful storage_blocks
+// insert in the same transaction.
+func storePackedBlockWithWriter(
+	ctx context.Context,
+	tx *sql.Tx,
+	writer payloadStatefulWriter,
+	transformer blocks.Transformer,
+	builder *blocks.BlockBuilder,
+) (packedBlockPersistResult, error) {
+	if builder == nil || builder.Empty() {
+		return packedBlockPersistResult{}, fmt.Errorf("packed block flush requires non-empty builder")
+	}
+
+	// 1-2) Build block and compute mandatory hash over encoded plaintext bytes.
+	encodedBlock, _, err := builder.Build()
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	plaintextEncoded, err := blocks.EncodeBlock(encodedBlock)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	blockHash := blocks.ComputeBlockHash(plaintextEncoded)
+
+	// 3) Transform/encrypt encoded bytes for physical storage.
+	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
+		ChunkID:   0,
+		ChunkHash: hex.EncodeToString(blockHash),
+		Plaintext: plaintextEncoded,
+	})
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// 4) Append transformed payload to container.
+	placement, err := writer.AppendPayload(tx, transformed.Payload)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// 5) Insert storage_blocks metadata row.
+	var blockID int64
+	if err := tx.QueryRowContext(
+		ctx,
+		`INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, stored_size,
+			container_id, container_offset, block_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		int(encodedBlock.Header.Version),
+		string(transformed.Descriptor.Codec),
+		int64(len(plaintextEncoded)),
+		int64(len(transformed.Payload)),
+		placement.ContainerID,
+		placement.Offset,
+		blockHash,
+	).Scan(&blockID); err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// 6) Insert chunk -> packed-block placement rows.
+	for _, entry := range encodedBlock.Entries {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+			 VALUES ($1, $2, $3, $4)`,
+			int64(entry.ChunkID),
+			blockID,
+			int64(entry.Offset),
+			int64(entry.Size),
+		); err != nil {
+			return packedBlockPersistResult{}, err
+		}
+	}
+
+	return packedBlockPersistResult{
+		BlockID:    blockID,
+		BlockHash:  blockHash,
+		Placement:  placement,
+		StoredSize: int64(len(transformed.Payload)),
+	}, nil
+}
+
 // Store payload bytes directly in a container and return offset/size metadata.
 func StoreBlockPayload(c container.Container, payload []byte) (offset int64, newSize int64, err error) {
 	offset, err = c.Append(payload)

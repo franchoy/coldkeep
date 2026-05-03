@@ -234,6 +234,170 @@ func TestStoreDedupCheckHappensBeforeWriteBoundary(t *testing.T) {
 	}
 }
 
+func TestStorePackedBlockWithWriterCommitWritesBlockAndRefsAtomically(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	insertChunk := func(hash string, size int64) int64 {
+		t.Helper()
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, 1, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			size,
+			filestate.ChunkProcessing,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk: %v", err)
+		}
+		return chunkID
+	}
+
+	chunk1 := insertChunk("packed-commit-1", 3)
+	chunk2 := insertChunk("packed-commit-2", 4)
+
+	builder := blocks.NewBlockBuilder(64)
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunk1, Data: []byte("abc"), Size: 3}); err != nil {
+		t.Fatalf("add chunk1: %v", err)
+	}
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunk2, Data: []byte("wxyz"), Size: 4}); err != nil {
+		t.Fatalf("add chunk2: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+
+	ctx := context.Background()
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	result, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("store packed block: %v", err)
+	}
+	if result.BlockID <= 0 {
+		_ = tx.Rollback()
+		t.Fatalf("expected persisted storage_blocks id, got %d", result.BlockID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit packed block tx: %v", err)
+	}
+
+	var storageBlockRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlockRows); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+	if storageBlockRows != 1 {
+		t.Fatalf("expected one storage_blocks row, got %d", storageBlockRows)
+	}
+
+	var refRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRows); err != nil {
+		t.Fatalf("count chunk_block_refs: %v", err)
+	}
+	if refRows != 2 {
+		t.Fatalf("expected two chunk_block_refs rows, got %d", refRows)
+	}
+
+	var danglingRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk_block_refs r
+		LEFT JOIN storage_blocks b ON b.id = r.block_id
+		WHERE b.id IS NULL
+	`).Scan(&danglingRefs); err != nil {
+		t.Fatalf("count dangling refs: %v", err)
+	}
+	if danglingRefs != 0 {
+		t.Fatalf("expected no dangling chunk_block_refs, got %d", danglingRefs)
+	}
+}
+
+func TestStorePackedBlockWithWriterRollbackLeavesNoRefsOrBlockRows(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling')
+		 RETURNING id`,
+		"packed-rollback",
+		4,
+		filestate.ChunkProcessing,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	builder := blocks.NewBlockBuilder(64)
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunkID, Data: []byte("data"), Size: 4}); err != nil {
+		t.Fatalf("add chunk: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+
+	ctx := context.Background()
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	if _, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("store packed block before rollback: %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+
+	var storageBlockRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlockRows); err != nil {
+		t.Fatalf("count storage_blocks after rollback: %v", err)
+	}
+	if storageBlockRows != 0 {
+		t.Fatalf("expected zero storage_blocks rows after rollback, got %d", storageBlockRows)
+	}
+
+	var refRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRows); err != nil {
+		t.Fatalf("count chunk_block_refs after rollback: %v", err)
+	}
+	if refRows != 0 {
+		t.Fatalf("expected zero chunk_block_refs rows after rollback, got %d", refRows)
+	}
+}
+
 func TestNewStoreServiceUsesInjectedChunker(t *testing.T) {
 	const customChunkerVersion chunk.Version = "v1-simple-rolling-test-injected"
 	repo := NewRepository(nil)
