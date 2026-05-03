@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -175,6 +176,9 @@ func (r *StorageBlockReader) readBlockFromContainer(meta *blockMetadata) ([]byte
 // For "aes-gcm", decrypts and returns plaintext.
 func (r *StorageBlockReader) decryptBlock(ctx context.Context, meta *blockMetadata, storedBytes []byte) ([]byte, error) {
 	codec := blocks.Codec(meta.Codec)
+	if strings.EqualFold(strings.TrimSpace(meta.Codec), packedStorageBlockCodecNone) {
+		codec = blocks.CodecPlain
+	}
 
 	// Get or create transformer for this codec
 	transformer, ok := r.transformerCache[codec]

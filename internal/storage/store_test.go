@@ -137,6 +137,11 @@ type duplicateChunker struct {
 	payload []byte
 }
 
+type scriptedChunker struct {
+	version  chunk.Version
+	payloads [][]byte
+}
+
 func (c duplicateChunker) Version() chunk.Version {
 	return c.version
 }
@@ -148,6 +153,24 @@ func (c duplicateChunker) ChunkFile(path string) ([]chunk.Result, error) {
 		{Info: chunk.Info{Size: int64(len(left)), Offset: 0}, Data: left},
 		{Info: chunk.Info{Size: int64(len(right)), Offset: int64(len(left))}, Data: right},
 	}, nil
+}
+
+func (c scriptedChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c scriptedChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	results := make([]chunk.Result, 0, len(c.payloads))
+	offset := int64(0)
+	for _, p := range c.payloads {
+		payload := append([]byte(nil), p...)
+		results = append(results, chunk.Result{
+			Info: chunk.Info{Size: int64(len(payload)), Offset: offset},
+			Data: payload,
+		})
+		offset += int64(len(payload))
+	}
+	return results, nil
 }
 
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
@@ -256,6 +279,222 @@ func TestStoreDedupCheckHappensBeforeWriteBoundary(t *testing.T) {
 	}
 	if blockRows != 1 {
 		t.Fatalf("expected one persisted block row for deduplicated chunk, got %d", blockRows)
+	}
+}
+
+func TestStoreMixedExistingAndNewChunksPacksOnlyNewAndPreservesRecipeOrder(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "mixed-existing-new.bin")
+	if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn)
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+	blockRepo := &blocks.Repository{DB: dbconn}
+
+	hashHex := func(payload []byte) string {
+		sum := sha256.Sum256(payload)
+		return hex.EncodeToString(sum[:])
+	}
+
+	insertChunk := func(hash string, size int64, status string) int64 {
+		t.Helper()
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, 0, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			size,
+			status,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk: %v", err)
+		}
+		return chunkID
+	}
+
+	payloadA := []byte("chunk-A-existing-legacy")
+	payloadB := []byte("chunk-B-new")
+	payloadC := []byte("chunk-C-existing-packed")
+	payloadD := []byte("chunk-D-new")
+
+	hashA := hashHex(payloadA)
+	hashB := hashHex(payloadB)
+	hashC := hashHex(payloadC)
+	hashD := hashHex(payloadD)
+
+	// Seed A as existing legacy block.
+	chunkAID := insertChunk(hashA, int64(len(payloadA)), filestate.ChunkProcessing)
+	txA, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin txA: %v", err)
+	}
+	placementA, _, err := storeChunkAsPlainBlockWithWriter(context.Background(), txA, blockRepo, writer, chunkAID, hashA, payloadA, transformer)
+	if err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("seed legacy chunk A: %v", err)
+	}
+	if _, err := txA.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkAID); err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("mark chunk A completed: %v", err)
+	}
+	if err := container.UpdateContainerSize(txA, placementA.ContainerID, placementA.NewContainerSize); err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("update container size for A: %v", err)
+	}
+	if err := txA.Commit(); err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("commit seed A: %v", err)
+	}
+	acknowledgeWriterAppendCommitted(writer)
+
+	// Seed C as existing previously packed block (+ compatibility companion row).
+	chunkCID := insertChunk(hashC, int64(len(payloadC)), filestate.ChunkProcessing)
+	builderC := blocks.NewBlockBuilder(1 << 20)
+	if err := builderC.Add(blocks.PendingChunk{ChunkID: chunkCID, Data: payloadC, Size: int64(len(payloadC))}); err != nil {
+		t.Fatalf("build packed chunk C: %v", err)
+	}
+	txC, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin txC: %v", err)
+	}
+	persistedC, err := storePackedBlockWithWriter(context.Background(), txC, writer, transformer, builderC)
+	if err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("seed packed chunk C: %v", err)
+	}
+	if _, err := txC.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkCID); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("mark chunk C completed: %v", err)
+	}
+	if err := insertLegacyCompanionBlockRowWithContext(context.Background(), txC, chunkCID, persistedC.Placement.ContainerID, persistedC.Placement.Offset, int64(len(payloadC))); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("insert companion block row for C: %v", err)
+	}
+	if err := container.UpdateContainerSize(txC, persistedC.Placement.ContainerID, persistedC.Placement.NewContainerSize); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("update container size for C: %v", err)
+	}
+	if err := txC.Commit(); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("commit seed C: %v", err)
+	}
+	acknowledgeWriterAppendCommitted(writer)
+
+	var storageBlocksBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlocksBefore); err != nil {
+		t.Fatalf("count storage_blocks before: %v", err)
+	}
+	var refsBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsBefore); err != nil {
+		t.Fatalf("count chunk_block_refs before: %v", err)
+	}
+
+	chunker := scriptedChunker{
+		version:  chunk.VersionV1SimpleRolling,
+		payloads: [][]byte{payloadA, payloadB, payloadC, payloadD},
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: workDir,
+		Chunker:      chunker,
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store mixed existing/new file: %v", err)
+	}
+
+	rows, err := dbconn.Query(
+		`SELECT fc.chunk_order, c.chunk_hash
+		 FROM file_chunk fc
+		 JOIN chunk c ON c.id = fc.chunk_id
+		 WHERE fc.logical_file_id = $1
+		 ORDER BY fc.chunk_order`,
+		result.FileID,
+	)
+	if err != nil {
+		t.Fatalf("query file recipe rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	gotHashes := make([]string, 0, 4)
+	for rows.Next() {
+		var order int
+		var hash string
+		if err := rows.Scan(&order, &hash); err != nil {
+			t.Fatalf("scan recipe row: %v", err)
+		}
+		if order != len(gotHashes) {
+			t.Fatalf("unexpected recipe order: got %d at position %d", order, len(gotHashes))
+		}
+		gotHashes = append(gotHashes, hash)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate recipe rows: %v", err)
+	}
+
+	wantHashes := []string{hashA, hashB, hashC, hashD}
+	if len(gotHashes) != len(wantHashes) {
+		t.Fatalf("recipe length mismatch: got %d want %d", len(gotHashes), len(wantHashes))
+	}
+	for i := range wantHashes {
+		if gotHashes[i] != wantHashes[i] {
+			t.Fatalf("recipe hash mismatch at index %d: got %q want %q", i, gotHashes[i], wantHashes[i])
+		}
+	}
+
+	var storageBlocksAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlocksAfter); err != nil {
+		t.Fatalf("count storage_blocks after: %v", err)
+	}
+	if storageBlocksAfter-storageBlocksBefore != 2 {
+		t.Fatalf("expected exactly two new packed storage_blocks rows (B and D), got delta %d", storageBlocksAfter-storageBlocksBefore)
+	}
+
+	var refsAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsAfter); err != nil {
+		t.Fatalf("count chunk_block_refs after: %v", err)
+	}
+	if refsAfter-refsBefore != 2 {
+		t.Fatalf("expected exactly two new chunk_block_refs rows (B and D), got delta %d", refsAfter-refsBefore)
+	}
+
+	var refsForA int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs r JOIN chunk c ON c.id = r.chunk_id WHERE c.chunk_hash = $1`, hashA).Scan(&refsForA); err != nil {
+		t.Fatalf("count refs for A: %v", err)
+	}
+	if refsForA != 0 {
+		t.Fatalf("expected no packed refs for existing legacy chunk A, got %d", refsForA)
+	}
+
+	outPath := filepath.Join(workDir, "mixed-restore.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, result.FileID, outPath, workDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore mixed file: %v", err)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	want := append(append(append([]byte{}, payloadA...), payloadB...), append(payloadC, payloadD...)...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("restored bytes mismatch: got=%q want=%q", string(got), string(want))
 	}
 }
 
