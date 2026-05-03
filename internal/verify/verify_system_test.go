@@ -163,3 +163,44 @@ func TestVerifySystemStandardDetectsEmptyChunkChunkerVersion(t *testing.T) {
 		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodePhysicalGraphIntegrity, code, ok, err)
 	}
 }
+
+func TestVerifyRepositoryDetectsChunkBlockRefMissingStorageBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable sqlite foreign_keys: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		strings.Repeat("f", 64),
+		int64(17),
+		filestate.ChunkAborted,
+		int64(0),
+		int64(0),
+		int64(0),
+		"v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		chunkID,
+		int64(9999),
+		int64(0),
+		int64(17),
+	); err != nil {
+		t.Fatalf("insert orphan chunk_block_ref: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "missing storage_blocks") {
+		t.Fatalf("expected verifyChunkBlockRefs missing storage_blocks error, got: %v", err)
+	}
+}

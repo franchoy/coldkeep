@@ -122,13 +122,8 @@ func VerifySystemStandardWithContainersDir(dbconn *sql.DB, containersDir string)
 		return err
 	}
 
-	// --- Physical integrity ---
-	if err := runPhysicalIntegrityChecks(dbconn); err != nil {
-		return err
-	}
-
-	// --- Logical reconstruction ---
-	if err := runLogicalReconstructionChecks(dbconn); err != nil {
+	// Phase 5 layered verification entrypoint.
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
 		return err
 	}
 
