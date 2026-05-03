@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,6 +216,53 @@ func TestVerifyRepositoryDetectsChunkBlockRefMissingStorageBlock(t *testing.T) {
 	}
 }
 
+func TestVerifyRepositoryDetectsChunkBlockRefInvalidChunkID(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable sqlite foreign_keys: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"verify-invalid-chunk-id.bin",
+		int64(4096),
+		int64(4096),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var blockID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', 32, 32, $1, 0, zeroblob(32))
+		 RETURNING id`,
+		containerID,
+	).Scan(&blockID); err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		int64(9999),
+		blockID,
+		int64(0),
+		int64(32),
+	); err != nil {
+		t.Fatalf("insert invalid chunk id row: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "missing chunks") {
+		t.Fatalf("expected invalid chunk_id error, got: %v", err)
+	}
+}
+
 func TestVerifyRepositoryDetectsFileChunkMissingChunkRef(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -415,6 +464,117 @@ func TestVerifyRepositoryDetectsCompletedChunkWithoutPhysicalLocation(t *testing
 	err := verifyChunkBlockRefs(dbconn)
 	if err == nil || !strings.Contains(err.Error(), "no physical location") {
 		t.Fatalf("expected no-physical-location error, got: %v", err)
+	}
+}
+
+func TestVerifyChunkBlockRefsDetectsDuplicateChunkBlockRefs(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("dup-test")}, nil)
+
+	if _, err := dbconn.Exec(`ALTER TABLE chunk_block_refs RENAME TO chunk_block_refs_old`); err != nil {
+		t.Fatalf("rename chunk_block_refs table for duplicate corruption test: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		CREATE TABLE chunk_block_refs (
+			chunk_id INTEGER NOT NULL,
+			block_id INTEGER NOT NULL,
+			offset_in_block INTEGER NOT NULL,
+			size_in_block INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("recreate chunk_block_refs table without PK: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) SELECT chunk_id, block_id, offset_in_block, size_in_block FROM chunk_block_refs_old`); err != nil {
+		t.Fatalf("copy rows into corrupted chunk_block_refs: %v", err)
+	}
+	if _, err := dbconn.Exec(`DROP TABLE chunk_block_refs_old`); err != nil {
+		t.Fatalf("drop old chunk_block_refs table: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		chunkIDs[0],
+		blockID,
+		int64(0),
+		int64(len([]byte("dup-test"))),
+	); err != nil {
+		t.Fatalf("insert duplicate chunk_block_ref row: %v", err)
+	}
+
+	err := verifyChunkBlockRefs(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "multiple packed refs") {
+		t.Fatalf("expected duplicate chunk_block_ref detection, got: %v", err)
+	}
+}
+
+func packedFixtureBlockStorageMeta(t *testing.T, dbconn *sql.DB, blockID int64, containersDir string) (string, int64, int64, int64) {
+	t.Helper()
+
+	var filename string
+	var containerOffset int64
+	var storedSize int64
+	var plaintextSize int64
+	if err := dbconn.QueryRow(`
+		SELECT c.filename, sb.container_offset, sb.stored_size, sb.plaintext_size
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE sb.id = $1
+	`, blockID).Scan(&filename, &containerOffset, &storedSize, &plaintextSize); err != nil {
+		t.Fatalf("query storage block metadata: %v", err)
+	}
+
+	path := filepath.Join(containersDir, filename)
+	return path, containerOffset, storedSize, plaintextSize
+}
+
+func readPackedStoredBytesForTest(t *testing.T, path string, offset int64, size int64) []byte {
+	t.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open container for read: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	buf := make([]byte, size)
+	n, err := f.ReadAt(buf, offset)
+	if err != nil {
+		t.Fatalf("read stored bytes: %v", err)
+	}
+	if int64(n) != size {
+		t.Fatalf("short read for stored bytes: got %d want %d", n, size)
+	}
+	return buf
+}
+
+func overwritePackedStoredBytesForTest(t *testing.T, path string, offset int64, payload []byte) {
+	t.Helper()
+
+	f, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("open container for write: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	n, err := f.WriteAt(payload, offset)
+	if err != nil {
+		t.Fatalf("write stored bytes: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("short write for stored bytes: got %d want %d", n, len(payload))
+	}
+}
+
+func setPackedBlockHashForBytes(t *testing.T, dbconn *sql.DB, blockID int64, payload []byte) {
+	t.Helper()
+
+	h := blocks.ComputeBlockHash(payload)
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = $1 WHERE id = $2`, h, blockID); err != nil {
+		t.Fatalf("update block hash for mutated payload: %v", err)
 	}
 }
 
@@ -642,6 +802,163 @@ func TestVerifyBlockPayloadsDetectsSegmentOutOfBounds(t *testing.T) {
 	err := verifyBlockPayloads(dbconn, containersDir)
 	if err == nil || (!strings.Contains(err.Error(), "segment out of payload bounds") && !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table")) {
 		t.Fatalf("expected out-of-bounds-or-table-mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsSegmentSizeBeyondPayload(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkIDs[0]); err != nil {
+		t.Fatalf("clear default refs for size-beyond-payload test: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		chunkIDs[0],
+		blockID,
+		int64(0),
+		int64(99),
+	); err != nil {
+		t.Fatalf("insert size-beyond-payload ref: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || (!strings.Contains(err.Error(), "segment out of payload bounds") && !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table") && !strings.Contains(err.Error(), "size mismatch")) {
+		t.Fatalf("expected size-beyond-payload-or-table-mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsSegmentOffsetSizeOverflow(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkIDs[0]); err != nil {
+		t.Fatalf("clear default refs for overflow test: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		chunkIDs[0],
+		blockID,
+		int64(math.MaxInt64-1),
+		int64(64),
+	); err != nil {
+		t.Fatalf("insert overflow ref: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || (!strings.Contains(err.Error(), "segment out of payload bounds") && !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table") && !strings.Contains(err.Error(), "size mismatch")) {
+		t.Fatalf("expected overflow-or-table-mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyChunkBlockRefsDetectsZeroSizeSegment(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	if _, err := dbconn.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+		t.Fatalf("disable sqlite check constraints: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE chunk_block_refs SET size_in_block = 0 WHERE chunk_id = $1`, chunkIDs[0]); err != nil {
+		t.Fatalf("force zero-size segment row: %v", err)
+	}
+
+	err := verifyChunkBlockRefs(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "invalid chunk_block_refs ranges") {
+		t.Fatalf("expected zero-size segment range error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsBadBlockMagic(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	binary.LittleEndian.PutUint32(payload[0:4], uint32(0x00000000))
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected bad magic decode error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsUnsupportedBlockVersion(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	binary.LittleEndian.PutUint16(payload[4:6], uint16(99))
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected unsupported version decode error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsTruncatedEncodedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	if len(payload) < 8 {
+		t.Fatalf("fixture payload unexpectedly small: %d", len(payload))
+	}
+	truncated := payload[:len(payload)-5]
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET stored_size = $1, plaintext_size = $2 WHERE id = $3`, int64(len(truncated)), int64(len(truncated)), blockID); err != nil {
+		t.Fatalf("update storage block sizes to truncated length: %v", err)
+	}
+	overwritePackedStoredBytesForTest(t, path, offset, truncated)
+	setPackedBlockHashForBytes(t, dbconn, blockID, truncated)
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected truncated encoded block decode error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsCorruptedStoredBytes(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	payload[len(payload)-1] ^= 0xFF
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("expected corrupted stored bytes chunk-hash mismatch error, got: %v", err)
 	}
 }
 
