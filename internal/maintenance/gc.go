@@ -560,20 +560,16 @@ func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, container
 	}
 
 	if len(deletablePackedBlockIDs) > 0 {
+		// Metadata deletion order is intentional and must remain transactional:
+		// 1) delete chunk_block_refs for the dead packed block
+		// 2) delete storage_blocks row
+		// 3) physical bytes follow existing container lifecycle behavior
+		//    (whole-container metadata+file deletion after commit in current model)
+		//
+		// This preserves the crash-safety invariant that no committed
+		// chunk_block_ref can point to a deleted storage_block.
 		for _, blockID := range deletablePackedBlockIDs {
-			if _, err := execer.ExecContext(ctx, `
-				DELETE FROM chunk_block_refs
-				WHERE block_id = $1
-			`, blockID); err != nil {
-				return err
-			}
-		}
-
-		for _, blockID := range deletablePackedBlockIDs {
-			if _, err := execer.ExecContext(ctx, `
-				DELETE FROM storage_blocks
-				WHERE id = $1
-			`, blockID); err != nil {
+			if err := deletePackedBlockMetadata(ctx, execer, blockID); err != nil {
 				return err
 			}
 		}
@@ -630,6 +626,24 @@ func deletablePackedBlockIDsForContainer(ctx context.Context, q gcChunkQuerier, 
 	}
 
 	return out, nil
+}
+
+func deletePackedBlockMetadata(ctx context.Context, execer gcSweepExecer, blockID int64) error {
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM chunk_block_refs
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		return err
+	}
+
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM storage_blocks
+		WHERE id = $1
+	`, blockID); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // cleanupFullyDeadActiveContainers deletes active (unsealed) containers in which
