@@ -13,7 +13,7 @@ type AESGCMTransformer struct {
 	Key []byte
 }
 
-func (t *AESGCMTransformer) Encode(_ context.Context, in EncodeInput) (*EncodedBlock, error) {
+func (t *AESGCMTransformer) Encode(_ context.Context, in EncodeInput) (*TransformedBlock, error) {
 	block, err := aes.NewCipher(t.Key)
 	if err != nil {
 		return nil, fmt.Errorf("create cipher: %w", err)
@@ -40,7 +40,7 @@ func (t *AESGCMTransformer) Encode(_ context.Context, in EncodeInput) (*EncodedB
 		Nonce:         nonce,
 	}
 
-	return &EncodedBlock{
+	return &TransformedBlock{
 		Descriptor: desc,
 		Payload:    ciphertext,
 	}, nil

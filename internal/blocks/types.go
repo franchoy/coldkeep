@@ -75,7 +75,7 @@ type DecodeInput struct {
 	Payload    []byte
 }
 
-type EncodedBlock struct {
+type TransformedBlock struct {
 	Descriptor Descriptor
 	Payload    []byte
 }

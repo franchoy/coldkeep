@@ -52,6 +52,14 @@ type ChunkEntry struct {
 	Size    uint64
 }
 
+// EncodedBlock is the in-memory representation of a decoded/constructed
+// plaintext block format payload in v1 layout.
+type EncodedBlock struct {
+	Header  BlockHeader
+	Entries []ChunkEntry
+	Payload []byte
+}
+
 // PackedChunk is an encode helper input for building payload and chunk table
 // deterministically from an ordered chunk sequence.
 type PackedChunk struct {
@@ -59,12 +67,8 @@ type PackedChunk struct {
 	Data    []byte
 }
 
-// PackedBlockV1 is the in-memory representation of a decoded v1 encoded block.
-type PackedBlockV1 struct {
-	Header  BlockHeader
-	Entries []ChunkEntry
-	Payload []byte
-}
+// PackedBlockV1 remains as a compatibility alias during Phase 2 rollout.
+type PackedBlockV1 = EncodedBlock
 
 // EncodedPackedBlockV1 is the result of encoding v1 block bytes.
 // BlockHash is mandatory and computed from plaintext encoded block bytes.
