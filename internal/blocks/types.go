@@ -1,6 +1,7 @@
 package blocks
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -61,6 +62,18 @@ type BlockStore interface {
 // This abstraction is introduced early as part of the future engine boundary.
 type ChunkLocator interface {
 	GetChunkSegment(chunkID int64) (*ChunkSegment, error)
+}
+
+// BlockReader provides context-aware read access to decoded blocks.
+// Used in Phase 3+ read path abstraction for both v1.7 and v1.8 formats.
+type BlockReader interface {
+	ReadBlock(ctx context.Context, blockID int64) (*EncodedBlock, error)
+}
+
+// ChunkResolver provides context-aware resolution of chunk placement inside blocks.
+// Used in Phase 3+ read path abstraction for both v1.7 and v1.8 layouts.
+type ChunkResolver interface {
+	ResolveChunk(ctx context.Context, chunkID int64) (*ChunkSegment, error)
 }
 
 type EncodeInput struct {
