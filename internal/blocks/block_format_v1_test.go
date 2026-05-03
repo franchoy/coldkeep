@@ -417,6 +417,13 @@ func TestDecodePackedBlockV1RejectsInvalidEntryBounds(t *testing.T) {
 	}
 }
 
+func TestEncodePackedBlockV1RejectsZeroSizeChunk(t *testing.T) {
+	_, err := EncodePackedBlockV1([]ChunkEntry{{ChunkID: 1, Offset: 0, Size: 0}}, []byte{})
+	if err == nil {
+		t.Fatal("expected encode error for zero-size chunk entry")
+	}
+}
+
 func TestHashPlaintextEncodedBlockMatchesEncodedResult(t *testing.T) {
 	enc, err := EncodePackedBlockV1([]ChunkEntry{{ChunkID: 7, Offset: 0, Size: 4}}, []byte("data"))
 	if err != nil {
