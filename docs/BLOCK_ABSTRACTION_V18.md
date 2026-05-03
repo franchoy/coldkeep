@@ -131,3 +131,21 @@ Explicit Phase 1 decision:
 - Option B (bulk migration converting legacy `blocks` into packed-table rows during upgrade) is deferred and is not part of Phase 1.
 - No forced rewrite of existing physical payloads or metadata is allowed in Phase 1.
 
+## Phase 1 Step 6 Versioning Strategy (Locked)
+
+Version field introduced and fixed for v1.8 packed blocks:
+
+```text
+format_version = 1
+```
+
+Version mapping rules:
+
+- Legacy v1.7 `blocks` rows are treated by adapter logic as implicit `format_version = 0`.
+- Native v1.8 packed blocks in `storage_blocks` are persisted with `format_version = 1`.
+
+Forward-compatibility intent:
+
+- Reader abstraction must branch by effective format version and fail closed on unsupported versions.
+- This mapping is reserved to enable future v1.9+ format evolution without rewriting v1.7/v1.8 data.
+
