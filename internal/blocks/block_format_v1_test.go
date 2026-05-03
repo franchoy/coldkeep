@@ -424,6 +424,49 @@ func TestEncodePackedBlockV1RejectsZeroSizeChunk(t *testing.T) {
 	}
 }
 
+func TestEncodePackedBlockV1RejectsFirstOffsetNotZero(t *testing.T) {
+	_, err := EncodePackedBlockV1([]ChunkEntry{{ChunkID: 1, Offset: 1, Size: 1}}, []byte("ab"))
+	if err == nil {
+		t.Fatal("expected encode error for first offset != 0")
+	}
+}
+
+func TestEncodePackedBlockV1RejectsGapBetweenEntries(t *testing.T) {
+	_, err := EncodePackedBlockV1(
+		[]ChunkEntry{
+			{ChunkID: 1, Offset: 0, Size: 1},
+			{ChunkID: 2, Offset: 2, Size: 1},
+		},
+		[]byte("abc"),
+	)
+	if err == nil {
+		t.Fatal("expected encode error for gap between entries")
+	}
+}
+
+func TestEncodePackedBlockV1RejectsOverlapEntries(t *testing.T) {
+	_, err := EncodePackedBlockV1(
+		[]ChunkEntry{
+			{ChunkID: 1, Offset: 0, Size: 2},
+			{ChunkID: 2, Offset: 1, Size: 1},
+		},
+		[]byte("abc"),
+	)
+	if err == nil {
+		t.Fatal("expected encode error for overlapping entries")
+	}
+}
+
+func TestEncodePackedBlockV1RejectsFinalEndNotEqualPayloadSize(t *testing.T) {
+	_, err := EncodePackedBlockV1(
+		[]ChunkEntry{{ChunkID: 1, Offset: 0, Size: 1}},
+		[]byte("ab"),
+	)
+	if err == nil {
+		t.Fatal("expected encode error when final entry end != payload size")
+	}
+}
+
 func TestHashPlaintextEncodedBlockMatchesEncodedResult(t *testing.T) {
 	enc, err := EncodePackedBlockV1([]ChunkEntry{{ChunkID: 7, Offset: 0, Size: 4}}, []byte("data"))
 	if err != nil {

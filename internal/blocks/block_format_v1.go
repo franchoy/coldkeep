@@ -290,14 +290,23 @@ func SliceChunkFromPayload(payload []byte, entry ChunkEntry) ([]byte, error) {
 }
 
 func validateChunkEntries(entries []ChunkEntry, payloadSize uint64) error {
+	expectedOffset := uint64(0)
 	for _, entry := range entries {
 		if entry.Size == 0 {
+			return ErrBlockFormatInvalidLayout
+		}
+		if entry.Offset != expectedOffset {
 			return ErrBlockFormatInvalidLayout
 		}
 		end := entry.Offset + entry.Size
 		if end < entry.Offset || end > payloadSize {
 			return ErrBlockFormatInvalidLayout
 		}
+		expectedOffset = end
+	}
+
+	if expectedOffset != payloadSize {
+		return ErrBlockFormatInvalidLayout
 	}
 	return nil
 }
