@@ -165,3 +165,59 @@ Release gate for Phase 1 completion:
 - Existing v1.7 repositories continue to operate unchanged.
 - New Phase 1 artifacts exist for later phases but remain behaviorally inert.
 
+## Phase 2 Design Decisions (Locked)
+
+### Mandatory Block Hash
+
+```text
+block_hash = hash(plaintext_encoded_block)
+```
+
+Rules:
+
+- Computed before encryption.
+- Validates full block integrity.
+- Independent from container placement and encryption state.
+
+### v1.8 Encoding Pipeline
+
+```text
+chunks -> pack -> encode -> hash -> encrypt -> store
+```
+
+Not used:
+
+- hash(encrypted)
+- hash(per chunk)
+
+## Phase 2 Step 1 Binary Format (Locked)
+
+Final deterministic layout:
+
+```text
+| HEADER | CHUNK_TABLE | PAYLOAD |
+```
+
+Header (fixed size):
+
+- `magic` (`uint32`) = `0x434B424C` (`"CKBL"`)
+- `version` (`uint16`) = `1`
+- `codec` (`uint16`) = `0` (none)
+- `chunk_count` (`uint32`)
+- `plaintext_size` (`uint64`)
+
+Chunk table entry (repeated `chunk_count` times):
+
+- `chunk_id` (`uint64`)
+- `offset` (`uint64`)
+- `size` (`uint64`)
+
+Payload:
+
+- Concatenated chunk plaintext bytes.
+
+Phase boundary note:
+
+- Step 1 introduces isolated encode/decode/hash logic and format validation only.
+- Runtime store/restore integration remains deferred to later Phase 2 steps.
+
