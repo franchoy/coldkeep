@@ -36,6 +36,15 @@ var gcLoadLivePackedBlockIDs = func(ctx context.Context, dbconn *sql.DB) (map[in
 	return LoadLivePackedBlockIDs(ctx, dbconn)
 }
 
+var gcLoadLiveLegacyContainerIDs = func(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	return LoadLiveLegacyContainerIDs(ctx, dbconn)
+}
+
+type livePhysicalUnits struct {
+	LegacyLiveContainerIDs map[int64]struct{}
+	PackedLiveBlockIDs     map[int64]struct{}
+}
+
 // GCResult contains structured metadata about a GC run.
 // Non-dry-run GC is state-changing: it deletes unreferenced metadata rows and
 // container files. Dry-run is read-only and only reports what would be removed.
@@ -164,6 +173,14 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	if err != nil {
 		return GCResult{}, fmt.Errorf("GC pre-flight: failed to load live packed blocks: %w", err)
 	}
+	liveLegacyContainerIDs, err := gcLoadLiveLegacyContainerIDs(ctx, dbconn)
+	if err != nil {
+		return GCResult{}, fmt.Errorf("GC pre-flight: failed to load live legacy containers: %w", err)
+	}
+	liveUnits := livePhysicalUnits{
+		LegacyLiveContainerIDs: liveLegacyContainerIDs,
+		PackedLiveBlockIDs:     livePackedBlockIDs,
+	}
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
@@ -212,12 +229,12 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 				_ = tx.Rollback()
 				return GCResult{}, err
 			}
-			hasLivePacked, err := containerHasLivePackedBlocks(ctx, tx, containerID, livePackedBlockIDs)
+			hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, tx, containerID, liveUnits)
 			if err != nil {
 				_ = tx.Rollback()
-				return GCResult{}, fmt.Errorf("live packed block check for container %d: %w", containerID, err)
+				return GCResult{}, fmt.Errorf("live physical unit check for container %d: %w", containerID, err)
 			}
-			if hasLivePacked {
+			if hasLiveUnits {
 				stillEmpty = false
 			}
 		} else {
@@ -263,12 +280,12 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 				_ = tx.Rollback()
 				return GCResult{}, err
 			}
-			hasLivePacked, err := containerHasLivePackedBlocks(ctx, tx, containerID, livePackedBlockIDs)
+			hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, tx, containerID, liveUnits)
 			if err != nil {
 				_ = tx.Rollback()
-				return GCResult{}, fmt.Errorf("live packed block check for container %d: %w", containerID, err)
+				return GCResult{}, fmt.Errorf("live physical unit check for container %d: %w", containerID, err)
 			}
-			if hasLivePacked {
+			if hasLiveUnits {
 				stillEmpty = false
 			}
 		}
@@ -341,7 +358,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	// they will be sealed and collected by the regular sealed-container path later.
 	// Dry-run skips this to avoid side effects.
 	if !dryRun {
-		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks, livePackedBlockIDs); err != nil {
+		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks, liveUnits); err != nil {
 			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
 		}
 	}
@@ -383,6 +400,40 @@ func LoadLivePackedBlockIDs(ctx context.Context, dbconn *sql.DB) (map[int64]stru
 		return nil, err
 	}
 	return packedBlockIDsForChunks(ctx, dbconn, liveChunkIDs)
+}
+
+// LoadLiveLegacyContainerIDs resolves live chunks (live_ref_count > 0 OR pin_count > 0)
+// to legacy container ids through blocks rows.
+func LoadLiveLegacyContainerIDs(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT DISTINCT b.container_id
+		FROM blocks b
+		JOIN chunk ch ON ch.id = b.chunk_id
+		WHERE ch.status = 'COMPLETED'
+		AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	containerIDs := make(map[int64]struct{})
+	for rows.Next() {
+		var containerID int64
+		if err := rows.Scan(&containerID); err != nil {
+			return nil, err
+		}
+		containerIDs[containerID] = struct{}{}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return containerIDs, nil
 }
 
 // containerHasReachableChunks reports whether any chunk in containerID is in
@@ -514,7 +565,7 @@ func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, container
 // offset invariant is preserved by removing the container entirely — no offsets shift.
 // Partially-dead containers (mixed live and dead chunks) are left intact;
 // they will be handled by the regular sealed-container GC path once sealed.
-func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, livePackedBlockIDs map[int64]struct{}) error {
+func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, liveUnits livePhysicalUnits) error {
 	// Identify active containers where no chunk is still live or pinned.
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT c.id, c.filename
@@ -572,11 +623,11 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 		if hasRetained {
 			continue
 		}
-		hasLivePacked, err := containerHasLivePackedBlocks(ctx, dbconn, ac.id, livePackedBlockIDs)
+		hasLiveUnits, err := containerHasLivePhysicalUnits(ctx, dbconn, ac.id, liveUnits)
 		if err != nil {
-			return fmt.Errorf("live packed block check for active container %d: %w", ac.id, err)
+			return fmt.Errorf("live physical unit check for active container %d: %w", ac.id, err)
 		}
-		if hasLivePacked {
+		if hasLiveUnits {
 			continue
 		}
 
@@ -603,12 +654,12 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 			_ = tx.Rollback()
 			return err
 		}
-		hasLivePacked, err = containerHasLivePackedBlocks(ctx, tx, ac.id, livePackedBlockIDs)
+		hasLiveUnits, err = containerHasLivePhysicalUnits(ctx, tx, ac.id, liveUnits)
 		if err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("live packed block check for active container %d: %w", ac.id, err)
+			return fmt.Errorf("live physical unit check for active container %d: %w", ac.id, err)
 		}
-		if hasLivePacked {
+		if hasLiveUnits {
 			stillFullyDead = false
 		}
 		if !stillFullyDead {
@@ -730,4 +781,11 @@ func containerHasLivePackedBlocks(ctx context.Context, q gcChunkQuerier, contain
 	}
 
 	return false, rows.Err()
+}
+
+func containerHasLivePhysicalUnits(ctx context.Context, q gcChunkQuerier, containerID int64, liveUnits livePhysicalUnits) (bool, error) {
+	if _, ok := liveUnits.LegacyLiveContainerIDs[containerID]; ok {
+		return true, nil
+	}
+	return containerHasLivePackedBlocks(ctx, q, containerID, liveUnits.PackedLiveBlockIDs)
 }

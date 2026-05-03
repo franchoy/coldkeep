@@ -74,6 +74,52 @@ func TestLoadLivePackedBlockIDsResolvesFromLiveChunks(t *testing.T) {
 	}
 }
 
+func TestLoadLiveLegacyContainerIDsResolvesFromLiveChunks(t *testing.T) {
+	dbconn := openPackedGCUnitDB(t)
+
+	resA, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('legacy-live.bin', 1, 0, 64, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container A: %v", err)
+	}
+	containerLiveID, _ := resA.LastInsertId()
+
+	resB, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('legacy-dead.bin', 1, 0, 64, 1024)`)
+	if err != nil {
+		t.Fatalf("insert container B: %v", err)
+	}
+	containerDeadID, _ := resB.LastInsertId()
+
+	liveChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('legacy-live-chunk', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live chunk: %v", err)
+	}
+	liveChunkID, _ := liveChunkRes.LastInsertId()
+
+	deadChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('legacy-dead-chunk', 64, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert dead chunk: %v", err)
+	}
+	deadChunkID, _ := deadChunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 64, 64, ?, 0)`, liveChunkID, containerLiveID); err != nil {
+		t.Fatalf("insert live legacy block: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 64, 64, ?, 0)`, deadChunkID, containerDeadID); err != nil {
+		t.Fatalf("insert dead legacy block: %v", err)
+	}
+
+	liveLegacyContainers, err := LoadLiveLegacyContainerIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLiveLegacyContainerIDs: %v", err)
+	}
+	if _, ok := liveLegacyContainers[containerLiveID]; !ok {
+		t.Fatalf("expected legacy live container id %d", containerLiveID)
+	}
+	if _, ok := liveLegacyContainers[containerDeadID]; ok {
+		t.Fatalf("unexpected legacy dead container id %d in live set", containerDeadID)
+	}
+}
+
 func TestContainerHasReachableChunksIncludesPackedRefs(t *testing.T) {
 	dbconn := openPackedGCUnitDB(t)
 
@@ -160,5 +206,113 @@ func TestSweepUnreachableChunksDeletesPackedMappings(t *testing.T) {
 	}
 	if chunks != 0 {
 		t.Fatalf("chunk rows remaining = %d, want 0", chunks)
+	}
+}
+
+func TestContainerHasLivePhysicalUnitsSupportsLegacyPackedAndMixed(t *testing.T) {
+	dbconn := openPackedGCUnitDB(t)
+
+	legacyContainerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('legacy-only.bin', 1, 0, 64, 1024)`)
+	if err != nil {
+		t.Fatalf("insert legacy container: %v", err)
+	}
+	legacyContainerID, _ := legacyContainerRes.LastInsertId()
+
+	packedContainerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('packed-only.bin', 1, 0, 64, 1024)`)
+	if err != nil {
+		t.Fatalf("insert packed container: %v", err)
+	}
+	packedContainerID, _ := packedContainerRes.LastInsertId()
+
+	mixedContainerRes, err := dbconn.Exec(`INSERT INTO container (filename, sealed, quarantine, current_size, max_size) VALUES ('mixed.bin', 1, 0, 128, 1024)`)
+	if err != nil {
+		t.Fatalf("insert mixed container: %v", err)
+	}
+	mixedContainerID, _ := mixedContainerRes.LastInsertId()
+
+	liveLegacyChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('legacy-live', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live legacy chunk: %v", err)
+	}
+	liveLegacyChunkID, _ := liveLegacyChunkRes.LastInsertId()
+
+	livePackedChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('packed-live', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live packed chunk: %v", err)
+	}
+	livePackedChunkID, _ := livePackedChunkRes.LastInsertId()
+
+	liveMixedPackedChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('packed-live-mixed', 64, 'COMPLETED', 1, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert live mixed packed chunk: %v", err)
+	}
+	liveMixedPackedChunkID, _ := liveMixedPackedChunkRes.LastInsertId()
+
+	deadChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version) VALUES ('dead-mixed', 64, 'COMPLETED', 0, 0, 'v2-fastcdc')`)
+	if err != nil {
+		t.Fatalf("insert dead chunk: %v", err)
+	}
+	deadChunkID, _ := deadChunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 64, 64, ?, 0)`, liveLegacyChunkID, legacyContainerID); err != nil {
+		t.Fatalf("insert legacy-only block: %v", err)
+	}
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 64, 64, ?, 0)`, deadChunkID, mixedContainerID); err != nil {
+		t.Fatalf("insert mixed legacy dead block: %v", err)
+	}
+
+	packedOnlyBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'11')`, packedContainerID)
+	if err != nil {
+		t.Fatalf("insert packed-only block: %v", err)
+	}
+	packedOnlyBlockID, _ := packedOnlyBlockRes.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 64)`, livePackedChunkID, packedOnlyBlockID); err != nil {
+		t.Fatalf("insert packed-only refs: %v", err)
+	}
+
+	mixedPackedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 64, x'12')`, mixedContainerID)
+	if err != nil {
+		t.Fatalf("insert mixed packed block: %v", err)
+	}
+	mixedPackedBlockID, _ := mixedPackedBlockRes.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 64)`, liveMixedPackedChunkID, mixedPackedBlockID); err != nil {
+		t.Fatalf("insert mixed packed refs: %v", err)
+	}
+
+	liveLegacyContainers, err := LoadLiveLegacyContainerIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLiveLegacyContainerIDs: %v", err)
+	}
+	livePackedBlocks, err := LoadLivePackedBlockIDs(context.Background(), dbconn)
+	if err != nil {
+		t.Fatalf("LoadLivePackedBlockIDs: %v", err)
+	}
+	liveUnits := livePhysicalUnits{
+		LegacyLiveContainerIDs: liveLegacyContainers,
+		PackedLiveBlockIDs:     livePackedBlocks,
+	}
+
+	hasLiveLegacy, err := containerHasLivePhysicalUnits(context.Background(), dbconn, legacyContainerID, liveUnits)
+	if err != nil {
+		t.Fatalf("containerHasLivePhysicalUnits legacy-only: %v", err)
+	}
+	if !hasLiveLegacy {
+		t.Fatal("expected legacy-only container to be live")
+	}
+
+	hasLivePacked, err := containerHasLivePhysicalUnits(context.Background(), dbconn, packedContainerID, liveUnits)
+	if err != nil {
+		t.Fatalf("containerHasLivePhysicalUnits packed-only: %v", err)
+	}
+	if !hasLivePacked {
+		t.Fatal("expected packed-only container to be live")
+	}
+
+	hasLiveMixed, err := containerHasLivePhysicalUnits(context.Background(), dbconn, mixedContainerID, liveUnits)
+	if err != nil {
+		t.Fatalf("containerHasLivePhysicalUnits mixed: %v", err)
+	}
+	if !hasLiveMixed {
+		t.Fatal("expected mixed container to be live")
 	}
 }
