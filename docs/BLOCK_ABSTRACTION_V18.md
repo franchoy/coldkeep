@@ -240,3 +240,20 @@ Rules:
 - Hash must be computed from encoded plaintext block bytes.
 - Hash must not be computed from encrypted/transformed stored bytes.
 
+## Phase 2 Step 9 Isolation Rule (Locked)
+
+Phase 2 block format work remains isolated until explicitly unlocked by later steps.
+
+Do not during Phase 2 isolation window:
+
+- plug block-format core into store path,
+- plug block-format core into restore path,
+- change DB write/read behavior for active runtime flows.
+
+Scope allowed in Phase 2 isolation window:
+
+- in-memory types,
+- binary encode/decode/hash logic,
+- isolated unit tests,
+- design documentation.
+
