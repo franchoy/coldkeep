@@ -440,7 +440,7 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     needs: quality
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -475,7 +475,7 @@ jobs:
             cp benchmark-baseline.json benchmark-baseline-committed.json
           fi
 
-      - name: Run benchmark (small dataset) and capture baseline
+      - name: Run benchmark (small dataset, workers=1) and capture baseline
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: plain
@@ -486,9 +486,22 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: ./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
+        run: ./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-baseline.json
 
-      - name: Compare against committed baseline (100% threshold — disaster check only)
+      - name: Run benchmark (small dataset, workers=4) and capture profile
+        env:
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-baseline-w4.json
+
+      - name: Compare workers=1 against committed baseline (100% threshold — disaster check only)
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
           COLDKEEP_CODEC: plain
@@ -501,15 +514,34 @@ jobs:
           DB_SSLMODE: disable
         run: |
           if [ -f benchmark-baseline-committed.json ]; then
-            ./coldkeep benchmark run --dataset small --output json \
+            ./coldkeep benchmark run --dataset small --workers 1 --output json \
               --compare benchmark-baseline-committed.json --threshold 100
           fi
 
-      - name: Upload benchmark baseline
+      - name: Compare workers=4 against committed baseline (100% threshold — disaster check only)
+        env:
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: |
+          if [ -f benchmark-baseline-committed.json ]; then
+            ./coldkeep benchmark run --dataset small --workers 4 --output json \
+              --compare benchmark-baseline-committed.json --threshold 100
+          fi
+
+      - name: Upload benchmark baselines
         uses: actions/upload-artifact@v5
         with:
-          name: benchmark-baseline
-          path: benchmark-baseline.json
+          name: benchmark-baselines
+          path: |
+            benchmark-baseline.json
+            benchmark-baseline-w4.json
           if-no-files-found: error
 
   ci-required:
