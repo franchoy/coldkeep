@@ -108,6 +108,9 @@ func EncodeBlock(b *EncodedBlock) ([]byte, error) {
 	if b == nil {
 		return nil, ErrNilEncodedBlock
 	}
+	if b.Header.Magic != BlockMagicV1 || b.Header.Version != BlockFormatVersionV1 || b.Header.Codec != BlockCodecNoneV1 {
+		return nil, fmt.Errorf("%w: magic=%x version=%d codec=%d", ErrBlockFormatUnsupported, b.Header.Magic, b.Header.Version, b.Header.Codec)
+	}
 	if b.Header.ChunkCount == 0 {
 		return nil, ErrBlockFormatEmptyBlock
 	}

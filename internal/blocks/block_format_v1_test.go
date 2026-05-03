@@ -66,6 +66,26 @@ func TestEncodeBlockRejectsInconsistentShape(t *testing.T) {
 	}
 }
 
+func TestEncodeBlockRejectsUnsupportedHeaderConstants(t *testing.T) {
+	_, err := EncodeBlock(&EncodedBlock{
+		Header: BlockHeader{
+			Magic:         0,
+			Version:       999,
+			Codec:         42,
+			ChunkCount:    1,
+			PlaintextSize: 1,
+		},
+		Entries: []ChunkEntry{{ChunkID: 1, Offset: 0, Size: 1}},
+		Payload: []byte("x"),
+	})
+	if err == nil {
+		t.Fatal("expected unsupported-header encode error")
+	}
+	if !errors.Is(err, ErrBlockFormatUnsupported) {
+		t.Fatalf("expected ErrBlockFormatUnsupported, got: %v", err)
+	}
+}
+
 func TestDecodeBlockReadsHeaderTableAndPayload(t *testing.T) {
 	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{
 		{ChunkID: 101, Data: []byte("aa")},
