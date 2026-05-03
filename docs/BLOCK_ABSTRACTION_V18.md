@@ -17,6 +17,7 @@ BlockFormatVersion = 1
 BlockCodec         = "none"
 TargetBlockSize    = 1 * 1024 * 1024   # 1 MiB
 MaxBlockSize       = 1 * 1024 * 1024   # 1 MiB
+BlockHashPolicy    = required
 ```
 
 ## Locked Invariants
@@ -27,6 +28,7 @@ MaxBlockSize       = 1 * 1024 * 1024   # 1 MiB
 4. Each chunk belongs to exactly one block.
 5. No chunk spans multiple blocks in v1.8.
 6. Any open block builder must be flushed at operation end.
+7. Every persisted v1.8 storage block must carry a plaintext block hash.
 
 ## Phase 1 Scope Guard
 
@@ -59,4 +61,51 @@ Design intent:
 
 - `storage_blocks` is the canonical v1.8 packed-block table name in design docs and planning.
 - Legacy `blocks` remains part of compatibility read-path support for mixed repositories.
+
+## Phase 1 Step 4 Target Schema (Locked)
+
+### Table: `storage_blocks`
+
+Represents the physical stored block unit.
+
+```sql
+storage_blocks (
+	id                BIGSERIAL PRIMARY KEY,
+
+	format_version    INT NOT NULL,
+	codec             TEXT NOT NULL, -- "none" for v1.8
+
+	plaintext_size    BIGINT NOT NULL,
+	stored_size       BIGINT NOT NULL,
+
+	container_id      BIGINT NOT NULL,
+	container_offset  BIGINT NOT NULL,
+
+	block_hash        BYTEA NOT NULL, -- required for block validity verification
+
+	created_at        TIMESTAMP NOT NULL DEFAULT NOW()
+)
+```
+
+### Table: `chunk_block_refs`
+
+Represents per-chunk placement inside one physical block.
+
+```sql
+chunk_block_refs (
+	chunk_id          BIGINT NOT NULL,
+	block_id          BIGINT NOT NULL,
+
+	offset_in_block   BIGINT NOT NULL,
+	size_in_block     BIGINT NOT NULL,
+
+	PRIMARY KEY (chunk_id),
+	FOREIGN KEY (block_id) REFERENCES storage_blocks(id)
+)
+```
+
+### Existing Tables Kept Unchanged
+
+- `chunk` identity remains plaintext-based (`chunk_hash = plaintext identity`).
+- `file_chunk` restore recipe remains the same logical ordered mapping.
 
