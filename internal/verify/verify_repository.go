@@ -5,7 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 )
 
@@ -305,10 +312,180 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 }
 
 func verifyBlockPayloads(dbconn *sql.DB, containersDir string) error {
-	// Phase 5 Step 1 scope: define layered flow and keep payload validation
-	// behavior unchanged for now. Deep byte-level verification remains in
-	// VerifySystemDeepWithContainersDir and will be progressively moved here.
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking packed block payload and segment integrity...")
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT sb.id, sb.container_offset, sb.stored_size, sb.block_hash, c.filename, c.max_size
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		ORDER BY sb.id
+	`)
+	if err != nil {
+		return fmt.Errorf("verifyBlockPayloads: query storage blocks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type blockRow struct {
+		id              int64
+		containerOffset int64
+		storedSize      int64
+		blockHash       []byte
+		filename        string
+		maxSize         int64
+	}
+
+	blocksToVerify := make([]blockRow, 0)
+	for rows.Next() {
+		var b blockRow
+		if err := rows.Scan(&b.id, &b.containerOffset, &b.storedSize, &b.blockHash, &b.filename, &b.maxSize); err != nil {
+			return fmt.Errorf("verifyBlockPayloads: scan storage block row: %w", err)
+		}
+		blocksToVerify = append(blocksToVerify, b)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verifyBlockPayloads: iterate storage block rows: %w", err)
+	}
+
+	strictMode := verifyStrictPackedSegmentsEnabled()
+
+	for _, b := range blocksToVerify {
+		path := filepath.Join(containersDir, b.filename)
+		fc, err := container.OpenReadOnlyContainer(path, b.maxSize)
+		if err != nil {
+			return fmt.Errorf("verifyBlockPayloads: open container for block %d: %w", b.id, err)
+		}
+
+		storedBytes, readErr := container.ReadPayloadAt(fc, b.containerOffset, b.storedSize)
+		closeErr := fc.Close()
+		if readErr != nil {
+			return fmt.Errorf("verifyBlockPayloads: read payload for block %d: %w", b.id, readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("verifyBlockPayloads: close container for block %d: %w", b.id, closeErr)
+		}
+
+		if err := blocks.VerifyBlockHash(storedBytes, b.blockHash); err != nil {
+			return fmt.Errorf("verifyBlockPayloads: block %d hash mismatch: %w", b.id, err)
+		}
+
+		decoded, err := blocks.DecodeBlock(storedBytes)
+		if err != nil {
+			return fmt.Errorf("verifyBlockPayloads: decode block %d: %w", b.id, err)
+		}
+
+		if err := verifyDecodedBlockSegmentsAgainstRefs(ctx, dbconn, b.id, decoded, strictMode); err != nil {
+			return err
+		}
+	}
+
+	log.Println(" SUCCESS ")
 	return nil
+}
+
+type verifyChunkRefSegment struct {
+	chunkID   int64
+	offset    uint64
+	size      uint64
+	chunkSize int64
+}
+
+func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, blockID int64, decoded *blocks.EncodedBlock, strictMode bool) error {
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT r.chunk_id, r.offset_in_block, r.size_in_block, c.size
+		FROM chunk_block_refs r
+		JOIN chunk c ON c.id = r.chunk_id
+		WHERE r.block_id = $1
+		ORDER BY r.offset_in_block ASC
+	`, blockID)
+	if err != nil {
+		return fmt.Errorf("verifyBlockPayloads: query chunk refs for block %d: %w", blockID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	segments := make([]verifyChunkRefSegment, 0)
+	for rows.Next() {
+		var chunkID int64
+		var offset int64
+		var size int64
+		var chunkSize int64
+		if err := rows.Scan(&chunkID, &offset, &size, &chunkSize); err != nil {
+			return fmt.Errorf("verifyBlockPayloads: scan chunk ref for block %d: %w", blockID, err)
+		}
+		if offset < 0 {
+			return fmt.Errorf("verifyBlockPayloads: block %d has negative offset_in_block for chunk %d", blockID, chunkID)
+		}
+		if size <= 0 {
+			return fmt.Errorf("verifyBlockPayloads: block %d has non-positive size_in_block for chunk %d", blockID, chunkID)
+		}
+		if chunkSize > 0 && size != chunkSize {
+			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize)
+		}
+		segments = append(segments, verifyChunkRefSegment{
+			chunkID:   chunkID,
+			offset:    uint64(offset),
+			size:      uint64(size),
+			chunkSize: chunkSize,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verifyBlockPayloads: iterate chunk refs for block %d: %w", blockID, err)
+	}
+
+	payloadSize := uint64(len(decoded.Payload))
+	for _, s := range segments {
+		end := s.offset + s.size
+		if end < s.offset || end > payloadSize {
+			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d segment out of payload bounds offset=%d size=%d payload=%d", blockID, s.chunkID, s.offset, s.size, payloadSize)
+		}
+	}
+
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].offset == segments[j].offset {
+			return segments[i].chunkID < segments[j].chunkID
+		}
+		return segments[i].offset < segments[j].offset
+	})
+
+	prevEnd := uint64(0)
+	for i, s := range segments {
+		if i > 0 && s.offset < prevEnd {
+			return fmt.Errorf("verifyBlockPayloads: block %d has overlapping segments around chunk %d", blockID, s.chunkID)
+		}
+		prevEnd = s.offset + s.size
+	}
+
+	if strictMode {
+		if len(decoded.Entries) != len(segments) {
+			return fmt.Errorf("verifyBlockPayloads: strict mode block %d entry count mismatch decoded=%d refs=%d", blockID, len(decoded.Entries), len(segments))
+		}
+		for i := range decoded.Entries {
+			e := decoded.Entries[i]
+			s := segments[i]
+			if int64(e.ChunkID) != s.chunkID || e.Offset != s.offset || e.Size != s.size {
+				return fmt.Errorf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i)
+			}
+		}
+	}
+
+	return nil
+}
+
+func verifyStrictPackedSegmentsEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv("COLDKEEP_VERIFY_STRICT_SEGMENTS")))
+	if raw == "" {
+		return false
+	}
+	if raw == "true" || raw == "yes" || raw == "on" {
+		return true
+	}
+	v, err := strconv.ParseBool(raw)
+	if err == nil {
+		return v
+	}
+	return false
 }
 
 func verifyLegacyCompatibility(dbconn *sql.DB) error {

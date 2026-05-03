@@ -1,10 +1,16 @@
 package verify
 
 import (
+	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -384,5 +390,212 @@ func TestVerifyRepositoryDetectsImpossibleStorageBlockContainerRange(t *testing.
 	err := VerifyRepository(dbconn, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "verifyStorageBlocks") || !strings.Contains(err.Error(), "impossible container ranges") {
 		t.Fatalf("expected impossible range error, got: %v", err)
+	}
+}
+
+type verifyPackedRefSeed struct {
+	chunkID int64
+	offset  int64
+	size    int64
+}
+
+func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, refs []verifyPackedRefSeed) (int64, []int64) {
+	t.Helper()
+
+	chunkIDs := make([]int64, 0, len(chunkPayloads))
+	packedChunks := make([]blocks.PackedChunk, 0, len(chunkPayloads))
+	for i, payload := range chunkPayloads {
+		var chunkID int64
+		hash := strings.Repeat(strconv.Itoa((i%9)+1), 64)
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+			 VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			int64(len(payload)),
+			filestate.ChunkAborted,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert verify chunk: %v", err)
+		}
+		chunkIDs = append(chunkIDs, chunkID)
+		packedChunks = append(packedChunks, blocks.PackedChunk{ChunkID: uint64(chunkID), Data: payload})
+	}
+
+	encoded, err := blocks.EncodePackedBlockV1FromChunks(packedChunks)
+	if err != nil {
+		t.Fatalf("encode packed block fixture: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	tx, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin tx for packed fixture: %v", err)
+	}
+	placement, err := writer.AppendPayload(tx, encoded.Bytes)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("append packed fixture payload: %v", err)
+	}
+	if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("update container size for packed fixture: %v", err)
+	}
+
+	var blockID int64
+	if err := tx.QueryRow(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', $1, $2, $3, $4, $5)
+		 RETURNING id`,
+		int64(len(encoded.Bytes)),
+		int64(len(encoded.Bytes)),
+		placement.ContainerID,
+		placement.Offset,
+		encoded.BlockHash,
+	).Scan(&blockID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert storage_blocks for fixture: %v", err)
+	}
+
+	if refs == nil {
+		refs = make([]verifyPackedRefSeed, 0, len(encoded.Entries))
+		for i, entry := range encoded.Entries {
+			refs = append(refs, verifyPackedRefSeed{chunkID: chunkIDs[i], offset: int64(entry.Offset), size: int64(entry.Size)})
+		}
+	}
+
+	for _, r := range refs {
+		if _, err := tx.Exec(
+			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+			 VALUES ($1, $2, $3, $4)`,
+			r.chunkID,
+			blockID,
+			r.offset,
+			r.size,
+		); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("insert chunk_block_refs for fixture: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("commit packed fixture: %v", err)
+	}
+
+	return blockID, chunkIDs
+}
+
+func TestVerifyBlockPayloadsDetectsSegmentOutOfBounds(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, chunkIDs[0]); err != nil {
+		t.Fatalf("clear default refs for bounds test: %v", err)
+	}
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		 VALUES ($1, $2, $3, $4)`,
+		chunkIDs[0],
+		blockID,
+		int64(1),
+		int64(4),
+	); err != nil {
+		t.Fatalf("insert out-of-bounds ref: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "segment out of payload bounds") {
+		t.Fatalf("expected out-of-bounds segment error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsChunkSizeMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	// Create one chunk with payload size 4, then change chunk.size to 5 to force mismatch.
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("WXYZ")}, nil)
+
+	if _, err := dbconn.Exec(`
+		UPDATE chunk
+		SET size = 5
+		WHERE id = (SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 LIMIT 1)
+	`, blockID); err != nil {
+		t.Fatalf("mutate chunk size for mismatch test: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "size mismatch") {
+		t.Fatalf("expected chunk size mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsStrictModeRequiresExactEncodedChunkTable(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	old := os.Getenv("COLDKEEP_VERIFY_STRICT_SEGMENTS")
+	if err := os.Setenv("COLDKEEP_VERIFY_STRICT_SEGMENTS", "1"); err != nil {
+		t.Fatalf("set strict env: %v", err)
+	}
+	defer func() {
+		if old == "" {
+			_ = os.Unsetenv("COLDKEEP_VERIFY_STRICT_SEGMENTS")
+		} else {
+			_ = os.Setenv("COLDKEEP_VERIFY_STRICT_SEGMENTS", old)
+		}
+	}()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("aa"), []byte("bb")}, nil)
+
+	rows, err := dbconn.Query(`SELECT chunk_id, offset_in_block, size_in_block FROM chunk_block_refs WHERE block_id = $1 ORDER BY offset_in_block`, blockID)
+	if err != nil {
+		t.Fatalf("query refs for strict mismatch setup: %v", err)
+	}
+
+	var firstChunkID, secondChunkID int64
+	var firstOffset, secondOffset int64
+	var firstSize, secondSize int64
+	if rows.Next() {
+		if err := rows.Scan(&firstChunkID, &firstOffset, &firstSize); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan first ref: %v", err)
+		}
+	}
+	if rows.Next() {
+		if err := rows.Scan(&secondChunkID, &secondOffset, &secondSize); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan second ref: %v", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate refs for strict mismatch setup: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close refs query for strict mismatch setup: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE block_id = $1`, blockID); err != nil {
+		t.Fatalf("clear refs for strict mismatch setup: %v", err)
+	}
+	// Reinsert same offsets/sizes but swapped chunk IDs; non-strict bounds still valid,
+	// strict mode must fail because encoded chunk table order/ids differ.
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES ($1, $2, $3, $4), ($5, $2, $6, $7)`,
+		secondChunkID, blockID, firstOffset, firstSize,
+		firstChunkID, secondOffset, secondSize,
+	); err != nil {
+		t.Fatalf("insert swapped refs for strict mismatch: %v", err)
+	}
+
+	err = verifyBlockPayloads(dbconn, filepath.Clean(containersDir))
+	if err == nil || !strings.Contains(err.Error(), "strict mode") || !strings.Contains(err.Error(), "entry mismatch") {
+		t.Fatalf("expected strict-mode entry mismatch error, got: %v", err)
 	}
 }
