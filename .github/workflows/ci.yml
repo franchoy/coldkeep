@@ -514,8 +514,24 @@ jobs:
           DB_SSLMODE: disable
         run: |
           if [ -f benchmark-baseline-committed.json ]; then
+            set +e
+            diag_dir="${RUNNER_TEMP}/benchmark-diag"
+            mkdir -p "$diag_dir"
+            json_file="$diag_dir/benchmark-compare-w1.json"
+
             ./coldkeep benchmark run --dataset small --workers 1 --output json \
-              --compare benchmark-baseline-committed.json --threshold 100
+              --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
+            status=${PIPESTATUS[0]}
+
+            if [ "$status" -ne 0 ]; then
+              echo "benchmark compare failed for workers=1"
+              echo "regression markers (first 20):"
+              grep -E 'Benchmark regressions detected|DEGRADATION|\"status\":\"error\"|\"message\":\"benchmark regression' "$json_file" | head -n 20 || true
+              echo "last 80 lines:"
+              tail -n 80 "$json_file" || true
+            fi
+
+            exit "$status"
           fi
 
       - name: Compare workers=4 against committed baseline (100% threshold — disaster check only)
@@ -531,9 +547,37 @@ jobs:
           DB_SSLMODE: disable
         run: |
           if [ -f benchmark-baseline-committed.json ]; then
+            set +e
+            diag_dir="${RUNNER_TEMP}/benchmark-diag"
+            mkdir -p "$diag_dir"
+            json_file="$diag_dir/benchmark-compare-w4.json"
+
             ./coldkeep benchmark run --dataset small --workers 4 --output json \
-              --compare benchmark-baseline-committed.json --threshold 100
+              --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
+            status=${PIPESTATUS[0]}
+
+            if [ "$status" -ne 0 ]; then
+              echo "benchmark compare failed for workers=4"
+              echo "regression markers (first 20):"
+              grep -E 'Benchmark regressions detected|DEGRADATION|\"status\":\"error\"|\"message\":\"benchmark regression' "$json_file" | head -n 20 || true
+              echo "last 80 lines:"
+              tail -n 80 "$json_file" || true
+            fi
+
+            exit "$status"
           fi
+
+      - name: Upload benchmark diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: benchmark-diag
+          path: |
+            benchmark-baseline.json
+            benchmark-baseline-w4.json
+            benchmark-baseline-committed.json
+            ${{ runner.temp }}/benchmark-diag/*.json
+          if-no-files-found: ignore
 
       - name: Upload benchmark baselines
         uses: actions/upload-artifact@v5
