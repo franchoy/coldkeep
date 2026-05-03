@@ -66,6 +66,20 @@ type EncodedBlock struct {
 	Payload []byte
 }
 
+// GetChunk returns one chunk slice by table index from the payload.
+// Invalid indexes or invalid entry bounds return nil.
+func (b *EncodedBlock) GetChunk(i int) []byte {
+	if b == nil || i < 0 || i >= len(b.Entries) {
+		return nil
+	}
+	entry := b.Entries[i]
+	end := entry.Offset + entry.Size
+	if end < entry.Offset || end > uint64(len(b.Payload)) {
+		return nil
+	}
+	return b.Payload[entry.Offset:end]
+}
+
 // PackedChunk is an encode helper input for building payload and chunk table
 // deterministically from an ordered chunk sequence.
 type PackedChunk struct {
@@ -184,22 +198,28 @@ func EncodePackedBlockV1(entries []ChunkEntry, payload []byte) (*EncodedPackedBl
 
 // DecodePackedBlockV1 parses and validates encoded v1 block bytes.
 func DecodePackedBlockV1(encoded []byte) (*PackedBlockV1, error) {
-	if len(encoded) < blockHeaderSizeV1 {
+	return DecodeBlock(encoded)
+}
+
+// DecodeBlock parses and validates v1 encoded block bytes into in-memory
+// representation.
+func DecodeBlock(data []byte) (*EncodedBlock, error) {
+	if len(data) < blockHeaderSizeV1 {
 		return nil, ErrBlockFormatTooSmall
 	}
 
-	header := readBlockHeader(encoded[:blockHeaderSizeV1])
+	header := readBlockHeader(data[:blockHeaderSizeV1])
 	if header.Magic != BlockMagicV1 || header.Version != BlockFormatVersionV1 || header.Codec != BlockCodecNoneV1 {
 		return nil, fmt.Errorf("%w: magic=%x version=%d codec=%d", ErrBlockFormatUnsupported, header.Magic, header.Version, header.Codec)
 	}
 
 	tableSize := uint64(header.ChunkCount) * chunkEntrySizeV1
 	totalMin := uint64(blockHeaderSizeV1) + tableSize
-	if uint64(len(encoded)) < totalMin {
+	if uint64(len(data)) < totalMin {
 		return nil, ErrBlockFormatInvalidLayout
 	}
 
-	payload := encoded[int(totalMin):]
+	payload := data[int(totalMin):]
 	if uint64(len(payload)) != header.PlaintextSize {
 		return nil, ErrBlockFormatInvalidLayout
 	}
@@ -207,7 +227,7 @@ func DecodePackedBlockV1(encoded []byte) (*PackedBlockV1, error) {
 	entries := make([]ChunkEntry, int(header.ChunkCount))
 	offset := blockHeaderSizeV1
 	for i := 0; i < int(header.ChunkCount); i++ {
-		entries[i] = readChunkEntry(encoded[offset : offset+chunkEntrySizeV1])
+		entries[i] = readChunkEntry(data[offset : offset+chunkEntrySizeV1])
 		offset += chunkEntrySizeV1
 	}
 
@@ -215,7 +235,7 @@ func DecodePackedBlockV1(encoded []byte) (*PackedBlockV1, error) {
 		return nil, err
 	}
 
-	return &PackedBlockV1{
+	return &EncodedBlock{
 		Header:  header,
 		Entries: entries,
 		Payload: payload,

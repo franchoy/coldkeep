@@ -65,6 +65,81 @@ func TestEncodeBlockRejectsInconsistentShape(t *testing.T) {
 	}
 }
 
+func TestDecodeBlockReadsHeaderTableAndPayload(t *testing.T) {
+	enc, err := EncodePackedBlockV1FromChunks([]PackedChunk{
+		{ChunkID: 101, Data: []byte("aa")},
+		{ChunkID: 202, Data: []byte("bbb")},
+	})
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+
+	b, err := DecodeBlock(enc.Bytes)
+	if err != nil {
+		t.Fatalf("decode block: %v", err)
+	}
+
+	if b.Header.Magic != BlockMagicV1 {
+		t.Fatalf("unexpected magic: got %x want %x", b.Header.Magic, BlockMagicV1)
+	}
+	if b.Header.Version != BlockFormatVersionV1 {
+		t.Fatalf("unexpected version: got %d want %d", b.Header.Version, BlockFormatVersionV1)
+	}
+	if len(b.Entries) != 2 {
+		t.Fatalf("unexpected entries len: got %d want 2", len(b.Entries))
+	}
+
+	if got := b.GetChunk(0); !bytes.Equal(got, []byte("aa")) {
+		t.Fatalf("chunk[0] mismatch: got %q want %q", got, "aa")
+	}
+	if got := b.GetChunk(1); !bytes.Equal(got, []byte("bbb")) {
+		t.Fatalf("chunk[1] mismatch: got %q want %q", got, "bbb")
+	}
+}
+
+func TestDecodeBlockRejectsUnsupportedVersion(t *testing.T) {
+	b := &EncodedBlock{
+		Header: BlockHeader{
+			Magic:         BlockMagicV1,
+			Version:       999,
+			Codec:         BlockCodecNoneV1,
+			ChunkCount:    0,
+			PlaintextSize: 0,
+		},
+		Entries: nil,
+		Payload: nil,
+	}
+
+	raw, err := EncodeBlock(b)
+	if err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+
+	if _, err := DecodeBlock(raw); err == nil {
+		t.Fatal("expected unsupported-version decode error")
+	}
+}
+
+func TestGetChunkReturnsNilForInvalidIndexOrBounds(t *testing.T) {
+	b := &EncodedBlock{
+		Header: BlockHeader{Magic: BlockMagicV1, Version: BlockFormatVersionV1, Codec: BlockCodecNoneV1, ChunkCount: 1, PlaintextSize: 3},
+		Entries: []ChunkEntry{
+			{ChunkID: 1, Offset: 0, Size: 5}, // invalid against payload len=3
+		},
+		Payload: []byte("abc"),
+	}
+
+	if got := b.GetChunk(-1); got != nil {
+		t.Fatalf("expected nil for negative index, got %q", got)
+	}
+	if got := b.GetChunk(1); got != nil {
+		t.Fatalf("expected nil for out-of-range index, got %q", got)
+	}
+	if got := b.GetChunk(0); got != nil {
+		t.Fatalf("expected nil for invalid bounds, got %q", got)
+	}
+}
+
 func TestEncodeDecodePackedBlockV1RoundTripFromChunks(t *testing.T) {
 	encoded, err := EncodePackedBlockV1FromChunks([]PackedChunk{
 		{ChunkID: 101, Data: []byte("hello")},
