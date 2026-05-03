@@ -94,6 +94,25 @@ func insertBlock(t *testing.T, dbconn *sql.DB, chunkID, containerID, storedSize 
 	}
 }
 
+func insertStorageBlockRef(t *testing.T, dbconn *sql.DB, chunkID, containerID, storedSize int64, blockHash []byte) int64 {
+	t.Helper()
+	res, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', ?, ?, ?, 0, ?)`,
+		storedSize, storedSize, containerID, blockHash,
+	)
+	if err != nil {
+		t.Fatalf("insert storage_block: %v", err)
+	}
+	blockID, _ := res.LastInsertId()
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, ?)`,
+		chunkID, blockID, storedSize,
+	); err != nil {
+		t.Fatalf("insert chunk_block_refs: %v", err)
+	}
+	return blockID
+}
+
 func insertPhysicalFile(t *testing.T, dbconn *sql.DB, path string, fileID int64) {
 	t.Helper()
 	if _, err := dbconn.Exec(`INSERT INTO physical_file (path, logical_file_id) VALUES (?, ?)`, path, fileID); err != nil {
@@ -532,6 +551,72 @@ func TestBuildPlanIncludesFullyDeadActiveContainersInPhysicalReclaim(t *testing.
 	}
 	if impact.LiveBytesAfterGC != 0 {
 		t.Fatalf("LiveBytesAfterGC = %d, want 0", impact.LiveBytesAfterGC)
+	}
+}
+
+func TestBuildPlanPackedBlockFromLiveChunkNotReclaimable(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	liveChunkID := insertChunk(t, dbconn, "live-packed", 140, 1, 0)
+	containerID := insertContainer(t, dbconn, "c-packed-live.bin", 140)
+	insertStorageBlockRef(t, dbconn, liveChunkID, containerID, 140, []byte{0x01, 0x02, 0x03})
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReclaimableBytes != 0 {
+		t.Fatalf("ReclaimableBytes = %d, want 0", plan.ReclaimableBytes)
+	}
+	if len(plan.AffectedContainers) != 0 {
+		t.Fatalf("AffectedContainers = %d, want 0", len(plan.AffectedContainers))
+	}
+}
+
+func TestBuildPlanPackedBlockFromDeadChunkIsReclaimable(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	deadChunkID := insertChunk(t, dbconn, "dead-packed", 180, 0, 0)
+	containerID := insertContainer(t, dbconn, "c-packed-dead.bin", 180)
+	insertStorageBlockRef(t, dbconn, deadChunkID, containerID, 180, []byte{0x04, 0x05, 0x06})
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if plan.ReclaimableBytes != 180 {
+		t.Fatalf("ReclaimableBytes = %d, want 180", plan.ReclaimableBytes)
+	}
+	if plan.PhysicallyReclaimableBytes != 180 {
+		t.Fatalf("PhysicallyReclaimableBytes = %d, want 180", plan.PhysicallyReclaimableBytes)
+	}
+	if len(plan.AffectedContainers) != 1 {
+		t.Fatalf("AffectedContainers = %d, want 1", len(plan.AffectedContainers))
+	}
+	impact := plan.AffectedContainers[0]
+	if impact.ContainerID != containerID {
+		t.Fatalf("container id = %d, want %d", impact.ContainerID, containerID)
+	}
+	if !impact.FullyReclaimable {
+		t.Fatalf("expected packed-only dead container to be fully reclaimable, got %+v", impact)
+	}
+}
+
+func TestBuildPlanPackedPlacementDoesNotTriggerMissingContainerWarning(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	deadChunkID := insertChunk(t, dbconn, "packed-placement", 90, 0, 0)
+	containerID := insertContainer(t, dbconn, "c-packed-placement.bin", 90)
+	insertStorageBlockRef(t, dbconn, deadChunkID, containerID, 90, []byte{0x09, 0x0A})
+
+	plan, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	for _, warning := range plan.Warnings {
+		if warning.Code == "CHUNK_MISSING_CONTAINER" {
+			t.Fatalf("unexpected warning %q for chunk with packed placement", warning.Code)
+		}
 	}
 }
 

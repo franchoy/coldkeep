@@ -145,10 +145,23 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 		return nil, fmt.Errorf("gc.BuildPlan: load completed chunks: %w", err)
 	}
 	unknownVersions := make(map[string]struct{})
+	liveChunkIDs := make(map[int64]struct{})
 	for _, ch := range allChunks {
 		if version := ch.ChunkerVersion; version != string(chunkmeta.VersionV1SimpleRolling) && version != string(chunkmeta.VersionV2FastCDC) {
 			unknownVersions[version] = struct{}{}
 		}
+		if ch.LiveRefCount > 0 || ch.PinCount > 0 {
+			liveChunkIDs[ch.ID] = struct{}{}
+		}
+	}
+
+	livePackedBlockIDs, err := packedBlockIDsForChunks(ctx, dbconn, liveChunkIDs)
+	if err != nil {
+		return nil, fmt.Errorf("gc.BuildPlan: live packed blocks from live chunks: %w", err)
+	}
+	reachablePackedBlockIDs, err := packedBlockIDsForChunks(ctx, dbconn, reachableChunkIDs)
+	if err != nil {
+		return nil, fmt.Errorf("gc.BuildPlan: reachable packed blocks from roots: %w", err)
 	}
 
 	unreachable := make([]chunkRecord, 0)
@@ -161,7 +174,7 @@ func BuildPlan(ctx context.Context, dbconn *sql.DB, opts PlanOptions) (*Plan, er
 		unreachable = append(unreachable, ch)
 	}
 
-	plan, err := buildPlanFromUnreachable(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, reachableChunkIDs, unreachable, unknownVersions)
+	plan, err := buildPlanFromUnreachable(ctx, dbconn, int64(len(allChunks)), reachableCompletedCount, reachableChunkIDs, livePackedBlockIDs, reachablePackedBlockIDs, unreachable, unknownVersions)
 	if err != nil {
 		return nil, fmt.Errorf("gc.BuildPlan: build plan from unreachable: %w", err)
 	}
@@ -256,17 +269,17 @@ func refuseOnIntegrityIssues(dbconn *sql.DB) error {
 	return nil
 }
 
-func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, reachableChunkIDs map[int64]struct{}, unreachable []chunkRecord, unknownVersions map[string]struct{}) (*Plan, error) {
+func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, reachableChunks int64, reachableChunkIDs map[int64]struct{}, livePackedBlockIDs, reachablePackedBlockIDs map[int64]struct{}, unreachable []chunkRecord, unknownVersions map[string]struct{}) (*Plan, error) {
 	unreachableChunkIDs := make(map[int64]struct{}, len(unreachable))
 	for _, ch := range unreachable {
 		unreachableChunkIDs[ch.ID] = struct{}{}
 	}
 
-	affectedContainers, logicalReclaimableBytes, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs)
+	affectedContainers, logicalReclaimableBytes, physicalReclaimableBytes, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, err := planContainerImpact(ctx, dbconn, unreachableChunkIDs, livePackedBlockIDs)
 	if err != nil {
 		return nil, err
 	}
-	activeContainers, activeLogicalReclaimableBytes, activePhysicalReclaimableBytes, activeFullyReclaimableContainers, activeInconsistentContainers, err := planActiveContainerImpact(ctx, dbconn, reachableChunkIDs, unreachableChunkIDs)
+	activeContainers, activeLogicalReclaimableBytes, activePhysicalReclaimableBytes, activeFullyReclaimableContainers, activeInconsistentContainers, err := planActiveContainerImpact(ctx, dbconn, reachableChunkIDs, unreachableChunkIDs, livePackedBlockIDs, reachablePackedBlockIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +332,7 @@ func buildPlanFromUnreachable(ctx context.Context, dbconn *sql.DB, totalChunks, 
 
 // planContainerImpact scans sealed non-quarantined containers and returns the
 // per-container impact summary and total reclaimable bytes.
-func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, int64, error) {
+func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkIDs map[int64]struct{}, livePackedBlockIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename, current_size
 		FROM container
@@ -371,7 +384,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			return nil, 0, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for container %d: %w", c.id, err)
 		}
 
-		var totalChunks, reclaimChunks int64
+		var totalUnits, reclaimUnits int64
 		var reclaimBytes int64
 		var totalBlockBytes int64
 
@@ -383,12 +396,12 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 				_ = chunkRows.Close()
 				return nil, 0, 0, 0, 0, 0, err
 			}
-			totalChunks++
+			totalUnits++
 			totalBlockBytes += storedSize
 			_, isUnreachable := unreachableChunkIDs[chunkID]
 			isLive := liveRefCount > 0 || pinCount > 0
 			if isUnreachable && !isLive {
-				reclaimChunks++
+				reclaimUnits++
 				reclaimBytes += storedSize
 			}
 		}
@@ -397,12 +410,39 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			return nil, 0, 0, 0, 0, 0, err
 		}
 
-		if reclaimChunks == 0 {
+		packedRows, err := dbconn.QueryContext(ctx, `
+			SELECT id, stored_size
+			FROM storage_blocks
+			WHERE container_id = $1
+		`, c.id)
+		if err != nil {
+			return nil, 0, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query storage_blocks for container %d: %w", c.id, err)
+		}
+		for packedRows.Next() {
+			var blockID int64
+			var storedSize int64
+			if err := packedRows.Scan(&blockID, &storedSize); err != nil {
+				_ = packedRows.Close()
+				return nil, 0, 0, 0, 0, 0, err
+			}
+			totalUnits++
+			totalBlockBytes += storedSize
+			if _, live := livePackedBlockIDs[blockID]; !live {
+				reclaimUnits++
+				reclaimBytes += storedSize
+			}
+		}
+		_ = packedRows.Close()
+		if err := packedRows.Err(); err != nil {
+			return nil, 0, 0, 0, 0, 0, err
+		}
+
+		if reclaimUnits == 0 {
 			continue
 		}
 
-		fullyReclaimable := totalChunks > 0 && reclaimChunks == totalChunks
-		requiresCompaction := reclaimChunks > 0 && !fullyReclaimable
+		fullyReclaimable := totalUnits > 0 && reclaimUnits == totalUnits
+		requiresCompaction := reclaimUnits > 0 && !fullyReclaimable
 		liveBytesAfterGC := c.size - reclaimBytes
 		if liveBytesAfterGC < 0 {
 			inconsistentContainers++
@@ -418,8 +458,8 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 			TotalBytes:         c.size,
 			LiveBytesAfterGC:   liveBytesAfterGC,
 			ReclaimableBytes:   reclaimBytes,
-			ReclaimableChunks:  reclaimChunks,
-			TotalChunks:        totalChunks,
+			ReclaimableChunks:  reclaimUnits,
+			TotalChunks:        totalUnits,
 			FullyReclaimable:   fullyReclaimable,
 			RequiresCompaction: requiresCompaction,
 		}
@@ -436,7 +476,7 @@ func planContainerImpact(ctx context.Context, dbconn *sql.DB, unreachableChunkID
 	return affected, totalLogicalReclaimable, totalPhysicalReclaimable, fullyReclaimableContainers, partiallyDeadContainers, inconsistentContainers, nil
 }
 
-func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChunkIDs, unreachableChunkIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, error) {
+func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChunkIDs, unreachableChunkIDs map[int64]struct{}, livePackedBlockIDs, reachablePackedBlockIDs map[int64]struct{}) ([]ContainerImpact, int64, int64, int64, int64, error) {
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT c.id, c.filename, c.current_size
 		FROM container c
@@ -448,8 +488,19 @@ func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChu
 			WHERE b.container_id = c.id
 			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
 		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM storage_blocks sb
+			JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+			JOIN chunk ch ON ch.id = cbr.chunk_id
+			WHERE sb.container_id = c.id
+			AND ch.status = 'COMPLETED'
+			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
+		)
 		AND EXISTS (
 			SELECT 1 FROM blocks WHERE container_id = c.id
+			UNION ALL
+			SELECT 1 FROM storage_blocks WHERE container_id = c.id
 		)
 		ORDER BY c.id ASC
 	`)
@@ -496,8 +547,8 @@ func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChu
 			return nil, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query blocks for active container %d: %w", c.id, err)
 		}
 
-		var totalChunks int64
-		var reclaimChunks int64
+		var totalUnits int64
+		var reclaimUnits int64
 		var reclaimBytes int64
 		var totalBlockBytes int64
 		var hasRetained bool
@@ -516,12 +567,12 @@ func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChu
 			if status != "COMPLETED" {
 				continue
 			}
-			totalChunks++
+			totalUnits++
 			totalBlockBytes += storedSize
 			if _, unreachable := unreachableChunkIDs[chunkID]; !unreachable {
 				continue
 			}
-			reclaimChunks++
+			reclaimUnits++
 			reclaimBytes += storedSize
 		}
 		_ = chunkRows.Close()
@@ -529,7 +580,38 @@ func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChu
 			return nil, 0, 0, 0, 0, err
 		}
 
-		if hasRetained || totalChunks == 0 || reclaimChunks != totalChunks {
+		packedRows, err := dbconn.QueryContext(ctx, `
+			SELECT id, stored_size
+			FROM storage_blocks
+			WHERE container_id = $1
+		`, c.id)
+		if err != nil {
+			return nil, 0, 0, 0, 0, fmt.Errorf("gc.BuildPlan: query storage_blocks for active container %d: %w", c.id, err)
+		}
+		for packedRows.Next() {
+			var blockID int64
+			var storedSize int64
+			if err := packedRows.Scan(&blockID, &storedSize); err != nil {
+				_ = packedRows.Close()
+				return nil, 0, 0, 0, 0, err
+			}
+			totalUnits++
+			totalBlockBytes += storedSize
+			if _, retained := reachablePackedBlockIDs[blockID]; retained {
+				hasRetained = true
+			}
+			if _, live := livePackedBlockIDs[blockID]; live {
+				continue
+			}
+			reclaimUnits++
+			reclaimBytes += storedSize
+		}
+		_ = packedRows.Close()
+		if err := packedRows.Err(); err != nil {
+			return nil, 0, 0, 0, 0, err
+		}
+
+		if hasRetained || totalUnits == 0 || reclaimUnits != totalUnits {
 			continue
 		}
 		if totalBlockBytes > c.size {
@@ -542,8 +624,8 @@ func planActiveContainerImpact(ctx context.Context, dbconn *sql.DB, reachableChu
 			TotalBytes:         c.size,
 			LiveBytesAfterGC:   0,
 			ReclaimableBytes:   reclaimBytes,
-			ReclaimableChunks:  reclaimChunks,
-			TotalChunks:        totalChunks,
+			ReclaimableChunks:  reclaimUnits,
+			TotalChunks:        totalUnits,
 			FullyReclaimable:   true,
 			RequiresCompaction: false,
 		})
@@ -564,6 +646,7 @@ func countUnreachableChunksWithoutContainer(ctx context.Context, dbconn *sql.DB,
 		FROM chunk ch
 		WHERE ch.status = 'COMPLETED'
 		AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.chunk_id = ch.id)
+		AND NOT EXISTS (SELECT 1 FROM chunk_block_refs cbr WHERE cbr.chunk_id = ch.id)
 	`)
 	if err != nil {
 		return 0, err
@@ -588,10 +671,17 @@ func countQuarantinedContainersWithDeadChunks(ctx context.Context, dbconn *sql.D
 		return 0, nil
 	}
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT DISTINCT c.id, b.chunk_id
+		SELECT DISTINCT c.id, x.chunk_id
 		FROM container c
-		JOIN blocks b ON b.container_id = c.id
-		JOIN chunk ch ON ch.id = b.chunk_id
+		JOIN (
+			SELECT b.container_id, b.chunk_id
+			FROM blocks b
+			UNION
+			SELECT sb.container_id, cbr.chunk_id
+			FROM storage_blocks sb
+			JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		) x ON x.container_id = c.id
+		JOIN chunk ch ON ch.id = x.chunk_id
 		WHERE c.quarantine = TRUE
 		AND ch.status = 'COMPLETED'
 	`)
@@ -649,4 +739,35 @@ func buildWarnings(inputs warningInputs) []Warning {
 		})
 	}
 	return warnings
+}
+
+func packedBlockIDsForChunks(ctx context.Context, dbconn *sql.DB, chunkIDs map[int64]struct{}) (map[int64]struct{}, error) {
+	if len(chunkIDs) == 0 {
+		return map[int64]struct{}{}, nil
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT chunk_id, block_id
+		FROM chunk_block_refs
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	blockIDs := make(map[int64]struct{})
+	for rows.Next() {
+		var chunkID, blockID int64
+		if err := rows.Scan(&chunkID, &blockID); err != nil {
+			return nil, err
+		}
+		if _, ok := chunkIDs[chunkID]; ok {
+			blockIDs[blockID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return blockIDs, nil
 }

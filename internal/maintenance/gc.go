@@ -32,6 +32,10 @@ var gcMarkReachableChunks = func(ctx context.Context, dbconn *sql.DB) (map[int64
 	return MarkReachableChunks(ctx, dbconn)
 }
 
+var gcLoadLivePackedBlockIDs = func(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	return LoadLivePackedBlockIDs(ctx, dbconn)
+}
+
 // GCResult contains structured metadata about a GC run.
 // Non-dry-run GC is state-changing: it deletes unreferenced metadata rows and
 // container files. Dry-run is read-only and only reports what would be removed.
@@ -156,6 +160,10 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	if err != nil {
 		return GCResult{}, fmt.Errorf("GC pre-flight: failed to mark reachable chunks: %w", err)
 	}
+	livePackedBlockIDs, err := gcLoadLivePackedBlockIDs(ctx, dbconn)
+	if err != nil {
+		return GCResult{}, fmt.Errorf("GC pre-flight: failed to load live packed blocks: %w", err)
+	}
 
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT id, filename
@@ -204,6 +212,14 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 				_ = tx.Rollback()
 				return GCResult{}, err
 			}
+			hasLivePacked, err := containerHasLivePackedBlocks(ctx, tx, containerID, livePackedBlockIDs)
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, fmt.Errorf("live packed block check for container %d: %w", containerID, err)
+			}
+			if hasLivePacked {
+				stillEmpty = false
+			}
 		} else {
 			// Lock the container row first so status/metadata used for deletion is stable.
 			var isSealed bool
@@ -246,6 +262,14 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 			if err != nil {
 				_ = tx.Rollback()
 				return GCResult{}, err
+			}
+			hasLivePacked, err := containerHasLivePackedBlocks(ctx, tx, containerID, livePackedBlockIDs)
+			if err != nil {
+				_ = tx.Rollback()
+				return GCResult{}, fmt.Errorf("live packed block check for container %d: %w", containerID, err)
+			}
+			if hasLivePacked {
+				stillEmpty = false
 			}
 		}
 
@@ -317,7 +341,7 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 	// they will be sealed and collected by the regular sealed-container path later.
 	// Dry-run skips this to avoid side effects.
 	if !dryRun {
-		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks); err != nil {
+		if err := cleanupFullyDeadActiveContainers(ctx, dbconn, containersDir, reachableChunks, livePackedBlockIDs); err != nil {
 			return GCResult{}, fmt.Errorf("cleanup fully dead active containers: %w", err)
 		}
 	}
@@ -348,6 +372,19 @@ func MarkReachableChunks(ctx context.Context, dbconn *sql.DB) (map[int64]struct{
 	return g.ReachableChunksFromRoots(ctx, roots)
 }
 
+// LoadLivePackedBlockIDs resolves live chunks (live_ref_count > 0 OR pin_count > 0)
+// to their packed storage block ids through chunk_block_refs.
+func LoadLivePackedBlockIDs(ctx context.Context, dbconn *sql.DB) (map[int64]struct{}, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	liveChunkIDs, err := loadLiveChunkIDs(ctx, dbconn)
+	if err != nil {
+		return nil, err
+	}
+	return packedBlockIDsForChunks(ctx, dbconn, liveChunkIDs)
+}
+
 // containerHasReachableChunks reports whether any chunk in containerID is in
 // reachableChunkIDs. It is the snapshot-retention safety net: even when
 // live_ref_count == 0, a container must not be reclaimed if its chunks are
@@ -375,29 +412,100 @@ func containerHasReachableChunks(ctx context.Context, q gcChunkQuerier, containe
 			return true, nil
 		}
 	}
-	return false, rows.Err()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	packedRows, err := q.QueryContext(ctx, `
+		SELECT DISTINCT cbr.chunk_id
+		FROM storage_blocks sb
+		JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		WHERE sb.container_id = $1
+	`, containerID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = packedRows.Close() }()
+
+	for packedRows.Next() {
+		var chunkID int64
+		if err := packedRows.Scan(&chunkID); err != nil {
+			return false, err
+		}
+		if _, retained := reachableChunkIDs[chunkID]; retained {
+			return true, nil
+		}
+	}
+
+	return false, packedRows.Err()
 }
 
 type gcSweepExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
 // SweepUnreachableChunks performs the chunk/blocks sweep for one container.
 // It relies on the earlier mark phase and active liveness guards.
 func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, containerID int64) error {
-	_, err := execer.ExecContext(ctx, `
-		WITH deleted_blocks AS (
-			DELETE FROM blocks
-			WHERE container_id = $1
-			RETURNING chunk_id
-		)
-		DELETE FROM chunk c
-		USING deleted_blocks db
-		WHERE c.id = db.chunk_id
-		AND c.live_ref_count = 0
-		AND c.pin_count = 0
+	chunkRows, err := execer.QueryContext(ctx, `
+		SELECT DISTINCT x.chunk_id
+		FROM (
+			SELECT b.chunk_id
+			FROM blocks b
+			WHERE b.container_id = $1
+			UNION
+			SELECT cbr.chunk_id
+			FROM storage_blocks sb
+			JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+			WHERE sb.container_id = $1
+		) x
 	`, containerID)
-	return err
+	if err != nil {
+		return err
+	}
+	chunkIDs := make([]int64, 0)
+	for chunkRows.Next() {
+		var chunkID int64
+		if err := chunkRows.Scan(&chunkID); err != nil {
+			_ = chunkRows.Close()
+			return err
+		}
+		chunkIDs = append(chunkIDs, chunkID)
+	}
+	if err := chunkRows.Err(); err != nil {
+		_ = chunkRows.Close()
+		return err
+	}
+	_ = chunkRows.Close()
+
+	if _, err := execer.ExecContext(ctx, `
+		DELETE FROM chunk_block_refs
+		WHERE block_id IN (
+			SELECT id FROM storage_blocks WHERE container_id = $1
+		)
+	`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM storage_blocks WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+	if _, err := execer.ExecContext(ctx, `DELETE FROM blocks WHERE container_id = $1`, containerID); err != nil {
+		return err
+	}
+
+	for _, chunkID := range chunkIDs {
+		if _, err := execer.ExecContext(ctx, `
+			DELETE FROM chunk
+			WHERE id = $1
+			AND live_ref_count = 0
+			AND pin_count = 0
+		`, chunkID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // cleanupFullyDeadActiveContainers deletes active (unsealed) containers in which
@@ -406,7 +514,7 @@ func SweepUnreachableChunks(ctx context.Context, execer gcSweepExecer, container
 // offset invariant is preserved by removing the container entirely — no offsets shift.
 // Partially-dead containers (mixed live and dead chunks) are left intact;
 // they will be handled by the regular sealed-container GC path once sealed.
-func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}) error {
+func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, containersDir string, reachableChunkIDs map[int64]struct{}, livePackedBlockIDs map[int64]struct{}) error {
 	// Identify active containers where no chunk is still live or pinned.
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT c.id, c.filename
@@ -419,8 +527,18 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 			WHERE b.container_id = c.id
 			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
 		)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM storage_blocks sb
+			JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+			JOIN chunk ch ON ch.id = cbr.chunk_id
+			WHERE sb.container_id = c.id
+			AND (ch.live_ref_count > 0 OR ch.pin_count > 0)
+		)
 		AND EXISTS (
 			SELECT 1 FROM blocks WHERE container_id = c.id
+			UNION ALL
+			SELECT 1 FROM storage_blocks WHERE container_id = c.id
 		)
 		ORDER BY c.id ASC
 	`)
@@ -454,6 +572,13 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 		if hasRetained {
 			continue
 		}
+		hasLivePacked, err := containerHasLivePackedBlocks(ctx, dbconn, ac.id, livePackedBlockIDs)
+		if err != nil {
+			return fmt.Errorf("live packed block check for active container %d: %w", ac.id, err)
+		}
+		if hasLivePacked {
+			continue
+		}
 
 		tx, err := dbconn.BeginTx(ctx, nil)
 		if err != nil {
@@ -477,6 +602,14 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 		if err := tx.QueryRowContext(ctx, emptyQuery, ac.id).Scan(&stillFullyDead); err != nil {
 			_ = tx.Rollback()
 			return err
+		}
+		hasLivePacked, err = containerHasLivePackedBlocks(ctx, tx, ac.id, livePackedBlockIDs)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("live packed block check for active container %d: %w", ac.id, err)
+		}
+		if hasLivePacked {
+			stillFullyDead = false
 		}
 		if !stillFullyDead {
 			_ = tx.Rollback()
@@ -508,4 +641,93 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 	}
 
 	return nil
+}
+
+func loadLiveChunkIDs(ctx context.Context, q gcChunkQuerier) (map[int64]struct{}, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT id
+		FROM chunk
+		WHERE status = 'COMPLETED'
+		AND (live_ref_count > 0 OR pin_count > 0)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	chunkIDs := make(map[int64]struct{})
+	for rows.Next() {
+		var chunkID int64
+		if err := rows.Scan(&chunkID); err != nil {
+			return nil, err
+		}
+		chunkIDs[chunkID] = struct{}{}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return chunkIDs, nil
+}
+
+func packedBlockIDsForChunks(ctx context.Context, q gcChunkQuerier, chunkIDs map[int64]struct{}) (map[int64]struct{}, error) {
+	if len(chunkIDs) == 0 {
+		return map[int64]struct{}{}, nil
+	}
+
+	rows, err := q.QueryContext(ctx, `
+		SELECT chunk_id, block_id
+		FROM chunk_block_refs
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	blockIDs := make(map[int64]struct{})
+	for rows.Next() {
+		var chunkID int64
+		var blockID int64
+		if err := rows.Scan(&chunkID, &blockID); err != nil {
+			return nil, err
+		}
+		if _, ok := chunkIDs[chunkID]; ok {
+			blockIDs[blockID] = struct{}{}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return blockIDs, nil
+}
+
+func containerHasLivePackedBlocks(ctx context.Context, q gcChunkQuerier, containerID int64, livePackedBlockIDs map[int64]struct{}) (bool, error) {
+	if len(livePackedBlockIDs) == 0 {
+		return false, nil
+	}
+
+	rows, err := q.QueryContext(ctx, `
+		SELECT id
+		FROM storage_blocks
+		WHERE container_id = $1
+	`, containerID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var blockID int64
+		if err := rows.Scan(&blockID); err != nil {
+			return false, err
+		}
+		if _, live := livePackedBlockIDs[blockID]; live {
+			return true, nil
+		}
+	}
+
+	return false, rows.Err()
 }
