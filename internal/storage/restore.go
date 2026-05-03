@@ -1059,8 +1059,12 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		// v1.8 block-based path: Read block once and slice chunk from it
 		if seg.BlockID > 0 {
 			cachedBlock, cachedOK := blockCache.Get(seg.BlockID)
+			if cachedOK {
+				log.Printf("event=restore_block_cache action=hit file_id=%d chunk_id=%d block_id=%d", fileID, chunk.ID, seg.BlockID)
+			}
 			if !cachedOK {
 				// Block not yet cached: read it now
+				log.Printf("event=restore_block_read action=start file_id=%d chunk_id=%d block_id=%d", fileID, chunk.ID, seg.BlockID)
 				block, err := restoreService.BlockReader.ReadBlock(ctx, seg.BlockID)
 				if err != nil {
 					log.Printf("event=restore_skip_chunk action=block_read_failed file_id=%d chunk_id=%d block_id=%d err=%v", fileID, chunk.ID, seg.BlockID, err)
@@ -1069,6 +1073,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 					}
 					continue
 				}
+				log.Printf("event=restore_block_read action=success file_id=%d chunk_id=%d block_id=%d", fileID, chunk.ID, seg.BlockID)
 
 				if block == nil || block.Payload == nil {
 					log.Printf("event=restore_skip_chunk action=block_payload_nil file_id=%d chunk_id=%d block_id=%d", fileID, chunk.ID, seg.BlockID)
@@ -1088,6 +1093,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			// Step 7: Integrate chunk slicing from decoded block payload.
+			log.Printf("event=restore_block_slice action=start file_id=%d chunk_id=%d block_id=%d offset=%d size=%d", fileID, chunk.ID, seg.BlockID, seg.Offset, seg.Size)
 			plaintext, err := blocks.SliceChunkFromPayload(cachedBlock.Payload, blocks.ChunkEntry{
 				Offset: uint64(seg.Offset),
 				Size:   uint64(seg.Size),
