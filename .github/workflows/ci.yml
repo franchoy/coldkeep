@@ -189,7 +189,7 @@ jobs:
 
       - name: Upload integration-correctness diagnostic JSON
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: integration-correctness-diag-${{ matrix.codec }}
           path: ${{ runner.temp }}/integration-diag/*.json
@@ -431,7 +431,7 @@ jobs:
 
       - name: Upload smoke artifacts on failure
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: smoke-artifacts-${{ matrix.codec }}
           path: ${{ github.workspace }}/.ci-storage/${{ matrix.codec }}
@@ -506,7 +506,7 @@ jobs:
           fi
 
       - name: Upload benchmark baseline
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-baseline
           path: benchmark-baseline.json
