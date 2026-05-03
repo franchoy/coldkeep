@@ -2,8 +2,12 @@ package maintenance
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +18,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
+	"github.com/franchoy/coldkeep/internal/snapshot"
+	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
 	"github.com/franchoy/coldkeep/tests/testdb"
 )
@@ -783,4 +789,173 @@ func TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete(t *te
 	if after.SnapshotRetainedContainers != 1 {
 		t.Fatalf("expected 1 snapshot-retained container after removing current mapping, got %d", after.SnapshotRetainedContainers)
 	}
+}
+
+func TestRunGCSnapshotRetainsPackedBlockAndRestoreSucceedsWhenLiveNamespaceRemoved(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+
+	retainedPayload := []byte("snapshot-packed-retained")
+	deadPayload := []byte("dead-neighbor-chunk")
+	containerPayload := append(append([]byte{}, retainedPayload...), deadPayload...)
+
+	containerFilename := "snapshot-packed-retained.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeTestContainerFileWithPayload(containerPath, containerPayload); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	retainedChunkHash := sha256.Sum256(retainedPayload)
+	deadChunkHash := sha256.Sum256(deadPayload)
+	packedBlockHash := sha256.Sum256(containerPayload)
+
+	var logicalID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status, chunker_version)
+		VALUES ('A.bin', $1, $2, 0, 'COMPLETED', 'v2-fastcdc')
+		RETURNING id
+	`, int64(len(retainedPayload)), hex.EncodeToString(retainedChunkHash[:])).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical_file: %v", err)
+	}
+
+	var retainedChunkID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		RETURNING id
+	`, hex.EncodeToString(retainedChunkHash[:]), int64(len(retainedPayload))).Scan(&retainedChunkID); err != nil {
+		t.Fatalf("insert retained chunk: %v", err)
+	}
+
+	var deadChunkID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		RETURNING id
+	`, hex.EncodeToString(deadChunkHash[:]), int64(len(deadPayload))).Scan(&deadChunkID); err != nil {
+		t.Fatalf("insert dead chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		VALUES ($1, $2, 0)
+	`, logicalID, retainedChunkID); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		VALUES ($1, $2, $3, TRUE, FALSE)
+		RETURNING id
+	`, containerFilename, int64(container.ContainerHdrLen+len(containerPayload)), container.GetContainerMaxSize()).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		VALUES ($1, 'plain', 1, $2, $3, $4, $5)
+	`, retainedChunkID, int64(len(retainedPayload)), int64(len(retainedPayload)), containerID, int64(container.ContainerHdrLen)); err != nil {
+		t.Fatalf("insert legacy block for retained chunk: %v", err)
+	}
+
+	var storageBlockID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		RETURNING id
+	`, int64(len(containerPayload)), int64(len(containerPayload)), containerID, int64(container.ContainerHdrLen), packedBlockHash[:]).Scan(&storageBlockID); err != nil {
+		t.Fatalf("insert packed storage block: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		VALUES ($1, $2, 0, $3)
+	`, retainedChunkID, storageBlockID, int64(len(retainedPayload))); err != nil {
+		t.Fatalf("insert packed retained ref: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+		VALUES ($1, $2, $3, $4)
+	`, deadChunkID, storageBlockID, int64(len(retainedPayload)), int64(len(deadPayload))); err != nil {
+		t.Fatalf("insert packed dead ref: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('S1', NOW(), 'full')`); err != nil {
+		t.Fatalf("insert snapshot S1: %v", err)
+	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "S1", "snap/A.bin", logicalID)
+
+	// File A removed from live namespace: no physical_file rows, logical ref_count stays 0.
+	if _, err := dbconn.Exec(`DELETE FROM physical_file WHERE logical_file_id = $1`, logicalID); err != nil {
+		t.Fatalf("delete physical_file rows for logical: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE logical_file SET ref_count = 0 WHERE id = $1`, logicalID); err != nil {
+		t.Fatalf("set logical ref_count to 0: %v", err)
+	}
+
+	gcResult, gcErr := RunGCWithContainersDirResult(false, containersDir)
+	if gcErr != nil {
+		t.Fatalf("GC should succeed: %v", gcErr)
+	}
+	if gcResult.AffectedContainers != 0 {
+		t.Fatalf("expected 0 affected containers (snapshot-retained), got %d", gcResult.AffectedContainers)
+	}
+	if gcResult.SnapshotRetainedContainers != 1 {
+		t.Fatalf("expected 1 snapshot-retained container, got %d", gcResult.SnapshotRetainedContainers)
+	}
+
+	var packedBlockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, storageBlockID).Scan(&packedBlockCount); err != nil {
+		t.Fatalf("count packed block after GC: %v", err)
+	}
+	if packedBlockCount != 1 {
+		t.Fatalf("expected packed block to remain live via snapshot-retained chunk, got count=%d", packedBlockCount)
+	}
+
+	restoreTarget := filepath.Join(t.TempDir(), "restored-A.bin")
+	sgctx := storage.StorageContext{DB: dbconn, ContainerDir: containersDir}
+	restoreResult, err := snapshot.RestoreSnapshot(context.Background(), dbconn, "S1", nil, snapshot.RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOverride,
+		Destination:     restoreTarget,
+		Overwrite:       true,
+		NoMetadata:      true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("restore from snapshot S1: %v", err)
+	}
+	if restoreResult.RestoredFiles != 1 {
+		t.Fatalf("expected one restored file, got %d", restoreResult.RestoredFiles)
+	}
+
+	restored, err := os.ReadFile(restoreTarget)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(retainedPayload) {
+		t.Fatalf("restored payload mismatch: got %q want %q", string(restored), string(retainedPayload))
+	}
+}
+
+func writeTestContainerFileWithPayload(path string, payload []byte) error {
+	hdr := make([]byte, container.ContainerHdrLen)
+	copy(hdr[0:8], []byte(container.ContainerMagic))
+	binary.LittleEndian.PutUint16(hdr[8:10], container.LegacyContainerFormatVersionMajor)
+	binary.LittleEndian.PutUint16(hdr[10:12], 9)
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(container.ContainerHdrLen))
+	binary.LittleEndian.PutUint64(hdr[28:36], uint64(container.GetContainerMaxSize()))
+	binary.LittleEndian.PutUint32(hdr[52:56], crc32.ChecksumIEEE(hdr[0:52]))
+
+	buf := append(hdr, payload...)
+	return os.WriteFile(path, buf, 0o644)
 }
