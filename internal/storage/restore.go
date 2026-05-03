@@ -86,6 +86,55 @@ type blockReadPlan struct {
 	BlockDedup map[int64]bool
 }
 
+// BlockCache is a per-restore in-memory cache for decoded blocks.
+// Eviction policy: FIFO by first insertion order.
+type BlockCache struct {
+	entries map[int64]*blocks.EncodedBlock
+	order   []int64
+	maxSize int
+}
+
+func newBlockCache(maxSize int) *BlockCache {
+	if maxSize <= 0 {
+		maxSize = 4
+	}
+	return &BlockCache{
+		entries: make(map[int64]*blocks.EncodedBlock),
+		order:   make([]int64, 0, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+// Get returns a cached block and whether it exists.
+func (c *BlockCache) Get(blockID int64) (*blocks.EncodedBlock, bool) {
+	if c == nil {
+		return nil, false
+	}
+	b, ok := c.entries[blockID]
+	return b, ok
+}
+
+// Put inserts a block into the cache and evicts the oldest entry when full.
+func (c *BlockCache) Put(blockID int64, block *blocks.EncodedBlock) {
+	if c == nil || block == nil {
+		return
+	}
+
+	if _, exists := c.entries[blockID]; exists {
+		c.entries[blockID] = block
+		return
+	}
+
+	if len(c.entries) >= c.maxSize && len(c.order) > 0 {
+		evictID := c.order[0]
+		c.order = c.order[1:]
+		delete(c.entries, evictID)
+	}
+
+	c.entries[blockID] = block
+	c.order = append(c.order, blockID)
+}
+
 type restoreChunkRow struct {
 	chunkOrder          int64
 	blockOffset         int64
@@ -971,15 +1020,10 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Build block read plan: groups blocks by ID while maintaining chunk_index order
 	// This plan identifies which blocks need to be read and in what order.
 	// Non-contiguous block references are handled via block cache.
-	// blockPlan provides:
-	// - BlockRequests: ordered list of unique blocks to read
-	// - ChunkToBlock: mapping of chunk index to resolved segment
-	// - Block deduplication info to avoid re-reading same block
-	//
-	// The restore loop iterates chunks in order (preserving output order)
-	// and uses blockPlan.ChunkToBlock for fast segment lookups.
 	blockPlan := buildBlockReadPlan(chunkSegments)
-	_ = blockPlan // blockPlan used for block read optimization and diagnostics
+
+	// Per-restore block cache (recommended default: maxSize=4).
+	blockCache := newBlockCache(4)
 
 	// Read blocks and extract chunks, emitting in original chunk index order
 	var expectedOrder int64 = 0
@@ -987,9 +1031,6 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	var firstRestoreError error
 	const emptyFileSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	isExpectedEmptyFile := len(recipe.Chunks) == 0 && recipe.ExpectedHash == emptyFileSHA256
-
-	// Cache of BlockID -> decoded block bytes to avoid repeated reads
-	blockCache := make(map[int64][]byte)
 
 	// Process chunks in original order to preserve output sequence
 	for chunkIdx, chunk := range recipe.Chunks {
@@ -1002,7 +1043,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 
 		// Get chunk segment (resolved block placement)
-		seg := chunkSegments[chunkIdx]
+		seg := blockPlan.ChunkToBlock[chunkIdx]
 		if seg == nil {
 			log.Printf("event=restore_skip_chunk action=segment_not_resolved file_id=%d chunk_id=%d", fileID, chunk.ID)
 			continue
@@ -1017,8 +1058,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 
 		// v1.8 block-based path: Read block once and slice chunk from it
 		if seg.BlockID > 0 {
-			// Check if we've already read this block
-			blockBytes, cachedOK := blockCache[seg.BlockID]
+			cachedBlock, cachedOK := blockCache.Get(seg.BlockID)
 			if !cachedOK {
 				// Block not yet cached: read it now
 				block, err := restoreService.BlockReader.ReadBlock(ctx, seg.BlockID)
@@ -1035,9 +1075,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 					continue
 				}
 
-				// Cache the block bytes
-				blockBytes = block.Payload
-				blockCache[seg.BlockID] = blockBytes
+				// Insert newly read block into cache.
+				blockCache.Put(seg.BlockID, block)
+				cachedBlock = block
 
 				// TEST HOOK: assert state just before first block read.
 				if TestRestoreBeforeChunkReadHook != nil {
@@ -1048,12 +1088,12 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			// Slice chunk from the block payload
-			if seg.Offset+seg.Size > int64(len(blockBytes)) {
-				log.Printf("event=restore_skip_chunk action=segment_out_of_bounds file_id=%d chunk_id=%d block_id=%d offset=%d size=%d block_size=%d", fileID, chunk.ID, seg.BlockID, seg.Offset, seg.Size, len(blockBytes))
+			if seg.Offset+seg.Size > int64(len(cachedBlock.Payload)) {
+				log.Printf("event=restore_skip_chunk action=segment_out_of_bounds file_id=%d chunk_id=%d block_id=%d offset=%d size=%d block_size=%d", fileID, chunk.ID, seg.BlockID, seg.Offset, seg.Size, len(cachedBlock.Payload))
 				continue
 			}
 
-			plaintext := blockBytes[seg.Offset : seg.Offset+seg.Size]
+			plaintext := cachedBlock.Payload[seg.Offset : seg.Offset+seg.Size]
 
 			// Validate plaintext size
 			if int64(len(plaintext)) != chunk.PlaintextSize {
