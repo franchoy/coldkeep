@@ -655,6 +655,12 @@ scripts/run_phase8_blocksize_matrix.sh --list-missing
 # Resume only missing or incomplete runs (builds once, writes JSON atomically)
 DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep DB_SSLMODE=disable \
 scripts/run_phase8_blocksize_matrix.sh
+
+# Generate an aggregated markdown/json summary from the collected JSON files
+python3 scripts/summarize_phase8_blocksize.py \
+   --input-dir tmp/bench_phase8 \
+   --output tmp/bench_phase8/summary.md \
+   --json-output tmp/bench_phase8/summary.json
 ```
 
 The helper skips only outputs that already contain a valid `"status":"ok"`
