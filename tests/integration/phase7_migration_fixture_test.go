@@ -384,6 +384,227 @@ func TestPhase7LegacyOnlyRestoreAndVerifyIntegration(t *testing.T) {
 	}
 }
 
+func TestPhase7UpgradeAndAddNewDataIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for upgrade-and-add-new-data fixture: %v", err)
+	}
+
+	legacyRoot := filepath.Join(tmp, "upgrade-legacy-input")
+	legacySet := createPhase7FixtureInputSet(t, legacyRoot)
+	legacyExpectedHashes := make(map[string]struct{})
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	for _, p := range legacySet.allStorePaths {
+		legacyExpectedHashes[testutils.SHA256File(t, p)] = struct{}{}
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed legacy data %s: %v", p, err)
+		}
+	}
+
+	// Represent a true pre-upgrade legacy repository by removing packed metadata.
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete chunk_block_refs before upgrade: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete storage_blocks before upgrade: %v", err)
+	}
+
+	var oldMaxChunkID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM chunk`).Scan(&oldMaxChunkID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max chunk id: %v", err)
+	}
+	var oldMaxLogicalID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM logical_file`).Scan(&oldMaxLogicalID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max logical_file id: %v", err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before upgrade reopen: %v", err)
+	}
+
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("open legacy repository with v1.8 runtime: %v", err)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after upgrade reopen: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	newRoot := filepath.Join(tmp, "upgrade-new-input")
+	newFilePath := filepath.Join(newRoot, "new-single-after-upgrade.bin")
+	writeDeterministicFileWithSalt(t, newFilePath, 2*1024*1024+123, 1301)
+
+	newFolderPath := filepath.Join(newRoot, "new-folder")
+	newFolderFiles := make([]string, 0, 12)
+	for i := 0; i < 12; i++ {
+		p := filepath.Join(newFolderPath, fmt.Sprintf("new-%02d.dat", i))
+		writeDeterministicFileWithSalt(t, p, 4096+(i*211), 1700+i)
+		newFolderFiles = append(newFolderFiles, p)
+	}
+
+	newExpectedHashes := make(map[string]struct{})
+	newExpectedHashes[testutils.SHA256File(t, newFilePath)] = struct{}{}
+	for _, p := range newFolderFiles {
+		newExpectedHashes[testutils.SHA256File(t, p)] = struct{}{}
+	}
+
+	sgctx = storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, newFilePath, blocks.CodecPlain, false); err != nil {
+		t.Fatalf("store new file after upgrade: %v", err)
+	}
+	if err := storage.StoreFolderWithStorageContext(sgctx, newFolderPath); err != nil {
+		t.Fatalf("store new folder after upgrade: %v", err)
+	}
+
+	var newChunkPackedRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.id > $1
+	`, oldMaxChunkID).Scan(&newChunkPackedRefs); err != nil {
+		t.Fatalf("count new chunks with packed refs: %v", err)
+	}
+	if newChunkPackedRefs == 0 {
+		t.Fatal("expected new data after upgrade to use packed chunk_block_refs")
+	}
+
+	var newCompletedMissingPacked int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.id > $1 AND c.status = 'COMPLETED' AND r.chunk_id IS NULL
+	`, oldMaxChunkID).Scan(&newCompletedMissingPacked); err != nil {
+		t.Fatalf("count new completed chunks missing packed refs: %v", err)
+	}
+	if newCompletedMissingPacked != 0 {
+		t.Fatalf("expected all new completed chunks to have packed refs, missing=%d", newCompletedMissingPacked)
+	}
+
+	var oldChunkPackedRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.id <= $1
+	`, oldMaxChunkID).Scan(&oldChunkPackedRefs); err != nil {
+		t.Fatalf("count old chunks with packed refs: %v", err)
+	}
+	if oldChunkPackedRefs != 0 {
+		t.Fatalf("expected old legacy chunks to remain on legacy read path (no packed refs), got=%d", oldChunkPackedRefs)
+	}
+
+	var oldCompletedMissingLegacyBlocks int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		WHERE c.id <= $1 AND c.status = 'COMPLETED' AND b.id IS NULL
+	`, oldMaxChunkID).Scan(&oldCompletedMissingLegacyBlocks); err != nil {
+		t.Fatalf("count old completed chunks missing legacy blocks rows: %v", err)
+	}
+	if oldCompletedMissingLegacyBlocks != 0 {
+		t.Fatalf("expected old legacy chunks to keep legacy blocks rows, missing=%d", oldCompletedMissingLegacyBlocks)
+	}
+
+	restoreAndValidate := func(query string, queryArg int64, expected map[string]struct{}, label string) {
+		t.Helper()
+		rows, err := dbconn.Query(query, queryArg)
+		if err != nil {
+			t.Fatalf("query %s logical files: %v", label, err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		restoreDir := filepath.Join(tmp, fmt.Sprintf("restore-%s", label))
+		if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+			t.Fatalf("mkdir restore dir %s: %v", label, err)
+		}
+
+		ctx := storage.StorageContext{DB: dbconn, ContainerDir: container.ContainersDir}
+		restoredCount := 0
+		for rows.Next() {
+			var fileID int64
+			var wantHash string
+			if err := rows.Scan(&fileID, &wantHash); err != nil {
+				t.Fatalf("scan %s logical file row: %v", label, err)
+			}
+
+			outPath := filepath.Join(restoreDir, fmt.Sprintf("%s-%d.bin", label, fileID))
+			if err := storage.RestoreFileWithStorageContext(ctx, fileID, outPath); err != nil {
+				t.Fatalf("restore %s file id=%d: %v", label, fileID, err)
+			}
+
+			gotHash := testutils.SHA256File(t, outPath)
+			if gotHash != wantHash {
+				t.Fatalf("%s restore hash mismatch for file id=%d: got=%s want=%s", label, fileID, gotHash, wantHash)
+			}
+			if _, ok := expected[gotHash]; !ok {
+				t.Fatalf("%s restored hash not present in expected fixture set: %s", label, gotHash)
+			}
+			restoredCount++
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate %s logical rows: %v", label, err)
+		}
+		if restoredCount != len(expected) {
+			t.Fatalf("%s restored logical count mismatch: got=%d want=%d", label, restoredCount, len(expected))
+		}
+	}
+
+	restoreAndValidate(`
+		SELECT id, file_hash
+		FROM logical_file
+		WHERE status = 'COMPLETED' AND id <= $1
+		ORDER BY id ASC
+	`, oldMaxLogicalID, legacyExpectedHashes, "old")
+
+	restoreAndValidate(`
+		SELECT id, file_hash
+		FROM logical_file
+		WHERE status = 'COMPLETED' AND id > $1
+		ORDER BY id ASC
+	`, oldMaxLogicalID, newExpectedHashes, "new")
+
+	combinedExpected := make(map[string]struct{}, len(legacyExpectedHashes)+len(newExpectedHashes))
+	for hash := range legacyExpectedHashes {
+		combinedExpected[hash] = struct{}{}
+	}
+	for hash := range newExpectedHashes {
+		combinedExpected[hash] = struct{}{}
+	}
+
+	restoreAndValidate(`
+		SELECT id, file_hash
+		FROM logical_file
+		WHERE status = 'COMPLETED' AND id > 0
+		ORDER BY id ASC
+	`, 0, combinedExpected, "all")
+}
+
 func TestPhase7BuildFixtureWithActualV17BinaryIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 

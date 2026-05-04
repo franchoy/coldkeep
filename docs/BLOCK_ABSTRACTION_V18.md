@@ -327,3 +327,25 @@ Reference integration test:
 
 - `TestPhase7LegacyOnlyRestoreAndVerifyIntegration`
 
+## Phase 7 Step 4 Upgrade-and-Add-New-Data Test (Implemented)
+
+Upgrade flow under test:
+
+1. Create legacy repository fixture.
+2. Open repository using v1.8 runtime.
+3. Store new file and new folder content.
+4. Assert new chunks are mapped through packed metadata (`storage_blocks` + `chunk_block_refs`).
+5. Restore old data and verify hashes.
+6. Restore new data and verify hashes.
+7. Restore all data together and verify hashes.
+
+Expected outcome (locked):
+
+- old data remains on legacy path (no packed refs required for old chunks),
+- new data uses packed path,
+- old and new data both restore byte-identically.
+
+Reference integration test:
+
+- `TestPhase7UpgradeAndAddNewDataIntegration`
+
