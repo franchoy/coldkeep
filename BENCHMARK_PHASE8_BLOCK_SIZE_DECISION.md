@@ -496,6 +496,42 @@ Output artifacts:
 - `tmp/bench_phase8_dedup_sequence/*-chunk-map-before-v2.tsv`
 - `tmp/bench_phase8_dedup_sequence/*-chunk-map-after-v2.tsv`
 
+## 10.4 GC Benchmark Sequence (Locked)
+
+Dataset F must run this exact sequence:
+
+1. Store all small files from `DATASET_F_ROOT/files/`
+2. Remove a random subset (~30% by default)
+3. Run `simulate gc --output json` — record:
+   - `logically_reclaimable_bytes`
+   - `physically_reclaimable_bytes`
+   - `retained_dead_bytes_due_to_packed_blocks`
+4. Run `gc` (live)
+5. Run `verify system --standard`
+6. Restore remaining (non-removed) files and validate hashes
+
+Primary comparison metric between 1 MiB and 2 MiB:
+
+- `retained_dead_bytes_due_to_packed_blocks`
+
+Expected outcome:
+
+- 2 MiB blocks may retain more dead space because each packed block contains more
+  chunks; a partially-live 2 MiB block wastes more bytes than a partially-live 1 MiB block.
+- This is one of the strongest reasons to stay with 1 MiB if throughput difference is small.
+- If retained dead bytes differ significantly, 1 MiB is preferred on storage efficiency grounds.
+
+Canonical scripts:
+
+- Sequence runner: `scripts/run_phase8_gc_sequence.sh`
+- Cross-size comparator (1 MiB vs 2 MiB): `scripts/compare_phase8_gc_results.py`
+
+Output artifacts:
+
+- `tmp/bench_phase8_gc_sequence/*-gc-result.json`
+- `tmp/bench_phase8_gc_sequence/*-simulate-gc.json`
+- `tmp/bench_phase8_gc_sequence/*-removal.json`
+
 ## 11. Metrics to Collect (Locked)
 
 ### Store Metrics
