@@ -99,7 +99,37 @@ Minimum matrix:
 - workers: 1, 4
 - repeats: >= 3
 
-## 5. Safety and Correctness Gates (Must Stay True)
+## 5. Fixed Variables (Decision-Grade Requirement)
+
+For decision-grade benchmarking, block size is the only independent variable.
+
+Keep all of the following fixed across candidate runs:
+
+- FastCDC configuration
+- container max size (`64 MiB`)
+- database backend
+- storage directory type
+- encryption/key settings
+- CPU parallelism
+- dataset
+- CLI command sequence
+- GC settings
+- verify settings
+- machine
+- filesystem
+
+Any run matrix that changes one of the above between candidates is not valid
+for block-size selection.
+
+Invalid comparisons (must not be used for the decision):
+
+- `1 MiB` on sqlite vs `2 MiB` on postgres
+- `1 MiB` encrypted vs `2 MiB` plain
+- `1 MiB` warm cache vs `2 MiB` cold cache
+
+These comparisons mix confounders and invalidate attribution.
+
+## 6. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -112,7 +142,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 6. Decision Rule
+## 7. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -125,7 +155,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 7. 3 MiB Policy (Experimental Only)
+## 8. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -141,7 +171,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 8. Required Final Output
+## 9. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
