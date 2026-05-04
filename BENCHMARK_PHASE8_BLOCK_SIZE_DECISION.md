@@ -129,7 +129,28 @@ Invalid comparisons (must not be used for the decision):
 
 These comparisons mix confounders and invalidate attribution.
 
-## 6. Safety and Correctness Gates (Must Stay True)
+## 6. Repository Isolation (Fresh Repo Per Candidate)
+
+Never benchmark `1 MiB` and `2 MiB` in the same repository.
+
+Required repository layout per run set:
+
+- `repo_1m/`
+- `repo_2m/`
+- `repo_3m_optional/`
+
+Each candidate run must start from a fresh repository state for that candidate
+and must not reuse prior repositories from a different block-size run.
+
+Why this is mandatory:
+
+- Mixed block sizes contaminate attribution metrics.
+- GC outcomes become ambiguous when packed blocks were written under different
+   target-size policies.
+- Restore behavior becomes noisy because physical block composition differs by
+   prior-run history, not only by current candidate policy.
+
+## 7. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -142,7 +163,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 7. Decision Rule
+## 8. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -155,7 +176,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 8. 3 MiB Policy (Experimental Only)
+## 9. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -171,7 +192,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 9. Required Final Output
+## 10. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
