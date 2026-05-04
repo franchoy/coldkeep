@@ -671,23 +671,16 @@ func isSQLiteSchemaApplyCompatibilityError(err error) bool {
 		strings.Contains(errText, "no such column: path_id")
 }
 
-func ensurePostgresVersion(dbconn *sql.DB, ctx context.Context) error {
+func ensurePostgresVersion(dbconn *sql.DB, ctx context.Context) (int, error) {
 	var version int
 	err := dbconn.QueryRowContext(ctx, `SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&version)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("schema_version table is empty")
+			return 0, errors.New("schema_version table is empty")
 		}
-		return fmt.Errorf("query schema_version: %w", err)
+		return 0, fmt.Errorf("query schema_version: %w", err)
 	}
-	if version < requiredPostgresSchemaVersion {
-		return fmt.Errorf(
-			"postgres schema version too old: have %d, need at least %d; apply db/schema_postgres.sql",
-			version,
-			requiredPostgresSchemaVersion,
-		)
-	}
-	return nil
+	return version, nil
 }
 
 // EnsurePostgresSchema validates the runtime PostgreSQL schema.
@@ -722,8 +715,27 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 		}
 	}
 
-	if err := ensurePostgresVersion(dbconn, ctx); err != nil {
+	version, err := ensurePostgresVersion(dbconn, ctx)
+	if err != nil {
 		return err
+	}
+
+	if version < requiredPostgresSchemaVersion {
+		schemaSQL, err := loadPostgresSchema()
+		if err != nil {
+			return err
+		}
+		if _, err := dbconn.ExecContext(ctx, schemaSQL); err != nil {
+			return fmt.Errorf("auto-migrate postgres schema from version %d to >= %d: %w", version, requiredPostgresSchemaVersion, err)
+		}
+
+		version, err = ensurePostgresVersion(dbconn, ctx)
+		if err != nil {
+			return err
+		}
+		if version < requiredPostgresSchemaVersion {
+			return fmt.Errorf("postgres schema version too old after auto-migration: have %d, need at least %d", version, requiredPostgresSchemaVersion)
+		}
 	}
 
 	return nil
