@@ -294,7 +294,7 @@ python3 - "$RESULT_JSON_PATH" "$SELECTION_JSON_PATH" "$MAP_BEFORE_TSV_PATH" "$MA
 	"$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" \
 	"$store_v1_elapsed_ms" "$store_v2_elapsed_ms" "$restore_v1_elapsed_ms" "$restore_v2_elapsed_ms" "$verify_elapsed_ms" \
 	"$chunks_after_v1" "$chunks_after_v2" "$blocks_after_v1" "$blocks_after_v2" "$new_chunks_v2" "$new_blocks_v2" "$MAX_INCREMENTAL_RATIO" \
-	"$RESTORE_V1_ROOT" "$RESTORE_V2_ROOT" <<'PY'
+	"$RESTORE_V1_ROOT" "$RESTORE_V2_ROOT" "$RUN_ID" <<'PY'
 import hashlib
 import json
 import math
@@ -325,6 +325,7 @@ import sys
     max_incremental_ratio,
     restore_v1_root,
     restore_v2_root,
+    dataset_seed,
 ) = sys.argv[1:]
 
 with open(selection_path, 'r', encoding='utf-8') as f:
@@ -463,6 +464,7 @@ result = {
         'block_target_size_mb': int(block_mb),
         'dataset': dataset_label,
         'run_id': run_id,
+        'dataset_seed': dataset_seed,
         'db_name': db_name,
         'storage_dir': storage_dir,
         'timings_ms': {

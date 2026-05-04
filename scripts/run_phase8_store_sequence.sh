@@ -207,7 +207,7 @@ if [[ "$missing_block_hash_count" != "0" ]]; then
 	exit 1
 fi
 
-python3 - "$RESULT_JSON_PATH" "$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" "$store_elapsed_ms" "$verify_elapsed_ms" "$storage_blocks_count" "$avg_chunks_per_block" "$missing_block_hash_count" "$EXPECT_MULTI_CHUNK" "$store_rss_kb" "$verify_rss_kb" <<'PY'
+python3 - "$RESULT_JSON_PATH" "$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" "$store_elapsed_ms" "$verify_elapsed_ms" "$storage_blocks_count" "$avg_chunks_per_block" "$missing_block_hash_count" "$EXPECT_MULTI_CHUNK" "$store_rss_kb" "$verify_rss_kb" "$RUN_ID" <<'PY'
 import json,sys
 (
     out_path,
@@ -224,6 +224,7 @@ import json,sys
     expect_multichunk,
     store_rss_kb,
     verify_rss_kb,
+    dataset_seed,
 )=sys.argv[1:]
 payload={
     "status":"ok",
@@ -232,6 +233,7 @@ payload={
         "block_target_size_mb":int(block_mb),
         "dataset":dataset_label,
         "run_id":run_id,
+        "dataset_seed":dataset_seed,
         "db_name":db_name,
         "storage_dir":storage_dir,
         "store_elapsed_ms":int(store_elapsed_ms),

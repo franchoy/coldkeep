@@ -283,7 +283,7 @@ python3 - \
 	"$RESTORE_ROOT" \
 	"$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" \
 	"$store_elapsed_ms" "$remove_elapsed_ms" "$gc_elapsed_ms" "$verify_elapsed_ms" "$restore_elapsed_ms" \
-	"$store_rss_kb" "$verify_rss_kb" <<'PY'
+	"$store_rss_kb" "$verify_rss_kb" "$seed_for_removal" <<'PY'
 import hashlib
 import json
 import os
@@ -307,6 +307,7 @@ import sys
     restore_elapsed_ms,
     store_rss_kb,
     verify_rss_kb,
+    dataset_seed,
 ) = sys.argv[1:]
 
 with open(removal_path, 'r', encoding='utf-8') as f:
@@ -388,6 +389,7 @@ result = {
         'block_target_size_mb': int(block_mb),
         'dataset': dataset_label,
         'run_id': run_id,
+        'dataset_seed': dataset_seed,
         'db_name': db_name,
         'storage_dir': storage_dir,
         'timings_ms': {

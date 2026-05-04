@@ -379,7 +379,8 @@ python3 - "$SELECTION_JSON_PATH" "$RESULT_JSON_PATH" \
 	"$FULL_STATS_BEFORE" "$FULL_STATS_AFTER" "$SEL1_STATS_BEFORE" "$SEL1_STATS_AFTER" "$SEL100_STATS_BEFORE" "$SEL100_STATS_AFTER" "$SELDIR_STATS_BEFORE" "$SELDIR_STATS_AFTER" \
 	"$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" \
 	"$full_elapsed_ms" "$sel1_elapsed_ms" "$sel100_elapsed_ms" "$seldir_elapsed_ms" \
-	"$full_rss_kb" "$sel1_rss_kb" "$sel100_rss_kb" "$seldir_rss_kb" <<'PY'
+	"$full_rss_kb" "$sel1_rss_kb" "$sel100_rss_kb" "$seldir_rss_kb" \
+	"$seed_fallback" <<'PY'
 import hashlib
 import json
 import os
@@ -417,6 +418,7 @@ import sys
     sel1_rss_kb,
     sel100_rss_kb,
     seldir_rss_kb,
+    dataset_seed,
 ) = sys.argv[1:]
 
 def load_json(path):
@@ -608,6 +610,7 @@ result = {
         'block_target_size_mb': int(block_mb),
         'dataset': dataset_label,
         'run_id': run_id,
+        'dataset_seed': dataset_seed,
         'db_name': db_name,
         'storage_dir': storage_dir,
         'selective_subdirectory': subdir_info.get('path', ''),
