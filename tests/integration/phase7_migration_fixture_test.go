@@ -49,6 +49,14 @@ func writeDeterministicFileWithSalt(t *testing.T, path string, size int, salt in
 	}
 }
 
+func deterministicBytesWithSalt(size int, salt int) []byte {
+	buf := make([]byte, size)
+	for i := 0; i < size; i++ {
+		buf[i] = byte((i*31 + salt*17 + 7) % 251)
+	}
+	return buf
+}
+
 func createPhase7FixtureInputSet(t *testing.T, root string) phase7FixtureInputSet {
 	t.Helper()
 
@@ -743,6 +751,331 @@ func TestPhase7MixedVerifyAfterUpgradeIntegration(t *testing.T) {
 	t.Setenv("COLDKEEP_VERIFY_STRICT_SEGMENTS", "1")
 	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
 		t.Fatalf("mixed verify after upgrade failed: %v", err)
+	}
+}
+
+func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for mixed GC fixture: %v", err)
+	}
+
+	legacyRoot := filepath.Join(tmp, "mixed-gc-legacy-input")
+	legacySet := createPhase7FixtureInputSet(t, legacyRoot)
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	for _, p := range legacySet.allStorePaths {
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed mixed-gc legacy data %s: %v", p, err)
+		}
+	}
+
+	// Emulate pre-upgrade legacy repository metadata shape.
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete chunk_block_refs before mixed-gc upgrade: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete storage_blocks before mixed-gc upgrade: %v", err)
+	}
+
+	var oldMaxChunkID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM chunk`).Scan(&oldMaxChunkID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max chunk id for mixed-gc: %v", err)
+	}
+	var oldMaxLogicalID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM logical_file`).Scan(&oldMaxLogicalID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max logical id for mixed-gc: %v", err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before mixed-gc reopen: %v", err)
+	}
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("open mixed-gc repository with v1.8 runtime: %v", err)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after mixed-gc reopen: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	packedRoot := filepath.Join(tmp, "mixed-gc-packed-input")
+	packedAPath := filepath.Join(packedRoot, "packed-A.bin")
+	packedBPath := filepath.Join(packedRoot, "packed-B.bin")
+	packedCPath := filepath.Join(packedRoot, "packed-C-dead.bin")
+
+	if err := os.MkdirAll(packedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir packed input root: %v", err)
+	}
+
+	commonPrefix := deterministicBytesWithSalt(1_200_000, 3101)
+	suffixA := deterministicBytesWithSalt(420_000, 3102)
+	suffixB := deterministicBytesWithSalt(420_000, 3103)
+	uniqueC := deterministicBytesWithSalt(1_500_000, 3104)
+
+	dataA := make([]byte, 0, len(commonPrefix)+len(suffixA))
+	dataA = append(dataA, commonPrefix...)
+	dataA = append(dataA, suffixA...)
+	if err := os.WriteFile(packedAPath, dataA, 0o644); err != nil {
+		t.Fatalf("write packed A file: %v", err)
+	}
+
+	dataB := make([]byte, 0, len(commonPrefix)+len(suffixB))
+	dataB = append(dataB, commonPrefix...)
+	dataB = append(dataB, suffixB...)
+	if err := os.WriteFile(packedBPath, dataB, 0o644); err != nil {
+		t.Fatalf("write packed B file: %v", err)
+	}
+
+	if err := os.WriteFile(packedCPath, uniqueC, 0o644); err != nil {
+		t.Fatalf("write packed C file: %v", err)
+	}
+
+	sgctx = storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, packedAPath, blocks.CodecPlain, false); err != nil {
+		t.Fatalf("store packed A: %v", err)
+	}
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, packedBPath, blocks.CodecPlain, false); err != nil {
+		t.Fatalf("store packed B: %v", err)
+	}
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, packedCPath, blocks.CodecPlain, false); err != nil {
+		t.Fatalf("store packed C: %v", err)
+	}
+
+	// Remove subset of legacy data.
+	removeCtx := storage.StorageContext{DB: dbconn}
+	legacyRemove := []string{
+		legacySet.manySmallPaths[0],
+		legacySet.manySmallPaths[1],
+		legacySet.duplicatePathA,
+	}
+	for _, p := range legacyRemove {
+		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err != nil {
+			t.Fatalf("remove legacy subset path %s: %v", p, err)
+		}
+	}
+
+	// Remove subset of packed data.
+	packedRemove := []string{packedAPath, packedCPath}
+	for _, p := range packedRemove {
+		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err != nil {
+			t.Fatalf("remove packed subset path %s: %v", p, err)
+		}
+	}
+
+	type idSet map[int64]struct{}
+	collectBlockIDs := func(query string, arg int64) idSet {
+		t.Helper()
+		rows, err := dbconn.Query(query, arg)
+		if err != nil {
+			t.Fatalf("query block ids: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		ids := make(idSet)
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan block id: %v", err)
+			}
+			ids[id] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate block id rows: %v", err)
+		}
+		return ids
+	}
+
+	deadWholeBlockIDsBefore := collectBlockIDs(`
+		SELECT sb.id
+		FROM storage_blocks sb
+		WHERE EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.block_id = sb.id)
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM chunk_block_refs r
+			JOIN chunk c ON c.id = r.chunk_id
+			WHERE r.block_id = sb.id
+			  AND (c.live_ref_count > 0 OR c.pin_count > 0)
+		  )
+	`, oldMaxChunkID)
+
+	partialLiveBlockIDsBefore := collectBlockIDs(`
+		SELECT sb.id
+		FROM storage_blocks sb
+		WHERE EXISTS (
+			SELECT 1
+			FROM chunk_block_refs r
+			JOIN chunk c ON c.id = r.chunk_id
+			WHERE r.block_id = sb.id
+			  AND (c.live_ref_count > 0 OR c.pin_count > 0)
+		)
+		AND EXISTS (
+			SELECT 1
+			FROM chunk_block_refs r
+			JOIN chunk c ON c.id = r.chunk_id
+			WHERE r.block_id = sb.id
+			  AND c.live_ref_count = 0
+			  AND c.pin_count = 0
+		)
+	`, oldMaxChunkID)
+
+	if len(deadWholeBlockIDsBefore) == 0 {
+		t.Fatal("expected at least one fully-dead packed block before GC")
+	}
+	if len(partialLiveBlockIDsBefore) == 0 {
+		t.Fatal("expected at least one partially-live packed block before GC")
+	}
+
+	var legacyDeadChunksBefore int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk
+		WHERE id <= $1
+		  AND status = 'COMPLETED'
+		  AND live_ref_count = 0
+		  AND pin_count = 0
+	`, oldMaxChunkID).Scan(&legacyDeadChunksBefore); err != nil {
+		t.Fatalf("count legacy dead chunks before GC: %v", err)
+	}
+
+	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
+		t.Fatalf("mixed-gc dry-run failed: %v", err)
+	}
+
+	// Dry-run must not mutate whole-dead/partial-live packed block presence.
+	for id := range deadWholeBlockIDsBefore {
+		var count int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, id).Scan(&count); err != nil {
+			t.Fatalf("count dead whole block %d after dry-run: %v", id, err)
+		}
+		if count != 1 {
+			t.Fatalf("dead whole block %d changed during dry-run", id)
+		}
+	}
+	for id := range partialLiveBlockIDsBefore {
+		var count int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, id).Scan(&count); err != nil {
+			t.Fatalf("count partial live block %d after dry-run: %v", id, err)
+		}
+		if count != 1 {
+			t.Fatalf("partial live block %d changed during dry-run", id)
+		}
+	}
+
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
+		t.Fatalf("mixed-gc real run failed: %v", err)
+	}
+
+	for id := range deadWholeBlockIDsBefore {
+		var remaining int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, id).Scan(&remaining); err != nil {
+			t.Fatalf("count dead whole block %d after GC: %v", id, err)
+		}
+		if remaining != 0 {
+			t.Fatalf("dead whole packed block %d was not reclaimed", id)
+		}
+	}
+
+	for id := range partialLiveBlockIDsBefore {
+		var remaining int
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, id).Scan(&remaining); err != nil {
+			t.Fatalf("count partial live block %d after GC: %v", id, err)
+		}
+		if remaining != 1 {
+			t.Fatalf("partially-live packed block %d should be retained", id)
+		}
+	}
+
+	var legacyDeadChunksAfter int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk
+		WHERE id <= $1
+		  AND status = 'COMPLETED'
+		  AND live_ref_count = 0
+		  AND pin_count = 0
+	`, oldMaxChunkID).Scan(&legacyDeadChunksAfter); err != nil {
+		t.Fatalf("count legacy dead chunks after GC: %v", err)
+	}
+	if legacyDeadChunksBefore > 0 && legacyDeadChunksAfter >= legacyDeadChunksBefore {
+		t.Fatalf("expected legacy dead chunks to be reclaimed: before=%d after=%d", legacyDeadChunksBefore, legacyDeadChunksAfter)
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT lf.id, lf.file_hash
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.status = 'COMPLETED'
+		GROUP BY lf.id, lf.file_hash
+		ORDER BY lf.id ASC
+	`)
+	if err != nil {
+		t.Fatalf("query remaining logical files for restore: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	restoreDir := filepath.Join(tmp, "mixed-gc-remaining-restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir mixed-gc restore dir: %v", err)
+	}
+
+	remainingLegacy := 0
+	remainingPacked := 0
+	for rows.Next() {
+		var fileID int64
+		var wantHash string
+		if err := rows.Scan(&fileID, &wantHash); err != nil {
+			t.Fatalf("scan remaining logical file row: %v", err)
+		}
+
+		outPath := filepath.Join(restoreDir, fmt.Sprintf("remaining-%d.bin", fileID))
+		if err := storage.RestoreFileWithStorageContext(storage.StorageContext{DB: dbconn, ContainerDir: container.ContainersDir}, fileID, outPath); err != nil {
+			t.Fatalf("restore remaining file id=%d: %v", fileID, err)
+		}
+		if got := testutils.SHA256File(t, outPath); got != wantHash {
+			t.Fatalf("remaining restore hash mismatch for file id=%d: got=%s want=%s", fileID, got, wantHash)
+		}
+
+		if fileID <= oldMaxLogicalID {
+			remainingLegacy++
+		} else {
+			remainingPacked++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate remaining logical files: %v", err)
+	}
+
+	if remainingLegacy == 0 {
+		t.Fatal("expected remaining legacy data after mixed GC")
+	}
+	if remainingPacked == 0 {
+		t.Fatal("expected remaining packed data after mixed GC")
+	}
+
+	t.Setenv("COLDKEEP_VERIFY_STRICT_SEGMENTS", "1")
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("verify failed after mixed GC: %v", err)
 	}
 }
 

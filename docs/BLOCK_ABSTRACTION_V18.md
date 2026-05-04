@@ -373,3 +373,27 @@ Reference integration test:
 
 - `TestPhase7MixedVerifyAfterUpgradeIntegration`
 
+## Phase 7 Step 6 Mixed GC Test (Implemented)
+
+Flow under test:
+
+1. Create legacy data.
+2. Add packed data after upgrade.
+3. Remove subset of legacy data.
+4. Remove subset of packed data.
+5. Run GC dry-run.
+6. Run GC.
+7. Restore remaining data.
+8. Run verify.
+
+Expected outcome (locked):
+
+- legacy dead data is reclaimed safely,
+- packed dead data is reclaimed only at whole-block granularity,
+- partially-live packed blocks are retained,
+- remaining legacy and packed data restore byte-identically,
+- verify passes cleanly.
+
+Reference integration test:
+
+- `TestPhase7MixedGCAfterUpgradeIntegration`
