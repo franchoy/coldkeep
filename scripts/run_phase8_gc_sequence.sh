@@ -25,7 +25,8 @@ Options:
   --output-dir <path>         output directory (default: tmp/bench_phase8_gc_sequence)
   --bin <path>                coldkeep binary path (default: coldkeep)
   --remove-ratio <r>          fraction of stored files to remove, 0.0–1.0 (default: 0.30)
-  --random-seed <n>           seed for removal subset selection (default: derived from run_id)
+    --remove-filter <substr>    restrict removal candidates to paths containing substr (default: all files)
+    --random-seed <n>           seed for removal subset selection (default: derived from run_id)
 
 Required env:
   DB_HOST DB_PORT DB_USER DB_PASSWORD DB_SSLMODE
@@ -60,6 +61,7 @@ OUT_DIR="tmp/bench_phase8_gc_sequence"
 COLDKEEP_BIN="coldkeep"
 REMOVE_RATIO="0.30"
 RANDOM_SEED=""
+REMOVE_FILTER=""
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -79,6 +81,10 @@ while [[ $# -gt 0 ]]; do
 			REMOVE_RATIO="$2"
 			shift 2
 			;;
+        --remove-filter)
+            REMOVE_FILTER="$2"
+            shift 2
+            ;;
 		--random-seed)
 			RANDOM_SEED="$2"
 			shift 2
@@ -187,14 +193,14 @@ if [[ -n "$RANDOM_SEED" ]]; then
 fi
 
 # 2) remove a random subset (~REMOVE_RATIO)
-python3 - "$LIST_JSON_PATH" "$REMOVAL_JSON_PATH" "$REMOVE_RATIO" "$seed_for_removal" <<'PY'
+python3 - "$LIST_JSON_PATH" "$REMOVAL_JSON_PATH" "$REMOVE_RATIO" "$seed_for_removal" "$REMOVE_FILTER" <<'PY'
 import json
 import math
 import os
 import random
 import sys
 
-list_path, removal_out_path, remove_ratio_raw, seed_raw = sys.argv[1:]
+list_path, removal_out_path, remove_ratio_raw, seed_raw = sys.argv[1:5]
 remove_ratio = float(remove_ratio_raw)
 seed_int = 0
 try:
@@ -207,18 +213,30 @@ with open(list_path, 'r', encoding='utf-8') as f:
     doc = json.load(f)
 
 files = doc.get('files') or []
-stored_paths = sorted({str(x.get('name', '')).strip() for x in files if str(x.get('name', '')).strip()})
-if not stored_paths:
-    raise SystemExit('no stored paths found')
+entries = sorted(
+    {(int(x['id']), str(x.get('name', '')).strip()) for x in files
+     if x.get('id') and str(x.get('name', '')).strip()},
+    key=lambda e: e[1],
+)
+if not entries:
+    raise SystemExit('no stored files found')
 
 rng = random.Random(seed_int)
-n_remove = max(1, math.floor(len(stored_paths) * remove_ratio))
-to_remove = sorted(rng.sample(stored_paths, n_remove))
-to_keep = sorted(set(stored_paths) - set(to_remove))
+n_remove = max(1, math.floor(len(entries) * remove_ratio))
+remove_filter = sys.argv[5] if len(sys.argv) > 5 else ''
+candidates = [e for e in entries if not remove_filter or remove_filter in e[1]]
+if not candidates:
+    raise SystemExit(f'no stored paths match --remove-filter {remove_filter!r}')
+n_remove = max(1, math.floor(len(candidates) * remove_ratio))
+to_remove_entries = sorted(rng.sample(candidates, n_remove), key=lambda e: e[1])
+to_remove_ids = [e[0] for e in to_remove_entries]
+to_remove_paths = [e[1] for e in to_remove_entries]
+to_keep = sorted({e[1] for e in entries} - set(to_remove_paths))
 
 out = {
-    'stored_paths': stored_paths,
-    'to_remove': to_remove,
+    'stored_paths': [e[1] for e in entries],
+    'to_remove': to_remove_paths,
+    'to_remove_ids': to_remove_ids,
     'to_keep': to_keep,
     'remove_ratio_requested': remove_ratio,
     'remove_count': n_remove,
@@ -231,16 +249,16 @@ with open(removal_out_path, 'w', encoding='utf-8') as f:
 PY
 
 remove_start_ms="$(now_ms)"
-python3 - "$REMOVAL_JSON_PATH" <<'PY' | while IFS= read -r stored_path; do
+python3 - "$REMOVAL_JSON_PATH" <<'PY' | while IFS= read -r file_id; do
 import json
 import sys
 
 with open(sys.argv[1], 'r', encoding='utf-8') as f:
     doc = json.load(f)
-for p in (doc.get('to_remove') or []):
-    print(p)
+for fid in (doc.get('to_remove_ids') or []):
+    print(fid)
 PY
-	"$COLDKEEP_BIN" remove --stored-path "$stored_path" --output json >/dev/null
+	"$COLDKEEP_BIN" remove "$file_id" --output json >/dev/null
 done
 remove_end_ms="$(now_ms)"
 remove_elapsed_ms=$((remove_end_ms - remove_start_ms))
