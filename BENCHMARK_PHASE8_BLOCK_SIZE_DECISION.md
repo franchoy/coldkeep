@@ -334,7 +334,52 @@ Fallback disclosure requirement:
 - If strict cache control is not available, report explicitly:
    - `cache state not controlled; results use repeated median runs`
 
-## 10. Metrics to Collect (Locked)
+## 10. Benchmark Command Harness (Locked)
+
+Use one consistent shell harness shape for all matrix runs.
+
+Template shape:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+BLOCK_MB="$1"
+DATASET="$2"
+RUN_ID="$3"
+
+export COLDKEEP_BLOCK_TARGET_SIZE_MB="$BLOCK_MB"
+export COLDKEEP_STORAGE_DIR="/tmp/coldkeep-bench-${BLOCK_MB}m-${DATASET}-${RUN_ID}"
+export COLDKEEP_TEST_DB=1
+export DB_HOST=127.0.0.1
+export DB_PORT=5432
+export DB_USER=coldkeep
+export DB_PASSWORD=coldkeep
+export DB_NAME="coldkeep_bench_${BLOCK_MB}_${DATASET}_${RUN_ID}"
+export DB_SSLMODE=disable
+export COLDKEEP_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+
+# init db/repo
+# store dataset
+# stats
+# restore dataset
+# verify
+# gc dry-run / gc if dataset requires
+```
+
+Rules:
+
+- Do not reuse DBs between runs.
+- Do not reuse storage directories between runs.
+- Keep command sequence fixed for all candidates.
+
+Implementation note:
+
+- Canonical matrix runner lives at `scripts/run_phase8_blocksize_matrix.sh` and
+   follows these isolation rules by generating per-run `DB_NAME` and
+   `COLDKEEP_STORAGE_DIR` from block size, dataset, and run id.
+
+## 11. Metrics to Collect (Locked)
 
 ### Store Metrics
 
@@ -439,7 +484,7 @@ Expected trend to validate (not assume):
 - `2 MiB` may compress slightly better than `1 MiB`
 - `3 MiB` may show diminishing additional benefit
 
-## 11. Benchmark Instrumentation Path (Locked)
+## 12. Benchmark Instrumentation Path (Locked)
 
 Selected approach combines Option A and Option B:
 
@@ -463,7 +508,7 @@ At minimum, instrumentation must expose:
 Option C (manual SQL snippets) remains useful for ad-hoc debugging but is not
 the canonical reporting path for decision-grade benchmark output.
 
-## 12. Safety and Correctness Gates (Must Stay True)
+## 13. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -476,7 +521,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 13. Decision Rule
+## 14. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -489,7 +534,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 14. 3 MiB Policy (Experimental Only)
+## 15. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -505,7 +550,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 15. Required Final Output
+## 16. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 

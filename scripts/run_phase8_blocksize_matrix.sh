@@ -35,7 +35,13 @@ Options:
   --help               Show this help text
 
 Required DB env vars should already be set in the shell or Codespace:
-  DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME DB_SSLMODE
+	DB_HOST DB_PORT DB_USER DB_PASSWORD DB_SSLMODE
+
+Optional base DB name source:
+	DB_NAME_BASE (preferred) or DB_NAME (fallback)
+
+The runner enforces per-run DB isolation using generated names:
+	${DB_NAME_BASE}_${blockSize}m_${dataset}_w${workers}_r${repeat}
 
 The runner forces deterministic/plain benchmark settings because the current
 Phase 8 block-size comparison is about packed layout size, not codec variance.
@@ -56,12 +62,16 @@ is_complete_json() {
 
 require_db_env() {
 	local missing=0
-	for var_name in DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME DB_SSLMODE; do
+	for var_name in DB_HOST DB_PORT DB_USER DB_PASSWORD DB_SSLMODE; do
 		if [[ -z "${!var_name:-}" ]]; then
 			echo "missing required env: $var_name" >&2
 			missing=1
 		fi
 	done
+	if [[ -z "${DB_NAME_BASE:-}" && -z "${DB_NAME:-}" ]]; then
+		echo "missing required env: DB_NAME_BASE (or DB_NAME as fallback)" >&2
+		missing=1
+	fi
 	if [[ "$missing" -ne 0 ]]; then
 		exit 1
 	fi
@@ -154,6 +164,9 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP="true"
 export COLDKEEP_CODEC="plain"
 export COLDKEEP_KEY="${COLDKEEP_KEY:-$DEFAULT_KEY}"
 export COLDKEEP_DB_OPERATION_TIMEOUT_MS="${COLDKEEP_DB_OPERATION_TIMEOUT_MS:-1800000}"
+export COLDKEEP_TEST_DB="1"
+
+DB_NAME_BASE_EFFECTIVE="${DB_NAME_BASE:-${DB_NAME}}"
 
 for dataset in "${DATASETS[@]}"; do
 	for workers in "${WORKERS[@]}"; do
@@ -168,9 +181,17 @@ for dataset in "${DATASETS[@]}"; do
 				tmp_file="$out_file.tmp"
 				rm -f "$tmp_file"
 				echo "run dataset=$dataset workers=$workers block_size_mib=$size_mib repeat=$repeat_idx"
+				run_id="w${workers}_r${repeat_idx}"
+				run_storage_dir="/tmp/coldkeep-bench-${size_mib}m-${dataset}-${run_id}"
+				run_db_name="${DB_NAME_BASE_EFFECTIVE}_${size_mib}m_${dataset}_${run_id}"
+
+				# Do not reuse storage directories between runs.
+				rm -rf "$run_storage_dir"
 				(
 					cd "$ROOT_DIR"
-					COLDKEEP_PACKED_BLOCK_SIZE_MIB="$size_mib" \
+					COLDKEEP_BLOCK_TARGET_SIZE_MB="$size_mib" \
+					COLDKEEP_STORAGE_DIR="$run_storage_dir" \
+					DB_NAME="$run_db_name" \
 					"$BIN_PATH" benchmark run --dataset "$dataset" --workers "$workers" --output json
 				) >"$tmp_file"
 				if ! is_complete_json "$tmp_file"; then
