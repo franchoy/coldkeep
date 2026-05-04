@@ -645,6 +645,22 @@ go run ./cmd/coldkeep benchmark run --dataset medium --workers 1 --output json
 go run ./cmd/coldkeep benchmark run --dataset medium --workers 4 --output json
 ```
 
+For the Phase 8 packed block-size decision matrix, use the resumable helper:
+
+```bash
+# Show what is already complete vs missing/incomplete
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep DB_SSLMODE=disable \
+scripts/run_phase8_blocksize_matrix.sh --list-missing
+
+# Resume only missing or incomplete runs (builds once, writes JSON atomically)
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep DB_SSLMODE=disable \
+scripts/run_phase8_blocksize_matrix.sh
+```
+
+The helper skips only outputs that already contain a valid `"status":"ok"`
+payload, so interrupted Codespace sessions can resume without restarting the
+whole matrix.
+
 Recorded outputs for Step 12:
 
 - `.benchmarks/step12/small_w1.json`
