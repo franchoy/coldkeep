@@ -1136,3 +1136,289 @@ func TestPhase7BuildFixtureWithActualV17BinaryIntegration(t *testing.T) {
 		t.Fatalf("v1.8 gc dry-run failed on v1.7-built fixture: %v", err)
 	}
 }
+
+func TestPhase7SnapshotCompatibilityIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for snapshot compatibility fixture: %v", err)
+	}
+
+	// Step 1: Create legacy data
+	legacyRoot := filepath.Join(tmp, "snapshot-legacy-input")
+	legacySet := createPhase7FixtureInputSet(t, legacyRoot)
+	legacyExpectedHashes := make(map[string]struct{})
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	for _, p := range legacySet.allStorePaths {
+		legacyExpectedHashes[testutils.SHA256File(t, p)] = struct{}{}
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed snapshot legacy data %s: %v", p, err)
+		}
+	}
+
+	// Emulate pre-upgrade legacy repository.
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete chunk_block_refs before snapshot test: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete storage_blocks before snapshot test: %v", err)
+	}
+
+	var oldMaxChunkID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM chunk`).Scan(&oldMaxChunkID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max chunk id for snapshot test: %v", err)
+	}
+	var oldMaxLogicalID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM logical_file`).Scan(&oldMaxLogicalID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max logical id for snapshot test: %v", err)
+	}
+
+	// Step 2: Create snapshot of legacy data
+	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
+		ID:   "phase7-legacy-snapshot",
+		Type: "full",
+	}); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("create legacy snapshot: %v", err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before snapshot test upgrade reopen: %v", err)
+	}
+
+	// Step 3: Upgrade/open with v1.8
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("open snapshot test legacy repository with v1.8 runtime: %v", err)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after snapshot test upgrade: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	// Step 4: Add packed data
+	packedRoot := filepath.Join(tmp, "snapshot-packed-input")
+	packedFilePath := filepath.Join(packedRoot, "snapshot-packed-file.bin")
+	writeDeterministicFileWithSalt(t, packedFilePath, 1500000+321, 4401)
+
+	packedFolderPath := filepath.Join(packedRoot, "snapshot-packed-folder")
+	packedFolderFiles := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(packedFolderPath, fmt.Sprintf("packed-%02d.dat", i))
+		writeDeterministicFileWithSalt(t, p, 8192+(i*333), 4500+i)
+		packedFolderFiles = append(packedFolderFiles, p)
+	}
+
+	packedExpectedHashes := make(map[string]struct{})
+	packedExpectedHashes[testutils.SHA256File(t, packedFilePath)] = struct{}{}
+	for _, p := range packedFolderFiles {
+		packedExpectedHashes[testutils.SHA256File(t, p)] = struct{}{}
+	}
+
+	sgctx = storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, packedFilePath, blocks.CodecPlain, false); err != nil {
+		t.Fatalf("store snapshot packed file after upgrade: %v", err)
+	}
+	if err := storage.StoreFolderWithStorageContext(sgctx, packedFolderPath); err != nil {
+		t.Fatalf("store snapshot packed folder after upgrade: %v", err)
+	}
+
+	// Step 5: Create new snapshot
+	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
+		ID:   "phase7-packed-snapshot",
+		Type: "full",
+	}); err != nil {
+		t.Fatalf("create packed snapshot: %v", err)
+	}
+
+	// Step 6: Remove live files from both old and new data
+	removeCtx := storage.StorageContext{DB: dbconn}
+
+	// Remove some legacy files
+	legacyRemove := []string{
+		legacySet.manySmallPaths[0],
+		legacySet.manySmallPaths[1],
+		legacySet.duplicatePathA,
+	}
+	for _, p := range legacyRemove {
+		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err != nil {
+			t.Fatalf("remove snapshot legacy path %s: %v", p, err)
+		}
+	}
+
+	// Remove some packed files
+	packedRemove := []string{packedFilePath, packedFolderFiles[0]}
+	for _, p := range packedRemove {
+		if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(removeCtx, p); err != nil {
+			t.Fatalf("remove snapshot packed path %s: %v", p, err)
+		}
+	}
+
+	// Step 7: Run GC (dry-run and real)
+	if err := maintenance.RunGCWithContainersDir(true, container.ContainersDir); err != nil {
+		t.Fatalf("snapshot test gc dry-run failed: %v", err)
+	}
+
+	if err := maintenance.RunGCWithContainersDir(false, container.ContainersDir); err != nil {
+		t.Fatalf("snapshot test gc real run failed: %v", err)
+	}
+
+	// Step 8: Restore old snapshot
+	legacySnapshotRestoreDir := filepath.Join(tmp, "snapshot-legacy-restore")
+	if err := os.MkdirAll(legacySnapshotRestoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy snapshot restore dir: %v", err)
+	}
+
+	legacyRestoreCtx := storage.StorageContext{
+		DB:           dbconn,
+		ContainerDir: container.ContainersDir,
+	}
+
+	legacyRestoreResult, err := snapshot.RestoreSnapshot(
+		context.Background(),
+		dbconn,
+		"phase7-legacy-snapshot",
+		[]string{},
+		snapshot.RestoreSnapshotOptions{
+			DestinationMode: storage.RestoreDestinationOverride,
+			Destination:     legacySnapshotRestoreDir,
+			Overwrite:       true,
+			StorageContext:  &legacyRestoreCtx,
+		},
+	)
+	if err != nil {
+		t.Fatalf("restore legacy snapshot failed: %v", err)
+	}
+
+	// Validate restored legacy files match expected hashes
+	for path, info := range iterateRestoreOutputPaths(t, legacySnapshotRestoreDir) {
+		if info.IsDir() {
+			continue
+		}
+		restoredHash := testutils.SHA256File(t, path)
+		if _, expectedFromLegacy := legacyExpectedHashes[restoredHash]; !expectedFromLegacy {
+			t.Fatalf("legacy snapshot restored hash not in original legacy fixture: %s", restoredHash)
+		}
+	}
+
+	if legacyRestoreResult.RestoredFiles == 0 {
+		t.Fatal("expected legacy snapshot restore to restore files")
+	}
+
+	// Step 9: Restore new snapshot
+	packedSnapshotRestoreDir := filepath.Join(tmp, "snapshot-packed-restore")
+	if err := os.MkdirAll(packedSnapshotRestoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir packed snapshot restore dir: %v", err)
+	}
+
+	packedRestoreCtx := storage.StorageContext{
+		DB:           dbconn,
+		ContainerDir: container.ContainersDir,
+	}
+
+	packedRestoreResult, err := snapshot.RestoreSnapshot(
+		context.Background(),
+		dbconn,
+		"phase7-packed-snapshot",
+		[]string{},
+		snapshot.RestoreSnapshotOptions{
+			DestinationMode: storage.RestoreDestinationOverride,
+			Destination:     packedSnapshotRestoreDir,
+			Overwrite:       true,
+			StorageContext:  &packedRestoreCtx,
+		},
+	)
+	if err != nil {
+		t.Fatalf("restore packed snapshot failed: %v", err)
+	}
+
+	// Validate restored packed files match expected hashes
+	for path, info := range iterateRestoreOutputPaths(t, packedSnapshotRestoreDir) {
+		if info.IsDir() {
+			continue
+		}
+		restoredHash := testutils.SHA256File(t, path)
+		if _, expectedFromPacked := packedExpectedHashes[restoredHash]; !expectedFromPacked {
+			// File could be from legacy data too, so check both
+			if _, expectedFromLegacy := legacyExpectedHashes[restoredHash]; !expectedFromLegacy {
+				t.Fatalf("packed snapshot restored hash not in original expected fixture: %s", restoredHash)
+			}
+		}
+	}
+
+	if packedRestoreResult.RestoredFiles == 0 {
+		t.Fatal("expected packed snapshot restore to restore files")
+	}
+
+	// Step 10: Run verify
+	t.Setenv("COLDKEEP_VERIFY_STRICT_SEGMENTS", "1")
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("verify failed after snapshot GC test: %v", err)
+	}
+
+	// Validate mixed snapshot metadata
+	var legacySnapshotFiles int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		JOIN snapshot s ON s.id = sf.snapshot_id
+		WHERE s.id = $1
+	`, "phase7-legacy-snapshot").Scan(&legacySnapshotFiles); err != nil {
+		t.Fatalf("count legacy snapshot files: %v", err)
+	}
+	if legacySnapshotFiles == 0 {
+		t.Fatal("expected legacy snapshot to contain file records")
+	}
+
+	var packedSnapshotFiles int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM snapshot_file sf
+		JOIN snapshot s ON s.id = sf.snapshot_id
+		WHERE s.id = $1
+	`, "phase7-packed-snapshot").Scan(&packedSnapshotFiles); err != nil {
+		t.Fatalf("count packed snapshot files: %v", err)
+	}
+	if packedSnapshotFiles == 0 {
+		t.Fatal("expected packed snapshot to contain file records")
+	}
+}
+
+// Helper function to iterate over restored files
+func iterateRestoreOutputPaths(t *testing.T, rootDir string) map[string]os.FileInfo {
+	t.Helper()
+	result := make(map[string]os.FileInfo)
+	if err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != rootDir {
+			result[path] = info
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk restore output dir: %v", err)
+	}
+	return result
+}
