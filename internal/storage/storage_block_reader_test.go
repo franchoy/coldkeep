@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -37,6 +38,45 @@ func TestStorageBlockReaderBlockNotFound(t *testing.T) {
 	_, err = reader.ReadBlock(context.Background(), 999)
 	if err == nil {
 		t.Fatalf("expected error for nonexistent block")
+	}
+}
+
+// TestStorageBlockReaderEmptyBlockHashFailsClosed validates fail-closed behavior
+// for mandatory block hash verification.
+func TestStorageBlockReaderEmptyBlockHashFailsClosed(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	defer dbconn.Close()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	_, err = dbconn.ExecContext(context.Background(), `
+		INSERT INTO container (id, filename, max_size, created_at)
+		VALUES (1, 'missing.bin', 1048576, CURRENT_TIMESTAMP)
+	`)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	_, err = dbconn.ExecContext(context.Background(), `
+		INSERT INTO storage_blocks (id, format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		VALUES (1, 1, 'none', 100, 100, 1, 0, x'')
+	`)
+	if err != nil {
+		t.Fatalf("insert storage_blocks row with empty hash: %v", err)
+	}
+
+	reader := NewStorageBlockReader(dbconn, "/tmp")
+	_, err = reader.ReadBlock(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected error for empty block_hash")
+	}
+	if got := err.Error(); !strings.Contains(got, "empty block_hash") {
+		t.Fatalf("expected empty block_hash error, got: %v", err)
 	}
 }
 

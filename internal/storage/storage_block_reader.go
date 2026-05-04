@@ -48,6 +48,9 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	if err != nil {
 		return nil, fmt.Errorf("load block %d metadata: %w", blockID, err)
 	}
+	if r.verifyHash && len(metadata.BlockHash) == 0 {
+		return nil, fmt.Errorf("block %d has empty block_hash; fail-closed hash verification requires non-empty block_hash", blockID)
+	}
 
 	// Step 2: Read stored bytes from container
 	storedBytes, err := r.readBlockFromContainer(metadata)
@@ -72,7 +75,7 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	}
 
 	// Step 5: Verify hash (mandatory)
-	if r.verifyHash && len(metadata.BlockHash) > 0 {
+	if r.verifyHash {
 		if err := blocks.VerifyBlockHash(plaintextBytes, metadata.BlockHash); err != nil {
 			return nil, fmt.Errorf("verify block %d hash: %w", blockID, err)
 		}
