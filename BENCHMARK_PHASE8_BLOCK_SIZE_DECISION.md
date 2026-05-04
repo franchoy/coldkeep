@@ -263,7 +263,112 @@ Decision weight:
 
 - This dataset is critical for the 1 MiB vs 2 MiB choice.
 
-## 8. Safety and Correctness Gates (Must Stay True)
+## 8. Metrics to Collect (Locked)
+
+### Store Metrics
+
+Collect:
+
+- elapsed time
+- input bytes
+- store throughput (MB/s)
+- number of chunks
+- number of `storage_blocks`
+- average chunks per block
+- average block plaintext size
+- average block stored size
+- block fill ratio
+- container count
+- DB rows inserted
+- duplicate chunk count
+
+Formulas:
+
+- `store_throughput = input_bytes / elapsed_seconds`
+- `avg_chunks_per_block = chunk_block_refs_count / storage_blocks_count`
+- `block_fill_ratio = avg_block_plaintext_payload_size / target_block_size`
+
+### Restore Metrics
+
+Collect:
+
+- elapsed time
+- restored bytes
+- restore throughput (MB/s)
+- number of block reads
+- bytes read from containers
+- bytes restored
+- read amplification
+- block cache hits
+- block cache misses
+- decrypt and decode count
+
+Formulas:
+
+- `restore_throughput = restored_bytes / elapsed_seconds`
+- `read_amplification = bytes_read_from_containers / bytes_restored`
+- `cache_hit_ratio = hits / (hits + misses)`
+
+Interpretation:
+
+- For full restore, read amplification should be close to `1`.
+- For selective restore, read amplification may be significantly higher.
+
+### Verify Metrics
+
+Collect:
+
+- elapsed time
+- blocks verified
+- chunks verified
+- bytes read
+- block hash mismatches (must be `0`)
+- chunk hash mismatches (must be `0`)
+
+Comparison requirement:
+
+- Compare verify wall time directly between `1 MiB` and `2 MiB`.
+
+### GC Metrics
+
+Collect:
+
+- elapsed time
+- live chunks
+- dead chunks
+- live blocks
+- dead blocks
+- blocks deleted
+- bytes reclaimable
+- bytes retained due to partially-live packed blocks
+- container cleanup count
+
+Most important Phase 8 GC metric:
+
+- `retained_dead_bytes_due_to_packed_blocks`
+
+This metric captures the real retained-space cost of larger block sizes.
+
+### Optional Compression-Simulation Metrics
+
+Even before v1.9, run offline simulation on decoded plaintext packed blocks:
+
+- compress each block payload with zstd
+- record compressed size and timing
+
+Collect:
+
+- estimated compression ratio
+- estimated stored bytes
+- compression time
+- decompression time
+
+Expected trend to validate (not assume):
+
+- `2 MiB` may compress slightly better than `1 MiB`
+- `3 MiB` may show diminishing additional benefit
+
+## 9. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -276,7 +381,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 9. Decision Rule
+## 10. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -289,7 +394,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 10. 3 MiB Policy (Experimental Only)
+## 11. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -305,7 +410,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 11. Required Final Output
+## 12. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
