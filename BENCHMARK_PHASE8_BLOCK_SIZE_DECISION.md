@@ -887,3 +887,80 @@ committed to the repository.
   `.gitignore`); only summary JSON or the filled section 17 table is committed.
 - [ ] This file (`BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`) reflects the final
   decision and is committed as part of the v1.8 release record.
+
+
+## 20. Phase 8 Final Checklist
+
+All items must be checked before Phase 8 is closed and the v1.8 default is
+committed. Items are grouped by concern; check them in order.
+
+### 20.1 Implementation prerequisites
+
+- [ ] `COLDKEEP_BLOCK_TARGET_SIZE_MB` (or equivalent internal override) exists
+  and is honoured at runtime.
+- [ ] Default block size starts as **1 MiB** in source before any benchmark
+  runs begin.
+- [ ] Reader never assumes the currently-configured block size; block size is
+  derived solely from per-block metadata.
+- [ ] Existing blocks are self-describing through their stored metadata (no
+  external side-file required to read them back).
+
+### 20.2 Dataset coverage
+
+- [ ] Dataset A — large sequential file benchmark completed.
+- [ ] Dataset B — many-small-files benchmark completed.
+- [ ] Dataset C — mixed-folder benchmark completed.
+- [ ] Dataset D — dedup-heavy benchmark completed.
+- [ ] Dataset E — selective-restore benchmark completed.
+- [ ] Dataset F — GC partial-live benchmark completed.
+- [ ] Fresh DB + storage used for **each** block-size benchmark run.
+
+### 20.3 Metrics collected
+
+**Throughput**
+- [ ] Store throughput collected for 1 MiB and 2 MiB (all applicable datasets).
+- [ ] Restore throughput collected for 1 MiB and 2 MiB (all applicable
+  datasets).
+- [ ] Verify wall-clock time collected for 1 MiB and 2 MiB.
+
+**GC**
+- [ ] GC reclaim bytes collected for 1 MiB and 2 MiB.
+- [ ] `retained_dead_bytes_due_to_packed_blocks` collected for 1 MiB and 2 MiB
+  (Dataset F).
+
+**Block layout**
+- [ ] Block count collected.
+- [ ] Average chunks per block collected.
+- [ ] Average block size collected.
+- [ ] Block fill ratio collected.
+
+**IO**
+- [ ] Read amplification collected (bytes read / bytes restored).
+- [ ] Block cache hit/miss collected if instrumentation is available; explicitly
+  deferred and noted if not.
+
+**Dedup**
+- [ ] Dedup effectiveness compared between 1 MiB and 2 MiB (chunk-incremental
+  ratio and block-incremental ratio, Dataset D).
+- [ ] Optional compression simulation completed, **or** explicitly deferred with
+  a written note explaining why.
+
+### 20.4 Decision and documentation
+
+- [ ] Results table (section 17) fully populated with medians.
+- [ ] Final default block size decision documented in section 17 Final Decision
+  Record.
+- [ ] No section 18 investigation trigger left unresolved at decision time.
+
+### 20.5 Code and test sign-off
+
+- [ ] Default block size set in source to the value selected by the decision.
+- [ ] `COLDKEEP_BLOCK_TARGET_SIZE_MB` env override retained in codebase for
+  operator use and future testing.
+- [ ] Full test suite passes after the default is updated
+  (`go test ./... -count=1`).
+- [ ] Race detector test passes after the default is updated
+  (`go test -race ./... -count=1`).
+- [ ] DB-backed compatibility tests still pass after the default is updated.
+- [ ] No correctness regressions found (all restore hashes match sources across
+  all tested configurations).
