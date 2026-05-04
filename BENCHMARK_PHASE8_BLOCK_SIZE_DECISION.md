@@ -783,3 +783,35 @@ Operator note:
    tradeoff that operators should be aware of when overriding the default via
    COLDKEEP_BLOCK_TARGET_SIZE_MB.>
 ```
+
+## 18. Investigation Triggers
+
+The following observations **must halt the benchmark and trigger an
+implementation investigation** before any decision is recorded. Do not proceed
+to the decision record while any trigger condition is unresolved.
+
+### 18.1 Correctness triggers (stop immediately)
+
+| Observation | Why it matters |
+|:------------|:---------------|
+| 1 MiB and 2 MiB produce different restored file hashes for the same source tree | Block size must not affect restore correctness; differing hashes indicate a data-path bug. |
+| `verify system --standard` passes but a restore hash differs | Verifier and restore path disagree on block content; one or both are wrong. |
+| Any chunk appears in `chunk_block_refs` after v2 store pointing to a different block than before v2 (repack detected) | Existing chunks must never be repacked; a detected repack breaks the no-mutation invariant. |
+
+Any correctness trigger causes **Phase 8 to stop**. Return to implementation
+and fix the defect before re-running.
+
+### 18.2 Anomaly triggers (investigate before deciding)
+
+| Observation | Likely cause / what to check |
+|:------------|:-----------------------------|
+| 2 MiB changes the chunk-incremental ratio by > 10 percentage points relative to 1 MiB for the same dataset | Dedup effectiveness should not be sensitive to block size; check packing logic and boundary alignment. |
+| Read amplification exceeds 3× for a normal full-folder restore (non-selective) | Suggests over-reading of packed blocks; check block fan-out and IO path. |
+| `retained_dead_bytes_due_to_packed_blocks` (simulate gc) is higher than total size of removed files | More dead space retained than removed; check partial-live block accounting. |
+| GC deletes more blocks than expected given removal fraction | Could indicate cascade eviction of live-chunk blocks; audit `chunk_block_refs` integrity after gc. |
+| `block_hash` verification wall-clock time is disproportionate relative to store time (e.g. > 2× store time) | Unexpected fan-out or re-read pattern in the verifier; profile IO during verify. |
+| Packed block fill ratio < 50 % for large-file or mixed datasets | Blocks are not being filled to target; investigate packing/flush thresholds. |
+
+Anomaly triggers do not automatically stop Phase 8, but the root cause must be
+understood and documented before the decision record is written. If the
+investigation reveals a defect, treat it as a correctness trigger and stop.
