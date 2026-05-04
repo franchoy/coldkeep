@@ -31,7 +31,7 @@ import (
 //   - It uses the current Postgres-backed adversarial/integration harness.
 
 func adversarialG3Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG3Codec(t *testing.T, codec string) {

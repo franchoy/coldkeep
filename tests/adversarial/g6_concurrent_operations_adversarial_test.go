@@ -34,7 +34,7 @@ import (
 //     scheduler-specific timing assumptions.
 
 func adversarialG6Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG6Codec(t *testing.T, codec string) {

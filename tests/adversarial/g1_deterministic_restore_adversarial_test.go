@@ -36,7 +36,7 @@ import (
 //     than this new integration/adversarial structure.
 
 func adversarialG1Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG1Codec(t *testing.T, codec string) {

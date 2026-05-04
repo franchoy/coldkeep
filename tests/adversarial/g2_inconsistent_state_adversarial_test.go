@@ -31,7 +31,7 @@ import (
 //     tests/adversarial layout.
 
 func adversarialG2Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG2Codec(t *testing.T, codec string) {

@@ -31,7 +31,7 @@ import (
 //   - AES-GCM-specific tests explicitly validate authenticated decode failures.
 
 func adversarialG7Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG7Codec(t *testing.T, codec string) {

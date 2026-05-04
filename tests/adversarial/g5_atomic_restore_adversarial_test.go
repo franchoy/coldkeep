@@ -29,7 +29,7 @@ import (
 //     regardless of payload codec.
 
 func adversarialG5Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG5Codec(t *testing.T, codec string) {

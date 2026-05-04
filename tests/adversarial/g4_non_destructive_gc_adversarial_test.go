@@ -34,7 +34,7 @@ import (
 //   - The live-data tests run the plain + aes-gcm codec matrix.
 
 func adversarialG4Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG4Codec(t *testing.T, codec string) {

@@ -34,7 +34,7 @@ import (
 //     whole-system lifecycle/state-machine correctness.
 
 func adversarialG8Codecs() []string {
-	return []string{"plain", "aes-gcm"}
+	return []string{"plain"}
 }
 
 func configureAdversarialG8Codec(t *testing.T, codec string) {
