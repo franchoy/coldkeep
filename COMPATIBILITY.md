@@ -123,6 +123,22 @@ Practical consequence:
 
 - Operators can upgrade safely without forced rewrite, continue restoring historical data, and accept mixed-layout repositories as normal.
 
+Packed-block codec boundary (current v1.8 behavior):
+
+- Packed blocks persisted in `storage_blocks` are currently plain-encoded-at-rest metadata shape (`codec = "none"` in packed-block metadata semantics).
+- Full-block encrypted packed payloads (`pack -> encode -> encrypt full block -> store`) are not part of the current v1.8 compatibility contract.
+- For write paths that produce packed blocks, set `COLDKEEP_CODEC=plain`.
+- Legacy one-chunk `blocks` rows continue to support their existing codec semantics (including `aes-gcm`) per row metadata.
+
+Why this is explicit:
+
+- `storage_blocks` currently does not persist per-block nonce metadata needed by `aes-gcm` decode semantics in the same way as legacy `blocks` rows.
+- Verify currently enforces packed-block header codec semantics aligned to `none` for v1.8 packed layout.
+
+Forward-looking note:
+
+- Encrypted packed-block payloads are a future evolution item and are not implied by current v1.8 guarantees.
+
 Chunker evolution model:
 
 Current chunker versions include:

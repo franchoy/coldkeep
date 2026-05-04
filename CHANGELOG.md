@@ -28,6 +28,7 @@ project, do not start here; start with [README.md](README.md).
 - Mixed repositories containing legacy v1.7 data and v1.8 packed-block data are expected steady-state.
 - v1.7 is not expected to read v1.8 packed-block data.
 - Existing v1.7 data is not automatically rewritten during upgrade.
+- Current packed-block runtime contract is plain-only (`storage_blocks` packed metadata codec semantics use `none`); encrypted packed-block payload support is deferred.
 
 ------------------------------------------------------------------------
 

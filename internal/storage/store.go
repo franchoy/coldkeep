@@ -2768,7 +2768,7 @@ func storePackedBlockWithWriter(
 		return packedBlockPersistResult{}, err
 	}
 	if transformed.Descriptor.Codec != blocks.CodecPlain {
-		return packedBlockPersistResult{}, fmt.Errorf("packed block storage_blocks codec=%q requires plain transformed payload, got %q", packedStorageBlockCodecNone, transformed.Descriptor.Codec)
+		return packedBlockPersistResult{}, fmt.Errorf("packed block storage_blocks codec=%q currently requires plain transformed payload in v1.8; got %q (set COLDKEEP_CODEC=plain for packed-block writes)", packedStorageBlockCodecNone, transformed.Descriptor.Codec)
 	}
 
 	// 4) Append transformed payload to container.
