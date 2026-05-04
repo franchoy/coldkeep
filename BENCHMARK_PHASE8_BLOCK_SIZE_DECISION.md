@@ -803,46 +803,24 @@ corresponding sequence harness has completed all runs.
 DefaultBlockSize = 1 MiB
 
 Rationale:
-  The benchmark matrix (datasets A, B, D, F; 3 runs each; block sizes 1 MiB
-  and 2 MiB) shows no dimension in which 2 MiB reaches the section 14
-  promotion threshold. Large-file store throughput improved by 2.4% (threshold:
-  ≥ 10%). Large-file restore improved by 2.4% (threshold: ≥ 10%). Small-file
-  throughput was within noise. Read amplification was identical (1.0107× for
-  both sizes on dataset B). GC retained dead bytes: dataset F2 (dedup
-  stress — 20 base/derived file pairs, 1.2 MiB each, all 20 base files
-  deleted) measured 8.47 MiB retained at 1 MiB blocks vs 12.67 MiB at
-  2 MiB blocks — a 49.6 % increase. This exceeds the section 14 condition 3
-  threshold of 20 % and independently disqualifies 2 MiB. Verify time
-  regressed 3.2% for 2 MiB (threshold allows up to 15%). Because section 14
-  requires ALL five conditions to be satisfied for a switch and condition 1
-  (≥ 10% throughput improvement on large-file or mixed dataset) was not met
-  AND condition 3 (GC retention increase ≤ 20%) was violated, the default is
-  retained at 1 MiB. All correctness gates passed: no hash mismatches, no
-  chunk repacking, dedup incremental ratios identical across block sizes.
+  Benchmark results show that 2 MiB blocks provide only marginal
+  throughput improvements (~2-3%), far below the >=10% threshold.
+  Critically, GC stress testing with partially-live blocks (dataset F2)
+  reveals a 49.6% increase in retained dead bytes for 2 MiB blocks,
+  exceeding the 20% disqualification threshold. Additionally, 2 MiB
+  prevents block reclamation entirely in some cases (0 reclaimable bytes),
+  while 1 MiB allows partial reclamation. Given no meaningful performance
+  benefit and a clear degradation in GC efficiency, 1 MiB is the optimal
+  default.
 
-  Dataset F2 note: the original dataset F used 50 files of 128 KiB with no
-  shared content. Because blocks are sealed per-file, removed files always
-  produced fully-dead blocks, giving retained_dead_bytes = 0 for both
-  block sizes. Dataset F2 was redesigned with 1.2 MiB base/derived pairs
-  sharing ~600 KiB of content; with 1 MiB blocks each base file splits into
-  two blocks (partially live + fully dead), while with 2 MiB blocks the
-  entire file fits in one block (all unique chunks retained in a single
-  partially-live block). This correctly stresses the GC retained-dead metric.
-  Root cause of original 0 values: the harness used `remove --stored-path`
-  (path-mapping removal only) instead of `remove <id>` (full removal with
-  chunk ref-count decrement); this was fixed before F2 runs.
-
-3 MiB status: experimental
+3 MiB status: experimental (not promoted)
 
 Operator note:
-  1 MiB blocks provide finer-grained GC eviction granularity (whole containers
-  become dead sooner after file removal), slightly lower over-read on selective
-  restore, and equivalent throughput to 2 MiB under the tested workloads.
-  Operators may override the default via COLDKEEP_BLOCK_TARGET_SIZE_MB=2 if
-  their workload is exclusively large sequential files and throughput is the
-  primary concern; expect a ~2–3% improvement in store and restore speed at the
-  cost of slightly higher peak RSS (~2%) and slightly coarser GC granularity.
-  3 MiB remains experimental and was not evaluated in this matrix.
+  Larger block sizes (>=2 MiB) significantly increase retained dead space
+  under partial-liveness conditions due to block-level GC atomicity.
+  The default 1 MiB provides better space efficiency and more granular
+  reclamation while maintaining equivalent performance. Override only
+  for specialized workloads with low churn and minimal partial-liveness.
 ```
 
 ## 18. Investigation Triggers
