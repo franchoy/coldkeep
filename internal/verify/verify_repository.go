@@ -335,20 +335,35 @@ func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error
 
 func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunkID, chunkSize int64) (bool, error) {
 	var blockID int64
+	var offsetInBlock int64
+	var sizeInBlock int64
 	if err := dbconn.QueryRowContext(ctx,
-		`SELECT block_id FROM chunk_block_refs WHERE chunk_id = $1`,
+		`SELECT block_id, offset_in_block, size_in_block FROM chunk_block_refs WHERE chunk_id = $1`,
 		chunkID,
-	).Scan(&blockID); err != nil {
+	).Scan(&blockID, &offsetInBlock, &sizeInBlock); err != nil {
 		return false, err
 	}
 
 	var packedContainerID int64
 	var packedContainerOffset int64
+	var packedPlaintextSize int64
 	if err := dbconn.QueryRowContext(ctx,
-		`SELECT container_id, container_offset FROM storage_blocks WHERE id = $1`,
+		`SELECT container_id, container_offset, plaintext_size FROM storage_blocks WHERE id = $1`,
 		blockID,
-	).Scan(&packedContainerID, &packedContainerOffset); err != nil {
+	).Scan(&packedContainerID, &packedContainerOffset, &packedPlaintextSize); err != nil {
 		return false, err
+	}
+
+	var totalReferencedBytes int64
+	if err := dbconn.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(size_in_block), 0) FROM chunk_block_refs WHERE block_id = $1`,
+		blockID,
+	).Scan(&totalReferencedBytes); err != nil {
+		return false, err
+	}
+	payloadPrefixBytes := packedPlaintextSize - totalReferencedBytes
+	if payloadPrefixBytes < 0 {
+		return false, nil
 	}
 
 	var codec string
@@ -372,7 +387,11 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 	if plaintextSize != chunkSize || storedSize != chunkSize {
 		return false, nil
 	}
-	if legacyContainerID != packedContainerID || legacyOffset != packedContainerOffset {
+	if sizeInBlock != chunkSize {
+		return false, nil
+	}
+	expectedLegacyOffset := packedContainerOffset + payloadPrefixBytes + offsetInBlock
+	if legacyContainerID != packedContainerID || legacyOffset != expectedLegacyOffset {
 		return false, nil
 	}
 
@@ -759,6 +778,11 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		JOIN chunk c ON c.id = b.chunk_id
 		JOIN container cctr ON cctr.id = b.container_id
 		WHERE c.status = 'COMPLETED'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM chunk_block_refs r
+			WHERE r.chunk_id = c.id
+		  )
 		ORDER BY cctr.id, b.block_offset
 	`)
 	if err != nil {

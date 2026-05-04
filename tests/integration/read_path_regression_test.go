@@ -40,6 +40,8 @@ func prepareReadPathRegressionRepo(t *testing.T) string {
 			snapshot_path,
 			physical_file,
 			file_chunk,
+			chunk_block_refs,
+			storage_blocks,
 			blocks,
 			chunk,
 			logical_file,

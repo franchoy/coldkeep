@@ -250,6 +250,15 @@ func commitPreparedChunksWithContext(
 			}
 
 			for _, pending := range pendingPacked {
+				segment, ok := persisted.Segments[pending.chunkID]
+				if !ok {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(fmt.Errorf("missing packed segment metadata for chunk %d", pending.chunkID), rbErr)
+					}
+					return fmt.Errorf("missing packed segment metadata for chunk %d", pending.chunkID)
+				}
+
 				if _, err := tx.ExecContext(
 					ctx,
 					`UPDATE chunk SET status = $1 WHERE id = $2`,
@@ -268,8 +277,8 @@ func commitPreparedChunksWithContext(
 					tx,
 					pending.chunkID,
 					persisted.Placement.ContainerID,
-					persisted.Placement.Offset,
-					int64(pending.prepared.Size),
+					persisted.Placement.Offset+segment.Offset,
+					segment.Size,
 				); err != nil {
 					_ = tx.Rollback()
 					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
@@ -2703,6 +2712,12 @@ type packedBlockPersistResult struct {
 	BlockHash  []byte
 	Placement  container.LocalPlacement
 	StoredSize int64
+	Segments   map[int64]packedChunkSegment
+}
+
+type packedChunkSegment struct {
+	Offset int64
+	Size   int64
 }
 
 const packedStorageBlockCodecNone = "none"
@@ -2783,7 +2798,14 @@ func storePackedBlockWithWriter(
 	}
 
 	// 6) Insert chunk -> packed-block placement rows.
+	payloadPrefixBytes := int64(len(plaintextEncoded) - len(encodedBlock.Payload))
+	segments := make(map[int64]packedChunkSegment, len(encodedBlock.Entries))
 	for _, entry := range encodedBlock.Entries {
+		segments[int64(entry.ChunkID)] = packedChunkSegment{
+			Offset: payloadPrefixBytes + int64(entry.Offset),
+			Size:   int64(entry.Size),
+		}
+
 		if _, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
@@ -2802,6 +2824,7 @@ func storePackedBlockWithWriter(
 		BlockHash:  blockHash,
 		Placement:  placement,
 		StoredSize: int64(len(transformed.Payload)),
+		Segments:   segments,
 	}, nil
 }
 
