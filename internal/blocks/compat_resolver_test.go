@@ -23,42 +23,6 @@ func TestV17CompatResolverReturnsMarker(t *testing.T) {
 	}
 }
 
-func TestStorageBlockReaderRejectsInvalidBlockID(t *testing.T) {
-	reader := NewStorageBlockReader(nil)
-	_, err := reader.ReadBlock(context.Background(), 0)
-	if err == nil {
-		t.Fatalf("expected error for invalid block ID 0")
-	}
-	_, err = reader.ReadBlock(context.Background(), -1)
-	if err == nil {
-		t.Fatalf("expected error for invalid block ID -1")
-	}
-}
-
-func TestStorageBlockReaderGetBlockError(t *testing.T) {
-	// Mock BlockStore that returns an error
-	mockStore := &mockBlockStore{
-		errOnGet: true,
-	}
-	reader := NewStorageBlockReader(mockStore)
-	_, err := reader.ReadBlock(context.Background(), 1)
-	if err == nil {
-		t.Fatalf("expected error from failed block retrieval")
-	}
-}
-
-func TestStorageBlockReaderBlockNotFound(t *testing.T) {
-	// Mock BlockStore that returns nil block
-	mockStore := &mockBlockStore{
-		nilBlock: true,
-	}
-	reader := NewStorageBlockReader(mockStore)
-	_, err := reader.ReadBlock(context.Background(), 1)
-	if err == nil {
-		t.Fatalf("expected error for missing block")
-	}
-}
-
 func TestStorageChunkResolverRejectsInvalidChunkID(t *testing.T) {
 	resolver := NewStorageChunkResolver(nil)
 	_, err := resolver.ResolveChunk(context.Background(), 0)
@@ -117,28 +81,6 @@ func TestStorageChunkResolverSuccess(t *testing.T) {
 }
 
 // Mock implementations for testing
-
-type mockBlockStore struct {
-	errOnGet bool
-	nilBlock bool
-	block    *Block
-}
-
-func (m *mockBlockStore) GetBlock(blockID int64) (*Block, error) {
-	if m.errOnGet {
-		return nil, ErrBlockFormatTooSmall // any error will do
-	}
-	if m.nilBlock {
-		return nil, nil
-	}
-	if m.block != nil {
-		return m.block, nil
-	}
-	return &Block{
-		ID:            blockID,
-		PlaintextSize: 100,
-	}, nil
-}
 
 type mockChunkLocator struct {
 	errOnGet   bool

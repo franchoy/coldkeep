@@ -32,50 +32,6 @@ func (r *V17CompatResolver) ResolveChunk(ctx context.Context, chunkID int64) (*C
 	}, nil
 }
 
-// StorageBlockReader implements BlockReader for v1.8 block store.
-// It reads blocks from a BlockStore interface and returns decoded EncodedBlock structs.
-type StorageBlockReader struct {
-	store BlockStore
-}
-
-// NewStorageBlockReader creates a block reader backed by the given BlockStore.
-func NewStorageBlockReader(store BlockStore) *StorageBlockReader {
-	return &StorageBlockReader{store: store}
-}
-
-// ReadBlock retrieves and decodes a block from storage.
-// It fetches the block bytes from store, decodes the v1 format, and returns the EncodedBlock.
-// IMPORTANT: This assumes blocks are stored in plaintext encoded form (pre-encryption).
-func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*EncodedBlock, error) {
-	if blockID <= 0 {
-		return nil, fmt.Errorf("invalid block ID: %d", blockID)
-	}
-
-	// Fetch the block metadata and content from storage.
-	block, err := r.store.GetBlock(blockID)
-	if err != nil {
-		return nil, fmt.Errorf("get block %d: %w", blockID, err)
-	}
-
-	if block == nil {
-		return nil, fmt.Errorf("block %d not found", blockID)
-	}
-
-	// TODO: Phase 3+ — retrieve the plaintext encoded block bytes from storage.
-	// For now, this is a placeholder. The actual storage mechanism (e.g., blob store,
-	// chunk_block_refs table) will be wired in Phase 3 Step 3.
-	// We decode the bytes using DecodeBlock to validate format and reconstruct EncodedBlock.
-
-	// Placeholder: assume block.PlaintextSize > 0 indicates readiness for Phase 3.
-	if block.PlaintextSize <= 0 {
-		return nil, fmt.Errorf("block %d has invalid plaintext size: %d", blockID, block.PlaintextSize)
-	}
-
-	// This is where we would retrieve the actual encoded block bytes.
-	// For now, return a stub to allow the abstraction to be wired.
-	return nil, fmt.Errorf("block read not yet implemented in Phase 3 Step 2 (placeholder)")
-}
-
 // StorageChunkResolver implements ChunkResolver for v1.8 block-based layout.
 // It resolves chunk locations by querying the chunk_block_refs and storage_blocks tables.
 type StorageChunkResolver struct {
