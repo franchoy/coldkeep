@@ -73,6 +73,17 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 			SharedLogicalFiles:             1,
 			SharedBytes:                    10,
 		},
+		BlockStats: maintenance.BlockStats{
+			StorageBlocks:     4,
+			ChunkBlockRefs:    10,
+			AvgChunksPerBlock: 2.5,
+			AvgPlaintextSize:  900,
+			AvgStoredSize:     860,
+			FillRatio:         0.88,
+			LegacyBlocks:      2,
+			PackedBlocks:      4,
+			CodecDistribution: map[string]int64{"plain": 4},
+		},
 	}
 
 	result := mapStatsResult(fixedNow, raw)
@@ -101,6 +112,12 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	}
 	if result.Retention.SnapshotOnlyLogicalFiles != 2 {
 		t.Fatalf("unexpected retention stats: %+v", result.Retention)
+	}
+	if result.BlockLayout.StorageBlocksCount != 4 || result.BlockLayout.ChunkBlockRefsCount != 10 {
+		t.Fatalf("unexpected block layout stats: %+v", result.BlockLayout)
+	}
+	if got := result.BlockLayout.CodecDistribution["plain"]; got != 4 {
+		t.Fatalf("unexpected block layout codec distribution: %+v", result.BlockLayout.CodecDistribution)
 	}
 	if result.Efficiency.LogicalBytes != 500 {
 		t.Fatalf("unexpected efficiency logical_bytes: %d", result.Efficiency.LogicalBytes)

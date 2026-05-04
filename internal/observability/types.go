@@ -39,15 +39,16 @@ type Relation struct {
 type StatsResult struct {
 	GeneratedAtUTC time.Time `json:"generated_at_utc"`
 
-	Repository RepositoryStats `json:"repository"`
-	Logical    LogicalStats    `json:"logical"`
-	Physical   PhysicalStats   `json:"physical"`
-	Chunks     ChunkStats      `json:"chunks"`
-	Containers ContainerStats  `json:"containers"`
-	Efficiency EfficiencyStats `json:"efficiency"`
-	Snapshots  SnapshotStats   `json:"snapshots"`
-	Retention  RetentionStats  `json:"retention"`
-	Graph      GraphStats      `json:"graph"`
+	Repository  RepositoryStats  `json:"repository"`
+	Logical     LogicalStats     `json:"logical"`
+	Physical    PhysicalStats    `json:"physical"`
+	Chunks      ChunkStats       `json:"chunks"`
+	BlockLayout BlockLayoutStats `json:"block_layout"`
+	Containers  ContainerStats   `json:"containers"`
+	Efficiency  EfficiencyStats  `json:"efficiency"`
+	Snapshots   SnapshotStats    `json:"snapshots"`
+	Retention   RetentionStats   `json:"retention"`
+	Graph       GraphStats       `json:"graph"`
 
 	Warnings []ObservationWarning `json:"warnings,omitempty"`
 }
@@ -81,6 +82,18 @@ type ChunkStats struct {
 	ChunkerVersions  []VersionStat    `json:"chunker_versions,omitempty"`
 	TotalReferences  int64            `json:"total_references"`
 	UniqueReferenced int64            `json:"unique_referenced"`
+}
+
+type BlockLayoutStats struct {
+	StorageBlocksCount    int64            `json:"storage_blocks_count"`
+	ChunkBlockRefsCount   int64            `json:"chunk_block_refs_count"`
+	AvgChunksPerBlock     float64          `json:"avg_chunks_per_block"`
+	AvgBlockPlaintextSize float64          `json:"avg_block_plaintext_size"`
+	AvgBlockStoredSize    float64          `json:"avg_block_stored_size"`
+	AvgBlockFillRatio     float64          `json:"avg_block_fill_ratio"`
+	LegacyBlockCount      int64            `json:"legacy_block_count"`
+	PackedBlockCount      int64            `json:"packed_block_count"`
+	CodecDistribution     map[string]int64 `json:"codec_distribution,omitempty"`
 }
 
 type VersionStat struct {

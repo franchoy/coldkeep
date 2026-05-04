@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/retention"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 const unknownChunkerBucket = "unknown"
@@ -34,6 +36,20 @@ type SnapshotRetentionStats struct {
 	SnapshotOnlyBytes              int64 `json:"snapshot_only_bytes"`
 	SharedLogicalFiles             int64 `json:"shared_logical_files"`
 	SharedBytes                    int64 `json:"shared_bytes"`
+}
+
+// BlockStats summarizes legacy and packed block layout metrics for benchmarking
+// and operator visibility.
+type BlockStats struct {
+	StorageBlocks     int64            `json:"storage_blocks_count"`
+	ChunkBlockRefs    int64            `json:"chunk_block_refs_count"`
+	AvgChunksPerBlock float64          `json:"avg_chunks_per_block"`
+	AvgPlaintextSize  float64          `json:"avg_block_plaintext_size"`
+	AvgStoredSize     float64          `json:"avg_block_stored_size"`
+	FillRatio         float64          `json:"avg_block_fill_ratio"`
+	LegacyBlocks      int64            `json:"legacy_block_count"`
+	PackedBlocks      int64            `json:"packed_block_count"`
+	CodecDistribution map[string]int64 `json:"codec_distribution"`
 }
 
 // StatsResult holds the snapshot emitted by RunStatsResult.
@@ -75,6 +91,7 @@ type StatsResult struct {
 	AvgChunkRetries            float64                `json:"avg_chunk_retries"`
 	MaxChunkRetries            int64                  `json:"max_chunk_retries"`
 	SnapshotRetention          SnapshotRetentionStats `json:"snapshot_retention"`
+	BlockStats                 BlockStats             `json:"block_stats"`
 	Containers                 []ContainerStatRecord  `json:"containers"`
 }
 
@@ -210,6 +227,12 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 	r.SnapshotRetention = snapshotRetention
 
+	blockStats, err := CollectBlockStats(ctx, dbconn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect block stats: %w", err)
+	}
+	r.BlockStats = blockStats
+
 	// Chunk status breakdown
 	chunkRows, err := dbconn.QueryContext(ctx, `SELECT status, COUNT(*), COALESCE(SUM(size),0) FROM chunk GROUP BY status`)
 	if err != nil {
@@ -336,6 +359,99 @@ func runStatsResultWithDB(ctx context.Context, dbconn *sql.DB) (*StatsResult, er
 	}
 
 	return r, nil
+}
+
+func blockTargetSizeBytesForStats() int64 {
+	const defaultTargetBytes int64 = 1 << 20
+	const defaultTargetMB int64 = 1
+
+	targetMB := int64(0)
+	if _, ok := lookupEnv("COLDKEEP_BLOCK_TARGET_SIZE_MB"); ok {
+		targetMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_BLOCK_TARGET_SIZE_MB", defaultTargetMB)
+	} else {
+		targetMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_PACKED_BLOCK_SIZE_MIB", defaultTargetMB)
+	}
+
+	if targetMB <= 0 {
+		return defaultTargetBytes
+	}
+	if targetMB > (1<<63-1)/(1<<20) {
+		return defaultTargetBytes
+	}
+	return targetMB << 20
+}
+
+var lookupEnv = func(key string) (string, bool) {
+	return os.LookupEnv(key)
+}
+
+// CollectBlockStats gathers packed/legacy block metrics used in stats and
+// benchmarking analysis.
+func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) {
+	if dbconn == nil {
+		return BlockStats{}, fmt.Errorf("db connection is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	out := BlockStats{CodecDistribution: map[string]int64{}}
+
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM storage_blocks`).Scan(&out.StorageBlocks); err != nil {
+		return BlockStats{}, fmt.Errorf("count storage_blocks: %w", err)
+	}
+	out.PackedBlocks = out.StorageBlocks
+
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunk_block_refs`).Scan(&out.ChunkBlockRefs); err != nil {
+		return BlockStats{}, fmt.Errorf("count chunk_block_refs: %w", err)
+	}
+
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM blocks`).Scan(&out.LegacyBlocks); err != nil {
+		return BlockStats{}, fmt.Errorf("count legacy blocks: %w", err)
+	}
+
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(AVG(plaintext_size), 0),
+			COALESCE(AVG(stored_size), 0)
+		FROM storage_blocks
+	`).Scan(&out.AvgPlaintextSize, &out.AvgStoredSize); err != nil {
+		return BlockStats{}, fmt.Errorf("avg packed block sizes: %w", err)
+	}
+
+	if out.StorageBlocks > 0 {
+		out.AvgChunksPerBlock = float64(out.ChunkBlockRefs) / float64(out.StorageBlocks)
+	}
+
+	targetBlockSizeBytes := blockTargetSizeBytesForStats()
+	if targetBlockSizeBytes > 0 {
+		out.FillRatio = out.AvgPlaintextSize / float64(targetBlockSizeBytes)
+	}
+
+	rows, err := dbconn.QueryContext(ctx, `
+		SELECT codec, COUNT(*)
+		FROM storage_blocks
+		GROUP BY codec
+		ORDER BY codec
+	`)
+	if err != nil {
+		return BlockStats{}, fmt.Errorf("codec distribution: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var codec string
+		var count int64
+		if err := rows.Scan(&codec, &count); err != nil {
+			return BlockStats{}, fmt.Errorf("scan codec distribution: %w", err)
+		}
+		out.CodecDistribution[codec] = count
+	}
+	if err := rows.Err(); err != nil {
+		return BlockStats{}, fmt.Errorf("iterate codec distribution: %w", err)
+	}
+
+	return out, nil
 }
 
 func isRegisteredChunkerVersion(version chunk.Version) bool {

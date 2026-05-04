@@ -121,6 +121,17 @@ func (s *Service) mapMaintenanceStats(raw *maintenance.StatsResult, opts StatsOp
 		TotalReferences:  raw.TotalChunkReferences,
 		UniqueReferenced: raw.UniqueReferencedChunks,
 	}
+	r.BlockLayout = BlockLayoutStats{
+		StorageBlocksCount:    raw.BlockStats.StorageBlocks,
+		ChunkBlockRefsCount:   raw.BlockStats.ChunkBlockRefs,
+		AvgChunksPerBlock:     raw.BlockStats.AvgChunksPerBlock,
+		AvgBlockPlaintextSize: raw.BlockStats.AvgPlaintextSize,
+		AvgBlockStoredSize:    raw.BlockStats.AvgStoredSize,
+		AvgBlockFillRatio:     raw.BlockStats.FillRatio,
+		LegacyBlockCount:      raw.BlockStats.LegacyBlocks,
+		PackedBlockCount:      raw.BlockStats.PackedBlocks,
+		CodecDistribution:     cloneInt64Map(raw.BlockStats.CodecDistribution),
+	}
 	r.Containers = ContainerStats{
 		TotalContainers:       raw.TotalContainers,
 		HealthyContainers:     raw.HealthyContainers,

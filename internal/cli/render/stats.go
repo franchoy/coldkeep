@@ -122,6 +122,46 @@ func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 		return err
 	}
 
+	if _, err := fmt.Fprintln(w, "\nBlock layout"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  storage_blocks_count: %s\n", formatIntGrouped(r.BlockLayout.StorageBlocksCount)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  chunk_block_refs_count: %s\n", formatIntGrouped(r.BlockLayout.ChunkBlockRefsCount)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  avg_chunks_per_block: %.2f\n", r.BlockLayout.AvgChunksPerBlock); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  avg_block_plaintext_size: %s\n", formatIECBytes(int64(r.BlockLayout.AvgBlockPlaintextSize))); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  avg_block_stored_size: %s\n", formatIECBytes(int64(r.BlockLayout.AvgBlockStoredSize))); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  avg_block_fill_ratio: %.3f\n", r.BlockLayout.AvgBlockFillRatio); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  legacy_block_count: %s\n", formatIntGrouped(r.BlockLayout.LegacyBlockCount)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  packed_block_count: %s\n", formatIntGrouped(r.BlockLayout.PackedBlockCount)); err != nil {
+		return err
+	}
+	if len(r.BlockLayout.CodecDistribution) > 0 {
+		codecs := make([]string, 0, len(r.BlockLayout.CodecDistribution))
+		for codec := range r.BlockLayout.CodecDistribution {
+			codecs = append(codecs, codec)
+		}
+		sort.Strings(codecs)
+		for _, codec := range codecs {
+			if _, err := fmt.Fprintf(w, "  codec[%s]: %s\n", codec, formatIntGrouped(r.BlockLayout.CodecDistribution[codec])); err != nil {
+				return err
+			}
+		}
+	}
+
 	if _, err := fmt.Fprintln(w, "\nEfficiency"); err != nil {
 		return err
 	}

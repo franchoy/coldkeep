@@ -3,6 +3,7 @@ package maintenance
 import (
 	"context"
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 
@@ -421,5 +422,87 @@ func TestRunStatsResultVersionTotalsMatchDatabaseReality(t *testing.T) {
 	}
 	if statsChunkBytes != dbChunkBytes {
 		t.Fatalf("chunk byte totals mismatch: stats=%d db=%d map=%v", statsChunkBytes, dbChunkBytes, stats.ChunkBytesByVersion)
+	}
+}
+
+func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	t.Setenv("COLDKEEP_BLOCK_TARGET_SIZE_MB", "2")
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-blocks.bin", 0, 64*1024*1024)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := containerRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container id: %v", err)
+	}
+
+	chunkARes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, 'COMPLETED', 1, 'v2-fastcdc')`, "blk-stats-a", 128)
+	if err != nil {
+		t.Fatalf("insert chunk A: %v", err)
+	}
+	chunkAID, _ := chunkARes.LastInsertId()
+	chunkBRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, 'COMPLETED', 0, 'v2-fastcdc')`, "blk-stats-b", 256)
+	if err != nil {
+		t.Fatalf("insert chunk B: %v", err)
+	}
+	chunkBID, _ := chunkBRes.LastInsertId()
+
+	if _, err := dbconn.Exec(`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset) VALUES (?, 'plain', 1, 128, 128, ?, 0)`, chunkAID, containerID); err != nil {
+		t.Fatalf("insert legacy block: %v", err)
+	}
+
+	storageBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 512, 480, ?, 128, x'010203')`, containerID)
+	if err != nil {
+		t.Fatalf("insert storage_block: %v", err)
+	}
+	storageBlockID, _ := storageBlockRes.LastInsertId()
+	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, 0, 128), (?, ?, 128, 256)`, chunkAID, storageBlockID, chunkBID, storageBlockID); err != nil {
+		t.Fatalf("insert chunk_block_refs: %v", err)
+	}
+
+	blockStats, err := CollectBlockStats(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("CollectBlockStats: %v", err)
+	}
+
+	if blockStats.StorageBlocks != 1 {
+		t.Fatalf("storage blocks mismatch: got=%d want=1", blockStats.StorageBlocks)
+	}
+	if blockStats.ChunkBlockRefs != 2 {
+		t.Fatalf("chunk block refs mismatch: got=%d want=2", blockStats.ChunkBlockRefs)
+	}
+	if blockStats.LegacyBlocks != 1 {
+		t.Fatalf("legacy blocks mismatch: got=%d want=1", blockStats.LegacyBlocks)
+	}
+	if blockStats.PackedBlocks != 1 {
+		t.Fatalf("packed blocks mismatch: got=%d want=1", blockStats.PackedBlocks)
+	}
+	if blockStats.AvgChunksPerBlock != 2 {
+		t.Fatalf("avg chunks per block mismatch: got=%.2f want=2.00", blockStats.AvgChunksPerBlock)
+	}
+	if blockStats.AvgPlaintextSize != 512 {
+		t.Fatalf("avg plaintext size mismatch: got=%.2f want=512", blockStats.AvgPlaintextSize)
+	}
+	if blockStats.AvgStoredSize != 480 {
+		t.Fatalf("avg stored size mismatch: got=%.2f want=480", blockStats.AvgStoredSize)
+	}
+	wantFillRatio := float64(512) / float64(2*1024*1024)
+	if math.Abs(blockStats.FillRatio-wantFillRatio) > 1e-9 {
+		t.Fatalf("fill ratio mismatch: got=%.9f want=%.9f", blockStats.FillRatio, wantFillRatio)
+	}
+	if got := blockStats.CodecDistribution["plain"]; got != 1 {
+		t.Fatalf("codec distribution mismatch for plain: got=%d want=1", got)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+	if stats.BlockStats.StorageBlocks != 1 || stats.BlockStats.ChunkBlockRefs != 2 {
+		t.Fatalf("runStats block stats mismatch: %+v", stats.BlockStats)
 	}
 }

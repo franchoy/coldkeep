@@ -368,7 +368,31 @@ Expected trend to validate (not assume):
 - `2 MiB` may compress slightly better than `1 MiB`
 - `3 MiB` may show diminishing additional benefit
 
-## 9. Safety and Correctness Gates (Must Stay True)
+## 9. Benchmark Instrumentation Path (Locked)
+
+Selected approach combines Option A and Option B:
+
+- Option A: extend `stats` output with block-layout metrics so Phase 9 and
+   operator reports can reuse one canonical source.
+- Option B: expose an internal collector helper (`CollectBlockStats`) so test
+   and benchmark code can read the same metrics deterministically.
+
+At minimum, instrumentation must expose:
+
+- `storage_blocks_count`
+- `chunk_block_refs_count`
+- `avg_chunks_per_block`
+- `avg_block_plaintext_size`
+- `avg_block_stored_size`
+- `avg_block_fill_ratio`
+- `legacy_block_count`
+- `packed_block_count`
+- `codec_distribution`
+
+Option C (manual SQL snippets) remains useful for ad-hoc debugging but is not
+the canonical reporting path for decision-grade benchmark output.
+
+## 10. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -381,7 +405,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 10. Decision Rule
+## 11. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -394,7 +418,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 11. 3 MiB Policy (Experimental Only)
+## 12. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -410,7 +434,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 12. Required Final Output
+## 13. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
