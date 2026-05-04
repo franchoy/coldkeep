@@ -263,7 +263,48 @@ Decision weight:
 
 - This dataset is critical for the 1 MiB vs 2 MiB choice.
 
-## 8. Metrics to Collect (Locked)
+## 8. Benchmark Run Matrix (Locked)
+
+Minimum required matrix:
+
+- Block sizes: `1 MiB`, `2 MiB`
+- Datasets: `A`, `B`, `C`, `D`, `E`, `F`
+- Runs per test: `3`
+
+Recommended full matrix:
+
+- `1 MiB`
+   - Dataset A (large file) x3
+   - Dataset B (many small files) x3
+   - Dataset C (mixed folder) x3
+   - Dataset D (dedup-heavy) x3
+   - Dataset E (selective restore) x3
+   - Dataset F (GC partially-live) x3
+- `2 MiB`
+   - Dataset A (large file) x3
+   - Dataset B (many small files) x3
+   - Dataset C (mixed folder) x3
+   - Dataset D (dedup-heavy) x3
+   - Dataset E (selective restore) x3
+   - Dataset F (GC partially-live) x3
+
+Optional exploratory matrix:
+
+- `3 MiB`
+   - same full A-F matrix, or
+   - focused C/E/F matrix when runtime budget is constrained
+
+Why `3` runs per test:
+
+- First run can be noisier due to initialization and environment variance.
+- Decision-quality comparison needs central tendency, not one sample.
+
+Aggregation rule:
+
+- Use median as the primary comparison number.
+- Mean may be reported as secondary context.
+
+## 9. Metrics to Collect (Locked)
 
 ### Store Metrics
 
@@ -368,7 +409,7 @@ Expected trend to validate (not assume):
 - `2 MiB` may compress slightly better than `1 MiB`
 - `3 MiB` may show diminishing additional benefit
 
-## 9. Benchmark Instrumentation Path (Locked)
+## 10. Benchmark Instrumentation Path (Locked)
 
 Selected approach combines Option A and Option B:
 
@@ -392,7 +433,7 @@ At minimum, instrumentation must expose:
 Option C (manual SQL snippets) remains useful for ad-hoc debugging but is not
 the canonical reporting path for decision-grade benchmark output.
 
-## 10. Safety and Correctness Gates (Must Stay True)
+## 11. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -405,7 +446,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 11. Decision Rule
+## 12. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -418,7 +459,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 12. 3 MiB Policy (Experimental Only)
+## 13. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -434,7 +475,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 13. Required Final Output
+## 14. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
