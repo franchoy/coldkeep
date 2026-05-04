@@ -1080,8 +1080,14 @@ func TestPhase7MixedGCAfterUpgradeIntegration(t *testing.T) {
 func TestPhase7BuildFixtureWithActualV17BinaryIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 
+	// Optional by default for local/dev workflows; strict release gates can set
+	// COLDKEEP_REQUIRE_V17_BINARY_PROOF=1 to convert missing binary into failure.
 	v17Bin := os.Getenv("COLDKEEP_V17_BIN")
 	if v17Bin == "" {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("COLDKEEP_REQUIRE_V17_BINARY_PROOF")), "1") ||
+			strings.EqualFold(strings.TrimSpace(os.Getenv("COLDKEEP_REQUIRE_V17_BINARY_PROOF")), "true") {
+			t.Fatalf("COLDKEEP_REQUIRE_V17_BINARY_PROOF is enabled but COLDKEEP_V17_BIN is unset; set COLDKEEP_V17_BIN to a released v1.7 coldkeep binary path")
+		}
 		t.Skip("Set COLDKEEP_V17_BIN=/path/to/released-v1.7-binary to run actual v1.7 fixture integration")
 	}
 	if _, err := os.Stat(v17Bin); err != nil {

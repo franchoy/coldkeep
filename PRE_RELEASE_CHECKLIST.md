@@ -213,6 +213,19 @@ For the snapshot contract gate, run the focused integration suite after the matr
 scripts/run_snapshot_release_gate.sh --count 1
 ```
 
+For the Phase 7 released-v1.7 compatibility proof, run the strict gate below.
+This is a required gate for Phase 7 completion and must use a real released
+v1.7 coldkeep binary (not a local rebuild).
+
+```bash
+COLDKEEP_V17_BIN=/absolute/path/to/released/coldkeep-v1.7 \
+scripts/run_phase7_v17_binary_gate.sh --count 1
+```
+
+Expected: gate fails immediately if `COLDKEEP_V17_BIN` is missing/non-executable,
+and passes only when `TestPhase7BuildFixtureWithActualV17BinaryIntegration`
+executes successfully against the released v1.7 binary.
+
 After step 3, unset or override `COLDKEEP_CODEC` before manual CLI checks below.
 Otherwise the last loop iteration leaves `COLDKEEP_CODEC=aes-gcm`, which changes
 the behavior of later `store` commands.
