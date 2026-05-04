@@ -1227,6 +1227,45 @@ func TestVerifyRepositoryErrorCategoryMetadataInvalid(t *testing.T) {
 	}
 }
 
+func TestVerifyRepositoryErrorCategoryEmptyBlockHash(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"verify-empty-block-hash-category.bin",
+		int64(4096),
+		int64(4096),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		1,
+		"none",
+		int64(16),
+		int64(16),
+		containerID,
+		int64(0),
+		[]byte{},
+	); err != nil {
+		t.Fatalf("insert empty-hash storage_blocks row: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, t.TempDir())
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") {
+		t.Fatalf("expected metadata_invalid category prefix, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "empty block_hash") {
+		t.Fatalf("expected explicit empty block_hash error, got: %v", err)
+	}
+}
+
 func TestVerifyRepositoryErrorCategoryBlockHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()

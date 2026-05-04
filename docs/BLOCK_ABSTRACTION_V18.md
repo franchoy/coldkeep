@@ -191,7 +191,7 @@ Implementation status clarification (current code):
 
 - Current v1.8 runtime stores packed blocks with packed metadata codec semantics fixed to `none`.
 - Packed-block write path currently requires plain transformed payload for `storage_blocks` persistence.
-- Full-block encrypted packed payload support is deferred and not part of the current shipped v1.8 compatibility contract.
+- Compression and full-block encrypted packed payload support are deferred to v1.9 and are not part of the shipped v1.8 compatibility contract.
 
 Not used:
 

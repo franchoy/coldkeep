@@ -125,7 +125,7 @@ Practical consequence:
 
 Packed-block codec boundary (current v1.8 behavior):
 
-- Packed blocks persisted in `storage_blocks` are currently plain-encoded-at-rest metadata shape (`codec = "none"` in packed-block metadata semantics).
+- v1.8 packed blocks persisted in `storage_blocks` use `codec = "none"`.
 - Full-block encrypted packed payloads (`pack -> encode -> encrypt full block -> store`) are not part of the current v1.8 compatibility contract.
 - For write paths that produce packed blocks, set `COLDKEEP_CODEC=plain`.
 - Legacy one-chunk `blocks` rows continue to support their existing codec semantics (including `aes-gcm`) per row metadata.
@@ -137,7 +137,7 @@ Why this is explicit:
 
 Forward-looking note:
 
-- Encrypted packed-block payloads are a future evolution item and are not implied by current v1.8 guarantees.
+- Compression and encrypted packed-block payloads are planned for v1.9, not v1.8.
 
 Chunker evolution model:
 
