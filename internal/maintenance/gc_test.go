@@ -792,7 +792,6 @@ func TestRunGCDryRunCurrentAndSnapshotSharedRetentionSurvivesCurrentDelete(t *te
 }
 
 func TestRunGCSnapshotRetainsPackedBlockAndRestoreSucceedsWhenLiveNamespaceRemoved(t *testing.T) {
-	t.Skip("TODO: migrate packed snapshot fixture to encoded v1 block bytes + codec=none")
 	requireDB(t)
 
 	dbconn, err := db.ConnectDB()
@@ -807,17 +806,9 @@ func TestRunGCSnapshotRetainsPackedBlockAndRestoreSucceedsWhenLiveNamespaceRemov
 
 	retainedPayload := []byte("snapshot-packed-retained")
 	deadPayload := []byte("dead-neighbor-chunk")
-	containerPayload := append(append([]byte{}, retainedPayload...), deadPayload...)
-
-	containerFilename := "snapshot-packed-retained.bin"
-	containerPath := filepath.Join(containersDir, containerFilename)
-	if err := writeTestContainerFileWithPayload(containerPath, containerPayload); err != nil {
-		t.Fatalf("write container file: %v", err)
-	}
 
 	retainedChunkHash := sha256.Sum256(retainedPayload)
 	deadChunkHash := sha256.Sum256(deadPayload)
-	packedBlockHash := sha256.Sum256(containerPayload)
 
 	var logicalID int64
 	if err := dbconn.QueryRow(`
@@ -853,28 +844,29 @@ func TestRunGCSnapshotRetainsPackedBlockAndRestoreSucceedsWhenLiveNamespaceRemov
 		t.Fatalf("insert file_chunk: %v", err)
 	}
 
+	encodedBlock, packedBlockHash := step11EncodePackedBlockV1(t, []int64{retainedChunkID, deadChunkID}, retainedPayload, deadPayload)
+
+	containerFilename := "snapshot-packed-retained.bin"
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeTestContainerFileWithPayload(containerPath, encodedBlock); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
 	var containerID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
 		VALUES ($1, $2, $3, TRUE, FALSE)
 		RETURNING id
-	`, containerFilename, int64(container.ContainerHdrLen+len(containerPayload)), container.GetContainerMaxSize()).Scan(&containerID); err != nil {
+	`, containerFilename, int64(container.ContainerHdrLen+len(encodedBlock)), container.GetContainerMaxSize()).Scan(&containerID); err != nil {
 		t.Fatalf("insert container: %v", err)
-	}
-
-	if _, err := dbconn.Exec(`
-		INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
-		VALUES ($1, 'plain', 1, $2, $3, $4, $5)
-	`, retainedChunkID, int64(len(retainedPayload)), int64(len(retainedPayload)), containerID, int64(container.ContainerHdrLen)); err != nil {
-		t.Fatalf("insert legacy block for retained chunk: %v", err)
 	}
 
 	var storageBlockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(containerPayload)), int64(len(containerPayload)), containerID, int64(container.ContainerHdrLen), packedBlockHash[:]).Scan(&storageBlockID); err != nil {
+	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), packedBlockHash).Scan(&storageBlockID); err != nil {
 		t.Fatalf("insert packed storage block: %v", err)
 	}
 
@@ -890,6 +882,16 @@ func TestRunGCSnapshotRetainsPackedBlockAndRestoreSucceedsWhenLiveNamespaceRemov
 	`, deadChunkID, storageBlockID, int64(len(retainedPayload)), int64(len(deadPayload))); err != nil {
 		t.Fatalf("insert packed dead ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(
+		t,
+		dbconn,
+		containerID,
+		int64(container.ContainerHdrLen),
+		len(encodedBlock),
+		[]int64{retainedChunkID, deadChunkID},
+		retainedPayload,
+		deadPayload,
+	)
 
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('S1', NOW(), 'full')`); err != nil {
 		t.Fatalf("insert snapshot S1: %v", err)

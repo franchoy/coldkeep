@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/snapshot"
@@ -90,6 +91,66 @@ func step11InsertSealedContainerWithPayload(t *testing.T, dbconn *sql.DB, contai
 	return containerID
 }
 
+func step11EncodePackedBlockV1(t *testing.T, chunkIDs []int64, chunkPayloads ...[]byte) ([]byte, []byte) {
+	t.Helper()
+
+	if len(chunkIDs) == 0 || len(chunkIDs) != len(chunkPayloads) {
+		t.Fatalf("invalid packed block fixture shape: chunkIDs=%d payloads=%d", len(chunkIDs), len(chunkPayloads))
+	}
+
+	entries := make([]blocks.ChunkEntry, 0, len(chunkIDs))
+	payload := make([]byte, 0)
+	offset := uint64(0)
+	for i, id := range chunkIDs {
+		chunk := chunkPayloads[i]
+		entries = append(entries, blocks.ChunkEntry{
+			ChunkID: uint64(id),
+			Offset:  offset,
+			Size:    uint64(len(chunk)),
+		})
+		payload = append(payload, chunk...)
+		offset += uint64(len(chunk))
+	}
+
+	encoded, err := blocks.EncodePackedBlockV1(entries, payload)
+	if err != nil {
+		t.Fatalf("encode packed block fixture: %v", err)
+	}
+
+	return encoded.Bytes, encoded.BlockHash
+}
+
+func step11InsertLegacyCompanionRows(t *testing.T, dbconn *sql.DB, containerID, containerOffset int64, encodedLen int, chunkIDs []int64, chunkPayloads ...[]byte) {
+	t.Helper()
+
+	if len(chunkIDs) == 0 || len(chunkIDs) != len(chunkPayloads) {
+		t.Fatalf("invalid legacy companion fixture shape: chunkIDs=%d payloads=%d", len(chunkIDs), len(chunkPayloads))
+	}
+
+	var totalChunkBytes int64
+	for _, payload := range chunkPayloads {
+		totalChunkBytes += int64(len(payload))
+	}
+
+	payloadPrefix := int64(encodedLen) - totalChunkBytes
+	if payloadPrefix < 0 {
+		t.Fatalf("invalid encoded block length: encoded=%d total_chunks=%d", encodedLen, totalChunkBytes)
+	}
+
+	offsetInPayload := int64(0)
+	for i, chunkID := range chunkIDs {
+		chunkSize := int64(len(chunkPayloads[i]))
+		legacyOffset := containerOffset + payloadPrefix + offsetInPayload
+		if _, err := dbconn.Exec(`
+			INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+			VALUES ($1, 'plain', 1, $2, $3, $4, $5)
+		`, chunkID, chunkSize, chunkSize, containerID, legacyOffset); err != nil {
+			t.Fatalf("insert legacy companion block for chunk %d: %v", chunkID, err)
+		}
+		offsetInPayload += chunkSize
+	}
+}
+
 func TestStep11PackedOnlyDeadBlockDeletionRunGCAndVerify(t *testing.T) {
 	requireDB(t)
 
@@ -104,18 +165,19 @@ func TestStep11PackedOnlyDeadBlockDeletionRunGCAndVerify(t *testing.T) {
 	containersDir := t.TempDir()
 
 	deadPayload := []byte("step11-packed-only-dead")
-	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-only-dead.bin", deadPayload)
 
 	deadHash := sha256.Sum256(deadPayload)
 	deadChunkID := step11InsertStandaloneDeadChunk(t, dbconn, hex.EncodeToString(deadHash[:]), int64(len(deadPayload)))
+	deadEncoded, deadBlockHash := step11EncodePackedBlockV1(t, []int64{deadChunkID}, deadPayload)
 
-	blockHash := sha256.Sum256(deadPayload)
+	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-only-dead.bin", deadEncoded)
+
 	var blockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(deadPayload)), int64(len(deadPayload)), containerID, int64(container.ContainerHdrLen), blockHash[:]).Scan(&blockID); err != nil {
+	`, int64(len(deadEncoded)), int64(len(deadEncoded)), containerID, int64(container.ContainerHdrLen), deadBlockHash).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
 
@@ -125,6 +187,7 @@ func TestStep11PackedOnlyDeadBlockDeletionRunGCAndVerify(t *testing.T) {
 	`, deadChunkID, blockID, int64(len(deadPayload))); err != nil {
 		t.Fatalf("insert chunk_block_ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(t, dbconn, containerID, int64(container.ContainerHdrLen), len(deadEncoded), []int64{deadChunkID}, deadPayload)
 
 	result, gcErr := RunGCWithContainersDirResult(false, containersDir)
 	if gcErr != nil {
@@ -156,7 +219,6 @@ func TestStep11PackedOnlyDeadBlockDeletionRunGCAndVerify(t *testing.T) {
 }
 
 func TestStep11PackedBlockPartiallyLiveRetainedRestoreAndVerify(t *testing.T) {
-	t.Skip("TODO: migrate Step11 packed fixture to encoded v1 block bytes + codec=none")
 	requireDB(t)
 
 	dbconn, err := db.ConnectDB()
@@ -172,23 +234,22 @@ func TestStep11PackedBlockPartiallyLiveRetainedRestoreAndVerify(t *testing.T) {
 	c1Payload := []byte("step11-c1-live")
 	c2Payload := []byte("step11-c2-dead")
 	c3Payload := []byte("step11-c3-dead")
-	combined := append(append(append([]byte{}, c1Payload...), c2Payload...), c3Payload...)
-
-	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-partially-live.bin", combined)
 
 	logicalC1ID, c1ChunkID := step11InsertLogicalFileChunkAndPhysicalPath(t, dbconn, "step11-c1.bin", c1Payload, "/step11/c1.bin")
 	h2 := sha256.Sum256(c2Payload)
 	h3 := sha256.Sum256(c3Payload)
 	c2ChunkID := step11InsertStandaloneDeadChunk(t, dbconn, hex.EncodeToString(h2[:]), int64(len(c2Payload)))
 	c3ChunkID := step11InsertStandaloneDeadChunk(t, dbconn, hex.EncodeToString(h3[:]), int64(len(c3Payload)))
+	encodedBlock, blockHash := step11EncodePackedBlockV1(t, []int64{c1ChunkID, c2ChunkID, c3ChunkID}, c1Payload, c2Payload, c3Payload)
 
-	blockHash := sha256.Sum256(combined)
+	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-partially-live.bin", encodedBlock)
+
 	var blockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(combined)), int64(len(combined)), containerID, int64(container.ContainerHdrLen), blockHash[:]).Scan(&blockID); err != nil {
+	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), blockHash).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
 
@@ -201,6 +262,17 @@ func TestStep11PackedBlockPartiallyLiveRetainedRestoreAndVerify(t *testing.T) {
 	if _, err := dbconn.Exec(`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES ($1, $2, $3, $4)`, c3ChunkID, blockID, int64(len(c1Payload)+len(c2Payload)), int64(len(c3Payload))); err != nil {
 		t.Fatalf("insert c3 ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(
+		t,
+		dbconn,
+		containerID,
+		int64(container.ContainerHdrLen),
+		len(encodedBlock),
+		[]int64{c1ChunkID, c2ChunkID, c3ChunkID},
+		c1Payload,
+		c2Payload,
+		c3Payload,
+	)
 
 	result, gcErr := RunGCWithContainersDirResult(false, containersDir)
 	if gcErr != nil {
@@ -245,7 +317,6 @@ func TestStep11PackedBlockPartiallyLiveRetainedRestoreAndVerify(t *testing.T) {
 }
 
 func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
-	t.Skip("TODO: migrate Step11 packed snapshot fixture to encoded v1 block bytes + updated restore mode")
 	requireDB(t)
 
 	dbconn, err := db.ConnectDB()
@@ -259,17 +330,18 @@ func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
 	containersDir := t.TempDir()
 
 	payload := []byte("step11-snapshot-packed-retained")
-	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-snapshot-packed.bin", payload)
 
 	logicalID, chunkID := step11InsertLogicalFileChunkAndPhysicalPath(t, dbconn, "step11-snapshot-packed.bin", payload, "/step11/snapshot-packed.bin")
+	encodedBlock, blockHash := step11EncodePackedBlockV1(t, []int64{chunkID}, payload)
 
-	blockHash := sha256.Sum256(payload)
+	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-snapshot-packed.bin", encodedBlock)
+
 	var blockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(payload)), int64(len(payload)), containerID, int64(container.ContainerHdrLen), blockHash[:]).Scan(&blockID); err != nil {
+	`, int64(len(encodedBlock)), int64(len(encodedBlock)), containerID, int64(container.ContainerHdrLen), blockHash).Scan(&blockID); err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -278,6 +350,7 @@ func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
 	`, chunkID, blockID, int64(len(payload))); err != nil {
 		t.Fatalf("insert chunk_block_ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(t, dbconn, containerID, int64(container.ContainerHdrLen), len(encodedBlock), []int64{chunkID}, payload)
 
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('step11-snapshot-packed', NOW(), 'full')`); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
@@ -307,11 +380,11 @@ func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
 		t.Fatalf("storage_blocks rows = %d, want 1", blockRows)
 	}
 
-	restoreTarget := filepath.Join(t.TempDir(), "step11-snapshot-restored.bin")
+	restoreDir := t.TempDir()
 	sgctx := storage.StorageContext{DB: dbconn, ContainerDir: containersDir}
 	restoreResult, err := snapshot.RestoreSnapshot(context.Background(), dbconn, "step11-snapshot-packed", nil, snapshot.RestoreSnapshotOptions{
-		DestinationMode: storage.RestoreDestinationOverride,
-		Destination:     restoreTarget,
+		DestinationMode: storage.RestoreDestinationPrefix,
+		Destination:     restoreDir,
 		Overwrite:       true,
 		NoMetadata:      true,
 		StorageContext:  &sgctx,
@@ -323,6 +396,7 @@ func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
 		t.Fatalf("RestoredFiles = %d, want 1", restoreResult.RestoredFiles)
 	}
 
+	restoreTarget := filepath.Join(restoreDir, "snap", "step11-snapshot-packed.bin")
 	restored, err := os.ReadFile(restoreTarget)
 	if err != nil {
 		t.Fatalf("read restored file: %v", err)
@@ -333,7 +407,6 @@ func TestStep11SnapshotRetainsPackedBlockAndRestoreSucceeds(t *testing.T) {
 }
 
 func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
-	t.Skip("TODO: migrate mixed legacy+packed Step11 fixture to encoded v1 packed block bytes")
 	requireDB(t)
 
 	dbconn, err := db.ConnectDB()
@@ -361,8 +434,10 @@ func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
 
 	legacyKeepContainerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-legacy-keep.bin", legacyKeepPayload)
 	legacyDropContainerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-legacy-drop.bin", legacyDropPayload)
-	packedKeepContainerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-keep.bin", packedKeepPayload)
-	packedDropContainerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-drop.bin", packedDropPayload)
+	packedKeepEncoded, keepBlockHash := step11EncodePackedBlockV1(t, []int64{packedKeepChunkID}, packedKeepPayload)
+	packedDropEncoded, dropBlockHash := step11EncodePackedBlockV1(t, []int64{packedDropChunkID}, packedDropPayload)
+	packedKeepContainerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-keep.bin", packedKeepEncoded)
+	packedDropContainerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-packed-drop.bin", packedDropEncoded)
 
 	if _, err := dbconn.Exec(`
 		INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
@@ -377,13 +452,12 @@ func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
 		t.Fatalf("insert legacy drop block: %v", err)
 	}
 
-	keepBlockHash := sha256.Sum256(packedKeepPayload)
 	var packedKeepBlockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(packedKeepPayload)), int64(len(packedKeepPayload)), packedKeepContainerID, int64(container.ContainerHdrLen), keepBlockHash[:]).Scan(&packedKeepBlockID); err != nil {
+	`, int64(len(packedKeepEncoded)), int64(len(packedKeepEncoded)), packedKeepContainerID, int64(container.ContainerHdrLen), keepBlockHash).Scan(&packedKeepBlockID); err != nil {
 		t.Fatalf("insert packed keep storage_block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -392,14 +466,14 @@ func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
 	`, packedKeepChunkID, packedKeepBlockID, int64(len(packedKeepPayload))); err != nil {
 		t.Fatalf("insert packed keep ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(t, dbconn, packedKeepContainerID, int64(container.ContainerHdrLen), len(packedKeepEncoded), []int64{packedKeepChunkID}, packedKeepPayload)
 
-	dropBlockHash := sha256.Sum256(packedDropPayload)
 	var packedDropBlockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(packedDropPayload)), int64(len(packedDropPayload)), packedDropContainerID, int64(container.ContainerHdrLen), dropBlockHash[:]).Scan(&packedDropBlockID); err != nil {
+	`, int64(len(packedDropEncoded)), int64(len(packedDropEncoded)), packedDropContainerID, int64(container.ContainerHdrLen), dropBlockHash).Scan(&packedDropBlockID); err != nil {
 		t.Fatalf("insert packed drop storage_block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -408,6 +482,7 @@ func TestStep11MixedLegacyAndPackedRepoRestoreRemainingAndVerify(t *testing.T) {
 	`, packedDropChunkID, packedDropBlockID, int64(len(packedDropPayload))); err != nil {
 		t.Fatalf("insert packed drop ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(t, dbconn, packedDropContainerID, int64(container.ContainerHdrLen), len(packedDropEncoded), []int64{packedDropChunkID}, packedDropPayload)
 
 	gcResult, gcErr := RunGCWithContainersDirResult(false, containersDir)
 	if gcErr != nil {
@@ -462,9 +537,6 @@ func TestStep11ContainerWithMixedPhysicalUnitsRetainedWhileEitherKindLive(t *tes
 
 	legacyPayload := []byte("step11-mixed-legacy")
 	packedPayload := []byte("step11-mixed-packed")
-	containerPayload := append(append([]byte{}, legacyPayload...), packedPayload...)
-
-	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-mixed-units.bin", containerPayload)
 
 	hLegacy := sha256.Sum256(legacyPayload)
 	hPacked := sha256.Sum256(packedPayload)
@@ -487,6 +559,11 @@ func TestStep11ContainerWithMixedPhysicalUnitsRetainedWhileEitherKindLive(t *tes
 		t.Fatalf("insert packed chunk: %v", err)
 	}
 
+	packedEncoded, packedBlockHash := step11EncodePackedBlockV1(t, []int64{packedChunkID}, packedPayload)
+	containerPayload := append(append([]byte{}, legacyPayload...), packedEncoded...)
+
+	containerID := step11InsertSealedContainerWithPayload(t, dbconn, containersDir, "step11-mixed-units.bin", containerPayload)
+
 	if _, err := dbconn.Exec(`
 		INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
 		VALUES ($1, 'plain', 1, $2, $3, $4, $5)
@@ -494,13 +571,12 @@ func TestStep11ContainerWithMixedPhysicalUnitsRetainedWhileEitherKindLive(t *tes
 		t.Fatalf("insert legacy block: %v", err)
 	}
 
-	packedBlockHash := sha256.Sum256(packedPayload)
 	var packedBlockID int64
 	if err := dbconn.QueryRow(`
 		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		VALUES (1, 'plain', $1, $2, $3, $4, $5)
+		VALUES (1, 'none', $1, $2, $3, $4, $5)
 		RETURNING id
-	`, int64(len(packedPayload)), int64(len(packedPayload)), containerID, int64(container.ContainerHdrLen+len(legacyPayload)), packedBlockHash[:]).Scan(&packedBlockID); err != nil {
+	`, int64(len(packedEncoded)), int64(len(packedEncoded)), containerID, int64(container.ContainerHdrLen+len(legacyPayload)), packedBlockHash).Scan(&packedBlockID); err != nil {
 		t.Fatalf("insert packed block: %v", err)
 	}
 	if _, err := dbconn.Exec(`
@@ -509,6 +585,15 @@ func TestStep11ContainerWithMixedPhysicalUnitsRetainedWhileEitherKindLive(t *tes
 	`, packedChunkID, packedBlockID, int64(len(packedPayload))); err != nil {
 		t.Fatalf("insert packed ref: %v", err)
 	}
+	step11InsertLegacyCompanionRows(
+		t,
+		dbconn,
+		containerID,
+		int64(container.ContainerHdrLen+len(legacyPayload)),
+		len(packedEncoded),
+		[]int64{packedChunkID},
+		packedPayload,
+	)
 
 	resultA, err := RunGCWithContainersDirResult(false, containersDir)
 	if err != nil {
