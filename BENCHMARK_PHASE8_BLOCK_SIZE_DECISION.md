@@ -32,7 +32,33 @@ while preserving safety invariants and predictable operator behavior?
 
 The decision must optimize for system-level behavior, not one benchmark number.
 
-## 2. Required Decision Dimensions
+## 2. Candidate Sizes (Locked)
+
+Use the following candidates:
+
+- Candidate A: 1 MiB
+- Candidate B: 2 MiB
+- Candidate C (optional exploratory): 3 MiB
+
+FastCDC parameters currently in use:
+
+- `MinChunkSize = 32 * 1024`
+- `AvgChunkSize = 64 * 1024`
+- `MaxChunkSize = 128 * 1024`
+
+Expected average chunks per block (using `AvgChunkSize = 64 KiB`):
+
+- 1 MiB -> ~16 chunks/block
+- 2 MiB -> ~32 chunks/block
+- 3 MiB -> ~48 chunks/block
+
+Initial expectations (hypotheses to validate with data):
+
+- 1 MiB: safest balance
+- 2 MiB: likely best throughput and future compression candidate
+- 3 MiB: possible upside, but higher over-read and GC-retained-space risk
+
+## 3. Required Decision Dimensions
 
 Each candidate (1, 2, optional 3 MiB) must be compared across all dimensions:
 
@@ -47,7 +73,7 @@ Each candidate (1, 2, optional 3 MiB) must be compared across all dimensions:
 
 No candidate can be accepted without complete evidence for all dimensions.
 
-## 3. Measurement Contract (What Counts as Evidence)
+## 4. Measurement Contract (What Counts as Evidence)
 
 For each candidate size:
 
@@ -66,7 +92,7 @@ Minimum matrix:
 - workers: 1, 4
 - repeats: >= 3
 
-## 4. Safety and Correctness Gates (Must Stay True)
+## 5. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -79,7 +105,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 5. Decision Rule
+## 6. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -92,7 +118,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 6. 3 MiB Policy (Experimental Only)
+## 7. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -108,7 +134,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 7. Required Final Output
+## 8. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
