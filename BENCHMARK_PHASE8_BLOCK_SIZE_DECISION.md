@@ -304,7 +304,37 @@ Aggregation rule:
 - Use median as the primary comparison number.
 - Mean may be reported as secondary context.
 
-## 9. Metrics to Collect (Locked)
+## 9. Cache State Policy (Cold vs Warm)
+
+Cache state affects restore and verify measurements and must be handled
+explicitly.
+
+Two allowed modes:
+
+### Practical mode (default)
+
+- Run each test `3` times and use median.
+- This is sufficient for most decision-grade comparisons when strict cache
+   control is unavailable.
+
+### Strict mode (when safe and available)
+
+- Before restore/verify runs, drop OS page cache.
+- Linux example:
+
+```bash
+sync
+echo 3 | sudo tee /proc/sys/vm/drop_caches
+```
+
+Use strict mode only when it is operationally safe for the benchmark host.
+
+Fallback disclosure requirement:
+
+- If strict cache control is not available, report explicitly:
+   - `cache state not controlled; results use repeated median runs`
+
+## 10. Metrics to Collect (Locked)
 
 ### Store Metrics
 
@@ -409,7 +439,7 @@ Expected trend to validate (not assume):
 - `2 MiB` may compress slightly better than `1 MiB`
 - `3 MiB` may show diminishing additional benefit
 
-## 10. Benchmark Instrumentation Path (Locked)
+## 11. Benchmark Instrumentation Path (Locked)
 
 Selected approach combines Option A and Option B:
 
@@ -433,7 +463,7 @@ At minimum, instrumentation must expose:
 Option C (manual SQL snippets) remains useful for ad-hoc debugging but is not
 the canonical reporting path for decision-grade benchmark output.
 
-## 11. Safety and Correctness Gates (Must Stay True)
+## 12. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -446,7 +476,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 12. Decision Rule
+## 13. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -459,7 +489,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 13. 3 MiB Policy (Experimental Only)
+## 14. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -475,7 +505,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 14. Required Final Output
+## 15. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
