@@ -410,6 +410,41 @@ Harness implementation:
    - `tmp/bench_phase8_store_sequence/*-stats.json`
    - `tmp/bench_phase8_store_sequence/*-result.json`
 
+## 10.2 Restore Benchmark Sequence (Locked)
+
+For each stored repo tuple `(block_size, dataset, run_id)`, execute:
+
+1. Restore full dataset
+2. Compare per-file hashes and tree hash against original dataset
+3. Record elapsed time (wall clock)
+4. Collect block read/cache metrics if available
+
+Selective restore cases (required):
+
+- single small file
+- 100 random small files
+- one subdirectory
+
+Expected checks for full + selective cases:
+
+- restored bytes match original bytes
+- read amplification is measured
+- no hash mismatch
+
+Implementation note:
+
+- Canonical restore sequence runner: `scripts/run_phase8_restore_sequence.sh`
+- Uses `restore --stored-path ... --mode prefix --destination <root>` for stable
+   path reconstruction and deterministic file-by-file comparisons.
+- Captures IO counters via `COLDKEEP_IO_COUNTERS_FILE` and computes:
+   `read_amplification = bytes_read / restored_bytes`.
+
+Output artifacts:
+
+- `tmp/bench_phase8_restore_sequence/*-restore-result.json`
+- `tmp/bench_phase8_restore_sequence/*-list.json`
+- `tmp/bench_phase8_restore_sequence/*-selection.json`
+
 ## 11. Metrics to Collect (Locked)
 
 ### Store Metrics
