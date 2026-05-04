@@ -618,6 +618,36 @@ Most important Phase 8 GC metric:
 
 This metric captures the real retained-space cost of larger block sizes.
 
+### Memory Metrics (Peak RSS)
+
+Collect peak resident set size (RSS) for store, restore, and verify operations.
+Larger packed blocks require larger decode buffers; under concurrency, 2 MiB
+blocks may increase memory footprint noticeably compared to 1 MiB.
+
+Minimal approach — wrap the coldkeep invocation with `/usr/bin/time -v`:
+
+```bash
+/usr/bin/time -v coldkeep store-folder /data 2>time_store.txt
+# parse: grep 'Maximum resident set size' time_store.txt
+```
+
+Collect for each phase:
+
+- `store_peak_rss_kb` — peak RSS during the store operation
+- `restore_peak_rss_kb` — peak RSS during full restore (max across individual
+  restore calls when restoring per-path)
+- `verify_peak_rss_kb` — peak RSS during `verify system --standard`
+
+Comparison requirement:
+
+- Compare `store_peak_rss_kb` and `restore_peak_rss_kb` directly between `1 MiB`
+  and `2 MiB` on the same dataset.
+- A 2 MiB RSS increase > 50% over 1 MiB on the same dataset is a signal worth
+  noting in the decision record, especially for constrained-memory operators.
+
+Fallback: if `/usr/bin/time -v` is unavailable (macOS, non-GNU time), record
+`unavailable` and note the platform.
+
 ### Optional Compression-Simulation Metrics
 
 Even before v1.9, run offline simulation on decoded plaintext packed blocks:

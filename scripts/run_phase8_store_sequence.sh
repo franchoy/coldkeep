@@ -142,9 +142,27 @@ print(int(time.time() * 1000))
 PY
 }
 
+# run_with_rss_kb: runs command, captures peak RSS into _last_rss_kb (kb).
+# Requires GNU /usr/bin/time -v. Falls back to 0 when unavailable.
+run_with_rss_kb() {
+	local _rss_tmp
+	_rss_tmp="$(mktemp)"
+	if /usr/bin/time -v "$@" 2>"$_rss_tmp"; then
+		_last_rss_kb="$(awk '/Maximum resident set size/{print $NF}' "$_rss_tmp")"
+		_last_rss_kb="${_last_rss_kb:-0}"
+	else
+		local _exit_code=$?
+		rm -f "$_rss_tmp"
+		return "$_exit_code"
+	fi
+	rm -f "$_rss_tmp"
+}
+_last_rss_kb=0
+
 # 2-3) store dataset and record elapsed
 store_start_ms="$(now_ms)"
-"${store_cmd[@]}" >/dev/null
+run_with_rss_kb "${store_cmd[@]}" >/dev/null
+store_rss_kb="$_last_rss_kb"
 store_end_ms="$(now_ms)"
 store_elapsed_ms=$((store_end_ms - store_start_ms))
 
@@ -163,7 +181,8 @@ PY
 
 # 5-6) verify and record elapsed
 verify_start_ms="$(now_ms)"
-"$COLDKEEP_BIN" verify system --standard >/dev/null
+run_with_rss_kb "$COLDKEEP_BIN" verify system --standard >/dev/null
+verify_rss_kb="$_last_rss_kb"
 verify_end_ms="$(now_ms)"
 verify_elapsed_ms=$((verify_end_ms - verify_start_ms))
 
@@ -188,7 +207,7 @@ if [[ "$missing_block_hash_count" != "0" ]]; then
 	exit 1
 fi
 
-python3 - "$RESULT_JSON_PATH" "$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" "$store_elapsed_ms" "$verify_elapsed_ms" "$storage_blocks_count" "$avg_chunks_per_block" "$missing_block_hash_count" "$EXPECT_MULTI_CHUNK" <<'PY'
+python3 - "$RESULT_JSON_PATH" "$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" "$store_elapsed_ms" "$verify_elapsed_ms" "$storage_blocks_count" "$avg_chunks_per_block" "$missing_block_hash_count" "$EXPECT_MULTI_CHUNK" "$store_rss_kb" "$verify_rss_kb" <<'PY'
 import json,sys
 (
     out_path,
@@ -203,6 +222,8 @@ import json,sys
     avg_chunks_per_block,
     missing_block_hash_count,
     expect_multichunk,
+    store_rss_kb,
+    verify_rss_kb,
 )=sys.argv[1:]
 payload={
     "status":"ok",
@@ -215,6 +236,10 @@ payload={
         "storage_dir":storage_dir,
         "store_elapsed_ms":int(store_elapsed_ms),
         "verify_elapsed_ms":int(verify_elapsed_ms),
+        "memory":{
+            "store_peak_rss_kb":int(store_rss_kb) if store_rss_kb else None,
+            "verify_peak_rss_kb":int(verify_rss_kb) if verify_rss_kb else None,
+        },
         "checks":{
             "store_succeeds":True,
             "verify_passes":True,

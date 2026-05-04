@@ -255,6 +255,10 @@ restore_paths_with_prefix() {
 	local destination_root="$3"
 	local io_jsonl_path="$4"
 
+	local _rss_peak_file
+	_rss_peak_file="$(mktemp)"
+	echo "0" >"$_rss_peak_file"
+
 	python3 - "$selection_json" "$selection_key" <<'PY' | while IFS= read -r stored_path; do
 import json
 import sys
@@ -279,9 +283,16 @@ for item in items:
     print(str(item))
 PY
 		export COLDKEEP_IO_COUNTERS_FILE="$io_jsonl_path"
-		"$COLDKEEP_BIN" restore --stored-path "$stored_path" --mode prefix --destination "$destination_root" --overwrite --output json >/dev/null
+		run_with_rss_kb "$COLDKEEP_BIN" restore --stored-path "$stored_path" --mode prefix --destination "$destination_root" --overwrite --output json >/dev/null
+		_cur_peak="$(cat "$_rss_peak_file" 2>/dev/null || echo 0)"
+		if [[ "${_last_rss_kb:-0}" -gt "${_cur_peak:-0}" ]]; then
+			echo "$_last_rss_kb" >"$_rss_peak_file"
+		fi
 	done
 	unset COLDKEEP_IO_COUNTERS_FILE
+
+	_restore_case_peak_rss_kb="$(cat "$_rss_peak_file" 2>/dev/null || echo 0)"
+	rm -f "$_rss_peak_file"
 }
 
 capture_stats_optional() {
@@ -309,10 +320,28 @@ print(int(time.time() * 1000))
 PY
 }
 
+# run_with_rss_kb: runs command, captures peak RSS into _last_rss_kb (kb).
+# Requires GNU /usr/bin/time -v. Falls back to 0 when unavailable.
+run_with_rss_kb() {
+	local _rss_tmp
+	_rss_tmp="$(mktemp)"
+	if /usr/bin/time -v "$@" 2>"$_rss_tmp"; then
+		_last_rss_kb="$(awk '/Maximum resident set size/{print $NF}' "$_rss_tmp")"
+		_last_rss_kb="${_last_rss_kb:-0}"
+	else
+		local _exit_code=$?
+		rm -f "$_rss_tmp"
+		return "$_exit_code"
+	fi
+	rm -f "$_rss_tmp"
+}
+_last_rss_kb=0
+
 # Full restore
 capture_stats_optional "$FULL_STATS_BEFORE"
 full_start_ms="$(now_ms)"
 restore_paths_with_prefix "$SELECTION_JSON_PATH" "full" "$FULL_RESTORE_ROOT" "$FULL_IO_JSONL_PATH"
+full_rss_kb="$_restore_case_peak_rss_kb"
 full_end_ms="$(now_ms)"
 full_elapsed_ms=$((full_end_ms - full_start_ms))
 capture_stats_optional "$FULL_STATS_AFTER"
@@ -321,6 +350,7 @@ capture_stats_optional "$FULL_STATS_AFTER"
 capture_stats_optional "$SEL1_STATS_BEFORE"
 sel1_start_ms="$(now_ms)"
 restore_paths_with_prefix "$SELECTION_JSON_PATH" "single_small" "$SEL_SINGLE_ROOT" "$SEL1_IO_JSONL_PATH"
+sel1_rss_kb="$_restore_case_peak_rss_kb"
 sel1_end_ms="$(now_ms)"
 sel1_elapsed_ms=$((sel1_end_ms - sel1_start_ms))
 capture_stats_optional "$SEL1_STATS_AFTER"
@@ -329,6 +359,7 @@ capture_stats_optional "$SEL1_STATS_AFTER"
 capture_stats_optional "$SEL100_STATS_BEFORE"
 sel100_start_ms="$(now_ms)"
 restore_paths_with_prefix "$SELECTION_JSON_PATH" "random_small_100" "$SEL_100_ROOT" "$SEL100_IO_JSONL_PATH"
+sel100_rss_kb="$_restore_case_peak_rss_kb"
 sel100_end_ms="$(now_ms)"
 sel100_elapsed_ms=$((sel100_end_ms - sel100_start_ms))
 capture_stats_optional "$SEL100_STATS_AFTER"
@@ -337,6 +368,7 @@ capture_stats_optional "$SEL100_STATS_AFTER"
 capture_stats_optional "$SELDIR_STATS_BEFORE"
 seldir_start_ms="$(now_ms)"
 restore_paths_with_prefix "$SELECTION_JSON_PATH" "subdirectory" "$SEL_SUBDIR_ROOT" "$SELDIR_IO_JSONL_PATH"
+seldir_rss_kb="$_restore_case_peak_rss_kb"
 seldir_end_ms="$(now_ms)"
 seldir_elapsed_ms=$((seldir_end_ms - seldir_start_ms))
 capture_stats_optional "$SELDIR_STATS_AFTER"
@@ -346,7 +378,8 @@ python3 - "$SELECTION_JSON_PATH" "$RESULT_JSON_PATH" \
 	"$FULL_IO_JSONL_PATH" "$SEL1_IO_JSONL_PATH" "$SEL100_IO_JSONL_PATH" "$SELDIR_IO_JSONL_PATH" \
 	"$FULL_STATS_BEFORE" "$FULL_STATS_AFTER" "$SEL1_STATS_BEFORE" "$SEL1_STATS_AFTER" "$SEL100_STATS_BEFORE" "$SEL100_STATS_AFTER" "$SELDIR_STATS_BEFORE" "$SELDIR_STATS_AFTER" \
 	"$BLOCK_MB" "$DATASET_LABEL" "$RUN_ID" "$RUN_DB_NAME" "$RUN_STORAGE_DIR" \
-	"$full_elapsed_ms" "$sel1_elapsed_ms" "$sel100_elapsed_ms" "$seldir_elapsed_ms" <<'PY'
+	"$full_elapsed_ms" "$sel1_elapsed_ms" "$sel100_elapsed_ms" "$seldir_elapsed_ms" \
+	"$full_rss_kb" "$sel1_rss_kb" "$sel100_rss_kb" "$seldir_rss_kb" <<'PY'
 import hashlib
 import json
 import os
@@ -380,6 +413,10 @@ import sys
     sel1_elapsed_ms,
     sel100_elapsed_ms,
     seldir_elapsed_ms,
+    full_rss_kb,
+    sel1_rss_kb,
+    sel100_rss_kb,
+    seldir_rss_kb,
 ) = sys.argv[1:]
 
 def load_json(path):
@@ -470,7 +507,7 @@ def collect_optional_metrics(obj, out):
             collect_optional_metrics(v, out)
 
 
-def run_case(case_name, selected_paths, restore_root, io_path, stats_before_path, stats_after_path, elapsed_ms):
+def run_case(case_name, selected_paths, restore_root, io_path, stats_before_path, stats_after_path, elapsed_ms, peak_rss_kb=None):
     source_hashes = {}
     restored_hashes = {}
     restored_bytes = 0
@@ -537,6 +574,7 @@ def run_case(case_name, selected_paths, restore_root, io_path, stats_before_path
         'read_amplification': read_amplification,
         'read_amplification_measured': read_amplification is not None,
         'optional_block_read_cache_metrics': optional_metrics,
+        'peak_rss_kb': int(peak_rss_kb) if peak_rss_kb else None,
     }
 
 full_paths = payload['stored_paths']
@@ -546,10 +584,10 @@ subdir_info = (payload['selective'] or {}).get('subdirectory') or {}
 subdir_paths = subdir_info.get('files') or []
 
 cases = [
-    run_case('full_restore', full_paths, full_root, full_io, full_stats_before, full_stats_after, full_elapsed_ms),
-    run_case('selective_single_small_file', single_paths, sel1_root, sel1_io, sel1_stats_before, sel1_stats_after, sel1_elapsed_ms),
-    run_case('selective_random_100_small_files', rand100_paths, sel100_root, sel100_io, sel100_stats_before, sel100_stats_after, sel100_elapsed_ms),
-    run_case('selective_one_subdirectory', subdir_paths, seldir_root, seldir_io, seldir_stats_before, seldir_stats_after, seldir_elapsed_ms),
+    run_case('full_restore', full_paths, full_root, full_io, full_stats_before, full_stats_after, full_elapsed_ms, full_rss_kb),
+    run_case('selective_single_small_file', single_paths, sel1_root, sel1_io, sel1_stats_before, sel1_stats_after, sel1_elapsed_ms, sel1_rss_kb),
+    run_case('selective_random_100_small_files', rand100_paths, sel100_root, sel100_io, sel100_stats_before, sel100_stats_after, sel100_elapsed_ms, sel100_rss_kb),
+    run_case('selective_one_subdirectory', subdir_paths, seldir_root, seldir_io, seldir_stats_before, seldir_stats_after, seldir_elapsed_ms, seldir_rss_kb),
 ]
 
 for case in cases:
