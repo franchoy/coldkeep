@@ -14,6 +14,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
+	"github.com/franchoy/coldkeep/internal/recovery"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -186,7 +187,7 @@ func TestPhase7BuildDeterministicV17StyleFixtureIntegration(t *testing.T) {
 	}
 
 	var manySmallCount int
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE $1`, filepath.ToSlash(filepath.Join(inputsRoot, "many-small")) + "/%").Scan(&manySmallCount); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file WHERE path LIKE $1`, filepath.ToSlash(filepath.Join(inputsRoot, "many-small"))+"/%").Scan(&manySmallCount); err != nil {
 		t.Fatalf("count many-small fixture paths: %v", err)
 	}
 	if manySmallCount != len(inputSet.manySmallPaths) {
@@ -252,6 +253,134 @@ func TestPhase7BuildDeterministicV17StyleFixtureIntegration(t *testing.T) {
 
 	if inputSet.retainedOriginalHash == inputSet.retainedUpdatedHash {
 		t.Fatal("fixture retained old/new hashes must differ")
+	}
+}
+
+func TestPhase7LegacyOnlyRestoreAndVerifyIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for legacy-only fixture: %v", err)
+	}
+
+	inputsRoot := filepath.Join(tmp, "legacy-only-input")
+	inputSet := createPhase7FixtureInputSet(t, inputsRoot)
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	expectedUniqueHashes := make(map[string]struct{})
+	for _, p := range inputSet.allStorePaths {
+		expectedUniqueHashes[testutils.SHA256File(t, p)] = struct{}{}
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed legacy-only store %s: %v", p, err)
+		}
+	}
+
+	// Convert to legacy-only metadata shape by dropping packed metadata rows.
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete chunk_block_refs for legacy-only fixture: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete storage_blocks for legacy-only fixture: %v", err)
+	}
+
+	var storageBlocksRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlocksRows); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("count storage_blocks rows: %v", err)
+	}
+	if storageBlocksRows != 0 {
+		_ = dbconn.Close()
+		t.Fatalf("expected no storage_blocks rows in legacy-only fixture, got=%d", storageBlocksRows)
+	}
+
+	var chunkBlockRefRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&chunkBlockRefRows); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("count chunk_block_refs rows: %v", err)
+	}
+	if chunkBlockRefRows != 0 {
+		_ = dbconn.Close()
+		t.Fatalf("expected no chunk_block_refs rows in legacy-only fixture, got=%d", chunkBlockRefRows)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before reopen: %v", err)
+	}
+
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("reopen legacy-only repository with v1.8 runtime: %v", err)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after reopen: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	sgctx = storage.StorageContext{
+		DB:           dbconn,
+		ContainerDir: container.ContainersDir,
+	}
+
+	rows, err := dbconn.Query(`
+		SELECT id, file_hash
+		FROM logical_file
+		WHERE status = 'COMPLETED'
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		t.Fatalf("query completed legacy logical files: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	restoreDir := filepath.Join(tmp, "legacy-only-restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy-only restore dir: %v", err)
+	}
+
+	restoredCount := 0
+	for rows.Next() {
+		var fileID int64
+		var wantHash string
+		if err := rows.Scan(&fileID, &wantHash); err != nil {
+			t.Fatalf("scan completed legacy logical file row: %v", err)
+		}
+
+		outPath := filepath.Join(restoreDir, fmt.Sprintf("legacy-%d.bin", fileID))
+		if err := storage.RestoreFileWithStorageContext(sgctx, fileID, outPath); err != nil {
+			t.Fatalf("restore legacy-only file id=%d: %v", fileID, err)
+		}
+
+		gotHash := testutils.SHA256File(t, outPath)
+		if gotHash != wantHash {
+			t.Fatalf("legacy-only restored hash mismatch for file id=%d: got=%s want=%s", fileID, gotHash, wantHash)
+		}
+		if _, ok := expectedUniqueHashes[gotHash]; !ok {
+			t.Fatalf("restored hash not present in seeded legacy fixture: %s", gotHash)
+		}
+		restoredCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate completed legacy logical file rows: %v", err)
+	}
+	if restoredCount != len(expectedUniqueHashes) {
+		t.Fatalf("legacy-only restored logical file count mismatch: got=%d want=%d", restoredCount, len(expectedUniqueHashes))
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("verify failed on legacy-only fixture under v1.8: %v", err)
 	}
 }
 

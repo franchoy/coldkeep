@@ -308,3 +308,22 @@ Reference integration tests:
 - `TestPhase7BuildDeterministicV17StyleFixtureIntegration`
 - `TestPhase7BuildFixtureWithActualV17BinaryIntegration`
 
+## Phase 7 Step 3 Legacy-Only Restore Test (Implemented)
+
+Legacy-only compatibility test scope:
+
+- open a legacy-only repository fixture with v1.8 runtime,
+- restore all completed legacy logical files,
+- compare restored file hashes with persisted logical hashes,
+- run verify (`system`, standard level).
+
+Expected outcome (locked):
+
+- restore succeeds,
+- verify succeeds,
+- packed metadata tables are not required for success in this scenario.
+
+Reference integration test:
+
+- `TestPhase7LegacyOnlyRestoreAndVerifyIntegration`
+
