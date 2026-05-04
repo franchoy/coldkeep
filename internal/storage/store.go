@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,28 @@ import (
 type payloadStatefulWriter interface {
 	AppendPayload(tx db.DBTX, payload []byte) (container.LocalPlacement, error)
 	FinalizeContainer() error
+}
+
+const defaultPackedBlockTargetSizeBytes int64 = 1 << 20
+
+func packedBlockTargetSizeBytesFromEnv() int64 {
+	raw := strings.TrimSpace(os.Getenv("COLDKEEP_PACKED_BLOCK_SIZE_MIB"))
+	if raw == "" {
+		return defaultPackedBlockTargetSizeBytes
+	}
+
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		log.Printf("invalid COLDKEEP_PACKED_BLOCK_SIZE_MIB=%q; using default %d bytes", raw, defaultPackedBlockTargetSizeBytes)
+		return defaultPackedBlockTargetSizeBytes
+	}
+
+	if v > (1<<63-1)/(1<<20) {
+		log.Printf("COLDKEEP_PACKED_BLOCK_SIZE_MIB=%d overflows int64 bytes; using default %d bytes", v, defaultPackedBlockTargetSizeBytes)
+		return defaultPackedBlockTargetSizeBytes
+	}
+
+	return v << 20
 }
 
 // preparedFile is the internal output of the CPU-side preparation phase.
@@ -190,14 +213,13 @@ func commitPreparedChunksWithContext(
 		}
 	}
 
-	const packedBlockTargetSizeBytes int64 = 1 << 20
 	type pendingPackedChunk struct {
 		chunkID  int64
 		hash     string
 		prepared preparedChunk
 	}
 
-	builder := blocks.NewBlockBuilder(packedBlockTargetSizeBytes)
+	builder := blocks.NewBlockBuilder(packedBlockTargetSizeBytesFromEnv())
 	pendingPacked := make([]pendingPackedChunk, 0, 8)
 	pendingPackedHashes := make(map[string]struct{})
 
