@@ -781,7 +781,8 @@ corresponding sequence harness has completed all runs.
 | Small files (B)    | Store MB/s                |          0.175 |          0.174 | −0.6% | = |
 | Small files (B)    | Restore MB/s              |          0.063 |          0.065 | +3.2% | = |
 | Full restore (B)   | Read amplification (×)    |         1.0107 |         1.0107 |   0 % | = |
-| GC partial-live (F)| Retained dead bytes (MiB) |           0.00 |           0.00 |   0 % | = |
+| ~~GC partial-live (F)~~ | ~~Retained dead bytes (MiB)~~ | ~~0.00~~ | ~~0.00~~ | ~~0 %~~ | ~~superseded by F2 — see note in decision record~~ |
+| GC partial-live (F2) | Retained dead bytes (MiB) |           8.47 |          12.67 | +49.6% | +1 MiB — 2 MiB disqualified (>20 % threshold) |
 | Verify (A)         | Wall-clock time (s)       |           9.18 |           9.47 | +3.2% | = (below 15% regression limit) |
 
 **Decision hint key**
@@ -807,13 +808,29 @@ Rationale:
   promotion threshold. Large-file store throughput improved by 2.4% (threshold:
   ≥ 10%). Large-file restore improved by 2.4% (threshold: ≥ 10%). Small-file
   throughput was within noise. Read amplification was identical (1.0107× for
-  both sizes on dataset B). GC retained dead bytes were 0 for both sizes on
-  dataset F. Verify time regressed 3.2% for 2 MiB (threshold allows up to
-  15%). Because section 14 requires ALL five conditions to be satisfied for a
-  switch and condition 1 (≥ 10% throughput improvement on large-file or mixed
-  dataset) was not met, the default is retained at 1 MiB. All correctness
-  gates passed: no hash mismatches, no chunk repacking, dedup incremental
-  ratios identical across block sizes.
+  both sizes on dataset B). GC retained dead bytes: dataset F2 (dedup
+  stress — 20 base/derived file pairs, 1.2 MiB each, all 20 base files
+  deleted) measured 8.47 MiB retained at 1 MiB blocks vs 12.67 MiB at
+  2 MiB blocks — a 49.6 % increase. This exceeds the section 14 condition 3
+  threshold of 20 % and independently disqualifies 2 MiB. Verify time
+  regressed 3.2% for 2 MiB (threshold allows up to 15%). Because section 14
+  requires ALL five conditions to be satisfied for a switch and condition 1
+  (≥ 10% throughput improvement on large-file or mixed dataset) was not met
+  AND condition 3 (GC retention increase ≤ 20%) was violated, the default is
+  retained at 1 MiB. All correctness gates passed: no hash mismatches, no
+  chunk repacking, dedup incremental ratios identical across block sizes.
+
+  Dataset F2 note: the original dataset F used 50 files of 128 KiB with no
+  shared content. Because blocks are sealed per-file, removed files always
+  produced fully-dead blocks, giving retained_dead_bytes = 0 for both
+  block sizes. Dataset F2 was redesigned with 1.2 MiB base/derived pairs
+  sharing ~600 KiB of content; with 1 MiB blocks each base file splits into
+  two blocks (partially live + fully dead), while with 2 MiB blocks the
+  entire file fits in one block (all unique chunks retained in a single
+  partially-live block). This correctly stresses the GC retained-dead metric.
+  Root cause of original 0 values: the harness used `remove --stored-path`
+  (path-mapping removal only) instead of `remove <id>` (full removal with
+  chunk ref-count decrement); this was fixed before F2 runs.
 
 3 MiB status: experimental
 
