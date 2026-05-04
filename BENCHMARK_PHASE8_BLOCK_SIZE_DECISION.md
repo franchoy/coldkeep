@@ -735,3 +735,51 @@ Phase 8 must end with a concise decision record containing:
 4. Explicit statement on 3 MiB status (`experimental` or `promoted`).
 5. Operator-facing note about tradeoffs (throughput vs amplification vs GC
    retention profile).
+
+## 17. Result Table (Fill After Runs Complete)
+
+Record median values from the full benchmark matrix below. The Δ column is
+expressed as `(2 MiB − 1 MiB) / 1 MiB` in percentage points; positive Δ
+favours 2 MiB for throughput metrics and disfavours 2 MiB for cost metrics
+(amplification, retained dead bytes, verify time). Leave cells blank until the
+corresponding sequence harness has completed all runs.
+
+| Dataset            | Metric                    | 1 MiB (median) | 2 MiB (median) | Δ    | Decision hint |
+|:-------------------|:--------------------------|---------------:|---------------:|-----:|:--------------|
+| Large file         | Store MB/s                |                |                |      |               |
+| Large file         | Restore MB/s              |                |                |      |               |
+| Small files        | Store MB/s                |                |                |      |               |
+| Small files        | Restore MB/s              |                |                |      |               |
+| Selective restore  | Read amplification (×)    |                |                |      |               |
+| GC partial-live    | Retained dead bytes (MiB) |                |                |      |               |
+| Verify             | Wall-clock time (s)       |                |                |      |               |
+
+**Decision hint key**
+
+- `+2 MiB` — metric favours 2 MiB by more than the minimum required threshold
+  (see section 14).
+- `+1 MiB` — metric favours 1 MiB or 2 MiB improvement is below threshold.
+- `=` — within noise (< 3 %).
+
+---
+
+### Final Decision Record
+
+> **Fill this section only after all runs are complete and the table above is
+> populated. Do not fill speculatively.**
+
+```
+DefaultBlockSize = X MiB
+
+Rationale:
+  <One paragraph tying the selected value to specific rows in the table above.
+   Reference the section 14 thresholds that were or were not met. State whether
+   3 MiB remains experimental or was promoted.>
+
+3 MiB status: experimental | promoted
+
+Operator note:
+  <Brief statement on the throughput / read-amplification / GC-retention
+   tradeoff that operators should be aware of when overriding the default via
+   COLDKEEP_BLOCK_TARGET_SIZE_MB.>
+```
