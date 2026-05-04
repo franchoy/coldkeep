@@ -379,6 +379,37 @@ Implementation note:
    follows these isolation rules by generating per-run `DB_NAME` and
    `COLDKEEP_STORAGE_DIR` from block size, dataset, and run id.
 
+## 10.1 Store Benchmark Sequence (Locked)
+
+For each `(block_size, dataset, run_id)` tuple, execute this exact order:
+
+1. Fresh repo context:
+   - unique `DB_NAME`
+   - unique `COLDKEEP_STORAGE_DIR`
+   - remove storage dir before the run
+2. Store dataset:
+   - use `store` for single-file datasets
+   - use `store-folder` for directory datasets
+3. Record store elapsed time (wall clock)
+4. Collect stats (`coldkeep stats --output json`)
+5. Run verify (`coldkeep verify system --standard`)
+6. Record verify elapsed time (wall clock)
+
+Mandatory success checks for every run:
+
+- Store command exits `0`
+- Verify command exits `0`
+- `storage_blocks_count > 0`
+- For multi-chunk datasets: `avg_chunks_per_block > 1`
+- Packed block integrity in DB: every `storage_blocks.block_hash` is present
+
+Harness implementation:
+
+- Canonical sequence runner: `scripts/run_phase8_store_sequence.sh`
+- Output artifacts:
+   - `tmp/bench_phase8_store_sequence/*-stats.json`
+   - `tmp/bench_phase8_store_sequence/*-result.json`
+
 ## 11. Metrics to Collect (Locked)
 
 ### Store Metrics
