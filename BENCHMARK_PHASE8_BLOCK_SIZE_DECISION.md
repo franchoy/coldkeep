@@ -445,6 +445,57 @@ Output artifacts:
 - `tmp/bench_phase8_restore_sequence/*-list.json`
 - `tmp/bench_phase8_restore_sequence/*-selection.json`
 
+## 10.3 Dedup Benchmark Sequence (Locked)
+
+Dataset D must run this exact sequence:
+
+1. Store `folder_v1`
+2. Record baseline chunk/block counts
+3. Store `folder_v2` (mostly duplicate content)
+4. Record incremental new chunks/blocks
+5. Restore both folders and validate hashes/tree hashes
+6. Run `verify system --standard`
+
+Expected checks:
+
+- Second store creates far fewer chunks/blocks than baseline
+- Existing chunks are not repacked
+- Restore validation passes for both folders
+
+Definitions:
+
+- `new_chunks_v2 = chunks_after_v2 - chunks_after_v1`
+- `new_blocks_v2 = blocks_after_v2 - blocks_after_v1`
+- Dedup incremental ratios:
+   - `chunk_incremental_ratio = new_chunks_v2 / chunks_after_v1`
+   - `block_incremental_ratio = new_blocks_v2 / blocks_after_v1`
+
+Repack guard:
+
+- Snapshot `chunk_block_refs` mapping after `folder_v1`
+- After `folder_v2`, require unchanged mapping for all pre-existing chunks
+
+Canonical scripts:
+
+- Sequence runner: `scripts/run_phase8_dedup_sequence.sh`
+- Cross-size comparator (1 MiB vs 2 MiB): `scripts/compare_phase8_dedup_results.py`
+
+Cross-size decision requirement:
+
+- Dedup effectiveness should be roughly equivalent between `1 MiB` and `2 MiB`.
+- Chunk identity must remain stable across block-size candidates.
+- If dedup deltas are significant, mark run as `investigate=true` and inspect:
+   - dataset composition drift,
+   - cache state drift,
+   - unexpected write-path differences unrelated to chunking.
+
+Output artifacts:
+
+- `tmp/bench_phase8_dedup_sequence/*-dedup-result.json`
+- `tmp/bench_phase8_dedup_sequence/*-selection.json`
+- `tmp/bench_phase8_dedup_sequence/*-chunk-map-before-v2.tsv`
+- `tmp/bench_phase8_dedup_sequence/*-chunk-map-after-v2.tsv`
+
 ## 11. Metrics to Collect (Locked)
 
 ### Store Metrics
