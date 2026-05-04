@@ -815,3 +815,75 @@ and fix the defect before re-running.
 Anomaly triggers do not automatically stop Phase 8, but the root cause must be
 understood and documented before the decision record is written. If the
 investigation reveals a defect, treat it as a correctness trigger and stop.
+
+## 19. Phase 8 Deliverables
+
+Phase 8 is complete only when every item in this checklist is satisfied and
+committed to the repository.
+
+### 19.1 Benchmark infrastructure
+
+- [ ] **Harness scripts** — all four sequence scripts present and syntax-clean:
+  - `scripts/run_phase8_store_sequence.sh`
+  - `scripts/run_phase8_restore_sequence.sh`
+  - `scripts/run_phase8_dedup_sequence.sh`
+  - `scripts/run_phase8_gc_sequence.sh`
+- [ ] **Comparator scripts** present and import-clean:
+  - `scripts/compare_phase8_dedup_results.py`
+  - `scripts/compare_phase8_gc_results.py`
+  - `scripts/summarize_phase8_blocksize.py`
+- [ ] Each harness enforces **per-run DB + storage isolation** (fresh `DB_NAME`
+  and `COLDKEEP_STORAGE_DIR` per invocation).
+
+### 19.2 Datasets
+
+- [ ] **Repeatable dataset generator** or committed seed files exist for every
+  dataset class used in the matrix (small-files, large-file, mixed,
+  dedup/Dataset D, partial-live/Dataset F).
+- [ ] Dataset generation is deterministic given the same seed; the seed value
+  is recorded alongside results.
+- [ ] Dataset sizes and file-count targets match the values documented in
+  section 10 of this file.
+
+### 19.3 Metrics collection
+
+- [ ] All result artefacts are present under `tmp/bench_phase8_*/` for every
+  `(block_size, dataset, run_id)` triple in the matrix.
+- [ ] `*-stats.json` files contain `block_layout` fields
+  (`storage_blocks_count`, `avg_chunks_per_block`, `avg_block_fill_ratio`).
+- [ ] IO counter JSONL files are present for restore runs
+  (`COLDKEEP_IO_COUNTERS_FILE`).
+- [ ] `*-simulate-gc.json` files contain
+  `data.gc.summary.retained_dead_bytes_due_to_packed_blocks`.
+- [ ] Medians and p95s have been extracted and entered into the result table
+  in section 17.
+
+### 19.4 Decision
+
+- [ ] Section 17 result table is fully populated with median values.
+- [ ] Section 17 Final Decision Record is filled in with:
+  - `DefaultBlockSize` set to the chosen value.
+  - One-paragraph rationale referencing specific table rows and section 14
+    thresholds.
+  - 3 MiB status declared (`experimental` or `promoted`).
+  - Operator note written.
+- [ ] No section 18 investigation trigger was left unresolved when the decision
+  was recorded.
+
+### 19.5 Code changes
+
+- [ ] The chosen default block size is set as the compiled-in default in the
+  relevant Go source file (not only via env override).
+- [ ] `COLDKEEP_BLOCK_TARGET_SIZE_MB` env override is **retained** in the
+  codebase for operator use and future testing; it is documented in
+  `README.md` or operator documentation.
+- [ ] `go test ./... -run TestDoesNotExist -count=1` passes with no compile
+  errors after the default is updated.
+
+### 19.6 Repository hygiene
+
+- [ ] All harness scripts and comparator scripts are committed.
+- [ ] Result artefacts under `tmp/` are **not** committed (covered by
+  `.gitignore`); only summary JSON or the filled section 17 table is committed.
+- [ ] This file (`BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`) reflects the final
+  decision and is committed as part of the v1.8 release record.
