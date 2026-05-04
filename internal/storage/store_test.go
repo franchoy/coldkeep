@@ -273,6 +273,95 @@ func loadPackingSnapshot(t *testing.T, dbconn *sql.DB) packingSnapshot {
 	return snapshot
 }
 
+func TestPackedBlockTargetSizeBytesFromEnv(t *testing.T) {
+	newKey := "COLDKEEP_BLOCK_TARGET_SIZE_MB"
+	legacyKey := "COLDKEEP_PACKED_BLOCK_SIZE_MIB"
+
+	restoreEnv := func() func() {
+		origNew, hasNew := os.LookupEnv(newKey)
+		origLegacy, hasLegacy := os.LookupEnv(legacyKey)
+		return func() {
+			if hasNew {
+				_ = os.Setenv(newKey, origNew)
+			} else {
+				_ = os.Unsetenv(newKey)
+			}
+			if hasLegacy {
+				_ = os.Setenv(legacyKey, origLegacy)
+			} else {
+				_ = os.Unsetenv(legacyKey)
+			}
+		}
+	}
+
+	t.Run("default when no env configured", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		_ = os.Unsetenv(newKey)
+		_ = os.Unsetenv(legacyKey)
+
+		if got := packedBlockTargetSizeBytesFromEnv(); got != defaultPackedBlockTargetSizeBytes {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv default mismatch: got=%d want=%d", got, defaultPackedBlockTargetSizeBytes)
+		}
+	})
+
+	t.Run("uses new env key when valid", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "2")
+		_ = os.Unsetenv(legacyKey)
+
+		const want int64 = 2 << 20
+		if got := packedBlockTargetSizeBytesFromEnv(); got != want {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv new key mismatch: got=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("invalid non-positive values fallback to default", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "0")
+
+		if got := packedBlockTargetSizeBytesFromEnv(); got != defaultPackedBlockTargetSizeBytes {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv invalid value mismatch: got=%d want=%d", got, defaultPackedBlockTargetSizeBytes)
+		}
+	})
+
+	t.Run("values outside benchmark candidate set fallback to default", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "4")
+
+		if got := packedBlockTargetSizeBytesFromEnv(); got != defaultPackedBlockTargetSizeBytes {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv unsupported value mismatch: got=%d want=%d", got, defaultPackedBlockTargetSizeBytes)
+		}
+	})
+
+	t.Run("new key takes precedence over legacy key", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "2")
+		t.Setenv(legacyKey, "3")
+
+		const want int64 = 2 << 20
+		if got := packedBlockTargetSizeBytesFromEnv(); got != want {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv precedence mismatch: got=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("legacy key remains backward compatible when new key is unset", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		_ = os.Unsetenv(newKey)
+		t.Setenv(legacyKey, "2")
+
+		const want int64 = 2 << 20
+		if got := packedBlockTargetSizeBytesFromEnv(); got != want {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv legacy compatibility mismatch: got=%d want=%d", got, want)
+		}
+	})
+}
+
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	service := NewStoreService(nil, nil)
 	resolved, err := service.ResolveActiveChunker()

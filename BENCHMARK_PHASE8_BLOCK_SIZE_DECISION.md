@@ -18,8 +18,15 @@ Optional exploratory set:
 
 Current implementation knob:
 
-- `COLDKEEP_PACKED_BLOCK_SIZE_MIB` controls packed target size at write time.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` controls packed target size at write time.
 - Current code default remains 1 MiB.
+
+Important behavior contract:
+
+- The env override affects new writes only.
+- Existing blocks remain self-describing via per-block metadata (for example
+   `storage_blocks.plaintext_size`).
+- Readers must not assume a global configured block size.
 
 ## 1. Locked Benchmark Question
 

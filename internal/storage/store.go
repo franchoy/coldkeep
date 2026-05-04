@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 type payloadStatefulWriter interface {
@@ -32,25 +32,34 @@ type payloadStatefulWriter interface {
 }
 
 const defaultPackedBlockTargetSizeBytes int64 = 1 << 20
+const defaultPackedBlockTargetSizeMB int64 = 1
 
 func packedBlockTargetSizeBytesFromEnv() int64 {
-	raw := strings.TrimSpace(os.Getenv("COLDKEEP_PACKED_BLOCK_SIZE_MIB"))
-	if raw == "" {
+	blockSizeMB := int64(0)
+	if _, ok := os.LookupEnv("COLDKEEP_BLOCK_TARGET_SIZE_MB"); ok {
+		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_BLOCK_TARGET_SIZE_MB", defaultPackedBlockTargetSizeMB)
+	} else {
+		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_PACKED_BLOCK_SIZE_MIB", defaultPackedBlockTargetSizeMB)
+	}
+
+	if blockSizeMB <= 0 {
+		log.Printf("invalid packed block target size mb=%d; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
 		return defaultPackedBlockTargetSizeBytes
 	}
 
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || v <= 0 {
-		log.Printf("invalid COLDKEEP_PACKED_BLOCK_SIZE_MIB=%q; using default %d bytes", raw, defaultPackedBlockTargetSizeBytes)
+	// Phase 8 benchmarking currently supports only bounded static candidates.
+	// Keep this non-adaptive and constrained until a final default is locked.
+	if blockSizeMB != 1 && blockSizeMB != 2 && blockSizeMB != 3 {
+		log.Printf("unsupported packed block target size mb=%d; allowed values are 1,2,3; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
 		return defaultPackedBlockTargetSizeBytes
 	}
 
-	if v > (1<<63-1)/(1<<20) {
-		log.Printf("COLDKEEP_PACKED_BLOCK_SIZE_MIB=%d overflows int64 bytes; using default %d bytes", v, defaultPackedBlockTargetSizeBytes)
+	if blockSizeMB > (1<<63-1)/(1<<20) {
+		log.Printf("packed block target size mb=%d overflows int64 bytes; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
 		return defaultPackedBlockTargetSizeBytes
 	}
 
-	return v << 20
+	return blockSizeMB << 20
 }
 
 // preparedFile is the internal output of the CPU-side preparation phase.
