@@ -257,3 +257,30 @@ Scope allowed in Phase 2 isolation window:
 - isolated unit tests,
 - design documentation.
 
+## Phase 7 Step 1 Compatibility Contract (Locked)
+
+Phase 7 validates real upgrade behavior from v1.7 repositories to v1.8 runtime.
+
+Mandatory contract:
+
+- v1.8 must read v1.7 repositories.
+- v1.8 must restore v1.7 data byte-identically.
+- v1.8 may write new data using packed blocks.
+- Mixed repositories (legacy + packed) are valid and supported.
+- v1.7 is not required to read repositories that contain v1.8 packed data.
+- Upgrade must not force rewrite of existing v1.7 data.
+
+Phase 7 compatibility evidence must cover all of the following repository states:
+
+- legacy-only repositories,
+- packed-only repositories,
+- mixed legacy + packed repositories,
+- snapshot-retained data after upgrade,
+- GC execution after upgrade.
+
+Canonical upgrade scenario under test:
+
+```text
+v1.7 repository -> opened by v1.8 -> new data added -> restore/verify/GC remain correct
+```
+
