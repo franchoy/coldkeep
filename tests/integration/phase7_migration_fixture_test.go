@@ -605,6 +605,147 @@ func TestPhase7UpgradeAndAddNewDataIntegration(t *testing.T) {
 	`, 0, combinedExpected, "all")
 }
 
+func TestPhase7MixedVerifyAfterUpgradeIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for mixed verify fixture: %v", err)
+	}
+
+	legacyRoot := filepath.Join(tmp, "mixed-verify-legacy-input")
+	legacySet := createPhase7FixtureInputSet(t, legacyRoot)
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	for _, p := range legacySet.allStorePaths {
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed mixed-verify legacy data %s: %v", p, err)
+		}
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete chunk_block_refs before upgrade for mixed verify: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete storage_blocks before upgrade for mixed verify: %v", err)
+	}
+
+	var oldMaxChunkID int64
+	if err := dbconn.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM chunk`).Scan(&oldMaxChunkID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query old max chunk id for mixed verify: %v", err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before mixed verify upgrade reopen: %v", err)
+	}
+
+	if err := recovery.SystemRecoveryWithContainersDir(container.ContainersDir); err != nil {
+		t.Fatalf("open mixed verify legacy repository with v1.8 runtime: %v", err)
+	}
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after mixed verify reopen: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	newRoot := filepath.Join(tmp, "mixed-verify-new-input")
+	newFilePath := filepath.Join(newRoot, "mixed-verify-new-file.bin")
+	writeDeterministicFileWithSalt(t, newFilePath, 2*1024*1024+321, 2201)
+
+	newFolderPath := filepath.Join(newRoot, "mixed-verify-folder")
+	for i := 0; i < 8; i++ {
+		p := filepath.Join(newFolderPath, fmt.Sprintf("verify-new-%02d.dat", i))
+		writeDeterministicFileWithSalt(t, p, 3072+(i*197), 2300+i)
+	}
+
+	sgctx = storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, newFilePath, blocks.CodecPlain, false); err != nil {
+		t.Fatalf("store mixed-verify new file after upgrade: %v", err)
+	}
+	if err := storage.StoreFolderWithStorageContext(sgctx, newFolderPath); err != nil {
+		t.Fatalf("store mixed-verify new folder after upgrade: %v", err)
+	}
+
+	var legacyBlocksRows int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		WHERE c.id <= $1
+	`, oldMaxChunkID).Scan(&legacyBlocksRows); err != nil {
+		t.Fatalf("count legacy blocks rows in mixed verify fixture: %v", err)
+	}
+	if legacyBlocksRows == 0 {
+		t.Fatal("expected mixed repository to contain legacy blocks rows")
+	}
+
+	var packedBlocksRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&packedBlocksRows); err != nil {
+		t.Fatalf("count storage_blocks rows in mixed verify fixture: %v", err)
+	}
+	if packedBlocksRows == 0 {
+		t.Fatal("expected mixed repository to contain packed storage_blocks rows")
+	}
+
+	var packedRefsRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&packedRefsRows); err != nil {
+		t.Fatalf("count chunk_block_refs rows in mixed verify fixture: %v", err)
+	}
+	if packedRefsRows == 0 {
+		t.Fatal("expected mixed repository to contain chunk_block_refs rows")
+	}
+
+	var oldChunksUsingPacked int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.id <= $1
+	`, oldMaxChunkID).Scan(&oldChunksUsingPacked); err != nil {
+		t.Fatalf("count old chunks unexpectedly using packed refs: %v", err)
+	}
+	if oldChunksUsingPacked != 0 {
+		t.Fatalf("expected old legacy chunks to avoid packed refs, got=%d", oldChunksUsingPacked)
+	}
+
+	var newChunksUsingPacked int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk c
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.id > $1
+	`, oldMaxChunkID).Scan(&newChunksUsingPacked); err != nil {
+		t.Fatalf("count new chunks using packed refs: %v", err)
+	}
+	if newChunksUsingPacked == 0 {
+		t.Fatal("expected new chunks to use packed refs in mixed repository")
+	}
+
+	// Enforce strict table/segment matching in verify for stronger encoded-table coverage.
+	t.Setenv("COLDKEEP_VERIFY_STRICT_SEGMENTS", "1")
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("mixed verify after upgrade failed: %v", err)
+	}
+}
+
 func TestPhase7BuildFixtureWithActualV17BinaryIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 

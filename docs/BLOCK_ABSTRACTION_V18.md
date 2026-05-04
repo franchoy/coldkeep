@@ -349,3 +349,27 @@ Reference integration test:
 
 - `TestPhase7UpgradeAndAddNewDataIntegration`
 
+## Phase 7 Step 5 Mixed Verify Test (Implemented)
+
+Scenario:
+
+- Start from an upgraded mixed repository (legacy data + newly packed data).
+- Run system verify in v1.8.
+
+Verify must validate:
+
+- legacy blocks,
+- packed blocks,
+- `chunk_block_refs`,
+- `block_hash`,
+- encoded block table,
+- decoded chunk-slice hashes.
+
+Expected outcome (locked):
+
+- verify passes cleanly.
+
+Reference integration test:
+
+- `TestPhase7MixedVerifyAfterUpgradeIntegration`
+
