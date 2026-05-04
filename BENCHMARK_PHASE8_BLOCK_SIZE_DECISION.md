@@ -674,18 +674,40 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 14. Decision Rule
+## 14. Decision Rule (Locked)
 
-Primary decision is 1 MiB vs 2 MiB.
+This section is locked. Do not revise after the benchmark run begins.
 
-Choose 2 MiB only if it is clearly better on overall balance, meaning:
+### Default rule
 
-1. Throughput improvement is consistent across store and restore workloads.
-2. GC retained dead-space impact is acceptable and explicitly quantified.
-3. Verify cost and tail latency do not regress materially.
-4. Memory pressure increase is bounded and acceptable for expected operators.
+Keep `1 MiB` unless `2 MiB` shows clear benefit.
 
-Otherwise, keep 1 MiB as default.
+### Switch to 2 MiB only if ALL of the following are true
+
+1. `2 MiB` improves large-file or mixed store **or** restore throughput by
+   **≥ 10%** (median across the run matrix) compared to `1 MiB`.
+2. `2 MiB` does **not** increase selective-restore read amplification to an
+   unacceptable level (decision: any increase > 20% over `1 MiB` disqualifies).
+3. `2 MiB` does **not** significantly increase `retained_dead_bytes_due_to_packed_blocks`
+   after GC (decision: an increase > 20% over `1 MiB` disqualifies).
+4. `2 MiB` verify time remains acceptable (no regression > 15% vs `1 MiB`).
+5. Memory and latency impact is within acceptable bounds for expected operators.
+
+All five conditions must hold simultaneously. A single disqualifier retains
+`1 MiB` as the default.
+
+### Tie-breaking and mixed results
+
+If results are mixed, close, or inconclusive across any dimension:
+
+- Choose `1 MiB`.
+
+### Rationale
+
+`1 MiB` is safer, more granular, produces lower over-read on selective restore,
+carries lower GC retention risk (partially-live blocks waste fewer bytes), and
+has a longer operational track record. The burden of proof is on `2 MiB` to
+demonstrate clear, consistent benefit that outweighs these structural advantages.
 
 ## 15. 3 MiB Policy (Experimental Only)
 
