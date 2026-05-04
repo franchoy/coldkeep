@@ -128,6 +128,10 @@ export COLDKEEP_DB_OPERATION_TIMEOUT_MS="${COLDKEEP_DB_OPERATION_TIMEOUT_MS:-180
 # 1) initialize fresh repo context
 rm -rf "$RUN_STORAGE_DIR"
 
+# drop and recreate the run DB to ensure a clean state
+PGPASSWORD="$DB_PASSWORD" dropdb --if-exists -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$RUN_DB_NAME" 2>/dev/null || true
+PGPASSWORD="$DB_PASSWORD" createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$RUN_DB_NAME"
+
 store_cmd=("$COLDKEEP_BIN")
 if [[ -d "$DATASET_PATH" ]]; then
 	store_cmd+=("store-folder" "$DATASET_PATH")

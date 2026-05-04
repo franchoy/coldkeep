@@ -169,6 +169,8 @@ PY
 
 # Fresh isolated run context.
 rm -rf "$RUN_STORAGE_DIR" "$RESTORE_V1_ROOT" "$RESTORE_V2_ROOT"
+PGPASSWORD="$DB_PASSWORD" dropdb --if-exists -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$RUN_DB_NAME" 2>/dev/null || true
+PGPASSWORD="$DB_PASSWORD" createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$RUN_DB_NAME"
 mkdir -p "$RESTORE_V1_ROOT" "$RESTORE_V2_ROOT"
 
 # 1) store folder_v1
