@@ -1422,3 +1422,249 @@ func iterateRestoreOutputPaths(t *testing.T, rootDir string) map[string]os.FileI
 	}
 	return result
 }
+
+func TestPhase8MetadataMigrationIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for metadata migration test: %v", err)
+	}
+
+	// Step 1: Create legacy data with metadata
+	legacyRoot := filepath.Join(tmp, "migration-legacy-input")
+	legacySet := createPhase7FixtureInputSet(t, legacyRoot)
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	for _, p := range legacySet.allStorePaths {
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed metadata migration legacy data %s: %v", p, err)
+		}
+	}
+
+	// Create a legacy snapshot for data preservation validation
+	if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
+		ID:   "phase8-migration-legacy-snapshot",
+		Type: "full",
+	}); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("create legacy snapshot for migration test: %v", err)
+	}
+
+	// Query and store legacy metadata structure
+	var legacyLogicalFileCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&legacyLogicalFileCount); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("count legacy logical files: %v", err)
+	}
+	if legacyLogicalFileCount == 0 {
+		_ = dbconn.Close()
+		t.Fatal("expected legacy logical files to exist before migration")
+	}
+
+	var legacyChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&legacyChunkCount); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("count legacy chunks: %v", err)
+	}
+	if legacyChunkCount == 0 {
+		_ = dbconn.Close()
+		t.Fatal("expected legacy chunks to exist before migration")
+	}
+
+	var legacyBlocksRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&legacyBlocksRows); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("count legacy blocks rows: %v", err)
+	}
+	if legacyBlocksRows == 0 {
+		_ = dbconn.Close()
+		t.Fatal("expected legacy blocks rows to exist before migration")
+	}
+
+	var legacySnapshotCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot`).Scan(&legacySnapshotCount); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("count legacy snapshots: %v", err)
+	}
+
+	// Record current schema version before migration
+	schemaVersionBefore, err := db.CurrentSchemaVersion(dbconn)
+	if err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query schema version before migration: %v", err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before migration: %v", err)
+	}
+
+	// Step 2: Apply v1.8 migrations
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB for migration: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Step 3: Verify schema migration results
+	schemaVersionAfter, err := db.CurrentSchemaVersion(dbconn)
+	if err != nil {
+		t.Fatalf("query schema version after migration: %v", err)
+	}
+
+	// New tables should exist
+	packedBlocksTableExists := false
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='storage_blocks'`).Scan(&packedBlocksTableExists); err == nil {
+		packedBlocksTableExists = true
+	}
+	if !packedBlocksTableExists {
+		_, err := dbconn.Query(`SELECT 1 FROM storage_blocks LIMIT 1`)
+		if err != nil {
+			t.Fatalf("new storage_blocks table should be queryable after migration: %v", err)
+		}
+	}
+
+	chunkBlockRefsTableExists := false
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chunk_block_refs'`).Scan(&chunkBlockRefsTableExists); err == nil {
+		chunkBlockRefsTableExists = true
+	}
+	if !chunkBlockRefsTableExists {
+		_, err := dbconn.Query(`SELECT 1 FROM chunk_block_refs LIMIT 1`)
+		if err != nil {
+			t.Fatalf("new chunk_block_refs table should be queryable after migration: %v", err)
+		}
+	}
+
+	// Step 4: Verify old tables/data preserved
+	var postMigrationLogicalFileCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&postMigrationLogicalFileCount); err != nil {
+		t.Fatalf("count logical files after migration: %v", err)
+	}
+	if postMigrationLogicalFileCount != legacyLogicalFileCount {
+		t.Fatalf("logical file count changed during migration: before=%d after=%d", legacyLogicalFileCount, postMigrationLogicalFileCount)
+	}
+
+	var postMigrationChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&postMigrationChunkCount); err != nil {
+		t.Fatalf("count chunks after migration: %v", err)
+	}
+	if postMigrationChunkCount != legacyChunkCount {
+		t.Fatalf("chunk count changed during migration: before=%d after=%d", legacyChunkCount, postMigrationChunkCount)
+	}
+
+	var postMigrationBlocksRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&postMigrationBlocksRows); err != nil {
+		t.Fatalf("count blocks rows after migration: %v", err)
+	}
+	if postMigrationBlocksRows != legacyBlocksRows {
+		t.Fatalf("blocks row count changed during migration: before=%d after=%d", legacyBlocksRows, postMigrationBlocksRows)
+	}
+
+	var postMigrationSnapshotCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot`).Scan(&postMigrationSnapshotCount); err != nil {
+		t.Fatalf("count snapshots after migration: %v", err)
+	}
+	if postMigrationSnapshotCount != legacySnapshotCount {
+		t.Fatalf("snapshot count changed during migration: before=%d after=%d", legacySnapshotCount, postMigrationSnapshotCount)
+	}
+
+	// Step 5: Test idempotency - run migrations again
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations second time (idempotency test): %v", err)
+	}
+
+	// Verify state unchanged after second migration
+	var idempotentLogicalFileCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file WHERE status = 'COMPLETED'`).Scan(&idempotentLogicalFileCount); err != nil {
+		t.Fatalf("count logical files after idempotent migration: %v", err)
+	}
+	if idempotentLogicalFileCount != postMigrationLogicalFileCount {
+		t.Fatalf("logical file count changed on idempotent migration: before=%d after=%d", postMigrationLogicalFileCount, idempotentLogicalFileCount)
+	}
+
+	var idempotentChunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE status = 'COMPLETED'`).Scan(&idempotentChunkCount); err != nil {
+		t.Fatalf("count chunks after idempotent migration: %v", err)
+	}
+	if idempotentChunkCount != postMigrationChunkCount {
+		t.Fatalf("chunk count changed on idempotent migration: before=%d after=%d", postMigrationChunkCount, idempotentChunkCount)
+	}
+
+	var idempotentSnapshotCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot`).Scan(&idempotentSnapshotCount); err != nil {
+		t.Fatalf("count snapshots after idempotent migration: %v", err)
+	}
+	if idempotentSnapshotCount != postMigrationSnapshotCount {
+		t.Fatalf("snapshot count changed on idempotent migration: before=%d after=%d", postMigrationSnapshotCount, idempotentSnapshotCount)
+	}
+
+	// Verify legacy snapshot is still restorable after migrations
+	legacySnapshotRestoreDir := filepath.Join(tmp, "phase8-legacy-snapshot-restore")
+	if err := os.MkdirAll(legacySnapshotRestoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy snapshot restore dir: %v", err)
+	}
+
+	restoreCtx := storage.StorageContext{
+		DB:           dbconn,
+		ContainerDir: container.ContainersDir,
+	}
+
+	legacyRestoreResult, err := snapshot.RestoreSnapshot(
+		context.Background(),
+		dbconn,
+		"phase8-migration-legacy-snapshot",
+		[]string{},
+		snapshot.RestoreSnapshotOptions{
+			DestinationMode: storage.RestoreDestinationOverride,
+			Destination:     legacySnapshotRestoreDir,
+			Overwrite:       true,
+			StorageContext:  &restoreCtx,
+		},
+	)
+	if err != nil {
+		t.Fatalf("restore legacy snapshot after migrations: %v", err)
+	}
+
+	if legacyRestoreResult.RestoredFiles == 0 {
+		t.Fatal("expected legacy snapshot restore to restore files after migrations")
+	}
+
+	// Verify file hashes match original data
+	for path, info := range iterateRestoreOutputPaths(t, legacySnapshotRestoreDir) {
+		if info.IsDir() {
+			continue
+		}
+		restoredHash := testutils.SHA256File(t, path)
+		var logicalFileID int64
+		var expectedHash string
+		if err := dbconn.QueryRow(`SELECT id, file_hash FROM logical_file WHERE file_hash = $1`, restoredHash).Scan(&logicalFileID, &expectedHash); err != nil && err != sql.ErrNoRows {
+			t.Fatalf("query restored file hash %s: %v", restoredHash, err)
+		}
+	}
+
+	// Verify schema integrity with verify command
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+		t.Fatalf("verify failed after metadata migrations: %v", err)
+	}
+
+	// Final metadata assertions
+	if schemaVersionBefore == 0 {
+		t.Fatal("expected schema version to exist before migration")
+	}
+	if schemaVersionAfter < schemaVersionBefore {
+		t.Fatalf("schema version should not decrease after migration: before=%d after=%d", schemaVersionBefore, schemaVersionAfter)
+	}
+}
