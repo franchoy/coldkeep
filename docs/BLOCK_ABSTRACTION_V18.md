@@ -284,3 +284,27 @@ Canonical upgrade scenario under test:
 v1.7 repository -> opened by v1.8 -> new data added -> restore/verify/GC remain correct
 ```
 
+## Phase 7 Step 2 Fixture Strategy (Implemented)
+
+Deterministic compatibility fixture generation is implemented in integration tests.
+
+Primary path (default):
+
+- Use v1.8 test/runtime helpers to seed fixture data with v1-style chunker metadata and legacy `blocks` companion rows.
+- Fixture shape includes:
+  - one large file,
+  - many small files,
+  - duplicate-content files,
+  - full snapshot creation,
+  - one file replaced after snapshot to create a deleted-in-current-but-snapshot-retained logical file.
+
+Optional path (if available):
+
+- Use an actual released v1.7 binary to build the fixture, then validate with v1.8 verify/GC.
+- Controlled by env var `COLDKEEP_V17_BIN` in integration tests.
+
+Reference integration tests:
+
+- `TestPhase7BuildDeterministicV17StyleFixtureIntegration`
+- `TestPhase7BuildFixtureWithActualV17BinaryIntegration`
+
