@@ -19,6 +19,18 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## [Unreleased]
+
+### Compatibility notes (v1.8 packed-block transition)
+
+- v1.8 reads existing v1.7 repositories.
+- New writes performed by v1.8 use packed blocks (`storage_blocks` + `chunk_block_refs`).
+- Mixed repositories containing legacy v1.7 data and v1.8 packed-block data are expected steady-state.
+- v1.7 is not expected to read v1.8 packed-block data.
+- Existing v1.7 data is not automatically rewritten during upgrade.
+
+------------------------------------------------------------------------
+
 ## [1.7.0] - 2026-05-02
 
 Deterministic Performance Foundation milestone.

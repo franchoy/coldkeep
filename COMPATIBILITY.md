@@ -109,6 +109,20 @@ Practical consequence:
 
 ## Versioning Rules
 
+### v1.8 Packed-Block Compatibility Clarification
+
+Contract:
+
+- v1.8 reads repositories created by v1.7.
+- New writes made by v1.8 use packed-block metadata (`storage_blocks`, `chunk_block_refs`).
+- Repositories that contain both legacy v1.7 data and v1.8 packed-block data are expected.
+- v1.7 must not be assumed to read v1.8 packed-block data.
+- Upgrading to v1.8 does not automatically rewrite existing v1.7 data.
+
+Practical consequence:
+
+- Operators can upgrade safely without forced rewrite, continue restoring historical data, and accept mixed-layout repositories as normal.
+
 Chunker evolution model:
 
 Current chunker versions include:

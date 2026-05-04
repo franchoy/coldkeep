@@ -61,6 +61,8 @@ Design intent:
 
 - `storage_blocks` is the canonical v1.8 packed-block table name in design docs and planning.
 - Legacy `blocks` remains part of compatibility read-path support for mixed repositories.
+- v1.8 reads v1.7 repositories; v1.7 is not expected to read v1.8 packed-block data.
+- New data written by v1.8 uses packed blocks; existing v1.7 data is not auto-rewritten.
 
 ## Phase 1 Step 4 Target Schema (Locked)
 
