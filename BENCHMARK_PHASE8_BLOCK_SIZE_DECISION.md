@@ -964,3 +964,20 @@ committed. Items are grouped by concern; check them in order.
 - [ ] DB-backed compatibility tests still pass after the default is updated.
 - [ ] No correctness regressions found (all restore hashes match sources across
   all tested configurations).
+
+### 20.6 Recommended final validation commands
+
+Run all four commands in order after the default block size is set in source.
+All must exit 0 before Phase 8 is closed.
+
+```bash
+go test -count=1 ./...
+go test -race ./...
+COLDKEEP_TEST_DB=1 go test -count=1 ./...
+COLDKEEP_TEST_DB=1 go test -race ./...
+```
+
+---
+
+> **Phase 8 is complete only when the default block size is chosen and
+> justified by reproducible benchmark data.**
