@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -1667,4 +1669,199 @@ func TestPhase8MetadataMigrationIntegration(t *testing.T) {
 	if schemaVersionAfter < schemaVersionBefore {
 		t.Fatalf("schema version should not decrease after migration: before=%d after=%d", schemaVersionBefore, schemaVersionAfter)
 	}
+}
+
+func TestPhase9CLICompatibilityIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := prepareReadPathRegressionRepo(t)
+	setRepoChunkerVersion(t, chunk.VersionV1SimpleRolling)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect DB for CLI compatibility test: %v", err)
+	}
+
+	// Build the coldkeep binary for CLI testing
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := filepath.Join(tmp, "coldkeep-binary")
+	buildCmd := []string{"go", "build", "-o", binPath, filepath.Join(repoRoot, "cmd/coldkeep")}
+	if err := runCommandSilent(buildCmd[0], buildCmd[1:]...); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("build coldkeep binary: %v", err)
+	}
+
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	// Step 1: Create legacy data with metadata
+	cliRoot := filepath.Join(tmp, "cli-repo")
+	if err := os.MkdirAll(cliRoot, 0o755); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("mkdir cli-repo: %v", err)
+	}
+
+	legacyInputRoot := filepath.Join(cliRoot, "legacy-input")
+	legacySet := createPhase7FixtureInputSet(t, legacyInputRoot)
+	legacyExpectedHashes := make(map[string]struct{})
+
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+
+	for _, p := range legacySet.allStorePaths {
+		legacyExpectedHashes[testutils.SHA256File(t, p)] = struct{}{}
+		if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, p, blocks.CodecPlain, false); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("seed CLI test legacy data %s: %v", p, err)
+		}
+	}
+
+	// Emulate pre-upgrade legacy state by removing packed metadata
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete chunk_block_refs for CLI test: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM storage_blocks`); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("delete storage_blocks for CLI test: %v", err)
+	}
+
+	var legacyLogicalID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE path = $1 LIMIT 1`, filepath.ToSlash(legacySet.largePath)).Scan(&legacyLogicalID); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query legacy large file logical id: %v", err)
+	}
+
+	if err := dbconn.Close(); err != nil {
+		t.Fatalf("close db before CLI upgrade: %v", err)
+	}
+
+	// Step 2: Run coldkeep verify on legacy repo
+	verifyRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify")
+	if verifyRes.ExitCode != 0 {
+		t.Fatalf("coldkeep verify failed on legacy repo: exit=%d stderr=%s", verifyRes.ExitCode, verifyRes.Stderr)
+	}
+
+	// Step 3: Run coldkeep restore for legacy file
+	legacyRestoreOut := filepath.Join(cliRoot, "restored-legacy.bin")
+	restoreRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "restore", fmt.Sprintf("%d", legacyLogicalID), legacyRestoreOut, "--overwrite")
+	if restoreRes.ExitCode != 0 {
+		t.Fatalf("coldkeep restore failed for legacy file: exit=%d stderr=%s", restoreRes.ExitCode, restoreRes.Stderr)
+	}
+
+	legacyRestoredHash := testutils.SHA256File(t, legacyRestoreOut)
+	if legacyRestoredHash != legacySet.largeHash {
+		t.Fatalf("legacy restored hash mismatch: got=%s want=%s", legacyRestoredHash, legacySet.largeHash)
+	}
+
+	// Step 4: Run coldkeep store for new data
+	packedInputRoot := filepath.Join(cliRoot, "packed-input")
+	if err := os.MkdirAll(packedInputRoot, 0o755); err != nil {
+		t.Fatalf("mkdir packed-input: %v", err)
+	}
+
+	newFilePath := filepath.Join(packedInputRoot, "new-file-cli.bin")
+	writeDeterministicFileWithSalt(t, newFilePath, 2*1024*1024+789, 5001)
+	newFileHash := testutils.SHA256File(t, newFilePath)
+
+	newFolderPath := filepath.Join(packedInputRoot, "new-folder-cli")
+	newFolderFiles := make([]string, 0, 5)
+	newFolderHashes := make(map[string]struct{})
+	for i := 0; i < 5; i++ {
+		p := filepath.Join(newFolderPath, fmt.Sprintf("file-%02d.dat", i))
+		writeDeterministicFileWithSalt(t, p, 512000+(i*100), 5100+i)
+		newFolderFiles = append(newFolderFiles, p)
+		newFolderHashes[testutils.SHA256File(t, p)] = struct{}{}
+	}
+
+	storeFileRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", newFilePath)
+	if storeFileRes.ExitCode != 0 {
+		t.Fatalf("coldkeep store file failed: exit=%d stderr=%s", storeFileRes.ExitCode, storeFileRes.Stderr)
+	}
+
+	storeFolderRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", newFolderPath)
+	if storeFolderRes.ExitCode != 0 {
+		t.Fatalf("coldkeep store folder failed: exit=%d stderr=%s", storeFolderRes.ExitCode, storeFolderRes.Stderr)
+	}
+
+	// Query new file ID after store
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("reconnect DB after CLI store: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	var newLogicalID int64
+	if err := dbconn.QueryRow(`SELECT id FROM logical_file WHERE file_hash = $1 LIMIT 1`, newFileHash).Scan(&newLogicalID); err != nil {
+		t.Fatalf("query new file logical id: %v", err)
+	}
+
+	// Step 5: Run coldkeep restore for new file
+	newRestoreOut := filepath.Join(cliRoot, "restored-new.bin")
+	restoreNewRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "restore", fmt.Sprintf("%d", newLogicalID), newRestoreOut, "--overwrite")
+	if restoreNewRes.ExitCode != 0 {
+		t.Fatalf("coldkeep restore failed for new file: exit=%d stderr=%s", restoreNewRes.ExitCode, restoreNewRes.Stderr)
+	}
+
+	newRestoredHash := testutils.SHA256File(t, newRestoreOut)
+	if newRestoredHash != newFileHash {
+		t.Fatalf("new restored hash mismatch: got=%s want=%s", newRestoredHash, newFileHash)
+	}
+
+	// Step 6: Run coldkeep verify after mixed operations
+	verifyRes2 := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify")
+	if verifyRes2.ExitCode != 0 {
+		t.Fatalf("coldkeep verify failed after mixed operations: exit=%d stderr=%s", verifyRes2.ExitCode, verifyRes2.Stderr)
+	}
+
+	// Step 7: Run coldkeep gc --dry-run
+	gcDryRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc", "--dry-run")
+	if gcDryRes.ExitCode != 0 {
+		t.Fatalf("coldkeep gc --dry-run failed: exit=%d stderr=%s", gcDryRes.ExitCode, gcDryRes.Stderr)
+	}
+
+	// Step 8: Run coldkeep gc (real)
+	gcRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "gc")
+	if gcRes.ExitCode != 0 {
+		t.Fatalf("coldkeep gc failed: exit=%d stderr=%s", gcRes.ExitCode, gcRes.Stderr)
+	}
+
+	// Step 9: Run coldkeep verify after GC
+	verifyRes3 := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "verify")
+	if verifyRes3.ExitCode != 0 {
+		t.Fatalf("coldkeep verify failed after GC: exit=%d stderr=%s", verifyRes3.ExitCode, verifyRes3.Stderr)
+	}
+
+	// Final validation: restore both files again and verify hashes
+	legacyRestoreOut2 := filepath.Join(cliRoot, "restored-legacy-post-gc.bin")
+	restoreLegacyPostGCRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "restore", fmt.Sprintf("%d", legacyLogicalID), legacyRestoreOut2, "--overwrite")
+	if restoreLegacyPostGCRes.ExitCode != 0 {
+		t.Fatalf("coldkeep restore legacy post-GC failed: exit=%d stderr=%s", restoreLegacyPostGCRes.ExitCode, restoreLegacyPostGCRes.Stderr)
+	}
+
+	legacyRestoredHash2 := testutils.SHA256File(t, legacyRestoreOut2)
+	if legacyRestoredHash2 != legacySet.largeHash {
+		t.Fatalf("legacy post-GC restored hash mismatch: got=%s want=%s", legacyRestoredHash2, legacySet.largeHash)
+	}
+
+	newRestoreOut2 := filepath.Join(cliRoot, "restored-new-post-gc.bin")
+	restoreNewPostGCRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "restore", fmt.Sprintf("%d", newLogicalID), newRestoreOut2, "--overwrite")
+	if restoreNewPostGCRes.ExitCode != 0 {
+		t.Fatalf("coldkeep restore new post-GC failed: exit=%d stderr=%s", restoreNewPostGCRes.ExitCode, restoreNewPostGCRes.Stderr)
+	}
+
+	newRestoredHash2 := testutils.SHA256File(t, newRestoreOut2)
+	if newRestoredHash2 != newFileHash {
+		t.Fatalf("new post-GC restored hash mismatch: got=%s want=%s", newRestoredHash2, newFileHash)
+	}
+}
+
+func runCommandSilent(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	return cmd.Run()
 }
