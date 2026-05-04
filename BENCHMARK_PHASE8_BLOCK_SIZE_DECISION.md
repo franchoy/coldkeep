@@ -150,7 +150,120 @@ Why this is mandatory:
 - Restore behavior becomes noisy because physical block composition differs by
    prior-run history, not only by current candidate policy.
 
-## 7. Safety and Correctness Gates (Must Stay True)
+## 7. Dataset Matrix (A-F)
+
+Multiple datasets are mandatory because block-size trade-offs differ by
+workload.
+
+### Dataset A - Large Sequential File
+
+Purpose:
+
+- Measure sequential store/restore throughput and block-read reduction behavior.
+
+Shape:
+
+- 1 file sized 1-4 GiB.
+
+Content options:
+
+- random-ish binary
+- moderately compressible generated content
+
+Note:
+
+- v1.8 does not enable compression for packed-block write path, but including
+   a compressibility-oriented variant is useful for v1.9 readiness signals.
+
+### Dataset B - Many Small Files
+
+Purpose:
+
+- Measure small-file packing efficiency and restore locality effects.
+
+Shape:
+
+- 10,000-100,000 files
+- file sizes 1 KiB-64 KiB
+- directory depth 3-5 levels
+
+Expected trade-off signal:
+
+- larger target blocks may reduce block count
+- smaller target blocks may reduce selective-restore over-read
+
+### Dataset C - Mixed Realistic Folder (Priority)
+
+Purpose:
+
+- Simulate real cold-backup behavior under mixed content classes.
+
+Shape (single source tree with mix):
+
+- small text and config files
+- medium photos and documents
+- large archive, video, or database dump files
+- duplicate subtrees
+
+Priority:
+
+- This is the highest-priority dataset for final default decision weight.
+
+### Dataset D - Dedup-Heavy Workload
+
+Purpose:
+
+- Ensure dedup effectiveness remains intact and block packing does not repack
+   existing duplicate content unnecessarily.
+
+Shape:
+
+- `folder_v1/`
+- `folder_v2/` with 80-95% shared content vs `folder_v1/`
+
+Measurement rule:
+
+- Record second-ingestion metrics separately from first-ingestion metrics.
+
+### Dataset E - Selective Restore and Over-Read
+
+Purpose:
+
+- Quantify selective-restore penalty from larger packed blocks.
+
+Shape:
+
+- Store many small files, then run selective restores:
+   - restore one file
+   - restore 100 random files
+   - restore one nested directory
+
+Interpretation:
+
+- This dataset is a primary guardrail against hidden read-amplification cost.
+
+### Dataset F - GC Partially-Live Packed Blocks
+
+Purpose:
+
+- Measure retained dead space caused by whole-block GC atomicity.
+
+Shape:
+
+- Store 10,000 small files
+- delete 50% randomly
+- run GC
+
+Required outputs:
+
+- bytes reclaimable
+- bytes retained due to partially-live blocks
+
+Decision weight:
+
+- This dataset is critical for the 1 MiB vs 2 MiB choice.
+
+## 8. Safety and Correctness Gates (Must Stay True)
 
 These are hard gates for all candidates:
 
@@ -163,7 +276,7 @@ These are hard gates for all candidates:
 
 If a candidate violates any gate, it is disqualified regardless of speed.
 
-## 8. Decision Rule
+## 9. Decision Rule
 
 Primary decision is 1 MiB vs 2 MiB.
 
@@ -176,7 +289,7 @@ Choose 2 MiB only if it is clearly better on overall balance, meaning:
 
 Otherwise, keep 1 MiB as default.
 
-## 9. 3 MiB Policy (Experimental Only)
+## 10. 3 MiB Policy (Experimental Only)
 
 3 MiB may be evaluated, but it is not a default candidate unless evidence is
 overwhelmingly positive.
@@ -192,7 +305,7 @@ overwhelmingly positive.
 If any of the above is not met, 3 MiB remains experimental and is not selected
 as v1.8 default.
 
-## 10. Required Final Output
+## 11. Required Final Output
 
 Phase 8 must end with a concise decision record containing:
 
