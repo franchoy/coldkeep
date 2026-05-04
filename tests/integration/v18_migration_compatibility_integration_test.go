@@ -1517,7 +1517,7 @@ func TestPhase8MetadataMigrationIntegration(t *testing.T) {
 	}
 	defer func() { _ = dbconn.Close() }()
 
-	if err := db.RunMigrations(dbconn); err != nil {
+	if err := db.EnsureSchema(dbconn); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
 
@@ -1584,7 +1584,7 @@ func TestPhase8MetadataMigrationIntegration(t *testing.T) {
 	}
 
 	// Step 5: Test idempotency - run migrations again
-	if err := db.RunMigrations(dbconn); err != nil {
+	if err := db.EnsureSchema(dbconn); err != nil {
 		t.Fatalf("run migrations second time (idempotency test): %v", err)
 	}
 
@@ -1630,7 +1630,7 @@ func TestPhase8MetadataMigrationIntegration(t *testing.T) {
 		"phase8-migration-legacy-snapshot",
 		[]string{},
 		snapshot.RestoreSnapshotOptions{
-			DestinationMode: storage.RestoreDestinationOverride,
+			DestinationMode: storage.RestoreDestinationPrefix,
 			Destination:     legacySnapshotRestoreDir,
 			Overwrite:       true,
 			StorageContext:  &restoreCtx,

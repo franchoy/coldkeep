@@ -729,6 +729,24 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 	return nil
 }
 
+// EnsureSchema applies/validates schema using the active backend.
+// SQLite: applies embedded schema migrations.
+// Postgres: validates or bootstraps schema and enforces minimum version.
+func EnsureSchema(dbconn *sql.DB) error {
+	if dbconn == nil {
+		return errors.New("nil DB connection")
+	}
+
+	switch backend := BackendFromDB(dbconn); backend {
+	case BackendSQLite:
+		return RunMigrations(dbconn)
+	case BackendPostgres:
+		return EnsurePostgresSchema(dbconn)
+	default:
+		return fmt.Errorf("EnsureSchema does not support backend %s", backend)
+	}
+}
+
 // RunMigrations applies the embedded SQLite schema to a DB connection.
 // It is intended for simulated/local SQLite contexts only.
 func RunMigrations(dbconn *sql.DB) error {

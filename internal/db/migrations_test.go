@@ -39,6 +39,13 @@ func TestEnsurePostgresSchemaFailsWhenDBIsNil(t *testing.T) {
 	}
 }
 
+func TestEnsureSchemaFailsWhenDBIsNil(t *testing.T) {
+	err := EnsureSchema(nil)
+	if err == nil || !strings.Contains(err.Error(), "nil DB connection") {
+		t.Fatalf("expected nil-DB error contract, got: %v", err)
+	}
+}
+
 func TestRunMigrationsSucceedsOnSQLiteInMemory(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -48,6 +55,18 @@ func TestRunMigrationsSucceedsOnSQLiteInMemory(t *testing.T) {
 
 	if err := RunMigrations(dbconn); err != nil {
 		t.Fatalf("expected RunMigrations to succeed on sqlite, got: %v", err)
+	}
+}
+
+func TestEnsureSchemaSucceedsOnSQLiteInMemory(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := EnsureSchema(dbconn); err != nil {
+		t.Fatalf("expected EnsureSchema to succeed on sqlite, got: %v", err)
 	}
 }
 
@@ -77,6 +96,20 @@ func TestRunMigrationsRejectsNonSQLiteBackend(t *testing.T) {
 	err = RunMigrations(dbconn)
 	if err == nil || !strings.Contains(err.Error(), "RunMigrations requires sqlite backend") {
 		t.Fatalf("expected non-sqlite error contract, got: %v", err)
+	}
+}
+
+func TestEnsureSchemaRejectsUnsupportedBackend(t *testing.T) {
+	registerDummyDriver()
+	dbconn, err := sql.Open("dummy", "")
+	if err != nil {
+		t.Fatalf("open dummy db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	err = EnsureSchema(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "EnsureSchema does not support backend") {
+		t.Fatalf("expected unsupported backend error contract, got: %v", err)
 	}
 }
 
