@@ -756,6 +756,19 @@ func verifyStrictPackedSegmentsEnabled() bool {
 	return false
 }
 
+func legacyDebugChunkPrefixHex(b []byte, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(b) < n {
+		n = len(b)
+	}
+	if n == 0 {
+		return ""
+	}
+	return hex.EncodeToString(b[:n])
+}
+
 func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
@@ -860,15 +873,50 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 			Payload: payload,
 		})
 		if err != nil {
+			log.Printf(
+				"verifyLegacyChunkHashes DEBUG decode failure chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size=%d expected_hash=%s payload_first16=%s",
+				chunkID,
+				codec,
+				formatVersion,
+				blockOffset,
+				storedSize,
+				plaintextSize,
+				strings.TrimSpace(expectedChunkHash),
+				legacyDebugChunkPrefixHex(payload, 16),
+			)
 			return fmt.Errorf("verifyLegacyChunkHashes: decode chunk %d payload: %w", chunkID, err)
 		}
 		if int64(len(plaintext)) != plaintextSize {
+			log.Printf(
+				"verifyLegacyChunkHashes DEBUG plaintext size mismatch chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size_meta=%d plaintext_size_decoded=%d plaintext_first16=%s",
+				chunkID,
+				codec,
+				formatVersion,
+				blockOffset,
+				storedSize,
+				plaintextSize,
+				len(plaintext),
+				legacyDebugChunkPrefixHex(plaintext, 16),
+			)
 			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d plaintext size mismatch metadata=%d decoded=%d", chunkID, plaintextSize, len(plaintext))
 		}
 
 		sum := sha256.Sum256(plaintext)
 		computed := hex.EncodeToString(sum[:])
 		if !strings.EqualFold(strings.TrimSpace(expectedChunkHash), computed) {
+			log.Printf(
+				"verifyLegacyChunkHashes DEBUG mismatch chunk=%d expected_hash=%s actual_hash=%s chunk_size=%d plaintext_first32=%s block_offset=%d stored_size=%d plaintext_size=%d codec=%s format=%d",
+				chunkID,
+				strings.TrimSpace(expectedChunkHash),
+				computed,
+				len(plaintext),
+				legacyDebugChunkPrefixHex(plaintext, 32),
+				blockOffset,
+				storedSize,
+				plaintextSize,
+				codec,
+				formatVersion,
+			)
 			return verifyCategoryError(verifyErrChunkHashMismatch, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d hash mismatch computed=%s expected=%s", chunkID, computed, strings.TrimSpace(expectedChunkHash)), nil)
 		}
 	}
