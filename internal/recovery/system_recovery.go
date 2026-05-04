@@ -371,6 +371,9 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 					JOIN chunk c ON c.id = b.chunk_id
 					WHERE b.container_id = $1
 					  AND c.status = $2
+					  AND NOT EXISTS (
+						SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+					  )
 					  AND (
 						b.block_offset < 0
 						OR b.stored_size <= 0
@@ -571,6 +574,9 @@ func detectInteriorGaps(ctx context.Context, dbconn *sql.DB, containerID int64, 
 		JOIN chunk c ON c.id = b.chunk_id
 		WHERE b.container_id = $1
 		  AND c.status = $2
+		  AND NOT EXISTS (
+			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+		  )
 		ORDER BY b.block_offset
 	`, containerID, completedStatus)
 	if err != nil {
@@ -609,6 +615,9 @@ func hasTrailingUnreferencedBytes(ctx context.Context, dbconn *sql.DB, container
 		JOIN chunk c ON c.id = b.chunk_id
 		WHERE b.container_id = $1
 		  AND c.status = $2
+		  AND NOT EXISTS (
+			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+		  )
 	`, containerID, completedStatus).Scan(&maxEnd)
 	if err != nil {
 		return false, err
