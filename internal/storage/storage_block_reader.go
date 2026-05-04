@@ -10,6 +10,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
+	"github.com/franchoy/coldkeep/internal/iodebug"
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
@@ -73,6 +74,8 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	if encodedBlock == nil {
 		return nil, fmt.Errorf("decode block %d returned nil", blockID)
 	}
+
+	iodebug.IncBlockDecode()
 
 	// Step 5: Verify hash (mandatory)
 	if r.verifyHash {

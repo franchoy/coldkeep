@@ -463,6 +463,7 @@ def parse_io(path):
         'bytes_written': 0,
         'bytes_read': 0,
         'snapshot_metadata_write_count': 0,
+        'block_decode_count': 0,
     }
     if not os.path.exists(path):
         return out
@@ -481,6 +482,7 @@ def parse_io(path):
             out['bytes_written'] += int(rec.get('bytes_written', 0))
             out['bytes_read'] += int(rec.get('bytes_read', 0))
             out['snapshot_metadata_write_count'] += int(rec.get('snapshot_metadata_write_count', 0))
+            out['block_decode_count'] += int(rec.get('block_decode_count', 0))
     return out
 
 
@@ -492,6 +494,7 @@ METRIC_KEYS = {
     'block_cache_hits',
     'block_cache_misses',
     'cache_hit_ratio',
+    'block_decode_count',
 }
 
 

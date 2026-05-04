@@ -570,7 +570,7 @@ Collect:
 - read amplification
 - block cache hits
 - block cache misses
-- decrypt and decode count
+- decrypt and decode count (`block_decode_count` from IO counters)
 
 Formulas:
 
