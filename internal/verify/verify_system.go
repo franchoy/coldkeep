@@ -12,7 +12,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/utils_print"
 )
 
@@ -235,7 +234,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 	}
 	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 
-	// Count all non-quarantined containers that currently hold completed chunks.
+	// Count all non-quarantined containers that currently hold packed storage blocks.
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
@@ -246,12 +245,10 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 		WHERE ctr.quarantine = FALSE
 		AND EXISTS (
 			SELECT 1
-			FROM blocks b
-			JOIN chunk c ON c.id = b.chunk_id
-			WHERE b.container_id = ctr.id
-			AND c.status = $1
+			FROM storage_blocks sb
+			WHERE sb.container_id = ctr.id
 		)
-	`, filestate.ChunkCompleted).Scan(&containerCount)
+	`).Scan(&containerCount)
 	if containerCountErr != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query deep-verify container count: %v", containerCountErr)
@@ -266,12 +263,10 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 		WHERE ctr.quarantine = FALSE
 		AND EXISTS (
 			SELECT 1
-			FROM blocks b
-			JOIN chunk c ON c.id = b.chunk_id
-			WHERE b.container_id = ctr.id
-			AND c.status = $1
+			FROM storage_blocks sb
+			WHERE sb.container_id = ctr.id
 		)
-	`, filestate.ChunkCompleted)
+	`)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query deep-verify containers: %v", err)
@@ -299,18 +294,15 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 		processContainerErr := func() (retErr error) {
 			//fetch chunks ordered by offset
 			chunks, err := dbconn.QueryContext(ctx, `SELECT 
-									b.block_offset,
-									b.stored_size,
-									b.plaintext_size,
-									c.chunk_hash,
-									b.codec,
-									b.format_version,
-									b.nonce
-								FROM blocks b
-								JOIN chunk c ON c.id = b.chunk_id
-								WHERE b.container_id = $1
-								AND c.status = $2
-								ORDER BY b.block_offset`, containerID, filestate.ChunkCompleted)
+									sb.container_offset,
+									sb.stored_size,
+									sb.plaintext_size,
+									encode(sb.block_hash, 'hex') AS block_hash_hex,
+									sb.codec,
+									sb.format_version
+								FROM storage_blocks sb
+								WHERE sb.container_id = $1
+								ORDER BY sb.container_offset`, containerID)
 			if err != nil {
 				return fmt.Errorf("failed to query chunks for container %d: %w", containerID, err)
 			}
@@ -335,11 +327,10 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 				var blockOffset int64
 				var storedSize int64
 				var plaintextSize int64
-				var chunkHash string
+				var blockHash string
 				var codec string
 				var formatVersion int
-				var nonce []byte
-				if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &chunkHash, &codec, &formatVersion, &nonce); err != nil {
+				if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &blockHash, &codec, &formatVersion); err != nil {
 					log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
 					appendDeepError(fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
 					continue
@@ -370,7 +361,12 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 					expectedOffset = nextExpectedOffset
 					continue
 				}
-				codecType := blocks.Codec(codec)
+				codecType, err := resolveVerifyStorageBlockCodec(codec)
+				if err != nil {
+					appendDeepError(fmt.Errorf("invalid storage block codec %q in container %q: %w", codec, filename, err))
+					expectedOffset = nextExpectedOffset
+					continue
+				}
 				transformer, ok := transformerCache[codecType]
 				if !ok {
 					transformer, err = blocks.GetBlockTransformer(codecType)
@@ -383,13 +379,12 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 				}
 
 				plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-					ChunkHash: chunkHash,
+					ChunkHash: blockHash,
 					Descriptor: blocks.Descriptor{
 						Codec:         codecType,
 						FormatVersion: formatVersion,
 						PlaintextSize: plaintextSize,
 						StoredSize:    storedSize,
-						Nonce:         nonce,
 						ContainerID:   int64(containerID),
 						BlockOffset:   blockOffset,
 					},
@@ -417,8 +412,8 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 				sum := sha256.Sum256(plaintext)
 				sumHex := hex.EncodeToString(sum[:])
 
-				if sumHex != chunkHash {
-					appendDeepError(fmt.Errorf("block hash mismatch at offset %d (db=%s computed=%s) for container %q", blockOffset, chunkHash, sumHex, filename))
+				if sumHex != blockHash {
+					appendDeepError(fmt.Errorf("block hash mismatch at offset %d (db=%s computed=%s) for container %q", blockOffset, blockHash, sumHex, filename))
 					expectedOffset = nextExpectedOffset
 					continue
 				}
@@ -428,7 +423,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 
 			// defensive — should not happen unless DB changes mid-run
 			if !hasChunks {
-				return fmt.Errorf("database invariant violation: container %d claimed to have completed chunks but returned none", containerID)
+				return fmt.Errorf("database invariant violation: container %d claimed to have storage blocks but returned none", containerID)
 			}
 
 			if err := chunks.Err(); err != nil {

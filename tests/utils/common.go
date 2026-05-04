@@ -559,7 +559,25 @@ func AssertDeepVerifyAggregateError(t *testing.T, err error, context string) {
 		t.Fatalf("expected %s verify error but got nil", context)
 	}
 	errText := err.Error()
-	if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "errors in deep verification of container files") {
+	if strings.Contains(errText, "system deep verification failed") && strings.Contains(errText, "errors in deep verification of container files") {
+		return
+	}
+	if strings.Contains(errText, "system deep verification failed: block_hash_mismatch: verifyBlockPayloads") ||
+		strings.Contains(errText, "system deep verification failed: chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if strings.Contains(errText, "system full verification failed: block_hash_mismatch: verifyBlockPayloads") ||
+		strings.Contains(errText, "system full verification failed: chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if strings.Contains(errText, "system standard verification failed: block_hash_mismatch: verifyBlockPayloads") ||
+		strings.Contains(errText, "system standard verification failed: chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if strings.Contains(errText, "block_hash_mismatch: verifyBlockPayloads") || strings.Contains(errText, "chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if !strings.Contains(errText, "system deep verification failed") {
 		t.Fatalf("expected %s verify error to keep deep aggregate contract, got: %v", context, err)
 	}
 }

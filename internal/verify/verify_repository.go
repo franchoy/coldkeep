@@ -180,7 +180,8 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		SELECT COUNT(*)
 		FROM storage_blocks sb
 		JOIN container c ON c.id = sb.container_id
-		WHERE sb.container_offset + sb.stored_size > c.current_size
+		WHERE c.quarantine = FALSE
+		  AND sb.container_offset + sb.stored_size > c.current_size
 	`).Scan(&impossibleLocationRows); err != nil {
 		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query impossible container locations", err)
 	}
@@ -416,6 +417,7 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 		SELECT sb.id, sb.format_version, sb.codec, sb.plaintext_size, sb.container_offset, sb.stored_size, sb.block_hash, c.filename, c.max_size
 		FROM storage_blocks sb
 		JOIN container c ON c.id = sb.container_id
+		WHERE c.quarantine = FALSE
 		ORDER BY sb.id
 	`)
 	if err != nil {

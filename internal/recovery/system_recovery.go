@@ -512,11 +512,6 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 			return fmt.Errorf("query existing container after orphan conflict: %w", err)
 		}
 
-		if existingQuarantine && existingCurrentSize == fileSize && existingMaxSize == fileSize {
-			reusedCount++
-			continue
-		}
-
 		if existingQuarantine {
 			resyncQuery := `UPDATE container SET current_size = $2, max_size = $2 WHERE filename = $1`
 			resyncArgs := []any{name, fileSize}
@@ -569,15 +564,31 @@ func quarantineOrphanContainers(dbconn *sql.DB, containersDir string, stats *rec
 // no completed blocks.
 func detectInteriorGaps(ctx context.Context, dbconn *sql.DB, containerID int64, completedStatus string) (string, error) {
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT b.block_offset, b.stored_size
-		FROM blocks b
-		JOIN chunk c ON c.id = b.chunk_id
-		WHERE b.container_id = $1
-		  AND c.status = $2
-		  AND NOT EXISTS (
-			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
-		  )
-		ORDER BY b.block_offset
+		SELECT span.block_offset, span.stored_size
+		FROM (
+			SELECT b.block_offset AS block_offset, b.stored_size AS stored_size
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = $1
+			  AND c.status = $2
+			  AND NOT EXISTS (
+				SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+			  )
+
+			UNION ALL
+
+			SELECT sb.container_offset AS block_offset, sb.stored_size AS stored_size
+			FROM storage_blocks sb
+			WHERE sb.container_id = $1
+			  AND EXISTS (
+				SELECT 1
+				FROM chunk_block_refs r
+				JOIN chunk c ON c.id = r.chunk_id
+				WHERE r.block_id = sb.id
+				  AND c.status = $2
+			  )
+		) AS span
+		ORDER BY span.block_offset
 	`, containerID, completedStatus)
 	if err != nil {
 		return "", err
@@ -610,14 +621,30 @@ func detectInteriorGaps(ctx context.Context, dbconn *sql.DB, containerID int64, 
 func hasTrailingUnreferencedBytes(ctx context.Context, dbconn *sql.DB, containerID int64, currentSize int64, completedStatus string) (bool, error) {
 	var maxEnd sql.NullInt64
 	err := dbconn.QueryRowContext(ctx, `
-		SELECT MAX(b.block_offset + b.stored_size)
-		FROM blocks b
-		JOIN chunk c ON c.id = b.chunk_id
-		WHERE b.container_id = $1
-		  AND c.status = $2
-		  AND NOT EXISTS (
-			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
-		  )
+		SELECT MAX(span.block_end)
+		FROM (
+			SELECT (b.block_offset + b.stored_size) AS block_end
+			FROM blocks b
+			JOIN chunk c ON c.id = b.chunk_id
+			WHERE b.container_id = $1
+			  AND c.status = $2
+			  AND NOT EXISTS (
+				SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+			  )
+
+			UNION ALL
+
+			SELECT (sb.container_offset + sb.stored_size) AS block_end
+			FROM storage_blocks sb
+			WHERE sb.container_id = $1
+			  AND EXISTS (
+				SELECT 1
+				FROM chunk_block_refs r
+				JOIN chunk c ON c.id = r.chunk_id
+				WHERE r.block_id = sb.id
+				  AND c.status = $2
+			  )
+		) AS span
 	`, containerID, completedStatus).Scan(&maxEnd)
 	if err != nil {
 		return false, err
