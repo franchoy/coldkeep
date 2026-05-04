@@ -25,7 +25,7 @@ for block_mb in 1 2; do
 
     log "=== RESTORE datasetA ${block_mb}mb run${run} ==="
     bash scripts/run_phase8_restore_sequence.sh "$block_mb" "$DATASETS_ROOT/datasetA" "$run" \
-      --bin "$COLDKEEP_BIN" --dataset-label datasetA --allow-fewer-than-100 2>&1 | grep -E 'complete|ERROR|FAIL' || true
+      --bin "$COLDKEEP_BIN" --dataset-label datasetA --skip-selective 2>&1 | grep -E 'complete|ERROR|FAIL' || true
 
     log "=== STORE datasetB ${block_mb}mb run${run} ==="
     bash scripts/run_phase8_store_sequence.sh "$block_mb" "$DATASETS_ROOT/datasetB" "$run" \

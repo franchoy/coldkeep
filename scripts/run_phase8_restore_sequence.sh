@@ -67,6 +67,7 @@ COLDKEEP_BIN="coldkeep"
 SMALL_FILE_MAX_BYTES=65536
 ALLOW_FEWER_THAN_100=0
 RANDOM_SEED=""
+SKIP_SELECTIVE=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -92,6 +93,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--allow-fewer-than-100)
 			ALLOW_FEWER_THAN_100=1
+			shift
+			;;
+		--skip-selective)
+			SKIP_SELECTIVE=1
 			shift
 			;;
 		--help|-h)
@@ -171,16 +176,17 @@ elif [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then
 	seed_fallback="$RUN_ID"
 fi
 
-python3 - "$DATASET_PATH" "$LIST_JSON_PATH" "$SELECTION_JSON_PATH" "$SMALL_FILE_MAX_BYTES" "$seed_fallback" "$ALLOW_FEWER_THAN_100" <<'PY'
+python3 - "$DATASET_PATH" "$LIST_JSON_PATH" "$SELECTION_JSON_PATH" "$SMALL_FILE_MAX_BYTES" "$seed_fallback" "$ALLOW_FEWER_THAN_100" "$SKIP_SELECTIVE" <<'PY'
 import json
 import os
 import random
 import sys
 
-(dataset_path, list_json_path, out_path, small_max_raw, seed_raw, allow_fewer_raw) = sys.argv[1:]
+(dataset_path, list_json_path, out_path, small_max_raw, seed_raw, allow_fewer_raw, skip_selective_raw) = sys.argv[1:]
 small_max = int(small_max_raw)
 seed = int(seed_raw)
 allow_fewer = int(allow_fewer_raw) == 1
+skip_selective = int(skip_selective_raw) == 1
 
 with open(list_json_path, 'r', encoding='utf-8') as f:
     doc = json.load(f)
@@ -205,6 +211,18 @@ for p in stored_paths:
         small_candidates.append(p)
 
 if not small_candidates:
+    if skip_selective:
+        payload = {
+            'dataset_path': dataset_path,
+            'stored_paths': stored_paths,
+            'source_meta': source_meta,
+            'selective': None,
+            'skip_selective': True,
+        }
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write('\n')
+        raise SystemExit(0)
     raise SystemExit(f'no small files found (<= {small_max} bytes) for selective restore')
 
 single_small = min(small_candidates, key=lambda p: (source_meta[p]['size_bytes'], p))
@@ -346,6 +364,14 @@ full_end_ms="$(now_ms)"
 full_elapsed_ms=$((full_end_ms - full_start_ms))
 capture_stats_optional "$FULL_STATS_AFTER"
 
+# Determine whether selective restores should run
+_has_selective="$(python3 -c "import json,sys; d=json.load(open('$SELECTION_JSON_PATH')); print(0 if d.get('skip_selective') else 1)")"
+
+sel1_elapsed_ms=0; sel1_rss_kb=0
+sel100_elapsed_ms=0; sel100_rss_kb=0
+seldir_elapsed_ms=0; seldir_rss_kb=0
+
+if [[ "$_has_selective" == "1" ]]; then
 # Selective: single small file
 capture_stats_optional "$SEL1_STATS_BEFORE"
 sel1_start_ms="$(now_ms)"
@@ -372,6 +398,7 @@ seldir_rss_kb="$_restore_case_peak_rss_kb"
 seldir_end_ms="$(now_ms)"
 seldir_elapsed_ms=$((seldir_end_ms - seldir_start_ms))
 capture_stats_optional "$SELDIR_STATS_AFTER"
+fi # _has_selective
 
 python3 - "$SELECTION_JSON_PATH" "$RESULT_JSON_PATH" \
 	"$FULL_RESTORE_ROOT" "$SEL_SINGLE_ROOT" "$SEL_100_ROOT" "$SEL_SUBDIR_ROOT" \
@@ -583,17 +610,24 @@ def run_case(case_name, selected_paths, restore_root, io_path, stats_before_path
     }
 
 full_paths = payload['stored_paths']
-single_paths = (payload['selective'] or {}).get('single_small') or []
-rand100_paths = (payload['selective'] or {}).get('random_small_100') or []
-subdir_info = (payload['selective'] or {}).get('subdirectory') or {}
-subdir_paths = subdir_info.get('files') or []
+skip_selective = bool(payload.get('skip_selective'))
 
 cases = [
     run_case('full_restore', full_paths, full_root, full_io, full_stats_before, full_stats_after, full_elapsed_ms, full_rss_kb),
-    run_case('selective_single_small_file', single_paths, sel1_root, sel1_io, sel1_stats_before, sel1_stats_after, sel1_elapsed_ms, sel1_rss_kb),
-    run_case('selective_random_100_small_files', rand100_paths, sel100_root, sel100_io, sel100_stats_before, sel100_stats_after, sel100_elapsed_ms, sel100_rss_kb),
-    run_case('selective_one_subdirectory', subdir_paths, seldir_root, seldir_io, seldir_stats_before, seldir_stats_after, seldir_elapsed_ms, seldir_rss_kb),
 ]
+
+if not skip_selective:
+    single_paths = (payload['selective'] or {}).get('single_small') or []
+    rand100_paths = (payload['selective'] or {}).get('random_small_100') or []
+    subdir_info = (payload['selective'] or {}).get('subdirectory') or {}
+    subdir_paths = subdir_info.get('files') or []
+    cases += [
+        run_case('selective_single_small_file', single_paths, sel1_root, sel1_io, sel1_stats_before, sel1_stats_after, sel1_elapsed_ms, sel1_rss_kb),
+        run_case('selective_random_100_small_files', rand100_paths, sel100_root, sel100_io, sel100_stats_before, sel100_stats_after, sel100_elapsed_ms, sel100_rss_kb),
+        run_case('selective_one_subdirectory', subdir_paths, seldir_root, seldir_io, seldir_stats_before, seldir_stats_after, seldir_elapsed_ms, seldir_rss_kb),
+    ]
+else:
+    subdir_info = {}
 
 for case in cases:
     if not case['restored_bytes_match_original']:

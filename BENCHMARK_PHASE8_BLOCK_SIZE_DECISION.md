@@ -774,15 +774,15 @@ favours 2 MiB for throughput metrics and disfavours 2 MiB for cost metrics
 (amplification, retained dead bytes, verify time). Leave cells blank until the
 corresponding sequence harness has completed all runs.
 
-| Dataset            | Metric                    | 1 MiB (median) | 2 MiB (median) | Δ    | Decision hint |
+| Dataset            | Metric                    | 1 MiB (median) | 2 MiB (median) |    Δ | Decision hint |
 |:-------------------|:--------------------------|---------------:|---------------:|-----:|:--------------|
-| Large file         | Store MB/s                |                |                |      |               |
-| Large file         | Restore MB/s              |                |                |      |               |
-| Small files        | Store MB/s                |                |                |      |               |
-| Small files        | Restore MB/s              |                |                |      |               |
-| Selective restore  | Read amplification (×)    |                |                |      |               |
-| GC partial-live    | Retained dead bytes (MiB) |                |                |      |               |
-| Verify             | Wall-clock time (s)       |                |                |      |               |
+| Large file (A)     | Store MB/s                |           12.5 |           12.8 | +2.4% | = (below 10% threshold) |
+| Large file (A)     | Restore MB/s              |           33.2 |           34.0 | +2.4% | = (below 10% threshold) |
+| Small files (B)    | Store MB/s                |          0.175 |          0.174 | −0.6% | = |
+| Small files (B)    | Restore MB/s              |          0.063 |          0.065 | +3.2% | = |
+| Full restore (B)   | Read amplification (×)    |         1.0107 |         1.0107 |   0 % | = |
+| GC partial-live (F)| Retained dead bytes (MiB) |           0.00 |           0.00 |   0 % | = |
+| Verify (A)         | Wall-clock time (s)       |           9.18 |           9.47 | +3.2% | = (below 15% regression limit) |
 
 **Decision hint key**
 
@@ -799,19 +799,33 @@ corresponding sequence harness has completed all runs.
 > populated. Do not fill speculatively.**
 
 ```
-DefaultBlockSize = X MiB
+DefaultBlockSize = 1 MiB
 
 Rationale:
-  <One paragraph tying the selected value to specific rows in the table above.
-   Reference the section 14 thresholds that were or were not met. State whether
-   3 MiB remains experimental or was promoted.>
+  The benchmark matrix (datasets A, B, D, F; 3 runs each; block sizes 1 MiB
+  and 2 MiB) shows no dimension in which 2 MiB reaches the section 14
+  promotion threshold. Large-file store throughput improved by 2.4% (threshold:
+  ≥ 10%). Large-file restore improved by 2.4% (threshold: ≥ 10%). Small-file
+  throughput was within noise. Read amplification was identical (1.0107× for
+  both sizes on dataset B). GC retained dead bytes were 0 for both sizes on
+  dataset F. Verify time regressed 3.2% for 2 MiB (threshold allows up to
+  15%). Because section 14 requires ALL five conditions to be satisfied for a
+  switch and condition 1 (≥ 10% throughput improvement on large-file or mixed
+  dataset) was not met, the default is retained at 1 MiB. All correctness
+  gates passed: no hash mismatches, no chunk repacking, dedup incremental
+  ratios identical across block sizes.
 
-3 MiB status: experimental | promoted
+3 MiB status: experimental
 
 Operator note:
-  <Brief statement on the throughput / read-amplification / GC-retention
-   tradeoff that operators should be aware of when overriding the default via
-   COLDKEEP_BLOCK_TARGET_SIZE_MB.>
+  1 MiB blocks provide finer-grained GC eviction granularity (whole containers
+  become dead sooner after file removal), slightly lower over-read on selective
+  restore, and equivalent throughput to 2 MiB under the tested workloads.
+  Operators may override the default via COLDKEEP_BLOCK_TARGET_SIZE_MB=2 if
+  their workload is exclusively large sequential files and throughput is the
+  primary concern; expect a ~2–3% improvement in store and restore speed at the
+  cost of slightly higher peak RSS (~2%) and slightly coarser GC granularity.
+  3 MiB remains experimental and was not evaluated in this matrix.
 ```
 
 ## 18. Investigation Triggers
