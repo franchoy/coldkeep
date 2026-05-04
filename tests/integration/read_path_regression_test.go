@@ -96,7 +96,7 @@ func TestReadPathRestoreAfterMigrationIntegration(t *testing.T) {
 		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
 		ContainerDir: container.ContainersDir,
 	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file for restore-after-migration regression: %v", err)
 	}
 

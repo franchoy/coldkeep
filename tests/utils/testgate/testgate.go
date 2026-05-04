@@ -19,7 +19,6 @@ func RequireDB(t *testing.T) {
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
 	}
-	ensureTestKey(t)
 }
 
 func RequireStress(t *testing.T) {
