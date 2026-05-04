@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	dbschema "github.com/franchoy/coldkeep/db"
@@ -34,7 +35,7 @@ import (
 //     whole-system lifecycle/state-machine correctness.
 
 func adversarialG8Codecs() []string {
-	return []string{"plain"}
+	return []string{"plain", "aes-gcm"}
 }
 
 func configureAdversarialG8Codec(t *testing.T, codec string) {
@@ -76,9 +77,17 @@ func setupAdversarialG8Env(t *testing.T) (*sql.DB, map[string]string, string, st
 func storeFileWithCodecCLIG8(t *testing.T, repoRoot, binPath string, env map[string]string, codec, path string) int64 {
 	t.Helper()
 
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
+	if res.ExitCode != 0 && codec == "aes-gcm" {
+		errText := strings.ToLower(res.Stderr + "\n" + res.Stdout)
+		if strings.Contains(errText, "currently requires plain transformed payload") {
+			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
+		}
+	}
+
 	payload := testutils.AssertCLIJSONOK(
 		t,
-		testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json"),
+		res,
 		"store",
 	)
 	data := testutils.JSONMap(t, payload, "data")
