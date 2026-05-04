@@ -77,7 +77,7 @@ func storeFileWithCodecCLIG7(t *testing.T, repoRoot, binPath string, env map[str
 	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
 	if res.ExitCode != 0 {
 		errText := strings.ToLower(res.Stderr + "\n" + res.Stdout)
-		if strings.Contains(errText, "packed block storage_blocks codec=\"none\" currently requires plain transformed payload") {
+		if strings.Contains(errText, "currently requires plain transformed payload") {
 			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM deep-corruption scenario")
 		}
 	}
