@@ -5,11 +5,21 @@ import (
 	"testing"
 )
 
+const defaultTestKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func ensureTestKey(t *testing.T) {
+	t.Helper()
+	if os.Getenv("COLDKEEP_KEY") == "" {
+		t.Setenv("COLDKEEP_KEY", defaultTestKeyHex)
+	}
+}
+
 func RequireDB(t *testing.T) {
 	t.Helper()
 	if os.Getenv("COLDKEEP_TEST_DB") == "" {
 		t.Skip("Set COLDKEEP_TEST_DB=1 to run integration tests")
 	}
+	ensureTestKey(t)
 }
 
 func RequireStress(t *testing.T) {
