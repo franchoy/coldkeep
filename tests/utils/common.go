@@ -500,6 +500,18 @@ func CorruptFirstCompletedChunkByte(t *testing.T, dbconn *sql.DB, containersDir 
 		ORDER BY c.id ASC
 		LIMIT 1
 	`, filestate.ChunkCompleted).Scan(&BlockOffset, &StoredSize, &ContainerFilename)
+	if err == sql.ErrNoRows {
+		err = dbconn.QueryRow(`
+			SELECT sb.container_offset, sb.stored_size, ctr.filename
+			FROM chunk c
+			JOIN chunk_block_refs r ON r.chunk_id = c.id
+			JOIN storage_blocks sb ON sb.id = r.block_id
+			JOIN container ctr ON ctr.id = sb.container_id
+			WHERE c.status = $1
+			ORDER BY c.id ASC
+			LIMIT 1
+		`, filestate.ChunkCompleted).Scan(&BlockOffset, &StoredSize, &ContainerFilename)
+	}
 	if err != nil {
 		t.Fatalf("query first completed chunk for corruption: %v", err)
 	}

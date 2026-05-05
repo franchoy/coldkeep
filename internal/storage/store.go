@@ -305,19 +305,21 @@ func commitPreparedChunksWithContext(
 					return err
 				}
 
-				if err := insertLegacyCompanionBlockRowWithContext(
-					ctx,
-					tx,
-					pending.chunkID,
-					persisted.Placement.ContainerID,
-					persisted.Placement.Offset+segment.Offset,
-					segment.Size,
-				); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return errors.Join(err, rbErr)
+				if persisted.StorageCodec == packedStorageBlockCodecNone {
+					if err := insertLegacyCompanionBlockRowWithContext(
+						ctx,
+						tx,
+						pending.chunkID,
+						persisted.Placement.ContainerID,
+						persisted.Placement.Offset+segment.Offset,
+						segment.Size,
+					); err != nil {
+						_ = tx.Rollback()
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+							return errors.Join(err, rbErr)
+						}
+						return err
 					}
-					return err
 				}
 
 				if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, pending.chunkID, pending.prepared.Index, true); err != nil {
@@ -943,6 +945,7 @@ type semanticReuseSuspicionSummary struct {
 
 type reusableCompletedChunkSummary struct {
 	blockRows                int64
+	packedRows               int64
 	existingContainerRows    int64
 	quarantinedContainerRows int64
 }
@@ -1016,13 +1019,18 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	err := dbconn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(b.id) AS block_rows,
+			COUNT(r.chunk_id) AS packed_rows,
 			COUNT(ctr.id) AS existing_container_rows,
 			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
-		FROM blocks b
-		LEFT JOIN container ctr ON ctr.id = b.container_id
-		WHERE b.chunk_id = $1
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
 	`, chunkID).Scan(
 		&summary.blockRows,
+		&summary.packedRows,
 		&summary.existingContainerRows,
 		&summary.quarantinedContainerRows,
 	)
@@ -1030,8 +1038,8 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		return fmt.Errorf("query reusable completed chunk %d: %w", chunkID, err)
 	}
 
-	if summary.blockRows != 1 {
-		return fmt.Errorf("chunk %d has invalid block metadata rows: expected 1 got %d", chunkID, summary.blockRows)
+	if !((summary.blockRows == 1 && summary.packedRows == 0) || (summary.blockRows == 0 && summary.packedRows == 1) || (summary.blockRows == 1 && summary.packedRows == 1)) {
+		return fmt.Errorf("chunk %d has invalid physical metadata rows: blocks=%d packed=%d", chunkID, summary.blockRows, summary.packedRows)
 	}
 	if summary.existingContainerRows != 1 {
 		return fmt.Errorf("chunk %d has missing container metadata", chunkID)
@@ -1053,10 +1061,19 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		maxSize       int64
 	)
 	err = dbconn.QueryRowContext(ctx, `
-		SELECT ctr.id, ctr.filename, b.block_offset, b.stored_size, ctr.current_size, ctr.max_size
-		FROM blocks b
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE b.chunk_id = $1
+		SELECT
+			ctr.id,
+			ctr.filename,
+			COALESCE(b.block_offset, sb.container_offset),
+			COALESCE(b.stored_size, sb.stored_size),
+			ctr.current_size,
+			ctr.max_size
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
 	`, chunkID).Scan(
 		&containerID,
 		&filename,
@@ -1141,12 +1158,14 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 				COUNT(*) AS chunk_refs,
 				COALESCE(SUM(CASE WHEN oc.chunk_order <> oc.expected_order THEN 1 ELSE 0 END), 0) AS broken_chunk_orders,
 				COALESCE(SUM(CASE WHEN c.id IS NULL OR c.status <> $2 THEN 1 ELSE 0 END), 0) AS invalid_chunks,
-				COALESCE(SUM(CASE WHEN b.id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
+				COALESCE(SUM(CASE WHEN b.id IS NULL AND r.block_id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
 				COALESCE(SUM(CASE WHEN ctr.id IS NULL THEN 1 ELSE 0 END), 0) AS invalid_containers
 			FROM ordered_chunks oc
 			LEFT JOIN chunk c ON c.id = oc.chunk_id
 			LEFT JOIN blocks b ON b.chunk_id = oc.chunk_id
-			LEFT JOIN container ctr ON ctr.id = b.container_id
+			LEFT JOIN chunk_block_refs r ON r.chunk_id = oc.chunk_id
+			LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+			LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
 		)
 		SELECT
 			tf.total_size,
@@ -1204,8 +1223,11 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	rows, err := dbconn.QueryContext(ctx, `
 		       SELECT DISTINCT ctr.id, ctr.filename
 		       FROM file_chunk fc
-		       JOIN blocks b ON b.chunk_id = fc.chunk_id
-		       JOIN container ctr ON ctr.id = b.container_id
+		       JOIN chunk c ON c.id = fc.chunk_id
+		       LEFT JOIN blocks b ON b.chunk_id = c.id
+		       LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		       LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		       JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
 		       WHERE fc.logical_file_id = $1
 	       `, fileID)
 	if err != nil {
@@ -2741,11 +2763,12 @@ func storeChunkAsPlainBlockWithWriter(
 }
 
 type packedBlockPersistResult struct {
-	BlockID    int64
-	BlockHash  []byte
-	Placement  container.LocalPlacement
-	StoredSize int64
-	Segments   map[int64]packedChunkSegment
+	BlockID      int64
+	BlockHash    []byte
+	StorageCodec string
+	Placement    container.LocalPlacement
+	StoredSize   int64
+	Segments     map[int64]packedChunkSegment
 }
 
 type packedChunkSegment struct {
@@ -2870,11 +2893,12 @@ func storePackedBlockWithWriter(
 	}
 
 	return packedBlockPersistResult{
-		BlockID:    blockID,
-		BlockHash:  blockHash,
-		Placement:  placement,
-		StoredSize: int64(len(storedPayload)),
-		Segments:   segments,
+		BlockID:      blockID,
+		BlockHash:    blockHash,
+		StorageCodec: storageCodec,
+		Placement:    placement,
+		StoredSize:   int64(len(storedPayload)),
+		Segments:     segments,
 	}, nil
 }
 

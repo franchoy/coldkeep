@@ -7959,23 +7959,25 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	}
 
 	var storedCodec string
-	var nonceLen int
+	var storedSize int64
+	var plaintextSize int64
 	err = dbconn.QueryRow(`
-		SELECT b.codec, OCTET_LENGTH(b.nonce)
+		SELECT sb.codec, sb.stored_size, sb.plaintext_size
 		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+		JOIN storage_blocks sb ON sb.id = r.block_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
-	`, result.FileID).Scan(&storedCodec, &nonceLen)
+	`, result.FileID).Scan(&storedCodec, &storedSize, &plaintextSize)
 	if err != nil {
-		t.Fatalf("query aes-gcm block metadata: %v", err)
+		t.Fatalf("query aes-gcm storage_blocks metadata: %v", err)
 	}
 	if storedCodec != string(blocks.CodecAESGCM) {
 		t.Fatalf("expected stored codec %q, got %q", blocks.CodecAESGCM, storedCodec)
 	}
-	if nonceLen == 0 {
-		t.Fatal("expected aes-gcm block nonce to be present")
+	if storedSize <= plaintextSize {
+		t.Fatalf("expected stored_size to exceed plaintext_size for aes-gcm packed block: stored=%d plaintext=%d", storedSize, plaintextSize)
 	}
 
 	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
@@ -8035,27 +8037,36 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
-	var ChunkID int64
-	var nonce []byte
+	var containerName string
+	var blockOffset int64
 	err = dbconn.QueryRow(`
-		SELECT b.chunk_id, b.nonce
+		SELECT c.filename, sb.container_offset
 		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		JOIN container c ON c.id = sb.container_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
-	`, result.FileID).Scan(&ChunkID, &nonce)
+	`, result.FileID).Scan(&containerName, &blockOffset)
 	if err != nil {
-		t.Fatalf("query aes-gcm nonce metadata: %v", err)
-	}
-	if len(nonce) == 0 {
-		t.Fatal("expected aes-gcm nonce to be present")
+		t.Fatalf("query aes-gcm packed block placement: %v", err)
 	}
 
-	tamperedNonce := append([]byte(nil), nonce...)
-	tamperedNonce[0] ^= 0x7F
-	if _, err := dbconn.Exec(`UPDATE blocks SET nonce = $1 WHERE chunk_id = $2`, tamperedNonce, ChunkID); err != nil {
-		t.Fatalf("tamper nonce metadata: %v", err)
+	containerPath := filepath.Join(container.ContainersDir, containerName)
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container for nonce tamper: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	b := make([]byte, 1)
+	if _, err := f.ReadAt(b, blockOffset); err != nil {
+		t.Fatalf("read nonce prefix byte: %v", err)
+	}
+	b[0] ^= 0x7F
+	if _, err := f.WriteAt(b, blockOffset); err != nil {
+		t.Fatalf("write tampered nonce prefix byte: %v", err)
 	}
 
 	testutils.AssertDeepVerifyAggregateError(

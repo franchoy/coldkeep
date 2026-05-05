@@ -378,6 +378,18 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 					transformerCache[codecType] = transformer
 				}
 
+				decodePayload := payload
+				descriptorNonce := []byte(nil)
+				if codecType == blocks.CodecAESGCM {
+					if len(payload) <= packedStorageBlockAESGCMNonceSize {
+						appendDeepError(fmt.Errorf("decode block payload for container %q at offset %d: aes-gcm payload too small for nonce prefix", filename, blockOffset))
+						expectedOffset = nextExpectedOffset
+						continue
+					}
+					descriptorNonce = append([]byte(nil), payload[:packedStorageBlockAESGCMNonceSize]...)
+					decodePayload = payload[packedStorageBlockAESGCMNonceSize:]
+				}
+
 				plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
 					ChunkHash: blockHash,
 					Descriptor: blocks.Descriptor{
@@ -385,10 +397,11 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 						FormatVersion: formatVersion,
 						PlaintextSize: plaintextSize,
 						StoredSize:    storedSize,
+						Nonce:         descriptorNonce,
 						ContainerID:   int64(containerID),
 						BlockOffset:   blockOffset,
 					},
-					Payload: payload,
+					Payload: decodePayload,
 				})
 				if err != nil {
 					appendDeepError(fmt.Errorf("decode block payload for container %q at offset %d: %w", filename, blockOffset, err))

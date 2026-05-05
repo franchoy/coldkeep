@@ -525,24 +525,26 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 	rows, err := tx.QueryContext(ctx, `
 		SELECT
 			fc.chunk_order,
-			b.block_offset,
-			b.plaintext_size,
-			b.stored_size,
+			COALESCE(b.block_offset, 0),
+			COALESCE(b.plaintext_size, c.size),
+			COALESCE(b.stored_size, c.size),
 			c.chunk_hash,
 			c.chunker_version,
 			c.size,
-			b.codec,
-			b.format_version,
+			COALESCE(b.codec, 'plain'),
+			COALESCE(b.format_version, 1),
 			b.nonce,
-			b.container_id,
+			COALESCE(b.container_id, 0),
 			ctr.filename,
 			c.status,
 			ctr.max_size,
 			c.id
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN blocks b ON b.chunk_id = c.id
-		LEFT JOIN container ctr ON ctr.id = b.container_id
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
 		WHERE fc.logical_file_id = $1 AND c.status = $2
 		ORDER BY fc.chunk_order ASC
 	`, fileID, filestate.ChunkCompleted)
