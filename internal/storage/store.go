@@ -47,10 +47,12 @@ func packedBlockTargetSizeBytesFromEnv() int64 {
 		return defaultPackedBlockTargetSizeBytes
 	}
 
-	// Phase 8 benchmarking currently supports only bounded static candidates.
-	// Keep this non-adaptive and constrained until a final default is locked.
+	// v1.8 final default is locked to 1 MiB (1 << 20 bytes).
+	// The COLDKEEP_BLOCK_TARGET_SIZE_MB override is retained for operator tuning and testing.
+	// Only validated sizes (1, 2, 3 MiB from Phase 8 benchmarking) are accepted for override.
+	// Production deployments should use the default; override is for evaluating alternative sizes on specific workloads.
 	if blockSizeMB != 1 && blockSizeMB != 2 && blockSizeMB != 3 {
-		log.Printf("unsupported packed block target size mb=%d; allowed values are 1,2,3; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
+		log.Printf("unsupported packed block target size mb=%d; v1.8 supports override values 1,2,3; using locked default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
 		return defaultPackedBlockTargetSizeBytes
 	}
 

@@ -405,3 +405,85 @@ Expected outcome (locked):
 Reference integration test:
 
 - `TestPhase7MixedGCAfterUpgradeIntegration`
+
+## Phase 9 Finalization: Block Size Default Lock
+
+Status: v1.8 finalization and release hardening.
+
+Purpose:
+
+- Lock the packed block size default at 1 MiB for production deployment.
+- Retain operator override capability for tuning on specific workloads.
+- Document override as advanced operator feature, not default behavior.
+
+### Default Block Size (Locked for v1.8)
+
+**Compiled-in default: 1 MiB (1,048,576 bytes)**
+
+This is the target packed block size used by default for all new writes.
+
+Contract:
+
+- All new writes will pack chunks into 1 MiB blocks.
+- Existing blocks remain self-describing via per-block metadata (e.g., `storage_blocks.plaintext_size`).
+- Readers never depend on the configured block size; they read per-block metadata from `storage_blocks` table.
+- Restore behavior is independent of default block size; readers replay stored block metadata.
+
+### Operator Override: COLDKEEP_BLOCK_TARGET_SIZE_MB
+
+**Advanced tuning knob for operator experimentation. Not recommended for production unless benchmarked for your workload.**
+
+Environment variable:
+
+```
+COLDKEEP_BLOCK_TARGET_SIZE_MB = <size_in_mb>
+```
+
+Behavior:
+
+- **Location**: Read at write time; affects new writes only.
+- **Validated values**: 1, 2, 3 (from Phase 8 benchmarking).
+- **Invalid/unsupported values**: Fall back to 1 MiB default with log warning.
+- **Precedence**: COLDKEEP_BLOCK_TARGET_SIZE_MB takes precedence over legacy COLDKEEP_PACKED_BLOCK_SIZE_MIB if both are set.
+
+Contract:
+
+- Readers never check this override; they read per-block metadata from storage.
+- Changing the override during repository lifetime is safe; existing blocks remain intact.
+- New blocks written after override change use the new size; old blocks retain their persisted sizes.
+- Multi-size repositories (mixed 1 MiB and 2 MiB blocks) are supported and expected if override is used.
+
+### Use Cases for Override
+
+**Allowed (supported by tests and documentation):**
+
+1. **Benchmarking alternative sizes**: Evaluate 2 MiB or 3 MiB on replicated test workloads to measure throughput/latency tradeoffs.
+2. **Size-specific tuning**: Workload-specific optimization on dedicated systems (e.g., large sparse-file workloads with 2 MiB packing).
+3. **Integration testing**: Test multi-size repository semantics during development.
+
+**Not recommended:**
+
+- Switching sizes frequently; plan and benchmark before deploying a custom size.
+- Sizes outside {1, 2, 3} MiB; only these candidates were measured and validated.
+- Assuming production improvement without explicit benchmarking on your workload.
+
+### Invariants Preserved
+
+1. Block hash is computed from plaintext block bytes regardless of block size.
+2. Restore correctness is unaffected by block size; reads follow per-block metadata.
+3. GC safety is preserved; blocks are reclaimed only at whole-block granularity.
+4. Verify behavior is size-independent; integrity checks remain per-block.
+
+### Registry Impact
+
+The override only affects:
+
+- **Write path**: `StoreService.prepareAndStoreFile()` reads the override when initializing a `BlockBuilder`.
+- **Reader path**: No impact; `StorageBlockReader.ReadBlock()` uses per-block metadata from `storage_blocks`.
+
+The override does not affect:
+
+- GC behavior (unit of deletion remains per-block).
+- Verify behavior (per-block hash/integrity checks).
+- Restore determinism (metadata-driven replay).
+- Compatibility (existing blocks are self-describing).
