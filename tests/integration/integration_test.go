@@ -13474,10 +13474,14 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 			results <- err
 		}()
 
+		var interleaveErr error
 		for i := 0; i < 3; i++ {
-			if err := <-results; err != nil {
-				t.Fatalf("round %d interleaving operation failed: %v", round, err)
+			if err := <-results; err != nil && interleaveErr == nil {
+				interleaveErr = err
 			}
+		}
+		if interleaveErr != nil {
+			t.Fatalf("round %d interleaving operation failed: %v", round, interleaveErr)
 		}
 
 		if got := testutils.MustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
@@ -13634,10 +13638,14 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 			results <- storage.RemoveFileWithDB(dbconn, victimID)
 		}()
 
+		var interleaveErr error
 		for i := 0; i < 4; i++ {
-			if err := <-results; err != nil {
-				t.Fatalf("round %d four-way interleaving operation failed: %v", round, err)
+			if err := <-results; err != nil && interleaveErr == nil {
+				interleaveErr = err
 			}
+		}
+		if interleaveErr != nil {
+			t.Fatalf("round %d four-way interleaving operation failed: %v", round, interleaveErr)
 		}
 
 		if got := testutils.MustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
@@ -14145,10 +14153,14 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 	}
 
 	// Collect errors
+	var concurrentStoreErr error
 	for i := 0; i < fileCount; i++ {
-		if err := <-errChan; err != nil {
-			t.Fatalf("concurrent store error: %v", err)
+		if err := <-errChan; err != nil && concurrentStoreErr == nil {
+			concurrentStoreErr = err
 		}
+	}
+	if concurrentStoreErr != nil {
+		t.Fatalf("concurrent store error: %v", concurrentStoreErr)
 	}
 
 	// Verify all files stored successfully with valid chunk sequences
