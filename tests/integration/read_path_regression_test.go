@@ -24,6 +24,8 @@ func prepareReadPathRegressionRepo(t *testing.T) string {
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	t.Cleanup(func() { container.ContainersDir = origContainersDir })
 	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	// Keep this regression suite deterministic even when caller env sets aes-gcm.
+	t.Setenv("COLDKEEP_CODEC", "plain")
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
