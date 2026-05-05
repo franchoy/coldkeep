@@ -2754,6 +2754,7 @@ type packedChunkSegment struct {
 }
 
 const packedStorageBlockCodecNone = "none"
+const packedStorageBlockAESGCMNonceSize = 12
 
 // storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
 //
@@ -2800,12 +2801,28 @@ func storePackedBlockWithWriter(
 	if err != nil {
 		return packedBlockPersistResult{}, err
 	}
-	if transformed.Descriptor.Codec != blocks.CodecPlain {
-		return packedBlockPersistResult{}, fmt.Errorf("packed block storage_blocks codec=%q currently requires plain transformed payload in v1.8; got %q (set COLDKEEP_CODEC=plain for packed-block writes)", packedStorageBlockCodecNone, transformed.Descriptor.Codec)
+
+	storageCodec := packedStorageBlockCodecNone
+	storedPayload := transformed.Payload
+	switch transformed.Descriptor.Codec {
+	case blocks.CodecPlain:
+		// Keep legacy v1.8 metadata contract for plain payloads.
+		storageCodec = packedStorageBlockCodecNone
+	case blocks.CodecAESGCM:
+		if len(transformed.Descriptor.Nonce) != packedStorageBlockAESGCMNonceSize {
+			return packedBlockPersistResult{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
+		}
+		// storage_blocks has no nonce column, so prefix nonce into stored payload.
+		storedPayload = make([]byte, 0, len(transformed.Descriptor.Nonce)+len(transformed.Payload))
+		storedPayload = append(storedPayload, transformed.Descriptor.Nonce...)
+		storedPayload = append(storedPayload, transformed.Payload...)
+		storageCodec = string(blocks.CodecAESGCM)
+	default:
+		return packedBlockPersistResult{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
 	}
 
 	// 4) Append transformed payload to container.
-	placement, err := writer.AppendPayload(tx, transformed.Payload)
+	placement, err := writer.AppendPayload(tx, storedPayload)
 	if err != nil {
 		return packedBlockPersistResult{}, err
 	}
@@ -2820,9 +2837,9 @@ func storePackedBlockWithWriter(
 		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
 		1,
-		packedStorageBlockCodecNone,
+		storageCodec,
 		int64(len(plaintextEncoded)),
-		int64(len(transformed.Payload)),
+		int64(len(storedPayload)),
 		placement.ContainerID,
 		placement.Offset,
 		blockHash,
@@ -2856,7 +2873,7 @@ func storePackedBlockWithWriter(
 		BlockID:    blockID,
 		BlockHash:  blockHash,
 		Placement:  placement,
-		StoredSize: int64(len(transformed.Payload)),
+		StoredSize: int64(len(storedPayload)),
 		Segments:   segments,
 	}, nil
 }

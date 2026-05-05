@@ -186,6 +186,15 @@ func (r *StorageBlockReader) decryptBlock(ctx context.Context, meta *blockMetada
 		codec = blocks.CodecPlain
 	}
 
+	decodePayload := storedBytes
+	if codec == blocks.CodecAESGCM {
+		if len(storedBytes) <= packedStorageBlockAESGCMNonceSize {
+			return nil, fmt.Errorf("stored payload too small for aes-gcm nonce prefix: size=%d", len(storedBytes))
+		}
+		meta.Nonce = append([]byte(nil), storedBytes[:packedStorageBlockAESGCMNonceSize]...)
+		decodePayload = storedBytes[packedStorageBlockAESGCMNonceSize:]
+	}
+
 	// Get or create transformer for this codec
 	transformer, ok := r.transformerCache[codec]
 	if !ok {
@@ -212,7 +221,7 @@ func (r *StorageBlockReader) decryptBlock(ctx context.Context, meta *blockMetada
 	// Decode (decrypt if needed)
 	plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
 		Descriptor: descriptor,
-		Payload:    storedBytes,
+		Payload:    decodePayload,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("decode block: %w", err)

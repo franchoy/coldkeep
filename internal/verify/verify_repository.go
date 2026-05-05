@@ -20,12 +20,13 @@ import (
 )
 
 const (
-	verifyErrMetadataMissing   = "metadata_missing"
-	verifyErrMetadataInvalid   = "metadata_invalid"
-	verifyErrPhysicalMissing   = "physical_missing"
-	verifyErrBlockHashMismatch = "block_hash_mismatch"
-	verifyErrChunkHashMismatch = "chunk_hash_mismatch"
-	verifyErrUnsupportedBlock  = "unsupported_block_format"
+	verifyErrMetadataMissing          = "metadata_missing"
+	verifyErrMetadataInvalid          = "metadata_invalid"
+	verifyErrPhysicalMissing          = "physical_missing"
+	verifyErrBlockHashMismatch        = "block_hash_mismatch"
+	verifyErrChunkHashMismatch        = "chunk_hash_mismatch"
+	verifyErrUnsupportedBlock         = "unsupported_block_format"
+	packedStorageBlockAESGCMNonceSize = 12
 )
 
 func verifyCategoryError(category, detail string, cause error) error {
@@ -139,7 +140,7 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		SELECT COUNT(*)
 		FROM storage_blocks
 		WHERE format_version != 1
-		   OR codec != 'none'
+		   OR lower(trim(codec)) NOT IN ('none', 'aes-gcm')
 		   OR plaintext_size <= 0
 		   OR stored_size <= 0
 		   OR container_offset < 0
@@ -485,6 +486,16 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			transformers[codec] = transformer
 		}
 
+		decodePayload := storedBytes
+		descriptorNonce := []byte(nil)
+		if codec == blocks.CodecAESGCM {
+			if len(storedBytes) <= packedStorageBlockAESGCMNonceSize {
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d stored payload too small for aes-gcm nonce prefix", b.id), nil)
+			}
+			descriptorNonce = append([]byte(nil), storedBytes[:packedStorageBlockAESGCMNonceSize]...)
+			decodePayload = storedBytes[packedStorageBlockAESGCMNonceSize:]
+		}
+
 		plaintextEncoded, err := transformer.Decode(ctx, blocks.DecodeInput{
 			Descriptor: blocks.Descriptor{
 				ChunkID:       0,
@@ -492,10 +503,11 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 				FormatVersion: int(b.formatVersion),
 				PlaintextSize: b.plaintextSize,
 				StoredSize:    b.storedSize,
+				Nonce:         descriptorNonce,
 				ContainerID:   0,
 				BlockOffset:   b.containerOffset,
 			},
-			Payload: storedBytes,
+			Payload: decodePayload,
 		})
 		if err != nil {
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d transform/decrypt failed", b.id), err)
@@ -569,7 +581,8 @@ func verifyDecodedBlockHeaderAndTable(blockID int64, formatVersion int64, codec 
 	if decoded.Header.Codec != blocks.BlockCodecNoneV1 {
 		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded codec invalid=%d", blockID, decoded.Header.Codec), nil)
 	}
-	if strings.ToLower(strings.TrimSpace(codec)) != "none" {
+	codecText := strings.ToLower(strings.TrimSpace(codec))
+	if codecText != "none" && codecText != "aes-gcm" {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d storage codec unsupported for packed verify=%q", blockID, codec), nil)
 	}
 
