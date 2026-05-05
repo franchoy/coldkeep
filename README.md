@@ -387,6 +387,13 @@ Observability command guarantees (v1.6):
 - Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.
 - `--trace` and `--trace-json` are diagnostics channels; traces are emitted to stderr so stdout data remains stable for piping.
 
+Operator-facing v1.8 delta for common commands:
+
+- `coldkeep store`, `restore`, `verify system --standard`, `gc --dry-run`, `gc`, `stats --json`, and `inspect` keep their existing invocation shape; v1.8 does not add new required flags to these commands.
+- `stats` may include packed-block metrics in human and JSON output.
+- `verify` may surface packed-block integrity categories such as packed block hash or metadata corruption.
+- Block abstraction is documented, but remains a compatibility-layer change rather than a new mandatory operator workflow.
+
 Chunker benchmark and interpretation:
 
 ```bash

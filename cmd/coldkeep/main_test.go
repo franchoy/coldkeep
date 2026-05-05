@@ -6926,6 +6926,14 @@ func TestRunStatsCommandJSONContract(t *testing.T) {
 				UniqueReferenced: 3,
 				ChunkerVersions:  []observability.VersionStat{{Version: "v2-fastcdc", Chunks: 3, Bytes: 1024}},
 			},
+			BlockLayout: observability.BlockLayoutStats{
+				StorageBlocksCount:  4,
+				ChunkBlockRefsCount: 9,
+				AvgChunksPerBlock:   2.25,
+				PackedBlockCount:    4,
+				LegacyBlockCount:    1,
+				CodecDistribution:   map[string]int64{"none": 4},
+			},
 			Containers: observability.ContainerStats{TotalBytes: 2048},
 			Warnings:   []observability.ObservationWarning{{Code: "STATS_WARNING", Message: "stats warning"}},
 		}, nil
@@ -6965,6 +6973,53 @@ func TestRunStatsCommandJSONContract(t *testing.T) {
 	assertJSONNumber(t, chunks, "completed_bytes", 1024)
 	if human, ok := chunks["completed_bytes"].(string); ok && strings.Contains(human, "KiB") {
 		t.Fatalf("expected numeric completed_bytes, got formatted string %q", human)
+	}
+	blockLayout, ok := data["block_layout"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected block_layout object, got %T", data["block_layout"])
+	}
+	assertJSONNumber(t, blockLayout, "storage_blocks_count", 4)
+	assertJSONNumber(t, blockLayout, "chunk_block_refs_count", 9)
+	assertJSONNumber(t, blockLayout, "packed_block_count", 4)
+	assertJSONNumber(t, blockLayout, "legacy_block_count", 1)
+	if got, ok := blockLayout["avg_chunks_per_block"].(float64); !ok || got != 2.25 {
+		t.Fatalf("avg_chunks_per_block mismatch: got=%v", blockLayout["avg_chunks_per_block"])
+	}
+	codecDistribution, ok := blockLayout["codec_distribution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected codec_distribution object, got %T", blockLayout["codec_distribution"])
+	}
+	assertJSONNumber(t, codecDistribution, "none", 4)
+}
+
+func TestPrintCLIErrorJSONPreservesPackedBlockVerifyMessage(t *testing.T) {
+	err := verifyError(errors.New("block_hash_mismatch: verifyBlockPayloads: packed block integrity mismatch"))
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, _ := payload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("error_class mismatch: got=%v", payload["error_class"])
+	}
+	message, _ := payload["message"].(string)
+	if !strings.Contains(message, "block_hash_mismatch") {
+		t.Fatalf("expected packed-block verify category in message, got=%v", payload)
+	}
+	encodedError, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested error object, got %T", payload["error"])
+	}
+	if got, _ := encodedError["message"].(string); !strings.Contains(got, "packed block integrity mismatch") {
+		t.Fatalf("expected packed-block integrity detail in nested error message, got=%v", encodedError)
 	}
 }
 
