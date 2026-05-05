@@ -293,7 +293,7 @@ func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error
 		WHERE c.status = 'COMPLETED'
 	`)
 	if err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: query chunk location shape: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: query chunk location shape", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -301,12 +301,12 @@ func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error
 	for rows.Next() {
 		var s chunkLocationShape
 		if err := rows.Scan(&s.chunkID, &s.chunkSize, &s.hasPacked, &s.legacyRows); err != nil {
-			return fmt.Errorf("verifyChunkBlockRefs: scan chunk location shape: %w", err)
+			return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: scan chunk location shape", err)
 		}
 		shapes = append(shapes, s)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("verifyChunkBlockRefs: iterate chunk location shape: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyChunkBlockRefs: iterate chunk location shape", err)
 	}
 
 	for _, s := range shapes {
@@ -321,13 +321,13 @@ func verifyChunkPhysicalLocationRules(ctx context.Context, dbconn *sql.DB) error
 		case s.hasPacked && s.legacyRows == 1:
 			ok, err := isValidMigrationCompanionMapping(ctx, dbconn, s.chunkID, s.chunkSize)
 			if err != nil {
-				return fmt.Errorf("verifyChunkBlockRefs: check migration companion for chunk %d: %w", s.chunkID, err)
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: check migration companion for chunk %d", s.chunkID), err)
 			}
 			if !ok {
-				return fmt.Errorf("verifyChunkBlockRefs: chunk %d has both packed and legacy mappings outside migration companion contract", s.chunkID)
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: chunk %d has both packed and legacy mappings outside migration companion contract", s.chunkID), nil)
 			}
 		default:
-			return fmt.Errorf("verifyChunkBlockRefs: chunk %d has invalid physical location shape packed=%t legacy_rows=%d", s.chunkID, s.hasPacked, s.legacyRows)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyChunkBlockRefs: chunk %d has invalid physical location shape packed=%t legacy_rows=%d", s.chunkID, s.hasPacked, s.legacyRows), nil)
 		}
 	}
 
@@ -441,12 +441,12 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	for rows.Next() {
 		var b blockRow
 		if err := rows.Scan(&b.id, &b.formatVersion, &b.codec, &b.plaintextSize, &b.containerOffset, &b.storedSize, &b.blockHash, &b.filename, &b.maxSize); err != nil {
-			return fmt.Errorf("verifyBlockPayloads: scan storage block row: %w", err)
+			return verifyCategoryError(verifyErrMetadataInvalid, "verifyBlockPayloads: scan storage block row", err)
 		}
 		blocksToVerify = append(blocksToVerify, b)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("verifyBlockPayloads: iterate storage block rows: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyBlockPayloads: iterate storage block rows", err)
 	}
 
 	strictMode := verifyStrictPackedSegmentsEnabled()
@@ -473,14 +473,14 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 
 		codec, err := resolveVerifyStorageBlockCodec(b.codec)
 		if err != nil {
-			return fmt.Errorf("verifyBlockPayloads: block %d invalid codec metadata: %w", b.id, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d invalid codec metadata", b.id), err)
 		}
 
 		transformer := transformers[codec]
 		if transformer == nil {
 			transformer, err = blocks.GetBlockTransformer(codec)
 			if err != nil {
-				return fmt.Errorf("verifyBlockPayloads: block %d get transformer codec=%s: %w", b.id, codec, err)
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d get transformer codec=%s", b.id, codec), err)
 			}
 			transformers[codec] = transformer
 		}
@@ -498,10 +498,10 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			Payload: storedBytes,
 		})
 		if err != nil {
-			return fmt.Errorf("verifyBlockPayloads: block %d transform/decrypt failed: %w", b.id, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d transform/decrypt failed", b.id), err)
 		}
 		if int64(len(plaintextEncoded)) != b.plaintextSize {
-			return fmt.Errorf("verifyBlockPayloads: block %d plaintext size mismatch metadata=%d decoded=%d", b.id, b.plaintextSize, len(plaintextEncoded))
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d plaintext size mismatch metadata=%d decoded=%d", b.id, b.plaintextSize, len(plaintextEncoded)), nil)
 		}
 
 		if err := blocks.VerifyBlockHash(plaintextEncoded, b.blockHash); err != nil {
@@ -556,50 +556,50 @@ func resolveVerifyStorageBlockCodec(raw string) (blocks.Codec, error) {
 
 func verifyDecodedBlockHeaderAndTable(blockID int64, formatVersion int64, codec string, decoded *blocks.EncodedBlock) error {
 	if decoded == nil {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded block is nil", blockID)
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded block is nil", blockID), nil)
 	}
 
 	if decoded.Header.Version != blocks.BlockFormatVersionV1 {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded header version invalid=%d", blockID, decoded.Header.Version)
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded header version invalid=%d", blockID, decoded.Header.Version), nil)
 	}
 	if int64(decoded.Header.Version) != formatVersion {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded header version mismatch metadata=%d decoded=%d", blockID, formatVersion, decoded.Header.Version)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d decoded header version mismatch metadata=%d decoded=%d", blockID, formatVersion, decoded.Header.Version), nil)
 	}
 
 	if decoded.Header.Codec != blocks.BlockCodecNoneV1 {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded codec invalid=%d", blockID, decoded.Header.Codec)
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded codec invalid=%d", blockID, decoded.Header.Codec), nil)
 	}
 	if strings.ToLower(strings.TrimSpace(codec)) != "none" {
-		return fmt.Errorf("verifyBlockPayloads: block %d storage codec unsupported for packed verify=%q", blockID, codec)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d storage codec unsupported for packed verify=%q", blockID, codec), nil)
 	}
 
 	if decoded.Header.ChunkCount == 0 {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk count must be > 0", blockID)
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk count must be > 0", blockID), nil)
 	}
 	if int(decoded.Header.ChunkCount) != len(decoded.Entries) {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk count mismatch header=%d entries=%d", blockID, decoded.Header.ChunkCount, len(decoded.Entries))
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk count mismatch header=%d entries=%d", blockID, decoded.Header.ChunkCount, len(decoded.Entries)), nil)
 	}
 
 	payloadSize := uint64(len(decoded.Payload))
 	if decoded.Header.PlaintextSize != payloadSize {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded payload size mismatch header=%d payload=%d", blockID, decoded.Header.PlaintextSize, payloadSize)
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded payload size mismatch header=%d payload=%d", blockID, decoded.Header.PlaintextSize, payloadSize), nil)
 	}
 
 	expectedOffset := uint64(0)
 	for i, entry := range decoded.Entries {
 		if entry.Size == 0 {
-			return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk table bounds invalid index=%d reason=zero-size", blockID, i)
+			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk table bounds invalid index=%d reason=zero-size", blockID, i), nil)
 		}
 		if entry.Offset != expectedOffset {
-			return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk table bounds invalid index=%d expected_offset=%d got=%d", blockID, i, expectedOffset, entry.Offset)
+			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk table bounds invalid index=%d expected_offset=%d got=%d", blockID, i, expectedOffset, entry.Offset), nil)
 		}
 		if _, err := blocks.SliceChunkFromPayload(decoded.Payload, entry); err != nil {
-			return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk table bounds invalid index=%d: %w", blockID, i, err)
+			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk table bounds invalid index=%d", blockID, i), err)
 		}
 		expectedOffset = entry.Offset + entry.Size
 	}
 	if expectedOffset != payloadSize {
-		return fmt.Errorf("verifyBlockPayloads: block %d decoded chunk table bounds invalid final_end=%d payload=%d", blockID, expectedOffset, payloadSize)
+		return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk table bounds invalid final_end=%d payload=%d", blockID, expectedOffset, payloadSize), nil)
 	}
 
 	return nil
@@ -609,7 +609,7 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 	for i, entry := range decoded.Entries {
 		chunkBytes, err := blocks.SliceChunkFromPayload(decoded.Payload, entry)
 		if err != nil {
-			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d slice failed at entry=%d: %w", blockID, entry.ChunkID, i, err)
+			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d slice failed at entry=%d", blockID, entry.ChunkID, i), err)
 		}
 
 		sum := sha256.Sum256(chunkBytes)
@@ -618,9 +618,9 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 		var expected string
 		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, int64(entry.ChunkID)).Scan(&expected); err != nil {
 			if err == sql.ErrNoRows {
-				return fmt.Errorf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i)
+				return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i), nil)
 			}
-			return fmt.Errorf("verifyBlockPayloads: block %d load chunk hash for chunk %d: %w", blockID, entry.ChunkID, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d load chunk hash for chunk %d", blockID, entry.ChunkID), err)
 		}
 
 		if !strings.EqualFold(strings.TrimSpace(expected), computed) {
@@ -640,7 +640,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		ORDER BY r.offset_in_block ASC
 	`, blockID)
 	if err != nil {
-		return fmt.Errorf("verifyBlockPayloads: query chunk refs for block %d: %w", blockID, err)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: query chunk refs for block %d", blockID), err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -651,16 +651,16 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		var size int64
 		var chunkSize int64
 		if err := rows.Scan(&chunkID, &offset, &size, &chunkSize); err != nil {
-			return fmt.Errorf("verifyBlockPayloads: scan chunk ref for block %d: %w", blockID, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: scan chunk ref for block %d", blockID), err)
 		}
 		if offset < 0 {
-			return fmt.Errorf("verifyBlockPayloads: block %d has negative offset_in_block for chunk %d", blockID, chunkID)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d has negative offset_in_block for chunk %d", blockID, chunkID), nil)
 		}
 		if size <= 0 {
-			return fmt.Errorf("verifyBlockPayloads: block %d has non-positive size_in_block for chunk %d", blockID, chunkID)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d has non-positive size_in_block for chunk %d", blockID, chunkID), nil)
 		}
 		if chunkSize > 0 && size != chunkSize {
-			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize), nil)
 		}
 		segments = append(segments, verifyChunkRefSegment{
 			chunkID:   chunkID,
@@ -670,7 +670,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("verifyBlockPayloads: iterate chunk refs for block %d: %w", blockID, err)
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: iterate chunk refs for block %d", blockID), err)
 	}
 	decodedEntriesByKey := make(map[verifyChunkRefSegment]struct{}, len(decoded.Entries))
 	for _, e := range decoded.Entries {
@@ -693,14 +693,14 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	for _, s := range segments {
 		k := verifyChunkRefSegment{chunkID: s.chunkID, offset: s.offset, size: s.size}
 		if _, ok := decodedEntriesByKey[k]; !ok {
-			return fmt.Errorf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size), nil)
 		}
 	}
 
 	for _, e := range decoded.Entries {
 		k := verifyChunkRefSegment{chunkID: int64(e.ChunkID), offset: e.Offset, size: e.Size}
 		if _, ok := refsByKey[k]; !ok {
-			return fmt.Errorf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size)
+			return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
 		}
 	}
 
@@ -708,7 +708,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	for _, s := range segments {
 		end := s.offset + s.size
 		if end < s.offset || end > payloadSize {
-			return fmt.Errorf("verifyBlockPayloads: block %d chunk %d segment out of payload bounds offset=%d size=%d payload=%d", blockID, s.chunkID, s.offset, s.size, payloadSize)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d segment out of payload bounds offset=%d size=%d payload=%d", blockID, s.chunkID, s.offset, s.size, payloadSize), nil)
 		}
 	}
 
@@ -722,20 +722,20 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	prevEnd := uint64(0)
 	for i, s := range segments {
 		if i > 0 && s.offset < prevEnd {
-			return fmt.Errorf("verifyBlockPayloads: block %d has overlapping segments around chunk %d", blockID, s.chunkID)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d has overlapping segments around chunk %d", blockID, s.chunkID), nil)
 		}
 		prevEnd = s.offset + s.size
 	}
 
 	if strictMode {
 		if len(decoded.Entries) != len(segments) {
-			return fmt.Errorf("verifyBlockPayloads: strict mode block %d entry count mismatch decoded=%d refs=%d", blockID, len(decoded.Entries), len(segments))
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry count mismatch decoded=%d refs=%d", blockID, len(decoded.Entries), len(segments)), nil)
 		}
 		for i := range decoded.Entries {
 			e := decoded.Entries[i]
 			s := segments[i]
 			if int64(e.ChunkID) != s.chunkID || e.Offset != s.offset || e.Size != s.size {
-				return fmt.Errorf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i)
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i), nil)
 			}
 		}
 	}
@@ -826,19 +826,19 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		var maxSize int64
 
 		if err := rows.Scan(&chunkID, &blockOffset, &storedSize, &plaintextSize, &expectedChunkHash, &codecRaw, &formatVersion, &nonce, &filename, &maxSize); err != nil {
-			return fmt.Errorf("verifyLegacyChunkHashes: scan legacy block row: %w", err)
+			return verifyCategoryError(verifyErrMetadataInvalid, "verifyLegacyChunkHashes: scan legacy block row", err)
 		}
 
 		codec, err := blocks.ParseCodec(strings.ToLower(strings.TrimSpace(codecRaw)))
 		if err != nil {
-			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d invalid codec=%q: %w", chunkID, codecRaw, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d invalid codec=%q", chunkID, codecRaw), err)
 		}
 
 		transformer := transformers[codec]
 		if transformer == nil {
 			transformer, err = blocks.GetBlockTransformer(codec)
 			if err != nil {
-				return fmt.Errorf("verifyLegacyChunkHashes: chunk %d get transformer codec=%s: %w", chunkID, codec, err)
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d get transformer codec=%s", chunkID, codec), err)
 			}
 			transformers[codec] = transformer
 		}
@@ -857,7 +857,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 
 		payload, err := container.ReadPayloadAt(fc, blockOffset, storedSize)
 		if err != nil {
-			return fmt.Errorf("verifyLegacyChunkHashes: read chunk %d payload: %w", chunkID, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: read chunk %d payload", chunkID), err)
 		}
 
 		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
@@ -886,7 +886,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 				strings.TrimSpace(expectedChunkHash),
 				legacyDebugChunkPrefixHex(payload, 16),
 			)
-			return fmt.Errorf("verifyLegacyChunkHashes: decode chunk %d payload: %w", chunkID, err)
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: decode chunk %d payload", chunkID), err)
 		}
 		if int64(len(plaintext)) != plaintextSize {
 			log.Printf(
@@ -900,7 +900,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 				len(plaintext),
 				legacyDebugChunkPrefixHex(plaintext, 16),
 			)
-			return fmt.Errorf("verifyLegacyChunkHashes: chunk %d plaintext size mismatch metadata=%d decoded=%d", chunkID, plaintextSize, len(plaintext))
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d plaintext size mismatch metadata=%d decoded=%d", chunkID, plaintextSize, len(plaintext)), nil)
 		}
 
 		sum := sha256.Sum256(plaintext)
@@ -923,7 +923,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("verifyLegacyChunkHashes: iterate legacy block rows: %w", err)
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyLegacyChunkHashes: iterate legacy block rows", err)
 	}
 
 	log.Println(" SUCCESS ")

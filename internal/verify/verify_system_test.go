@@ -369,7 +369,7 @@ func TestVerifyRepositoryRejectsInvalidDualLegacyPackedMapping(t *testing.T) {
 	}
 
 	err := VerifyRepository(dbconn, t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "outside migration companion contract") {
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") || !strings.Contains(err.Error(), "verifyChunkBlockRefs") || !strings.Contains(err.Error(), "outside migration companion contract") {
 		t.Fatalf("expected invalid dual mapping error, got: %v", err)
 	}
 }
@@ -979,7 +979,7 @@ func TestVerifyBlockPayloadsDetectsChunkSizeMismatch(t *testing.T) {
 	}
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "size mismatch") {
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") || !strings.Contains(err.Error(), "size mismatch") {
 		t.Fatalf("expected chunk size mismatch error, got: %v", err)
 	}
 }
@@ -1013,7 +1013,7 @@ func TestVerifyBlockPayloadsDetectsDecodedPayloadSizeMismatch(t *testing.T) {
 	}
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "plaintext size mismatch") {
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") || !strings.Contains(err.Error(), "plaintext size mismatch") {
 		t.Fatalf("expected decoded payload size mismatch error, got: %v", err)
 	}
 }
