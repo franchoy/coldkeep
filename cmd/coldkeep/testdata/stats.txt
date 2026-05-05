@@ -68,4 +68,3 @@ Container details
   dead: 1.0 KiB
   status: healthy
 
-
