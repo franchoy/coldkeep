@@ -1724,6 +1724,18 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 		}
 	}
 
+	var legacyStoredPath string
+	if err := dbconn.QueryRow(`
+		SELECT pf.path
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.file_hash = $1
+		LIMIT 1
+	`, legacySet.largeHash).Scan(&legacyStoredPath); err != nil {
+		_ = dbconn.Close()
+		t.Fatalf("query legacy stored path: %v", err)
+	}
+
 	// Emulate pre-upgrade legacy state by removing packed metadata
 	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs`); err != nil {
 		_ = dbconn.Close()
@@ -1753,7 +1765,7 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 		env,
 		"restore",
 		"--stored-path",
-		legacySet.largePath,
+		legacyStoredPath,
 		"--mode",
 		"override",
 		"--destination",
@@ -1814,6 +1826,17 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 		t.Fatal("expected new file hash to be present in logical_file after CLI store")
 	}
 
+	var newStoredPath string
+	if err := dbconn.QueryRow(`
+		SELECT pf.path
+		FROM physical_file pf
+		JOIN logical_file lf ON lf.id = pf.logical_file_id
+		WHERE lf.file_hash = $1
+		LIMIT 1
+	`, newFileHash).Scan(&newStoredPath); err != nil {
+		t.Fatalf("query new stored path: %v", err)
+	}
+
 	// Step 5: Run coldkeep restore for new file
 	newRestoreOut := filepath.Join(cliRoot, "restored-new.bin")
 	restoreNewRes := testutils.RunColdkeepCommand(
@@ -1823,7 +1846,7 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 		env,
 		"restore",
 		"--stored-path",
-		newFilePath,
+		newStoredPath,
 		"--mode",
 		"override",
 		"--destination",
@@ -1872,7 +1895,7 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 		env,
 		"restore",
 		"--stored-path",
-		legacySet.largePath,
+		legacyStoredPath,
 		"--mode",
 		"override",
 		"--destination",
@@ -1896,7 +1919,7 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 		env,
 		"restore",
 		"--stored-path",
-		newFilePath,
+		newStoredPath,
 		"--mode",
 		"override",
 		"--destination",
