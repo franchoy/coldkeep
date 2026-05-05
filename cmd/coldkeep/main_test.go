@@ -2579,41 +2579,13 @@ func TestInferOutputModeFromArgsSupportsSnapshotJSON(t *testing.T) {
 	}
 }
 
-func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
-	mode := inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output", "json"})
-	if mode != outputModeJSON {
-		t.Fatalf("expected benchmark --output json to infer json mode, got %q", mode)
-	}
-
-	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
-	if mode != outputModeJSON {
-		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
-	}
-
-	mode = inferOutputModeFromArgs([]string{"benchmark", "run", "--output", "json"})
-	if mode != outputModeJSON {
-		t.Fatalf("expected benchmark run --output json to infer json mode, got %q", mode)
-	}
-}
-
-func TestResolveOutputModeAllowsBenchmarkTableOnly(t *testing.T) {
-	mode, err := resolveOutputMode(parsedCommandLine{
-		method: "benchmark",
-		flags:  map[string][]string{"output": {"table"}},
-	})
-	if err != nil {
-		t.Fatalf("expected benchmark table output to be accepted, got %v", err)
-	}
-	if mode != outputModeText {
-		t.Fatalf("expected benchmark table output to map to text mode, got %q", mode)
-	}
-
-	_, err = resolveOutputMode(parsedCommandLine{
+func TestResolveOutputModeRejectsTableOutput(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
 		method: "stats",
 		flags:  map[string][]string{"output": {"table"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid --output value") {
-		t.Fatalf("expected non-benchmark table output to be rejected, got %v", err)
+		t.Fatalf("expected table output to be rejected, got %v", err)
 	}
 }
 
@@ -2653,7 +2625,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {

@@ -377,8 +377,12 @@ Observability command guarantees (v1.6):
 Chunker benchmark and interpretation:
 
 ```bash
-coldkeep benchmark chunkers
+scripts/run_phase8_blocksize_matrix.sh --list-missing
 ```
+
+Phase 8 benchmarking is script-only in v1.8 release builds. Use the retained
+helpers under `scripts/run_phase8_*.sh` and `scripts/compare_phase8_*.py`
+instead of a shipped CLI benchmark command.
 
 Typical outcomes to expect (informational ranges):
 

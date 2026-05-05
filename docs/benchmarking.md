@@ -25,26 +25,29 @@ evaluation in v1.7.
 
 ## Running benchmarks
 
+Phase 8 benchmark execution is script-only for v1.8 release hardening. The
+shipped CLI does not expose a `benchmark` command; use the retained helper
+scripts under `scripts/run_phase8_*.sh` and `scripts/compare_phase8_*.py`.
+
 ```bash
-# Quick run against a local Postgres instance
-coldkeep benchmark run --dataset small
+# Inspect/resume the packed block-size matrix
+scripts/run_phase8_blocksize_matrix.sh --list-missing
 
-# JSON output (suitable for tooling and baseline comparison)
-coldkeep benchmark run --dataset small --output json
+# Resume or execute the matrix
+scripts/run_phase8_blocksize_matrix.sh
 
-# Compare against a recorded baseline
-coldkeep benchmark run --dataset small --output json --compare benchmark-baseline.json
+# Summarize completed artifacts
+python3 scripts/summarize_phase8_blocksize.py --input-dir tmp/bench_phase8
 
-# Available presets: small | medium | large
-coldkeep benchmark run --dataset medium --repeat 3
+# Focused sequence runners remain available for single-slice experiments
+scripts/run_phase8_store_sequence.sh <BLOCK_MB> <DATASET_PATH> <RUN_ID>
+scripts/run_phase8_restore_sequence.sh <BLOCK_MB> <DATASET_PATH> <RUN_ID>
+scripts/run_phase8_dedup_sequence.sh <BLOCK_MB> <DATASET_ROOT> <RUN_ID>
+scripts/run_phase8_gc_sequence.sh <BLOCK_MB> <DATASET_ROOT> <RUN_ID>
 
-# Override store-folder benchmark worker concurrency for experiments
-coldkeep benchmark run --dataset small --workers 1
-coldkeep benchmark run --dataset small --workers 4
-
-# Medium runs can exceed default DB operation timeout on busy local machines
-export COLDKEEP_DB_OPERATION_TIMEOUT_MS=1800000
-coldkeep benchmark run --dataset medium --workers 4 --output json
+# Compare focused result documents
+python3 scripts/compare_phase8_dedup_results.py <result_1m.json> <result_2m.json>
+python3 scripts/compare_phase8_gc_results.py <result_1m.json> <result_2m.json>
 ```
 
 Required environment for deterministic benchmark runs:

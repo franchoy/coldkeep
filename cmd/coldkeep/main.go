@@ -370,8 +370,6 @@ func runCLI(args []string) int {
 		err = runGCCommand(parsed, outputMode)
 	case "simulate":
 		err = runSimulateCommand(parsed, outputMode)
-	case "benchmark":
-		err = runBenchmarkCommand(parsed, outputMode)
 	case "stats":
 		err = runStatsCommand(parsed, outputMode)
 	case "inspect":
@@ -602,7 +600,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
 		return
 	}
 
@@ -795,18 +793,11 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	case "", "text", "human":
 		return outputModeText, nil
 	case "table":
-		if parsed.method == "benchmark" {
-			return outputModeText, nil
-		}
 		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	case "json":
 		return outputModeJSON, nil
 	default:
-		allowed := "human, text, json"
-		if parsed.method == "benchmark" {
-			allowed = "human, text, table, json"
-		}
-		return outputModeText, usageErrorf("invalid --output value %q (allowed: %s)", value, allowed)
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	}
 }
 
@@ -842,7 +833,6 @@ var outputSupportedCommands = map[string]bool{
 	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
-	"benchmark":    true,
 	"snapshot":     true,
 }
 
@@ -4765,8 +4755,6 @@ func printHelp() {
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
-		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  benchmark run [--dataset <small|medium|large>] [--repeat <N>] [--workers <N>] [--output <table|json>]", "Run full benchmark scenario suite using dataset presets"},
 		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
 		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
