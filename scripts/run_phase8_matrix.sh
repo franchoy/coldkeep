@@ -47,4 +47,4 @@ done
 
 log "Matrix COMPLETE"
 log "Results in: tmp/bench_phase8_*/"
-ls tmp/bench_phase8_*/  2>/dev/null | wc -l
+find tmp/bench_phase8_/ -mindepth 1 -maxdepth 1 2>/dev/null | wc -l
