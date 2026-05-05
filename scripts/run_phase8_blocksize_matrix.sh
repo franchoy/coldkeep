@@ -52,6 +52,7 @@ split_csv() {
 	local raw="$1"
 	local -n out_ref=$2
 	IFS=',' read -r -a out_ref <<<"$raw"
+	: "${out_ref[@]+set}"  # nameref populated via indirect assignment; suppress SC2034
 }
 
 is_complete_json() {
@@ -145,6 +146,7 @@ for dataset in "${DATASETS[@]}"; do
 				fi
 				printf '%s\t%s\n' "$status" "$out_file"
 				if [[ "$status" != "done" ]]; then
+					# shellcheck disable=SC2034
 					needs_run=1
 				fi
 			done
