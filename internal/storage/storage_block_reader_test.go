@@ -213,29 +213,8 @@ func TestStorageBlockReaderMetadataValidation(t *testing.T) {
 			reader := NewStorageBlockReader(dbconn, "/tmp")
 			_, err := reader.ReadBlock(context.Background(), tc.blockID)
 
-			// Container read will fail, but we can check metadata validation
-			if tc.shouldFail && err == nil {
-				// Metadata validation may not trigger if container read fails first
-				// This is expected — the important part is the validation logic exists
-			}
+			// Container read will fail before metadata validation triggers; no assertion needed here.
+			_ = err
 		})
 	}
-}
-
-// Mock for testing when actual container isn't needed
-type mockFileContainer struct {
-	data []byte
-	err  error
-}
-
-func (m *mockFileContainer) Close() error {
-	return nil
-}
-
-func (m *mockFileContainer) ReadAt(p []byte, off int64) (int, error) {
-	if m.err != nil {
-		return 0, m.err
-	}
-	copy(p, m.data[off:])
-	return len(p), nil
 }

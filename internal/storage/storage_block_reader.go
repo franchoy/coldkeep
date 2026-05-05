@@ -162,7 +162,7 @@ func (r *StorageBlockReader) readBlockFromContainer(meta *blockMetadata) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("open container %s: %w", meta.ContainerName, err)
 	}
-	defer fc.Close()
+	defer func() { _ = fc.Close() }()
 
 	// Read block bytes at offset using the Container interface
 	payload, err := container.ReadPayloadAt(fc, meta.ContainerOffset, meta.StoredSize)

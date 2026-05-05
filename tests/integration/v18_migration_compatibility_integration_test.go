@@ -1792,12 +1792,10 @@ func TestPhase9CLICompatibilityIntegration(t *testing.T) {
 	newFileHash := testutils.SHA256File(t, newFilePath)
 
 	newFolderPath := filepath.Join(packedInputRoot, "new-folder-cli")
-	newFolderFiles := make([]string, 0, 5)
 	newFolderHashes := make(map[string]struct{})
 	for i := 0; i < 5; i++ {
 		p := filepath.Join(newFolderPath, fmt.Sprintf("file-%02d.dat", i))
 		writeDeterministicFileWithSalt(t, p, 512000+(i*100), 5100+i)
-		newFolderFiles = append(newFolderFiles, p)
 		newFolderHashes[testutils.SHA256File(t, p)] = struct{}{}
 	}
 
