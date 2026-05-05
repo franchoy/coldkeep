@@ -272,7 +272,7 @@ func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
-	payload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(
+	benchmarkRes := testutils.RunColdkeepCommand(
 		t,
 		repoRoot,
 		binPath,
@@ -282,7 +282,24 @@ func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
 		"--dataset", "small",
 		"--workers", "4",
 		"--output", "json",
-	), "benchmark")
+	)
+	if benchmarkRes.ExitCode != 0 {
+		t.Fatalf("benchmark run failed: exit=%d stderr=%s", benchmarkRes.ExitCode, benchmarkRes.Stderr)
+	}
+	jsonLines := testutils.ParseJSONLines(benchmarkRes.Stdout)
+	var payload map[string]any
+	for _, candidate := range jsonLines {
+		if _, ok := candidate["data"]; ok {
+			payload = candidate
+			break
+		}
+	}
+	if payload == nil {
+		t.Fatalf("expected benchmark JSON payload with data object, got stdout=%s", benchmarkRes.Stdout)
+	}
+	if status, _ := payload["status"].(string); status != "ok" {
+		t.Fatalf("expected benchmark status=ok, got payload=%v", payload)
+	}
 
 	data := testutils.JSONMap(t, payload, "data")
 	aggStats := testutils.JSONMap(t, data, "execution_stats")
