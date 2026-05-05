@@ -6927,12 +6927,15 @@ func TestRunStatsCommandJSONContract(t *testing.T) {
 				ChunkerVersions:  []observability.VersionStat{{Version: "v2-fastcdc", Chunks: 3, Bytes: 1024}},
 			},
 			BlockLayout: observability.BlockLayoutStats{
-				StorageBlocksCount:  4,
-				ChunkBlockRefsCount: 9,
-				AvgChunksPerBlock:   2.25,
-				PackedBlockCount:    4,
-				LegacyBlockCount:    1,
-				CodecDistribution:   map[string]int64{"none": 4},
+				StorageBlocksCount:    4,
+				ChunkBlockRefsCount:   9,
+				AvgChunksPerBlock:     2.25,
+				AvgBlockPlaintextSize: 786432,
+				AvgBlockStoredSize:    786432,
+				AvgBlockFillRatio:     0.75,
+				PackedBlockCount:      4,
+				LegacyBlockCount:      1,
+				CodecDistribution:     map[string]int64{"none": 4},
 			},
 			Containers: observability.ContainerStats{TotalBytes: 2048},
 			Warnings:   []observability.ObservationWarning{{Code: "STATS_WARNING", Message: "stats warning"}},
@@ -6980,10 +6983,15 @@ func TestRunStatsCommandJSONContract(t *testing.T) {
 	}
 	assertJSONNumber(t, blockLayout, "storage_blocks_count", 4)
 	assertJSONNumber(t, blockLayout, "chunk_block_refs_count", 9)
+	assertJSONNumber(t, blockLayout, "avg_block_plaintext_size", 786432)
+	assertJSONNumber(t, blockLayout, "avg_block_stored_size", 786432)
 	assertJSONNumber(t, blockLayout, "packed_block_count", 4)
 	assertJSONNumber(t, blockLayout, "legacy_block_count", 1)
 	if got, ok := blockLayout["avg_chunks_per_block"].(float64); !ok || got != 2.25 {
 		t.Fatalf("avg_chunks_per_block mismatch: got=%v", blockLayout["avg_chunks_per_block"])
+	}
+	if got, ok := blockLayout["avg_block_fill_ratio"].(float64); !ok || got != 0.75 {
+		t.Fatalf("avg_block_fill_ratio mismatch: got=%v", blockLayout["avg_block_fill_ratio"])
 	}
 	codecDistribution, ok := blockLayout["codec_distribution"].(map[string]any)
 	if !ok {

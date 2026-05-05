@@ -168,6 +168,8 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 		"storage_blocks_count: 100",
 		"chunk_block_refs_count: 3,200",
 		"avg_chunks_per_block: 32.00",
+		"avg_block_plaintext_size: 2.0 MiB",
+		"avg_block_stored_size: 1.9 MiB",
 		"avg_block_fill_ratio: 0.950",
 		"legacy_block_count: 12",
 		"packed_block_count: 100",
