@@ -21,11 +21,11 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.7%20performance%20validation%20%26%20release%20readiness-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.8%20block%20abstraction%20%26%20release%20hardening-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.7 adds controlled-execution performance measurement and validation while preserving restore determinism, GC safety, and snapshot semantics. It is not a fully concurrent daemon release, and it does not change the storage format or introduce a schema-breaking migration.
-> Migration note (v1.7): none required.
+> Status: v1.8 introduces packed block abstraction with configurable block sizing (1/2/3 MiB), improved garbage collection semantics for multi-size repositories, and locked defaults for production deployment. Restore determinism, GC safety, and snapshot semantics remain preserved. It does not require schema migration for existing v1.7 repositories.
+> Migration note (v1.8): none required; existing data remains accessible through compatibility adapter layer.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -76,6 +76,7 @@ Coldkeep has eight explicit correctness layers:
 - v1.7: controlled-execution performance validation (benchmarking, deterministic comparison, and release-readiness safety proof without storage-format or schema-breaking change)
 
 Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
+- v1.8: block abstraction and finalization (locked block-size defaults, configurable operator override, mixed-version repository support, release hardening)
 
 If you are new to the project, start here, then continue to [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model and [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for the guarantee-to-evidence map.
 
