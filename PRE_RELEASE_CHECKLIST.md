@@ -20,20 +20,20 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 14-17 as required release gates after sections 1-13.
 
-## Release Freeze Policy (v1.7 Phase 9 Step 1)
+## Release Freeze Policy (v1.8 Phase 9 Step 1)
 
 Before running the technical release checks below, freeze implementation scope.
 
-Phase 9 goal: prove v1.7 is faster while remaining fully Coldkeep-safe across
-deterministic restore, GC safety, snapshot correctness, crash-safety assumptions,
-stable CLI behavior, measurable performance, and no hidden semantic regressions.
+Phase 9 goal: make v1.8 boring in production: no surprises, no hidden dev
+paths, and every operator-facing behavior documented while preserving
+deterministic restore, GC safety, snapshot correctness, and stable CLI behavior.
 
 Release-positioning note:
 
-- v1.7 improves performance via controlled execution.
-- v1.7 is not a fully concurrent daemon release.
-- v1.7 introduces no storage format change.
-- v1.7 introduces no schema-breaking change.
+- v1.8 introduces packed-block storage metadata for new writes.
+- v1.8 reads v1.7 repositories without forced rewrite.
+- v1.8 default packed block target is 1 MiB.
+- v1.8 keeps mixed legacy/packed repositories as valid steady-state.
 - restore determinism is preserved.
 - GC safety is preserved.
 - snapshot semantics are preserved.

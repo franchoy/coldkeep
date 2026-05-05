@@ -398,12 +398,15 @@ Operator-facing v1.8 delta for common commands:
 Chunker benchmark and interpretation:
 
 ```bash
+coldkeep benchmark chunkers --output json
+coldkeep benchmark run --dataset small --repeat 1 --output json
 scripts/run_phase8_blocksize_matrix.sh --list-missing
 ```
 
-Phase 8 benchmarking is script-only in v1.8 release builds. Use the retained
-helpers under `scripts/run_phase8_*.sh` and `scripts/compare_phase8_*.py`
-instead of a shipped CLI benchmark command.
+v1.8 supports both CLI and scripted benchmark workflows.
+
+- Use `coldkeep benchmark chunkers` and `coldkeep benchmark run` for operator-facing repeatable local measurements.
+- Use `scripts/run_phase8_*.sh` and `scripts/compare_phase8_*.py` for release matrix orchestration and historical comparison workflows.
 
 Typical outcomes to expect (informational ranges):
 
