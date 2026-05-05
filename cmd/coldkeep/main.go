@@ -370,6 +370,8 @@ func runCLI(args []string) int {
 		err = runGCCommand(parsed, outputMode)
 	case "simulate":
 		err = runSimulateCommand(parsed, outputMode)
+	case "benchmark":
+		err = runBenchmarkCommand(parsed, outputMode)
 	case "stats":
 		err = runStatsCommand(parsed, outputMode)
 	case "inspect":
