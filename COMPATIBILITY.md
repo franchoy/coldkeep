@@ -115,6 +115,8 @@ Contract:
 
 - v1.8 reads repositories created by v1.7.
 - New writes made by v1.8 use packed-block metadata (`storage_blocks`, `chunk_block_refs`).
+- The compiled-in default packed block size in v1.8 is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` is an advanced/operator override that affects new writes only.
 - Repositories that contain both legacy v1.7 data and v1.8 packed-block data are expected.
 - v1.7 must not be assumed to read v1.8 packed-block data.
 - Upgrading to v1.8 does not automatically rewrite existing v1.7 data.
@@ -122,6 +124,7 @@ Contract:
 Practical consequence:
 
 - Operators can upgrade safely without forced rewrite, continue restoring historical data, and accept mixed-layout repositories as normal.
+- Readers continue to use persisted per-block metadata, so changing `COLDKEEP_BLOCK_TARGET_SIZE_MB` later does not affect restore of existing blocks.
 
 Packed-block codec boundary (current v1.8 behavior):
 
@@ -137,7 +140,7 @@ Why this is explicit:
 
 Forward-looking note:
 
-- Compression and encrypted packed-block payloads are planned for v1.9, not v1.8.
+- Compression is not enabled in v1.8. v1.9 will build on the packed-block foundation with block-level compression and encrypted packed-block payloads.
 
 Chunker evolution model:
 

@@ -24,7 +24,7 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![Status](https://img.shields.io/badge/status-v1.8%20block%20abstraction%20%26%20release%20hardening-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.8 introduces packed block abstraction with configurable block sizing (1/2/3 MiB), improved garbage collection semantics for multi-size repositories, and locked defaults for production deployment. Restore determinism, GC safety, and snapshot semantics remain preserved. It does not require schema migration for existing v1.7 repositories.
+> Status: v1.8 introduces packed storage blocks for new writes, with a compiled-in default packed block size of 1 MiB and an advanced write-time override via `COLDKEEP_BLOCK_TARGET_SIZE_MB`. Restore determinism, GC safety, and snapshot semantics remain preserved, and no schema migration is required for existing v1.7 repositories.
 > Migration note (v1.8): none required; existing data remains accessible through compatibility adapter layer.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
@@ -76,9 +76,22 @@ Coldkeep has eight explicit correctness layers:
 - v1.7: controlled-execution performance validation (benchmarking, deterministic comparison, and release-readiness safety proof without storage-format or schema-breaking change)
 
 Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
+
 - v1.8: block abstraction and finalization (locked block-size defaults, configurable operator override, mixed-version repository support, release hardening)
 
 If you are new to the project, start here, then continue to [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model and [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for the guarantee-to-evidence map.
+
+## v1.8 Storage Contract
+
+- v1.8 introduces packed storage blocks for new data.
+- The default packed block size is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` exists as an advanced operator tuning override for new writes only.
+- v1.8 reads existing v1.7 repositories without rewriting historical data.
+- v1.8 writes packed blocks for new data through `storage_blocks` and `chunk_block_refs`.
+- Mixed repositories containing legacy v1.7 data and new v1.8 packed blocks are valid steady-state.
+- v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
+- Compression is not enabled for v1.8 packed-block writes; packed blocks use `codec=none`.
+- v1.9 will build on the packed-block foundation with block-level compression.
 
 ## Core Guarantees
 

@@ -1,6 +1,22 @@
 # Phase 8 - Benchmark and Block Size Decision (v1.8)
 
-Status: decision framework locked.
+Status: decision finalized for v1.8 release hardening.
+
+## Final Decision
+
+- v1.8 introduces packed storage blocks for new writes.
+- The v1.8 compiled-in default packed block size is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` remains available as an advanced/operator write-time override for benchmarking and workload-specific tuning.
+- v1.8 reads existing v1.7 repositories and writes packed blocks only for new data.
+- Mixed repositories containing legacy v1.7 data and v1.8 packed blocks are valid.
+- v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
+- Compression is not enabled in v1.8 packed-block writes.
+- v1.9 will build on the packed-block foundation with block-level compression.
+
+Decision note:
+
+- Phase 8 benchmarking remains useful as supporting evidence and retained tooling, but it no longer implies that 2 MiB or 3 MiB are release defaults.
+- Alternative sizes remain benchmark/tuning candidates only; 1 MiB is the locked production default for v1.8.
 
 ## Objective
 

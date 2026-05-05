@@ -416,9 +416,19 @@ Purpose:
 - Retain operator override capability for tuning on specific workloads.
 - Document override as advanced operator feature, not default behavior.
 
+Release contract summary:
+
+- v1.8 introduces packed storage blocks for new writes.
+- v1.8 reads v1.7 repositories and does not rewrite historical v1.7 data during upgrade.
+- New data written by v1.8 uses packed blocks; mixed repositories are valid steady-state.
+- The compiled-in default packed block size is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` is an advanced write-time override for operators.
+- v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
+- Compression is not enabled in v1.8 packed-block writes; v1.9 will extend this design with block-level compression.
+
 ### Default Block Size (Locked for v1.8)
 
-**Compiled-in default: 1 MiB (1,048,576 bytes)**
+#### Compiled-in default: 1 MiB (1,048,576 bytes)
 
 This is the target packed block size used by default for all new writes.
 
@@ -435,7 +445,7 @@ Contract:
 
 Environment variable:
 
-```
+```text
 COLDKEEP_BLOCK_TARGET_SIZE_MB = <size_in_mb>
 ```
 
@@ -444,7 +454,7 @@ Behavior:
 - **Location**: Read at write time; affects new writes only.
 - **Validated values**: 1, 2, 3 (from Phase 8 benchmarking).
 - **Invalid/unsupported values**: Fall back to 1 MiB default with log warning.
-- **Precedence**: COLDKEEP_BLOCK_TARGET_SIZE_MB takes precedence over legacy COLDKEEP_PACKED_BLOCK_SIZE_MIB if both are set.
+- **Precedence**: `COLDKEEP_BLOCK_TARGET_SIZE_MB` is the documented v1.8 override for release builds.
 
 Contract:
 

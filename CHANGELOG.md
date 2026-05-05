@@ -25,10 +25,12 @@ project, do not start here; start with [README.md](README.md).
 
 - v1.8 reads existing v1.7 repositories.
 - New writes performed by v1.8 use packed blocks (`storage_blocks` + `chunk_block_refs`).
+- The compiled-in default packed block size for v1.8 is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` remains available as an advanced/operator write-time tuning override.
 - Mixed repositories containing legacy v1.7 data and v1.8 packed-block data are expected steady-state.
 - v1.7 is not expected to read v1.8 packed-block data.
 - Existing v1.7 data is not automatically rewritten during upgrade.
-- Current packed-block runtime contract is plain-only (`storage_blocks` packed metadata codec semantics use `none`); compression and encrypted packed-block payload support are deferred to v1.9.
+- Current packed-block runtime contract is plain-only (`storage_blocks` packed metadata codec semantics use `none`); compression is not enabled in v1.8, and v1.9 will build on this foundation with block-level compression and encrypted packed-block payload support.
 
 ------------------------------------------------------------------------
 
