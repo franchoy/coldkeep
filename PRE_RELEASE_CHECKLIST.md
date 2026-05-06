@@ -269,6 +269,9 @@ This step is intentionally non-blocking for release sign-off.
 Use it to catch broader regressions outside the required CI-equivalent gate set in steps 2-3.
 
 ```bash
+unset COLDKEEP_STORAGE_DIR
+unset COLDKEEP_CODEC
+
 go test -p 1 ./tests/... -count=1 -v -timeout 20m
 ```
 
