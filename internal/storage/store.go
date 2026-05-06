@@ -1371,6 +1371,11 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 		}
 	}()
 
+	restoreService := &RestoreService{
+		ChunkResolver: NewDualCompatChunkResolver(dbconn),
+		BlockReader:   NewStorageBlockReader(dbconn, containersDir),
+	}
+
 	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 	var expectedOrder int64
 
@@ -1380,53 +1385,66 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 		}
 		expectedOrder++
 
-		if containerfilename != chunkRow.filename {
-			if filecontainer != nil {
-				if closeErr := filecontainer.Close(); closeErr != nil {
-					return fmt.Errorf("close container %q during semantic validation: %w", containerfilename, closeErr)
+		seg, segErr := restoreService.ResolveChunkLocation(ctx, chunkRow.chunkID)
+		if segErr != nil {
+			return fmt.Errorf("resolve chunk for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, segErr)
+		}
+
+		var plaintext []byte
+		if seg != nil && seg.BlockID > 0 {
+			plaintext, err = restoreService.ReadChunkFromBlock(ctx, seg.BlockID, seg.Offset, seg.Size)
+			if err != nil {
+				return fmt.Errorf("read packed chunk for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
+			}
+		} else {
+			if containerfilename != chunkRow.filename {
+				if filecontainer != nil {
+					if closeErr := filecontainer.Close(); closeErr != nil {
+						return fmt.Errorf("close container %q during semantic validation: %w", containerfilename, closeErr)
+					}
+					filecontainer = nil
 				}
-				filecontainer = nil
+
+				containerPath := filepath.Join(containersDir, chunkRow.filename)
+				filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+				if err != nil {
+					return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+				}
+				containerfilename = chunkRow.filename
 			}
 
-			containerPath := filepath.Join(containersDir, chunkRow.filename)
-			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+			payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
 			if err != nil {
-				return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+				return fmt.Errorf("read payload for semantic validation from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
 			}
-			containerfilename = chunkRow.filename
-		}
 
-		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
-		if err != nil {
-			return fmt.Errorf("read payload for semantic validation from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
-		}
+			codec := blocks.Codec(chunkRow.blocksCodec)
+			transformer, ok := transformerCache[codec]
+			if !ok {
+				transformer, err = blocks.GetBlockTransformer(codec)
+				if err != nil {
+					return fmt.Errorf("get block transformer for semantic validation codec %s: %w", chunkRow.blocksCodec, err)
+				}
+				transformerCache[codec] = transformer
+			}
 
-		codec := blocks.Codec(chunkRow.blocksCodec)
-		transformer, ok := transformerCache[codec]
-		if !ok {
-			transformer, err = blocks.GetBlockTransformer(codec)
+			plaintext, err = transformer.Decode(ctx, blocks.DecodeInput{
+				ChunkHash: chunkRow.expectedChunkHash,
+				Descriptor: blocks.Descriptor{
+					ChunkID:       chunkRow.chunkID,
+					Codec:         codec,
+					FormatVersion: chunkRow.blocksFormatVersion,
+					PlaintextSize: chunkRow.plaintextSize,
+					StoredSize:    chunkRow.storedSize,
+					Nonce:         chunkRow.blocksNonce,
+					ContainerID:   chunkRow.blocksContainerID,
+					BlockOffset:   chunkRow.blockOffset,
+				},
+				Payload: payload,
+			})
 			if err != nil {
-				return fmt.Errorf("get block transformer for semantic validation codec %s: %w", chunkRow.blocksCodec, err)
+				return fmt.Errorf("decode payload for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
 			}
-			transformerCache[codec] = transformer
-		}
-
-		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-			ChunkHash: chunkRow.expectedChunkHash,
-			Descriptor: blocks.Descriptor{
-				ChunkID:       chunkRow.chunkID,
-				Codec:         codec,
-				FormatVersion: chunkRow.blocksFormatVersion,
-				PlaintextSize: chunkRow.plaintextSize,
-				StoredSize:    chunkRow.storedSize,
-				Nonce:         chunkRow.blocksNonce,
-				ContainerID:   chunkRow.blocksContainerID,
-				BlockOffset:   chunkRow.blockOffset,
-			},
-			Payload: payload,
-		})
-		if err != nil {
-			return fmt.Errorf("decode payload for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
 		}
 
 		if int64(len(plaintext)) != chunkRow.plaintextSize {
@@ -1488,26 +1506,6 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return err
 	}
 	if !runSemanticValidation {
-		return nil
-	}
-
-	// Packed AES-GCM chunks are stored as encrypted multi-chunk blobs.
-	// Chunk-level semantic replay currently relies on legacy per-chunk payload layout,
-	// so skip that replay for files backed by packed AES-GCM mappings.
-	var hasPackedAES bool
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1
-			FROM file_chunk fc
-			JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
-			JOIN storage_blocks sb ON sb.id = r.block_id
-			WHERE fc.logical_file_id = $1
-			  AND sb.codec = 'aes-gcm'
-		)
-	`, fileID).Scan(&hasPackedAES); err != nil {
-		return fmt.Errorf("check packed aes-gcm semantic reuse skip for logical file %d: %w", fileID, err)
-	}
-	if hasPackedAES {
 		return nil
 	}
 
