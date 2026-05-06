@@ -570,7 +570,17 @@ func TestStoreMixedExistingAndNewChunksPacksOnlyNewAndPreservesRecipeOrder(t *te
 		_ = txC.Rollback()
 		t.Fatalf("mark chunk C completed: %v", err)
 	}
-	if err := insertLegacyCompanionBlockRowWithContext(context.Background(), txC, chunkCID, persistedC.Placement.ContainerID, persistedC.Placement.Offset, int64(len(payloadC))); err != nil {
+	if err := insertLegacyCompanionBlockRowWithContext(
+		context.Background(),
+		txC,
+		chunkCID,
+		"plain",
+		[]byte{},
+		persistedC.Placement.ContainerID,
+		persistedC.Placement.Offset,
+		int64(len(payloadC)),
+		int64(len(payloadC)),
+	); err != nil {
 		_ = txC.Rollback()
 		t.Fatalf("insert companion block row for C: %v", err)
 	}
