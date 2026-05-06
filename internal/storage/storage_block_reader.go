@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -16,9 +17,12 @@ import (
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
 // It handles the full lifecycle: load metadata, read container bytes, decrypt, decode.
 type StorageBlockReader struct {
-	db               *sql.DB
-	containersDir    string
-	verifyHash       bool
+	db            *sql.DB
+	containersDir string
+	verifyHash    bool
+	// transformerCache is shared by reads and guarded by transformerMu.
+	// StorageBlockReader may be reused across goroutines.
+	transformerMu    sync.RWMutex
 	transformerCache map[blocks.Codec]blocks.Transformer
 }
 
@@ -29,6 +33,21 @@ func NewStorageBlockReader(db *sql.DB, containersDir string) *StorageBlockReader
 		containersDir:    containersDir,
 		verifyHash:       true, // mandatory verification in Phase 3+
 		transformerCache: make(map[blocks.Codec]blocks.Transformer),
+	}
+}
+
+// normalizeStorageBlockCodec maps persisted storage_blocks.codec values to runtime codecs.
+// Canonical persisted values are "none" and "aes-gcm".
+// "plain" is accepted as a legacy/test synonym for "none".
+func normalizeStorageBlockCodec(raw string) (blocks.Codec, error) {
+	codecText := strings.TrimSpace(strings.ToLower(raw))
+	switch codecText {
+	case packedStorageBlockCodecNone, "plain":
+		return blocks.CodecPlain, nil
+	case string(blocks.CodecAESGCM):
+		return blocks.CodecAESGCM, nil
+	default:
+		return "", fmt.Errorf("unsupported storage_blocks codec %q (expected %q or %q)", raw, packedStorageBlockCodecNone, blocks.CodecAESGCM)
 	}
 }
 
@@ -181,9 +200,9 @@ func (r *StorageBlockReader) readBlockFromContainer(meta *blockMetadata) ([]byte
 // For "plain" codec, returns bytes unchanged.
 // For "aes-gcm", decrypts and returns plaintext.
 func (r *StorageBlockReader) decryptBlock(ctx context.Context, meta *blockMetadata, storedBytes []byte) ([]byte, error) {
-	codec := blocks.Codec(meta.Codec)
-	if strings.EqualFold(strings.TrimSpace(meta.Codec), packedStorageBlockCodecNone) {
-		codec = blocks.CodecPlain
+	codec, err := normalizeStorageBlockCodec(meta.Codec)
+	if err != nil {
+		return nil, err
 	}
 
 	decodePayload := storedBytes
@@ -196,14 +215,22 @@ func (r *StorageBlockReader) decryptBlock(ctx context.Context, meta *blockMetada
 	}
 
 	// Get or create transformer for this codec
+	r.transformerMu.RLock()
 	transformer, ok := r.transformerCache[codec]
+	r.transformerMu.RUnlock()
 	if !ok {
-		var err error
-		transformer, err = blocks.GetBlockTransformer(codec)
-		if err != nil {
-			return nil, fmt.Errorf("get transformer for codec %s: %w", meta.Codec, err)
+		r.transformerMu.Lock()
+		// Re-check after taking write lock to avoid duplicate initialization.
+		transformer, ok = r.transformerCache[codec]
+		if !ok {
+			transformer, err = blocks.GetBlockTransformer(codec)
+			if err != nil {
+				r.transformerMu.Unlock()
+				return nil, fmt.Errorf("get transformer for codec %s: %w", meta.Codec, err)
+			}
+			r.transformerCache[codec] = transformer
 		}
-		r.transformerCache[codec] = transformer
+		r.transformerMu.Unlock()
 	}
 
 	// Create descriptor for decode
