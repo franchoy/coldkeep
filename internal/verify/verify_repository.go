@@ -372,28 +372,48 @@ func isValidMigrationCompanionMapping(ctx context.Context, dbconn *sql.DB, chunk
 	var formatVersion int64
 	var plaintextSize int64
 	var storedSize int64
+	var nonce []byte
 	var legacyContainerID int64
 	var legacyOffset int64
 	if err := dbconn.QueryRowContext(ctx,
-		`SELECT codec, format_version, plaintext_size, stored_size, container_id, block_offset
+		`SELECT codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset
 		 FROM blocks
 		 WHERE chunk_id = $1`,
 		chunkID,
-	).Scan(&codec, &formatVersion, &plaintextSize, &storedSize, &legacyContainerID, &legacyOffset); err != nil {
+	).Scan(&codec, &formatVersion, &plaintextSize, &storedSize, &nonce, &legacyContainerID, &legacyOffset); err != nil {
 		return false, err
 	}
 
-	if codec != "plain" || formatVersion != 1 {
+	if formatVersion != 1 {
 		return false, nil
 	}
-	if plaintextSize != chunkSize || storedSize != chunkSize {
-		return false, nil
-	}
-	if sizeInBlock != chunkSize {
-		return false, nil
-	}
-	expectedLegacyOffset := packedContainerOffset + payloadPrefixBytes + offsetInBlock
-	if legacyContainerID != packedContainerID || legacyOffset != expectedLegacyOffset {
+
+	switch codec {
+	case "plain":
+		if plaintextSize != chunkSize || storedSize != chunkSize {
+			return false, nil
+		}
+		if sizeInBlock != chunkSize {
+			return false, nil
+		}
+		expectedLegacyOffset := packedContainerOffset + payloadPrefixBytes + offsetInBlock
+		if legacyContainerID != packedContainerID || legacyOffset != expectedLegacyOffset {
+			return false, nil
+		}
+	case "aes-gcm":
+		if plaintextSize != chunkSize {
+			return false, nil
+		}
+		if storedSize <= 0 {
+			return false, nil
+		}
+		if len(nonce) != 12 {
+			return false, nil
+		}
+		if legacyContainerID != packedContainerID || legacyOffset != packedContainerOffset {
+			return false, nil
+		}
+	default:
 		return false, nil
 	}
 
