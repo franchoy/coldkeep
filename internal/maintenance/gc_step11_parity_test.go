@@ -86,7 +86,7 @@ func TestStep11DryRunPackedReclaimableMatchesActualGC(t *testing.T) {
 		var blockID int64
 		if err := dbconn.QueryRow(
 			`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-			 VALUES (1, 'plain', $1, $2, $3, 0, $4)
+			 VALUES (1, 'none', $1, $2, $3, 0, $4)
 			 RETURNING id`,
 			int64(len(payload)),
 			int64(len(payload)),
