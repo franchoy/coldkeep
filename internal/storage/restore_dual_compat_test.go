@@ -104,13 +104,16 @@ func TestNewDualCompatRestoreServiceHasCorrectResolver(t *testing.T) {
 	}
 	defer dbconn.Close()
 
-	svc := NewDualCompatRestoreService(dbconn)
+	svc := NewDualCompatRestoreService(dbconn, t.TempDir())
 	if svc.ChunkResolver == nil {
 		t.Fatalf("expected non-nil ChunkResolver")
 	}
 	_, ok := svc.ChunkResolver.(*DualCompatChunkResolver)
 	if !ok {
 		t.Fatalf("expected DualCompatChunkResolver, got %T", svc.ChunkResolver)
+	}
+	if svc.BlockReader == nil {
+		t.Fatalf("expected non-nil BlockReader")
 	}
 }
 

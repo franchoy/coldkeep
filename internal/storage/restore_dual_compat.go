@@ -120,11 +120,13 @@ func (r *LegacyBlockChunkResolver) ResolveChunk(ctx context.Context, chunkID int
 }
 
 // NewDualCompatRestoreService creates a restore service for mixed v1.7+v1.8 repositories.
-// It uses a DualCompatChunkResolver to automatically detect and handle both layouts.
-func NewDualCompatRestoreService(db *sql.DB) *RestoreService {
+// It uses a DualCompatChunkResolver to automatically detect and handle both layouts,
+// and a StorageBlockReader to read v1.8 packed blocks from disk.
+// containersDir must be the directory where container files are stored.
+func NewDualCompatRestoreService(db *sql.DB, containersDir string) *RestoreService {
 	return &RestoreService{
 		ChunkResolver: NewDualCompatChunkResolver(db),
-		BlockReader:   nil, // Will be wired in Phase 4 when write path is integrated
+		BlockReader:   NewStorageBlockReader(db, containersDir),
 	}
 }
 
