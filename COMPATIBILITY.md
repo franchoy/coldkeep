@@ -128,19 +128,20 @@ Practical consequence:
 
 Packed-block codec boundary (current v1.8 behavior):
 
-- v1.8 packed blocks persisted in `storage_blocks` use `codec = "none"`.
-- Full-block encrypted packed payloads (`pack -> encode -> encrypt full block -> store`) are not part of the current v1.8 compatibility contract.
-- For write paths that produce packed blocks, set `COLDKEEP_CODEC=plain`.
+- v1.8 packed blocks persisted in `storage_blocks` use `codec = "none"` at the block level; the block payload is a concatenation of plaintext chunk bytes.
+- Both `plain` and `aes-gcm` codec settings work with packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, individual chunk payloads are encrypted and each chunk's companion `blocks` row carries `codec="aes-gcm"` with a per-chunk nonce; the packed block container remains `codec="none"` at the `storage_blocks` level.
+- Full-block-level encryption (encrypting the entire packed block as one ciphertext) is not part of the v1.8 compatibility contract.
 - Legacy one-chunk `blocks` rows continue to support their existing codec semantics (including `aes-gcm`) per row metadata.
+- Mixed repositories that contain both `plain` and `aes-gcm` companion rows are valid.
 
 Why this is explicit:
 
-- `storage_blocks` currently does not persist per-block nonce metadata needed by `aes-gcm` decode semantics in the same way as legacy `blocks` rows.
-- Verify currently enforces packed-block header codec semantics aligned to `none` for v1.8 packed layout.
+- `storage_blocks` persists block-level metadata (`codec`, `plaintext_size`, `stored_size`, `block_hash`). Individual chunk encryption is tracked via companion `blocks` rows so the read path can decode each chunk independently.
+- Per-block full encryption (single nonce for all chunks in the block) is deferred to v1.9.
 
 Forward-looking note:
 
-- Compression is not enabled in v1.8. v1.9 will build on the packed-block foundation with block-level compression and encrypted packed-block payloads.
+- Compression is not enabled in v1.8. v1.9 will build on the packed-block foundation with block-level compression and full block-level encrypted payloads.
 
 Chunker evolution model:
 

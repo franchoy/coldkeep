@@ -2,13 +2,14 @@
 
 ## Status
 
-coldkeep v1.7 is a correctness-first storage engine focused on
+coldkeep v1.8 is a correctness-first storage engine focused on
 data integrity, deterministic restore, explicit operator-visible
 failure handling, and read-only observability/simulation tooling
 for safer diagnostics.
 
-v1.7 also introduces controlled-execution performance work without changing
-the storage format or introducing schema-breaking migrations.
+v1.8 introduces packed storage blocks (multiple chunks per physical block)
+and completes AES-GCM encrypted packed-block integration, while preserving
+restore determinism, GC safety, and snapshot semantics.
 
 It is suitable for controlled production environments where:
 
@@ -123,6 +124,7 @@ When enabled with a valid `COLDKEEP_KEY`, this provides:
 
 - confidentiality for stored block payloads at rest
 - authenticated decryption failure on ciphertext or nonce tampering
+- support for both legacy single-chunk blocks and v1.8 packed multi-chunk blocks (per-chunk nonce tracked in companion `blocks` rows)
 
 It does not provide:
 

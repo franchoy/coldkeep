@@ -8,7 +8,7 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
-v1.6 adds observability and tooling contract hardening.
+v1.8 adds packed storage blocks and completes AES-GCM packed-block integration.
 
 For the current operator-facing contract, see [README.md](README.md).
 For guarantee-to-evidence mapping, see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
@@ -27,6 +27,7 @@ project, do not start here; start with [README.md](README.md).
 - Multiple chunks per storage block (`storage_blocks` + `chunk_block_refs`).
 - Mandatory block hash validation for packed-block integrity.
 - Packed-block-aware `verify`, `gc`, and `restore` behavior.
+- AES-GCM packed-block integration: `COLDKEEP_CODEC=aes-gcm` now works end-to-end with packed writes; per-chunk nonce and codec metadata are tracked in companion `blocks` rows.
 - Block-layout stats and benchmarking documentation updates.
 
 ### Changed (v1.8 packed-block transition)
@@ -44,8 +45,8 @@ project, do not start here; start with [README.md](README.md).
 
 ### Not included (v1.8 packed-block transition)
 
-- Compression is not enabled yet.
-- Block-level compression is planned for v1.9.
+- Compression is not enabled yet; block-level compression is planned for v1.9.
+- Full block-level encryption (single ciphertext for the entire packed block) is not included; per-chunk AES-GCM via companion rows is used instead. Full block-level encryption is planned for v1.9.
 
 ------------------------------------------------------------------------
 

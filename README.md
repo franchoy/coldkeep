@@ -46,10 +46,7 @@ Unlike traditional backup tools, it emphasizes:
 
 The goal is confidence and recoverability over maximum throughput.
 
-v1.7 performance work follows the existing execution model: bounded worker-based
-commands under explicit safety constraints. It does not turn coldkeep into a
-fully concurrent daemon, and it does not change on-disk format, chunk layout,
-or operator-visible schema compatibility.
+v1.7 performance work followed the existing execution model: bounded worker-based commands under explicit safety constraints, without turning coldkeep into a fully concurrent daemon or changing on-disk format, chunk layout, or operator-visible schema compatibility. v1.8 built on this by introducing packed multi-chunk storage blocks and completing AES-GCM packed-block integration — all while preserving restore determinism, snapshot semantics, and GC safety.
 
 ## Features
 
@@ -64,7 +61,7 @@ or operator-visible schema compatibility.
 
 ## Status
 
-Coldkeep has eight explicit correctness layers:
+Coldkeep has nine explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
@@ -74,10 +71,9 @@ Coldkeep has eight explicit correctness layers:
 - v1.5: chunker-evolution compatibility contract clarity (mixed-version repositories, explicit new-writes-only chunker policy)
 - v1.6: observability and simulation contract hardening (read-only introspection, exact GC simulation parity, trace channel behavior)
 - v1.7: controlled-execution performance validation (benchmarking, deterministic comparison, and release-readiness safety proof without storage-format or schema-breaking change)
+- v1.8: packed block abstraction and AES-GCM packed-block integration (multi-chunk storage blocks, dual-compat read path, locked block-size defaults, configurable operator override, release hardening)
 
 Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
-
-- v1.8: block abstraction and finalization (locked block-size defaults, configurable operator override, mixed-version repository support, release hardening)
 
 If you are new to the project, start here, then continue to [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model and [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for the guarantee-to-evidence map.
 
@@ -90,8 +86,9 @@ If you are new to the project, start here, then continue to [ARCHITECTURE.md](AR
 - v1.8 writes packed blocks for new data through `storage_blocks` and `chunk_block_refs`.
 - Mixed repositories containing legacy v1.7 data and new v1.8 packed blocks are valid steady-state.
 - v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
-- Compression is not enabled for v1.8 packed-block writes; packed blocks use `codec=none`.
-- v1.9 will build on the packed-block foundation with block-level compression.
+- Both `plain` and `aes-gcm` codec settings work with v1.8 packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, each chunk's encryption nonce and codec metadata are tracked in per-chunk companion `blocks` rows; the packed block container in `storage_blocks` remains `codec=none`.
+- Full block-level encryption (one ciphertext per block) is not part of v1.8; compression is also not enabled in v1.8.
+- v1.9 will build on the packed-block foundation with block-level compression and full block-level encryption.
 
 ## Core Guarantees
 
@@ -848,8 +845,9 @@ Current status:
 - v1.5 chunker-evolution compatibility contract is complete.
 - v1.6 read-only observability and exact GC simulation tooling are complete.
 - v1.7 controlled-execution performance validation and release-readiness hardening are complete.
+- v1.8 packed block abstraction, AES-GCM packed-block integration, and release hardening are complete.
 
-Next focus shifts to v1.8 block abstraction while preserving the existing correctness model, restore determinism, and CLI/operator-facing compatibility contracts.
+Next focus is v1.9: block-level compression and full block-level encrypted payloads, building on the v1.8 packed-block foundation.
 
 ## Contributing
 
