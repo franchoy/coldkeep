@@ -597,6 +597,20 @@ func AssertErrorContains(t *testing.T, err error, substring string, context stri
 	}
 }
 
+func AssertErrorContainsAny(t *testing.T, err error, substrings []string, context string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %s error but got nil", context)
+	}
+	actual := strings.ToLower(err.Error())
+	for _, substring := range substrings {
+		if strings.Contains(actual, strings.ToLower(substring)) {
+			return
+		}
+	}
+	t.Fatalf("expected %s error to contain one of %q (case-insensitive), got: %v", context, substrings, err)
+}
+
 func Itoa(i int) string {
 	// small int to string without fmt to keep output clean
 	if i == 0 {
