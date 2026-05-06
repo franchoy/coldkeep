@@ -98,3 +98,11 @@ out/
 # phase output
 # =========================
 .phase_*
+
+# =========================
+# ignore pycache directories and files
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
