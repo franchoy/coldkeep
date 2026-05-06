@@ -966,69 +966,69 @@ Interpretation note:
 
 ### 19.1 Benchmark infrastructure
 
-- [ ] **Harness scripts** — all four sequence scripts present and syntax-clean:
+- [x] **Harness scripts** — all four sequence scripts present and syntax-clean:
   - `scripts/run_phase8_store_sequence.sh`
   - `scripts/run_phase8_restore_sequence.sh`
   - `scripts/run_phase8_dedup_sequence.sh`
   - `scripts/run_phase8_gc_sequence.sh`
-- [ ] **Comparator scripts** present and import-clean:
+- [x] **Comparator scripts** present and import-clean:
   - `scripts/compare_phase8_dedup_results.py`
   - `scripts/compare_phase8_gc_results.py`
   - `scripts/summarize_phase8_blocksize.py`
-- [ ] Each harness enforces **per-run DB + storage isolation** (fresh `DB_NAME`
+- [x] Each harness enforces **per-run DB + storage isolation** (fresh `DB_NAME`
   and `COLDKEEP_STORAGE_DIR` per invocation).
 
 ### 19.2 Datasets
 
-- [ ] **Repeatable dataset generator** or committed seed files exist for every
+- [x] **Repeatable dataset generator** or committed seed files exist for every
   dataset class used in the matrix (small-files, large-file, mixed,
   dedup/Dataset D, partial-live/Dataset F).
-- [ ] Dataset generation is deterministic given the same seed; the seed value
+- [x] Dataset generation is deterministic given the same seed; the seed value
   is recorded alongside results.
-- [ ] Dataset sizes and file-count targets match the values documented in
+- [x] Dataset sizes and file-count targets match the values documented in
   section 10 of this file.
 
 ### 19.3 Metrics collection
 
-- [ ] All result artefacts are present under `tmp/bench_phase8_*/` for every
+- [x] All result artefacts are present under `tmp/bench_phase8_*/` for every
   `(block_size, dataset, run_id)` triple in the matrix.
-- [ ] `*-stats.json` files contain `block_layout` fields
+- [x] `*-stats.json` files contain `block_layout` fields
   (`storage_blocks_count`, `avg_chunks_per_block`, `avg_block_fill_ratio`).
-- [ ] IO counter JSONL files are present for restore runs
+- [x] IO counter JSONL files are present for restore runs
   (`COLDKEEP_IO_COUNTERS_FILE`).
-- [ ] `*-simulate-gc.json` files contain
+- [x] `*-simulate-gc.json` files contain
   `data.gc.summary.retained_dead_bytes_due_to_packed_blocks`.
-- [ ] Medians and p95s have been extracted and entered into the result table
+- [x] Medians and p95s have been extracted and entered into the result table
   in section 17.
 
 ### 19.4 Decision
 
-- [ ] Section 17 result table is fully populated with median values.
-- [ ] Section 17 Final Decision Record is filled in with:
+- [x] Section 17 result table is fully populated with median values.
+- [x] Section 17 Final Decision Record is filled in with:
   - `DefaultBlockSize` set to the chosen value.
   - One-paragraph rationale referencing specific table rows and section 14
     thresholds.
   - 3 MiB status declared (`experimental` or `promoted`).
   - Operator note written.
-- [ ] No section 18 investigation trigger was left unresolved when the decision
+- [x] No section 18 investigation trigger was left unresolved when the decision
   was recorded.
 
 ### 19.5 Code changes
 
-- [ ] The chosen default block size is set as the compiled-in default in the
+- [x] The chosen default block size is set as the compiled-in default in the
   relevant Go source file (not only via env override).
-- [ ] `COLDKEEP_BLOCK_TARGET_SIZE_MB` env override is **retained** in the
+- [x] `COLDKEEP_BLOCK_TARGET_SIZE_MB` env override is **retained** in the
   codebase for operator use and future testing; it is documented in
   `README.md` or operator documentation.
-- [ ] `go test ./... -run TestDoesNotExist -count=1` passes with no compile
+- [x] `go test ./... -run TestDoesNotExist -count=1` passes with no compile
   errors after the default is updated.
 
 ### 19.6 Repository hygiene
 
-- [ ] All harness scripts and comparator scripts are committed.
-- [ ] Result artefacts under `tmp/` are **not** committed (covered by
+- [x] All harness scripts and comparator scripts are committed.
+- [x] Result artefacts under `tmp/` are **not** committed (covered by
   `.gitignore`); only summary JSON or the filled section 17 table is committed.
-- [ ] This file (`BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`) reflects the final
+- [x] This file (`BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`) reflects the final
   decision and is committed as part of the v1.8 release record.
 
 ## 20. Historical Template: Phase 8 Final Checklist
@@ -1044,93 +1044,90 @@ Interpretation note:
 
 ### 20.1 Implementation prerequisites
 
-- [ ] `COLDKEEP_BLOCK_TARGET_SIZE_MB` (or equivalent internal override) exists
+- [x] `COLDKEEP_BLOCK_TARGET_SIZE_MB` (or equivalent internal override) exists
   and is honoured at runtime.
-- [ ] Default block size starts as **1 MiB** in source before any benchmark
+- [x] Default block size starts as **1 MiB** in source before any benchmark
   runs begin.
-- [ ] Reader never assumes the currently-configured block size; block size is
+- [x] Reader never assumes the currently-configured block size; block size is
   derived solely from per-block metadata.
-- [ ] Existing blocks are self-describing through their stored metadata (no
+- [x] Existing blocks are self-describing through their stored metadata (no
   external side-file required to read them back).
 
 ### 20.2 Dataset coverage
 
-- [ ] Dataset A — large sequential file benchmark completed.
-- [ ] Dataset B — many-small-files benchmark completed.
-- [ ] Dataset C — mixed-folder benchmark completed.
-- [ ] Dataset D — dedup-heavy benchmark completed.
-- [ ] Dataset E — selective-restore benchmark completed.
-- [ ] Dataset F — GC partial-live benchmark completed.
-- [ ] Fresh DB + storage used for **each** block-size benchmark run.
+- [x] Dataset A — large sequential file benchmark completed.
+- [x] Dataset B — many-small-files benchmark completed.
+- [x] Dataset C — mixed-folder benchmark completed.
+- [x] Dataset D — dedup-heavy benchmark completed.
+- [x] Dataset E — selective-restore benchmark completed.
+- [x] Dataset F — GC partial-live benchmark completed.
+- [x] Fresh DB + storage used for **each** block-size benchmark run.
 
 ### 20.3 Metrics collected
 
 #### Throughput
 
-- [ ] Store throughput collected for 1 MiB and 2 MiB (all applicable datasets).
-- [ ] Restore throughput collected for 1 MiB and 2 MiB (all applicable
+- [x] Store throughput collected for 1 MiB and 2 MiB (all applicable datasets).
+- [x] Restore throughput collected for 1 MiB and 2 MiB (all applicable
   datasets).
-- [ ] Verify wall-clock time collected for 1 MiB and 2 MiB.
+- [x] Verify wall-clock time collected for 1 MiB and 2 MiB.
 
 #### GC
 
-- [ ] GC reclaim bytes collected for 1 MiB and 2 MiB.
-- [ ] `retained_dead_bytes_due_to_packed_blocks` collected for 1 MiB and 2 MiB
+- [x] GC reclaim bytes collected for 1 MiB and 2 MiB.
+- [x] `retained_dead_bytes_due_to_packed_blocks` collected for 1 MiB and 2 MiB
   (Dataset F).
 
 #### Block layout
 
-- [ ] Block count collected.
-- [ ] Average chunks per block collected.
-- [ ] Average block size collected.
-- [ ] Block fill ratio collected.
+- [x] Block count collected.
+- [x] Average chunks per block collected.
+- [x] Average block size collected.
+- [x] Block fill ratio collected.
 
 #### IO
 
-- [ ] Read amplification collected (bytes read / bytes restored).
-- [ ] Block cache hit/miss collected if instrumentation is available; explicitly
+- [x] Read amplification collected (bytes read / bytes restored).
+- [x] Block cache hit/miss collected if instrumentation is available; explicitly
   deferred and noted if not.
 
 #### Dedup
 
-- [ ] Dedup effectiveness compared between 1 MiB and 2 MiB (chunk-incremental
+- [x] Dedup effectiveness compared between 1 MiB and 2 MiB (chunk-incremental
   ratio and block-incremental ratio, Dataset D).
-- [ ] Optional compression simulation completed, **or** explicitly deferred with
+- [x] Optional compression simulation completed, **or** explicitly deferred with
   a written note explaining why.
 
 ### 20.4 Decision and documentation
 
-- [ ] Results table (section 17) fully populated with medians.
-- [ ] Final default block size decision documented in section 17 Final Decision
+- [x] Results table (section 17) fully populated with medians.
+- [x] Final default block size decision documented in section 17 Final Decision
   Record.
-- [ ] No section 18 investigation trigger left unresolved at decision time.
+- [x] No section 18 investigation trigger left unresolved at decision time.
 
 ### 20.5 Code and test sign-off
 
-- [ ] Default block size set in source to the value selected by the decision.
-- [ ] `COLDKEEP_BLOCK_TARGET_SIZE_MB` env override retained in codebase for
+- [x] Default block size set in source to the value selected by the decision.
+- [x] `COLDKEEP_BLOCK_TARGET_SIZE_MB` env override retained in codebase for
   operator use and future testing.
-- [ ] Full test suite passes after the default is updated
+- [x] Full test suite passes after the default is updated
   (`go test ./... -count=1`).
-- [ ] Race detector test passes after the default is updated
+- [x] Race detector test passes after the default is updated
   (`go test -race ./... -count=1`).
-- [ ] DB-backed compatibility tests still pass after the default is updated.
-- [ ] No correctness regressions found (all restore hashes match sources across
+- [x] DB-backed compatibility tests still pass after the default is updated.
+- [x] No correctness regressions found (all restore hashes match sources across
   all tested configurations).
 
 ### 20.6 Recommended final validation commands
 
-Run all four commands in order after the default block size is set in source.
-All must exit 0 before Phase 8 is closed.
-
-```bash
-go test -count=1 ./...
-go test -race ./...
-COLDKEEP_TEST_DB=1 go test -count=1 ./...
-COLDKEEP_TEST_DB=1 go test -race ./...
-```
+- [x] Validation commands executed and passing:
+  - `go test -count=1 ./...`
+  - `go test -race ./...`
+  - `COLDKEEP_TEST_DB=1 go test -count=1 ./...`
+  - `COLDKEEP_TEST_DB=1 go test -race ./...`
 
 ---
 
-> **Phase 8 is complete only when the default block size is chosen and
-> justified by reproducible benchmark data.**
+> **Phase 8 is complete.** The default block size (1 MiB) has been chosen and
+> justified by reproducible benchmark data. Results are in Section 17, decision
+> record is finalized, and all code changes and testing have been signed off.
