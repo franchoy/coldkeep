@@ -305,21 +305,36 @@ func commitPreparedChunksWithContext(
 					return err
 				}
 
-				if persisted.StorageCodec == packedStorageBlockCodecNone {
-					if err := insertLegacyCompanionBlockRowWithContext(
-						ctx,
-						tx,
-						pending.chunkID,
-						persisted.Placement.ContainerID,
-						persisted.Placement.Offset+segment.Offset,
-						segment.Size,
-					); err != nil {
-						_ = tx.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return errors.Join(err, rbErr)
-						}
-						return err
+				legacyCodec := "plain"
+				legacyNonce := []byte{}
+				legacyOffset := persisted.Placement.Offset + segment.Offset
+				legacyStoredSize := segment.Size
+
+				if persisted.StorageCodec == string(blocks.CodecAESGCM) {
+					legacyCodec = string(blocks.CodecAESGCM)
+					legacyNonce = append(legacyNonce, persisted.LegacyNonce...)
+					// AES-GCM packed payload stores one encrypted block blob per append.
+					// Companion rows should point at the block start for compatibility lookups.
+					legacyOffset = persisted.Placement.Offset
+					legacyStoredSize = persisted.StoredSize
+				}
+
+				if err := insertLegacyCompanionBlockRowWithContext(
+					ctx,
+					tx,
+					pending.chunkID,
+					legacyCodec,
+					legacyNonce,
+					persisted.Placement.ContainerID,
+					legacyOffset,
+					segment.Size,
+					legacyStoredSize,
+				); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
 					}
+					return err
 				}
 
 				if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, pending.chunkID, pending.prepared.Index, true); err != nil {
@@ -2659,18 +2674,25 @@ func insertLegacyCompanionBlockRowWithContext(
 	ctx context.Context,
 	tx *sql.Tx,
 	chunkID int64,
+	codec string,
+	nonce []byte,
 	containerID int64,
 	containerOffset int64,
-	chunkSize int64,
+	plaintextSize int64,
+	storedSize int64,
 ) error {
+	if codec == "" {
+		codec = "plain"
+	}
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		 VALUES ($1, $2, 1, $3, $4, $5, $6, $7)`,
 		chunkID,
-		chunkSize,
-		chunkSize,
-		[]byte{},
+		codec,
+		plaintextSize,
+		storedSize,
+		nonce,
 		containerID,
 		containerOffset,
 	); err != nil {
@@ -2766,6 +2788,7 @@ type packedBlockPersistResult struct {
 	BlockID      int64
 	BlockHash    []byte
 	StorageCodec string
+	LegacyNonce  []byte
 	Placement    container.LocalPlacement
 	StoredSize   int64
 	Segments     map[int64]packedChunkSegment
@@ -2826,6 +2849,7 @@ func storePackedBlockWithWriter(
 	}
 
 	storageCodec := packedStorageBlockCodecNone
+	legacyNonce := []byte{}
 	storedPayload := transformed.Payload
 	switch transformed.Descriptor.Codec {
 	case blocks.CodecPlain:
@@ -2840,6 +2864,7 @@ func storePackedBlockWithWriter(
 		storedPayload = append(storedPayload, transformed.Descriptor.Nonce...)
 		storedPayload = append(storedPayload, transformed.Payload...)
 		storageCodec = string(blocks.CodecAESGCM)
+		legacyNonce = append(legacyNonce, transformed.Descriptor.Nonce...)
 	default:
 		return packedBlockPersistResult{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
 	}
@@ -2896,6 +2921,7 @@ func storePackedBlockWithWriter(
 		BlockID:      blockID,
 		BlockHash:    blockHash,
 		StorageCodec: storageCodec,
+		LegacyNonce:  legacyNonce,
 		Placement:    placement,
 		StoredSize:   int64(len(storedPayload)),
 		Segments:     segments,
