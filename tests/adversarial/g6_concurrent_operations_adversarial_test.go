@@ -2,12 +2,10 @@ package main
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -38,8 +36,6 @@ import (
 func adversarialG6Codecs() []string {
 	return []string{"plain", "aes-gcm"}
 }
-
-var errPackedPlainOnlyG6 = errors.New("packed block currently requires plain transformed payload")
 
 func configureAdversarialG6Codec(t *testing.T, codec string) {
 	t.Helper()
@@ -81,12 +77,6 @@ func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[str
 	t.Helper()
 
 	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
-	if res.ExitCode != 0 && codec == "aes-gcm" {
-		errText := strings.ToLower(res.Stderr + "\n" + res.Stdout)
-		if strings.Contains(errText, "currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
-		}
-	}
 
 	payload := testutils.AssertCLIJSONOK(
 		t,
@@ -105,12 +95,6 @@ func storeFileWithCodecCLIG6Async(repoRoot, binPath string, env map[string]strin
 	cmd.Env = testutils.BuildCommandEnv(env)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		if codec == "aes-gcm" {
-			errText := strings.ToLower(string(out))
-			if strings.Contains(errText, "currently requires plain transformed payload") {
-				return 0, errPackedPlainOnlyG6
-			}
-		}
 		return 0, fmt.Errorf("store command: %w; output=%s", err, out)
 	}
 	payload, ok := testutils.TryParseLastJSONLine(string(out))
@@ -209,9 +193,6 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 			ids := make([]int64, workers)
 			for i := 0; i < workers; i++ {
 				res := <-resultCh
-				if errors.Is(res.err, errPackedPlainOnlyG6) {
-					t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
-				}
 				if res.err != nil {
 					t.Fatalf("concurrent store worker %d failed: %v", res.idx, res.err)
 				}
@@ -284,15 +265,9 @@ func TestAdversarialG6ConcurrentStoresSharedChunkInputsPreserveHealthyRestores(t
 				resultBCh <- err
 			}()
 			if errA := <-resultACh; errA != nil {
-				if errors.Is(errA, errPackedPlainOnlyG6) {
-					t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
-				}
 				t.Fatalf("concurrent store hybrid_a failed: %v", errA)
 			}
 			if errB := <-resultBCh; errB != nil {
-				if errors.Is(errB, errPackedPlainOnlyG6) {
-					t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
-				}
 				t.Fatalf("concurrent store hybrid_b failed: %v", errB)
 			}
 
@@ -351,9 +326,6 @@ func TestAdversarialG6ConcurrentStoreAndGCDoNotLoseReachableData(t *testing.T) {
 				gcErrCh <- maintenance.RunGCWithContainersDir(false, container.ContainersDir)
 			}()
 			if storeErr := <-storeCh; storeErr != nil {
-				if errors.Is(storeErr, errPackedPlainOnlyG6) {
-					t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
-				}
 				t.Fatalf("concurrent store failed: %v", storeErr)
 			}
 			if gcErr := <-gcErrCh; gcErr != nil {

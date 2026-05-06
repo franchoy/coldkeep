@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	dbschema "github.com/franchoy/coldkeep/db"
@@ -73,12 +72,6 @@ func storeFileWithCodecCLIG5(t *testing.T, repoRoot, binPath string, env map[str
 	t.Helper()
 
 	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
-	if res.ExitCode != 0 && codec == "aes-gcm" {
-		errText := strings.ToLower(res.Stderr + "\n" + res.Stdout)
-		if strings.Contains(errText, "currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM adversarial scenario")
-		}
-	}
 
 	payload := testutils.AssertCLIJSONOK(
 		t,
