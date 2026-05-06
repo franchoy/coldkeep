@@ -24,8 +24,8 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![Status](https://img.shields.io/badge/status-v1.8%20block%20abstraction%20%26%20release%20hardening-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.8 introduces packed storage blocks for new writes, with a compiled-in default packed block size of 1 MiB and an advanced write-time override via `COLDKEEP_BLOCK_TARGET_SIZE_MB`. Restore determinism, GC safety, and snapshot semantics remain preserved. No data rewrite is required for existing v1.7 repositories.
-> Migration note (v1.8): existing v1.7 payloads remain readable through the compatibility path. A schema upgrade to v12 is required; it is auto-applied when DB bootstrap/auto-migration settings are enabled, or can be applied manually via schema SQL.
+> Status: v1.8 introduces packed storage blocks for new writes, with a compiled-in default packed block size of 1 MiB and an advanced write-time override via `COLDKEEP_BLOCK_TARGET_SIZE_MB`. Restore determinism, GC safety, and snapshot semantics remain preserved. Existing v1.7 repositories do not require data rewrite.
+> Migration note (v1.8): existing v1.7 payloads remain readable through the compatibility path. A schema migration to v12 is required; it is auto-applied when DB bootstrap/auto-migration settings are enabled, or can be applied manually via schema SQL.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
