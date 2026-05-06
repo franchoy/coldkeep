@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_blocks_codec ON blocks(codec);
 CREATE TABLE IF NOT EXISTS storage_blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   format_version INTEGER NOT NULL CHECK (format_version > 0),
-  codec TEXT NOT NULL,
+  codec TEXT NOT NULL CHECK (codec IN ('plain', 'aes-gcm')),
   plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
   stored_size INTEGER NOT NULL CHECK (stored_size > 0),
   container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
