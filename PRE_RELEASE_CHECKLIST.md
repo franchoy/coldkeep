@@ -18,7 +18,13 @@ Execution model (step-by-step):
 - Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.
 - Capture evidence as you go (command output snippets, failing/success states, and any remediation notes).
 - If a step fails, fix the issue and re-run that step before moving forward.
-- For releases that include snapshot/retention scope, treat sections 14-17 as required release gates after sections 1-13.
+- For releases that include snapshot/retention scope, treat sections 15-17 as required release gates after sections 1-13.
+
+Checklist status interpretation for v1.8:
+
+- Active v1.8 blockers are the current release-gate sections (1-11, 15-18).
+- Historical template sections (12-14) are archived reference material only.
+- Unchecked boxes in sections 12-14 are intentional historical state and are not v1.8 blockers unless a release manager explicitly promotes one into the active v1.8 gate.
 
 ## Release Freeze Policy (v1.8 Phase 9 Step 1)
 
