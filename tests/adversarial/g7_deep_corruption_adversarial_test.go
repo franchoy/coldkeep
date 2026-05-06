@@ -262,17 +262,26 @@ func TestAdversarialG7AESGCMDetectsNonceMetadataTampering(t *testing.T) {
 	fileID := storeFileWithCodecCLIG7(t, repoRoot, binPath, env, codec, inPath)
 
 	record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
-	// Use a valid-length (12 bytes) but incorrect nonce for AES-GCM tampering
+	containerPath := testutils.ContainerPathForRecord(record)
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("open container for nonce tamper: %v", err)
+	}
+	// Packed AES-GCM payload stores nonce as the first 12 bytes at block_offset.
 	badNonce := make([]byte, 12)
 	for i := range badNonce {
 		badNonce[i] = 0xAA
 	}
-	if _, err := dbconn.Exec(`UPDATE blocks SET nonce = $1 WHERE chunk_id = $2`, badNonce, record.ChunkID); err != nil {
-		t.Fatalf("tamper nonce metadata: %v", err)
+	if _, err := f.WriteAt(badNonce, record.BlockOffset); err != nil {
+		_ = f.Close()
+		t.Fatalf("tamper packed nonce bytes: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close container after nonce tamper: %v", err)
 	}
 
-	err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
-	deepVerifyMustFailG7(t, err, "aes-gcm nonce metadata tampering")
+	verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep)
+	deepVerifyMustFailG7(t, verifyErr, "aes-gcm nonce metadata tampering")
 
 	restoreMustFailG7(t, dbconn, fileID, filepath.Join(restoreDir, "nonce-tamper.restored.bin"))
 }
