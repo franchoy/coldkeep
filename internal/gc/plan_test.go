@@ -97,7 +97,7 @@ func insertBlock(t *testing.T, dbconn *sql.DB, chunkID, containerID, storedSize 
 func insertStorageBlockRef(t *testing.T, dbconn *sql.DB, chunkID, containerID, storedSize int64, blockHash []byte) int64 {
 	t.Helper()
 	res, err := dbconn.Exec(
-		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', ?, ?, ?, 0, ?)`,
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', ?, ?, ?, 0, ?)`,
 		storedSize, storedSize, containerID, blockHash,
 	)
 	if err != nil {
@@ -629,7 +629,7 @@ func TestBuildPlanPackedDryRunMetrics(t *testing.T) {
 	liveContainerID := insertContainer(t, dbconn, "c-packed-metrics-live.bin", 200)
 	liveBlockRes, err := dbconn.Exec(
 		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
-		 VALUES (1, 'plain', 200, 200, ?, 0, ?)`,
+		 VALUES (1, 'none', 200, 200, ?, 0, ?)`,
 		liveContainerID,
 		[]byte{0x01, 0x23, 0x45},
 	)

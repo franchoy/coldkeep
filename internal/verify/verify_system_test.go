@@ -393,8 +393,8 @@ func TestVerifyRepositoryDetectsInvalidStorageBlockMetadataFields(t *testing.T) 
 	if _, err := dbconn.Exec(
 		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		2,       // invalid by verify policy: must be 1
-		"plain", // invalid by verify policy: must be none
+		2,      // invalid by verify policy: must be 1
+		"none", // canonical codec for plain packed blocks (schema CHECK: 'none' | 'aes-gcm')
 		int64(16),
 		int64(16),
 		containerID,
@@ -1211,7 +1211,7 @@ func TestVerifyRepositoryErrorCategoryMetadataInvalid(t *testing.T) {
 		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		2,
-		"plain",
+		"none",
 		int64(16),
 		int64(16),
 		containerID,

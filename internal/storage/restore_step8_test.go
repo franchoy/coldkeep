@@ -122,7 +122,7 @@ func insertLegacyBlocksRows(t *testing.T, dbconn *sql.DB, containerID int64, chu
 	for _, c := range chunks {
 		if _, err := dbconn.Exec(
 			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-			 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+			 VALUES ($1, 'none', 1, $2, $3, $4, $5, $6)`,
 			c.id,
 			int64(len(c.payload)),
 			int64(len(c.payload)),
@@ -187,7 +187,7 @@ func insertPackedStorageBlock(t *testing.T, dbconn *sql.DB, containersDir, filen
 		// Keep legacy metadata rows present because pin/load recipe still joins blocks table.
 		if _, err := dbconn.Exec(
 			`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-			 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+			 VALUES ($1, 'none', 1, $2, $3, $4, $5, $6)`,
 			c.id,
 			int64(len(c.payload)),
 			int64(len(c.payload)),
@@ -409,7 +409,7 @@ func TestStep8RestoreCorruptedPackedBlockFailsCleanly(t *testing.T) {
 	// Companion legacy metadata row required by pin/load query.
 	if _, err := dbconn.Exec(
 		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
+		 VALUES ($1, 'none', 1, $2, $3, $4, $5, $6)`,
 		seed.id,
 		int64(len(payload)),
 		int64(len(payload)),

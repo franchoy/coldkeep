@@ -455,7 +455,7 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 		t.Fatalf("insert legacy block: %v", err)
 	}
 
-	storageBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 512, 480, ?, 128, x'010203')`, containerID)
+	storageBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 512, 480, ?, 128, x'010203')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage_block: %v", err)
 	}
@@ -494,8 +494,8 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	if math.Abs(blockStats.FillRatio-wantFillRatio) > 1e-9 {
 		t.Fatalf("fill ratio mismatch: got=%.9f want=%.9f", blockStats.FillRatio, wantFillRatio)
 	}
-	if got := blockStats.CodecDistribution["plain"]; got != 1 {
-		t.Fatalf("codec distribution mismatch for plain: got=%d want=1", got)
+	if got := blockStats.CodecDistribution["none"]; got != 1 {
+		t.Fatalf("codec distribution mismatch for none: got=%d want=1", got)
 	}
 
 	stats, err := runStatsResultWithDB(ctx, dbconn)

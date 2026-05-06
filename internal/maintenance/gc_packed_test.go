@@ -43,13 +43,13 @@ func TestLoadLivePackedBlockIDsResolvesFromLiveChunks(t *testing.T) {
 	}
 	deadChunkID, _ := deadChunkRes.LastInsertId()
 
-	blockRes1, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'01')`, containerID)
+	blockRes1, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'01')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block #1: %v", err)
 	}
 	liveBlockID, _ := blockRes1.LastInsertId()
 
-	blockRes2, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 64, x'02')`, containerID)
+	blockRes2, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 64, x'02')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block #2: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestContainerHasReachableChunksIncludesPackedRefs(t *testing.T) {
 	}
 	chunkID, _ := chunkRes.LastInsertId()
 
-	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'03')`, containerID)
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'03')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestSweepUnreachableChunksDeletesPackedMappings(t *testing.T) {
 	}
 	chunkID, _ := chunkRes.LastInsertId()
 
-	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'04')`, containerID)
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'04')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestSweepUnreachableChunksKeepsPackedBlockWhenAnyChunkIsLive(t *testing.T) 
 	}
 	deadChunkID, _ := deadChunkRes.LastInsertId()
 
-	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 128, 128, ?, 0, x'22')`, containerID)
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 128, 128, ?, 0, x'22')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestSweepUnreachableChunksMixedPackedBlockKeepsAllRefsAndChunks(t *testing.
 	}
 	c3ID, _ := deadChunk3Res.LastInsertId()
 
-	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 192, 192, ?, 0, x'55')`, containerID)
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 192, 192, ?, 0, x'55')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestSweepUnreachableChunksDeletesWholePackedBlockWhenAllChunksDead(t *testi
 	}
 	deadChunkBID, _ := deadChunkBRes.LastInsertId()
 
-	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 128, 128, ?, 0, x'33')`, containerID)
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 128, 128, ?, 0, x'33')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestSweepUnreachableChunksMetadataOrderTransactionSafety(t *testing.T) {
 	}
 	deadChunkID, _ := deadChunkRes.LastInsertId()
 
-	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'44')`, containerID)
+	blockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'44')`, containerID)
 	if err != nil {
 		t.Fatalf("insert storage block: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestContainerHasLivePhysicalUnitsSupportsLegacyPackedAndMixed(t *testing.T)
 		t.Fatalf("insert mixed legacy dead block: %v", err)
 	}
 
-	packedOnlyBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'11')`, packedContainerID)
+	packedOnlyBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'11')`, packedContainerID)
 	if err != nil {
 		t.Fatalf("insert packed-only block: %v", err)
 	}
@@ -574,7 +574,7 @@ func TestContainerHasLivePhysicalUnitsSupportsLegacyPackedAndMixed(t *testing.T)
 		t.Fatalf("insert packed-only refs: %v", err)
 	}
 
-	mixedPackedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 64, x'12')`, mixedContainerID)
+	mixedPackedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 64, x'12')`, mixedContainerID)
 	if err != nil {
 		t.Fatalf("insert mixed packed block: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestContainerHasLivePhysicalUnitsFalseWhenNoLiveLegacyOrPacked(t *testing.T
 		t.Fatalf("insert dead legacy block: %v", err)
 	}
 
-	deadPackedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'66')`, containerID)
+	deadPackedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'66')`, containerID)
 	if err != nil {
 		t.Fatalf("insert dead packed block: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestContainerHasLivePhysicalUnitsUsesLivePackedBlockIDsForContainerRetentio
 	}
 	liveChunkID, _ := liveChunkRes.LastInsertId()
 
-	packedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'plain', 64, 64, ?, 0, x'77')`, containerID)
+	packedBlockRes, err := dbconn.Exec(`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash) VALUES (1, 'none', 64, 64, ?, 0, x'77')`, containerID)
 	if err != nil {
 		t.Fatalf("insert packed block: %v", err)
 	}

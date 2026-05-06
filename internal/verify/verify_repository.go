@@ -896,7 +896,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		})
 		if err != nil {
 			log.Printf(
-				"verifyLegacyChunkHashes DEBUG decode failure chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size=%d expected_hash=%s",
+				"verifyLegacyChunkHashes decode failure chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size=%d expected_hash=%s",
 				chunkID,
 				codec,
 				formatVersion,
@@ -909,7 +909,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		}
 		if int64(len(plaintext)) != plaintextSize {
 			log.Printf(
-				"verifyLegacyChunkHashes DEBUG plaintext size mismatch chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size_meta=%d plaintext_size_decoded=%d",
+				"verifyLegacyChunkHashes plaintext size mismatch chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size_meta=%d plaintext_size_decoded=%d",
 				chunkID,
 				codec,
 				formatVersion,
@@ -925,7 +925,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		computed := hex.EncodeToString(sum[:])
 		if !strings.EqualFold(strings.TrimSpace(expectedChunkHash), computed) {
 			log.Printf(
-				"verifyLegacyChunkHashes DEBUG mismatch chunk=%d expected_hash=%s actual_hash=%s chunk_size=%d block_offset=%d stored_size=%d plaintext_size=%d codec=%s format=%d",
+				"verifyLegacyChunkHashes mismatch chunk=%d expected_hash=%s actual_hash=%s chunk_size=%d block_offset=%d stored_size=%d plaintext_size=%d codec=%s format=%d",
 				chunkID,
 				strings.TrimSpace(expectedChunkHash),
 				computed,
