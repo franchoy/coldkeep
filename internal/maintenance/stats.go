@@ -423,6 +423,14 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 		out.AvgChunksPerBlock = float64(out.ChunkBlockRefs) / float64(out.StorageBlocks)
 	}
 
+	// FillRatio is calculated using the currently configured target block size
+	// (from COLDKEEP_BLOCK_TARGET_SIZE_MB or COLDKEEP_PACKED_BLOCK_SIZE_MIB),
+	// not the historical target size used when each block was written.
+	// If the env override has been changed historically, FillRatio may not
+	// accurately reflect the packing efficiency of existing blocks.
+	// Operators should note any block-size overrides when interpreting this metric.
+	// For decision-grade analysis, prefer reviewing individual block sizes from
+	// the storage_blocks table (plaintext_size, stored_size) directly.
 	targetBlockSizeBytes := blockTargetSizeBytesForStats()
 	if targetBlockSizeBytes > 0 {
 		out.FillRatio = out.AvgPlaintextSize / float64(targetBlockSizeBytes)
