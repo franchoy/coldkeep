@@ -209,13 +209,19 @@ if [ -f benchmark-baseline.json ]; then
   cp benchmark-baseline.json benchmark-baseline-committed.json
 fi
 
-./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-baseline.json
+./coldkeep benchmark run --dataset small --workers 1 --output json \
+  | jq -c 'select(type=="object" and .command=="benchmark" and .data!=null)' \
+  | head -n 1 \
+  | tee benchmark-baseline.json
 
 if [ -f benchmark-baseline-committed.json ]; then
   ./coldkeep benchmark run --dataset small --workers 1 --output json --compare benchmark-baseline-committed.json --threshold 100
 
   # Optional parity with CI workers=4 profile/compare:
-  ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-baseline-w4.json
+  ./coldkeep benchmark run --dataset small --workers 4 --output json \
+    | jq -c 'select(type=="object" and .command=="benchmark" and .data!=null)' \
+    | head -n 1 \
+    | tee benchmark-baseline-w4.json
   ./coldkeep benchmark run --dataset small --workers 4 --output json --compare benchmark-baseline-committed.json --threshold 100
 fi
 ```
