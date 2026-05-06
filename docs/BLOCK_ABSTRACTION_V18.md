@@ -22,6 +22,7 @@ BlockHashPolicy       = required
 ```
 
 Note on the two codec concepts:
+
 - `BlockBinaryCodec` is the codec field embedded in the block binary format header. It always equals `"none"` because the binary format always describes plaintext chunk layout regardless of whether the block is subsequently encrypted.
 - `StorageBlocksCodec` is what gets persisted in `storage_blocks.codec`. It equals `"none"` for plain writes and `"aes-gcm"` for encrypted writes. When `"aes-gcm"`, stored bytes are a 12-byte nonce prefix followed by AES-GCM ciphertext of the full encoded block.
 
@@ -77,20 +78,20 @@ Represents the physical stored block unit.
 
 ```sql
 storage_blocks (
-	id                BIGSERIAL PRIMARY KEY,
+    id                BIGSERIAL PRIMARY KEY,
 
-	format_version    INT NOT NULL,
-	codec             TEXT NOT NULL, -- "none" for plain writes; "aes-gcm" for encrypted writes
+    format_version    INT NOT NULL,
+    codec             TEXT NOT NULL, -- "none" for plain writes; "aes-gcm" for encrypted writes
 
-	plaintext_size    BIGINT NOT NULL,
-	stored_size       BIGINT NOT NULL,
+    plaintext_size    BIGINT NOT NULL,
+    stored_size       BIGINT NOT NULL,
 
-	container_id      BIGINT NOT NULL,
-	container_offset  BIGINT NOT NULL,
+    container_id      BIGINT NOT NULL,
+    container_offset  BIGINT NOT NULL,
 
-	block_hash        BYTEA NOT NULL, -- required for block validity verification
+    block_hash        BYTEA NOT NULL, -- required for block validity verification
 
-	created_at        TIMESTAMP NOT NULL DEFAULT NOW()
+created_at        TIMESTAMP NOT NULL DEFAULT NOW()
 )
 ```
 
@@ -100,14 +101,14 @@ Represents per-chunk placement inside one physical block.
 
 ```sql
 chunk_block_refs (
-	chunk_id          BIGINT NOT NULL,
-	block_id          BIGINT NOT NULL,
+    chunk_id          BIGINT NOT NULL,
+    block_id          BIGINT NOT NULL,
 
-	offset_in_block   BIGINT NOT NULL,
-	size_in_block     BIGINT NOT NULL,
+    offset_in_block   BIGINT NOT NULL,
+    size_in_block     BIGINT NOT NULL,
 
-	PRIMARY KEY (chunk_id),
-	FOREIGN KEY (block_id) REFERENCES storage_blocks(id)
+    PRIMARY KEY (chunk_id),
+    FOREIGN KEY (block_id) REFERENCES storage_blocks(id)
 )
 ```
 
@@ -127,9 +128,9 @@ v1.8 compatibility must support all of the following:
 Chosen implementation strategy for v1.8: Option A (cleanest).
 
 - Read-path compatibility will treat each legacy v1.7 `blocks` row as an adapter-level storage block view with:
-	- one chunk,
-	- `offset_in_block = 0`,
-	- `size_in_block = chunk/plaintext size`.
+  - one chunk,
+  - `offset_in_block = 0`,
+  - `size_in_block = chunk/plaintext size`.
 - New v1.8 packed data will use `storage_blocks` + `chunk_block_refs` directly.
 - Mixed repositories are resolved through unified read abstraction that can load either legacy adapted layout or native packed layout.
 
