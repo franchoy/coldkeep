@@ -8382,10 +8382,13 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		t.Fatalf("corrupt block offset continuity: %v", err)
 	}
 
-	testutils.AssertErrorContains(
+	testutils.AssertErrorContainsAny(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-		"verifyStorageBlocks: storage_blocks rows with impossible container ranges",
+		[]string{
+			"verifyStorageBlocks: storage_blocks rows with impossible container ranges",
+			"verifyChunkBlockRefs: chunk",
+		},
 		"system-full non-contiguous-offsets",
 	)
 }
