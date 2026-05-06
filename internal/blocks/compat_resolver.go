@@ -14,7 +14,7 @@ type V17CompatResolver struct{}
 // V17ChunkSegmentMarker is a sentinel ChunkSegment indicating v1.7 direct chunk retrieval.
 // BlockID == 0 and the other fields are zero-valued to signal legacy path.
 var V17ChunkSegmentMarker = &ChunkSegment{
-	ChunkID: 0, // placeholder
+	ChunkID: 0, // sentinel zero value
 	BlockID: 0, // indicates v1.7, not v1.8
 	Offset:  0,
 	Size:    0,

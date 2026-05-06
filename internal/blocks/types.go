@@ -29,9 +29,8 @@ type Descriptor struct {
 	UpdatedAt     time.Time
 }
 
-// Block represents a physical stored block unit for v1.8 packed-block model.
-// It is intentionally introduced early in Phase 1 and may remain unused until
-// later phases wire write/read/verify paths.
+// Block represents a physical stored block unit for the v1.8 packed-block model.
+// It captures the persisted block metadata shared by write, read, and verify paths.
 type Block struct {
 	ID              int64
 	FormatVersion   int
@@ -52,26 +51,26 @@ type ChunkSegment struct {
 	Size    int64
 }
 
-// BlockStore is the minimal storage-block retrieval boundary for v1.8+.
-// It is intentionally small in Phase 1 and will be extended in later phases.
+// BlockStore is the storage-block retrieval boundary for packed layouts.
+// The interface intentionally remains minimal to keep storage access decoupled.
 type BlockStore interface {
 	GetBlock(blockID int64) (*Block, error)
 }
 
 // ChunkLocator resolves chunk placement inside a physical block.
-// This abstraction is introduced early as part of the future engine boundary.
+// It isolates lookup logic from restore and verification execution paths.
 type ChunkLocator interface {
 	GetChunkSegment(chunkID int64) (*ChunkSegment, error)
 }
 
 // BlockReader provides context-aware read access to decoded blocks.
-// Used in Phase 3+ read path abstraction for both v1.7 and v1.8 formats.
+// It supports both legacy and packed repository read flows.
 type BlockReader interface {
 	ReadBlock(ctx context.Context, blockID int64) (*EncodedBlock, error)
 }
 
 // ChunkResolver provides context-aware resolution of chunk placement inside blocks.
-// Used in Phase 3+ read path abstraction for both v1.7 and v1.8 layouts.
+// It supports chunk lookup across legacy and packed layouts.
 type ChunkResolver interface {
 	ResolveChunk(ctx context.Context, chunkID int64) (*ChunkSegment, error)
 }

@@ -36,14 +36,14 @@ func verifyCategoryError(category, detail string, cause error) error {
 	return fmt.Errorf("%s: %s: %w", category, detail, cause)
 }
 
-// VerifyRepository provides the Phase 5 layered verification orchestration for
+// VerifyRepository provides layered verification orchestration for
 // repositories that may include v1.8 packed-block storage.
 //
 // Layer order:
 //  1. metadata integrity (chunk reachability)
 //  2. physical block integrity (storage_blocks + chunk_block_refs)
-//  3. decoded block integrity (payload stage placeholder)
-//  4. chunk slice integrity (payload stage placeholder)
+//  3. decoded block integrity (payload hash and codec validation)
+//  4. chunk slice integrity (chunk-to-block slice validation)
 //  5. legacy compatibility checks
 func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 	if err := verifyChunkReachability(dbconn); err != nil {
