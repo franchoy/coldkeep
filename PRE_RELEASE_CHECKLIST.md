@@ -201,6 +201,10 @@ for codec in plain aes-gcm; do
   scripts/smoke.sh
 done
 
+# Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).
+# Reset it before manual CLI checks in later steps.
+unset COLDKEEP_CODEC
+
 if [ -f benchmark-baseline.json ]; then
   cp benchmark-baseline.json benchmark-baseline-committed.json
 fi
@@ -268,6 +272,8 @@ multiple test packages share the same PostgreSQL instance.
 
 New maintainer note: if this step fails while steps 2-3 passed, treat it as extra investigation work, not an automatic release blocker. The required release gate remains the CI-parity flow above.
 
+If step 4 fails and steps 2-3 passed, capture the failure as investigation work and continue release gating from step 5. If steps 2-3 also failed, fix and re-run steps 2-3 first.
+
 ## 5) Run doctor
 
 Before steps 5-11, confirm your local CLI environment points at storage that
@@ -277,7 +283,7 @@ database. If you continue from those steps without resetting `DB_NAME` and
 `COLDKEEP_STORAGE_DIR`, doctor/stats/verify may legitimately report missing
 containers from an earlier storage path rather than a product defect.
 
-Recommended newcomer-safe reset before steps 5-11:
+Step 5A (recommended newcomer-safe reset before steps 5-11):
 
 ```bash
 export DB_NAME=coldkeep_manual
@@ -294,6 +300,8 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 
 Use this reset whenever you want steps 5-11 to validate the CLI against a fresh,
 known-good manual sandbox instead of the DB/storage state left behind by the CI-parity loop.
+
+Step 5B (run doctor):
 
 ```bash
 unset COLDKEEP_CODEC
@@ -336,14 +344,16 @@ unset COLDKEEP_DB_AUTO_BOOTSTRAP
 ```
 
 Expected: bootstrap on creates/validates schema path successfully; bootstrap off fails fast on missing schema.
+Expected bootstrap-off failure shape: non-zero exit plus missing-schema diagnostics (for example `schema_version`/relation-not-found style errors from PostgreSQL).
 
 ## 8) Test clean install path
 
-From a clean machine/container flow:
+Warning: destructive operation ahead.
+`docker compose down -v` removes PostgreSQL volumes and deletes data for all
+databases in this compose project, including manual sandboxes created in
+earlier steps.
 
-Warning: `docker compose down -v` is destructive and removes PostgreSQL volumes.
-This deletes data for all databases in this compose project, including manual
-sandboxes created in earlier steps.
+From a clean machine/container flow:
 
 ```bash
 docker compose down -v
@@ -448,15 +458,25 @@ printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 
 # corrupt a ref_count and confirm verify detects it
 # (manual DB update + verify — covers GC_REFUSED_INTEGRITY and PHYSICAL_GRAPH_REFCOUNT_MISMATCH)
+first_chunk_id=$(docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -At -c "SELECT id FROM chunk ORDER BY id LIMIT 1")
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -c "UPDATE chunk SET ref_count = ref_count + 1 WHERE id = ${first_chunk_id};"
+./coldkeep gc --output json
+./coldkeep verify system --standard --output json
+
+# repair the intentional drift and confirm verify/GC recover
+./coldkeep repair ref-counts --output json
+./coldkeep verify system --standard --output json
+./coldkeep gc --dry-run --output json
 
 # confirm restore-by-stored-path works while the mapping still exists
 ./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
 
 # stored-path remove: confirm remaining_ref_count in JSON output
-./coldkeep remove --stored-path <actual-stored-path-from-above> --output json
+./coldkeep remove --stored-path "$stored_path" --output json
 
-# confirm restore-by-stored-path works
-./coldkeep restore --stored-path <actual-stored-path-from-above> --mode override --destination ./out/restored.txt --output json
+# if remaining_ref_count is still > 0, restore-by-stored-path should still work;
+# if remaining_ref_count reached 0, restore-by-stored-path should now fail as expected.
+./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
@@ -876,6 +896,11 @@ Additional CLI validation and policy checks:
 
 Run this manual lifecycle gate after core CI/test gates pass.
 
+Naming note for this gate: `pre-gc-gate` is the `snapshot_id` system identifier.
+Create it with `--id`, then pass it positionally to `snapshot restore`,
+`snapshot diff`, and `snapshot delete`. If you also set `--label`, treat it as
+metadata only (never as a command target).
+
 ```bash
 # Prefer a single retaining snapshot for this gate unless you intentionally want
 # to test multi-snapshot retention. If multiple snapshots retain the same logical
@@ -902,8 +927,6 @@ Run this manual lifecycle gate after core CI/test gates pass.
 # confirm GC eligibility changes only after delete
 ./coldkeep gc --dry-run --output json
 ```
-
-Naming note: in this gate, `pre-gc-gate` is the `snapshot_id` system identifier. It is created explicitly with `--id` and then passed positionally to `snapshot restore`, `snapshot diff`, and `snapshot delete`. If you also set `--label`, treat it as metadata only (never as a command target).
 
 Confirm:
 
