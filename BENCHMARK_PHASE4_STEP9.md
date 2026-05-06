@@ -1,5 +1,7 @@
 # Phase 4 Step 9 - Benchmark Results
 
+Status: archived historical benchmark report (Phase 4 evidence record).
+
 This file is a phase-specific benchmark report.
 If you are new to the project, read [README.md](README.md) first and then
 [docs/benchmarking.md](docs/benchmarking.md) for the canonical benchmark model

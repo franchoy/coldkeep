@@ -34,6 +34,16 @@ comparison). Use the retained helper scripts under `scripts/run_phase8_*.sh`
 and `scripts/compare_phase8_*.py` for large-scale decision-grade matrix runs
 requiring strict isolation and metrics collection.
 
+Support level summary:
+
+- `coldkeep benchmark run|chunkers`: supported CLI surface for local/ad-hoc
+   benchmarking and regression inspection.
+- `scripts/run_phase8_*.sh` + `scripts/compare_phase8_*.py`: release
+   decision-grade harness for the v1.8 block-size decision record.
+- Historical phase reports (`BENCHMARK_PHASE4_STEP9.md`,
+   `BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`): archived evidence docs, not live
+   implementation specs.
+
 ```bash
 # Inspect/resume the packed block-size matrix
 scripts/run_phase8_blocksize_matrix.sh --list-missing

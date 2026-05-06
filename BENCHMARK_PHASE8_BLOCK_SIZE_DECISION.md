@@ -1,6 +1,6 @@
 # Phase 8 - Benchmark and Block Size Decision (v1.8)
 
-Status: decision finalized for v1.8 release hardening.
+Status: decision finalized for v1.8 release hardening; archived as historical decision evidence.
 
 ## Final Decision
 

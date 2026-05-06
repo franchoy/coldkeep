@@ -49,6 +49,12 @@ Allowed during this gate:
 - release notes
 - minor cleanup
 
+Required before final tag creation:
+
+- release notes file for the target version exists (for v1.8: `RELEASE_NOTES_v1.8.0.md`),
+- benchmark command support level is documented clearly (`coldkeep benchmark` CLI vs phase harness scripts),
+- historical phase benchmark reports are marked as archived evidence, not live implementation spec.
+
 Avoid during this gate:
 
 - new worker behavior
