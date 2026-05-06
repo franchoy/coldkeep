@@ -7952,9 +7952,6 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
-		if strings.Contains(err.Error(), "packed block storage_blocks codec=\"none\" currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM deep verify scenario")
-		}
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
@@ -8031,9 +8028,6 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
-		if strings.Contains(err.Error(), "packed block storage_blocks codec=\"none\" currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM deep verify scenario")
-		}
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
@@ -8118,9 +8112,6 @@ func TestVerifySystemDeepDetectsAESGCMWrongKeyMismatch(t *testing.T) {
 	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
-		if strings.Contains(err.Error(), "packed block storage_blocks codec=\"none\" currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM deep verify scenario")
-		}
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
@@ -8179,9 +8170,6 @@ func TestVerifySystemDeepDetectsAESGCMInvalidKeyConfiguration(t *testing.T) {
 	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
-		if strings.Contains(err.Error(), "packed block storage_blocks codec=\"none\" currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM deep verify scenario")
-		}
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
@@ -8240,9 +8228,6 @@ func TestVerifySystemDeepDetectsAESGCMInvalidHexKeyConfiguration(t *testing.T) {
 	sgctx := testutils.NewTestContext(dbconn)
 	result, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecAESGCM)
 	if err != nil {
-		if strings.Contains(err.Error(), "packed block storage_blocks codec=\"none\" currently requires plain transformed payload") {
-			t.Skip("packed-block writes currently require plain payloads; skipping AES-GCM deep verify scenario")
-		}
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
