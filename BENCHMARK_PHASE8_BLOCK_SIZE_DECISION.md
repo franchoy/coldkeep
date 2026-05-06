@@ -951,10 +951,18 @@ Anomaly triggers do not automatically stop Phase 8, but the root cause must be
 understood and documented before the decision record is written. If the
 investigation reveals a defect, treat it as a correctness trigger and stop.
 
-## 19. Phase 8 Deliverables
+## 19. Historical Template: Phase 8 Deliverables Checklist
 
-Phase 8 is complete only when every item in this checklist is satisfied and
-committed to the repository.
+This checklist is preserved as the original execution template used during
+Phase 8 planning and benchmarking. It is retained for historical traceability
+and reuse in future benchmark phases.
+
+Interpretation note:
+
+- Unchecked boxes in this section should not be read as current release
+  blockers for v1.8.
+- The authoritative completion evidence for v1.8 is the populated result table
+  and final decision record in Section 17.
 
 ### 19.1 Benchmark infrastructure
 
@@ -1023,10 +1031,16 @@ committed to the repository.
 - [ ] This file (`BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`) reflects the final
   decision and is committed as part of the v1.8 release record.
 
-## 20. Phase 8 Final Checklist
+## 20. Historical Template: Phase 8 Final Checklist
 
-All items must be checked before Phase 8 is closed and the v1.8 default is
-committed. Items are grouped by concern; check them in order.
+This final checklist is also preserved as a historical/template artifact from
+the original Phase 8 decision workflow.
+
+Interpretation note:
+
+- These checkboxes remain in template form by design.
+- They are maintained here for future reruns/audits, not as live unfinished
+  tasks for the current v1.8 release state.
 
 ### 20.1 Implementation prerequisites
 
