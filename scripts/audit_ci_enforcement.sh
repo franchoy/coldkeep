@@ -108,7 +108,6 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" '^  smoke:$' 'smoke job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Upload smoke artifacts on failure' 'smoke failure artifact upload step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ failure\(\) \}\}' 'smoke artifact upload is failure-only' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v4' 'smoke artifact upload action' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'uses:\s*actions/upload-artifact@v[45]' 'smoke artifact upload action' || check_status=1
   require_pattern "$WORKFLOW_FILE" './tests/integration/\.\.\.' 'integration stress race run (integration only)' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_LONG_RUN:\s*1' 'long-run env gate in CI' || check_status=1
