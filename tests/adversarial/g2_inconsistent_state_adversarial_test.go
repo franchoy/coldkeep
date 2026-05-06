@@ -425,6 +425,9 @@ func TestAdversarialG2VerifyRejectsCompletedChunkMissingBlockRow(t *testing.T) {
 			if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, record.ChunkID); err != nil {
 				t.Fatalf("delete blocks row for completed chunk: %v", err)
 			}
+			if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, record.ChunkID); err != nil {
+				t.Fatalf("delete chunk_block_refs row for completed chunk: %v", err)
+			}
 
 			verifyRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
 				"verify", "system", "--output", "json")
