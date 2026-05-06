@@ -106,3 +106,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+# =========================
+# release evidence files
+# =========================
+.release-evidence/
