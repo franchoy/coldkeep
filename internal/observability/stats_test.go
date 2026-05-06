@@ -82,7 +82,7 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 			FillRatio:         0.88,
 			LegacyBlocks:      2,
 			PackedBlocks:      4,
-			CodecDistribution: map[string]int64{"plain": 4},
+			CodecDistribution: map[string]int64{"none": 4},
 		},
 	}
 
@@ -116,7 +116,7 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	if result.BlockLayout.StorageBlocksCount != 4 || result.BlockLayout.ChunkBlockRefsCount != 10 {
 		t.Fatalf("unexpected block layout stats: %+v", result.BlockLayout)
 	}
-	if got := result.BlockLayout.CodecDistribution["plain"]; got != 4 {
+	if got := result.BlockLayout.CodecDistribution["none"]; got != 4 {
 		t.Fatalf("unexpected block layout codec distribution: %+v", result.BlockLayout.CodecDistribution)
 	}
 	if result.Efficiency.LogicalBytes != 500 {

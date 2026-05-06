@@ -505,10 +505,16 @@ Sections 12-14 are retained as historical release templates for prior release
 tracks (v1.5/v1.6). Unchecked boxes in these sections are intentional and do
 not represent unfinished blockers for the current v1.8 release.
 
+Historical status marker:
+
+- Sections 12-14 are archived reference templates only.
+- They are explicitly non-gating for v1.8 final sign-off.
+- Keep checklist boxes unchanged in these sections to preserve historical parity.
+
 For v1.8 final tagging, use the active release-gate flow in earlier sections
 plus the snapshot sign-off sections that follow.
 
-## 12) Historical Template - v1.5 CDC / chunker-evolution contract
+## 12) Historical Template (Archived, Non-gating) - v1.5 CDC / chunker-evolution contract
 
 Use this section for releases that include chunker-evolution behavior, default
 chunker policy changes, or compatibility-contract updates.
@@ -618,7 +624,7 @@ go test ./internal/chunk -run 'TestBothChunkersDeterministic|TestBothChunkersRec
 go test ./internal/chunk/fastcdc -run 'TestDeterministicChunkBoundariesAndData' -count=1
 ```
 
-## 13) Historical Template - v1.6 observability / simulation contract
+## 13) Historical Template (Archived, Non-gating) - v1.6 observability / simulation contract
 
 Release-ready definition:
 
@@ -701,7 +707,7 @@ For this historical v1.6 template, prefer the CI-parity gate flow already define
 - [ ] `go vet ./...` passes
 - [ ] Integration suite passes (`go test ./tests/integration/...`)
 
-## 14) Historical Template - Sign-off
+## 14) Historical Template (Archived, Non-gating) - Sign-off
 
 - [ ] Quality parity checks passed
 - [ ] Full local CI matrix simulation passed (both codecs)

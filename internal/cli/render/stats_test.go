@@ -111,7 +111,7 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 			AvgBlockFillRatio:     0.95,
 			LegacyBlockCount:      12,
 			PackedBlockCount:      100,
-			CodecDistribution:     map[string]int64{"plain": 100},
+			CodecDistribution:     map[string]int64{"none": 100},
 		},
 		Efficiency: observability.EfficiencyStats{ContainerOverheadPct: 3.1, StorageOverheadPct: 3.1},
 		Containers: observability.ContainerStats{
@@ -173,7 +173,7 @@ func TestRenderStatsHumanPrintsChunkerVersionsInSortedOrder(t *testing.T) {
 		"avg_block_fill_ratio: 0.950",
 		"legacy_block_count: 12",
 		"packed_block_count: 100",
-		"codec[plain]: 100",
+		"codec[none]: 100",
 		"container_overhead: 3.1%",
 		"current_only_files: 20",
 		"snapshot_only_files: 8",

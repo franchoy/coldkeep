@@ -895,47 +895,15 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 			Payload: payload,
 		})
 		if err != nil {
-			log.Printf(
-				"verifyLegacyChunkHashes decode failure chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size=%d expected_hash=%s",
-				chunkID,
-				codec,
-				formatVersion,
-				blockOffset,
-				storedSize,
-				plaintextSize,
-				strings.TrimSpace(expectedChunkHash),
-			)
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: decode chunk %d payload", chunkID), err)
 		}
 		if int64(len(plaintext)) != plaintextSize {
-			log.Printf(
-				"verifyLegacyChunkHashes plaintext size mismatch chunk=%d codec=%s format=%d block_offset=%d stored_size=%d plaintext_size_meta=%d plaintext_size_decoded=%d",
-				chunkID,
-				codec,
-				formatVersion,
-				blockOffset,
-				storedSize,
-				plaintextSize,
-				len(plaintext),
-			)
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d plaintext size mismatch metadata=%d decoded=%d", chunkID, plaintextSize, len(plaintext)), nil)
 		}
 
 		sum := sha256.Sum256(plaintext)
 		computed := hex.EncodeToString(sum[:])
 		if !strings.EqualFold(strings.TrimSpace(expectedChunkHash), computed) {
-			log.Printf(
-				"verifyLegacyChunkHashes mismatch chunk=%d expected_hash=%s actual_hash=%s chunk_size=%d block_offset=%d stored_size=%d plaintext_size=%d codec=%s format=%d",
-				chunkID,
-				strings.TrimSpace(expectedChunkHash),
-				computed,
-				len(plaintext),
-				blockOffset,
-				storedSize,
-				plaintextSize,
-				codec,
-				formatVersion,
-			)
 			return verifyCategoryError(verifyErrChunkHashMismatch, fmt.Sprintf("verifyLegacyChunkHashes: chunk %d hash mismatch computed=%s expected=%s", chunkID, computed, strings.TrimSpace(expectedChunkHash)), nil)
 		}
 	}
@@ -943,7 +911,7 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 		return verifyCategoryError(verifyErrMetadataInvalid, "verifyLegacyChunkHashes: iterate legacy block rows", err)
 	}
 
-	log.Println(" SUCCESS ")
+	log.Println("Legacy block payload hash integrity check: OK")
 	return nil
 }
 
