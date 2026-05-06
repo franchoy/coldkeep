@@ -465,10 +465,10 @@ printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 # repair ref-counts: must report updated_logical_files
 ./coldkeep repair ref-counts --output json
 
-# corrupt a ref_count and confirm verify detects it
+# corrupt logical_file.ref_count and confirm verify detects it
 # (manual DB update + verify — covers GC_REFUSED_INTEGRITY and PHYSICAL_GRAPH_REFCOUNT_MISMATCH)
-first_chunk_id=$(docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -At -c "SELECT id FROM chunk ORDER BY id LIMIT 1")
-docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -c "UPDATE chunk SET ref_count = ref_count + 1 WHERE id = ${first_chunk_id};"
+first_file_id=$(docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -At -c "SELECT id FROM logical_file ORDER BY id LIMIT 1")
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -c "UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = ${first_file_id};"
 ./coldkeep gc --output json
 ./coldkeep verify system --standard --output json
 
@@ -477,15 +477,11 @@ docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -c "UPDA
 ./coldkeep verify system --standard --output json
 ./coldkeep gc --dry-run --output json
 
-# confirm restore-by-stored-path works while the mapping still exists
-./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
-
 # stored-path remove: confirm remaining_ref_count in JSON output
 ./coldkeep remove --stored-path "$stored_path" --output json
 
-# if remaining_ref_count is still > 0, restore-by-stored-path should still work;
-# if remaining_ref_count reached 0, restore-by-stored-path should now fail as expected.
-./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
+# restore-by-file-id remains the supported restore contract surface.
+# (restore-by-stored-path is not currently part of the CLI contract.)
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
@@ -496,9 +492,8 @@ Confirm:
 - `store --output json` contains `stored_path` field in `data`
 - `verify system --standard --output json` succeeds with no `invariant_code` in payload
 - `repair ref-counts --output json` success payload contains `updated_logical_files` and `scanned_logical_files`
-- `restore --stored-path --output json` succeeds before the stored-path mapping is removed
 - `remove --stored-path --output json` success payload contains `remaining_ref_count`
-- After all mappings are removed, `verify system --standard --output json` still passes (ref_count=0 logical_file is valid)
+- After stored-path removal, `verify system --standard --output json` still passes when graph invariants are healthy
 - `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
 - GC correctly refuses when ref_count drift is present: `error_class=GENERAL`, `invariant_code=GC_REFUSED_INTEGRITY`
 - `repair ref-counts` unblocks subsequent GC and verify
