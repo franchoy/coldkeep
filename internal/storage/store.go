@@ -1491,6 +1491,26 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return nil
 	}
 
+	// Packed AES-GCM chunks are stored as encrypted multi-chunk blobs.
+	// Chunk-level semantic replay currently relies on legacy per-chunk payload layout,
+	// so skip that replay for files backed by packed AES-GCM mappings.
+	var hasPackedAES bool
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM file_chunk fc
+			JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+			JOIN storage_blocks sb ON sb.id = r.block_id
+			WHERE fc.logical_file_id = $1
+			  AND sb.codec = 'aes-gcm'
+		)
+	`, fileID).Scan(&hasPackedAES); err != nil {
+		return fmt.Errorf("check packed aes-gcm semantic reuse skip for logical file %d: %w", fileID, err)
+	}
+	if hasPackedAES {
+		return nil
+	}
+
 	if err := validateReusableLogicalFileSemanticsWithContext(ctx, dbconn, fileID, containersDir); err != nil {
 		return fmt.Errorf("semantic reuse validation failed (%s): %w", reason, err)
 	}
