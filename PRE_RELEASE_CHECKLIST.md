@@ -692,10 +692,12 @@ rg -n 'deep inspect output can be large|--deep --limit N|JSON output is intended
 rg -n 'Release highlights \(1\.6\.0\)|observability|simulate gc|trace-json' CHANGELOG.md
 ```
 
-### F. Final CI commands (explicit rerun)
+### F. Final CI commands (historical template note)
 
-- [ ] `go test ./...` passes
-- [ ] `go test -race ./...` passes
+For this historical v1.6 template, prefer the CI-parity gate flow already defined in sections 2-3 for modern release validation. Use the commands below only as additional exploratory reruns, not as current release blockers.
+
+- [ ] `go test ./...` (exploratory historical sweep)
+- [ ] `go test -race ./...` (exploratory historical sweep)
 - [ ] `go vet ./...` passes
 - [ ] Integration suite passes (`go test ./tests/integration/...`)
 
@@ -784,7 +786,7 @@ Package tests:
 
 - [ ] `internal/snapshot` covers create / restore / diff / query behavior
 - [ ] `internal/retention` covers current-only / snapshot-only / shared retention
-- [ ] `internal/maintenance/gc` covers snapshot-retained container protection
+- [ ] `internal/maintenance` covers snapshot-retained container protection
 - [ ] `internal/verify` covers snapshot reachability anomalies
 - [ ] Stats/reporting tests include snapshot retention visibility
 
