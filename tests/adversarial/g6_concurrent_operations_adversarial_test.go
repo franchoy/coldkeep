@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"os/exec"
 
 	dbschema "github.com/franchoy/coldkeep/db"
 	"github.com/franchoy/coldkeep/internal/container"
@@ -85,6 +86,30 @@ func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[str
 	)
 	data := testutils.JSONMap(t, payload, "data")
 	return testutils.JSONInt64(t, data, "file_id")
+}
+// storeFileWithCodecCLIG6Async is safe to call from goroutines because it
+// returns an error instead of calling t.Fatal/t.FailNow.
+func storeFileWithCodecCLIG6Async(repoRoot, binPath string, env map[string]string, codec, path string) (int64, error) {
+	cmd := exec.Command(binPath, "store", "--codec", codec, path, "--output", "json")
+	cmd.Dir = repoRoot
+	cmd.Env = testutils.BuildCommandEnv(env)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("store command: %w", err)
+	}
+	payload, ok := testutils.TryParseLastJSONLine(string(out))
+	if !ok {
+		return 0, fmt.Errorf("no JSON in store output: %s", out)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		return 0, fmt.Errorf("store payload missing data: %v", payload)
+	}
+	idF, ok := data["file_id"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("store payload missing file_id: %v", data)
+	}
+	return int64(idF), nil
 }
 
 // storeFileWithCodecCLIG6Async is safe to call from goroutines because it
@@ -198,7 +223,31 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 				}
 				ids[res.idx] = res.id
 			}
+			inPath := testutils.CreateTempFile(t, inputDir, "g6-same-file.bin", 2*1024*1024+313)
+			wantHash := testutils.SHA256File(t, inPath)
 
+			const workers = 6
+			type storeResult struct {
+				idx int
+				id  int64
+				err error
+			}
+			resultCh := make(chan storeResult, workers)
+			for i := 0; i < workers; i++ {
+				i := i
+				go func() {
+					id, err := storeFileWithCodecCLIG6Async(repoRoot, binPath, env, codec, inPath)
+					resultCh <- storeResult{idx: i, id: id, err: err}
+				}()
+			}
+			ids := make([]int64, workers)
+			for i := 0; i < workers; i++ {
+				res := <-resultCh
+				if res.err != nil {
+					t.Fatalf("concurrent store worker %d failed: %v", res.idx, res.err)
+				}
+				ids[res.idx] = res.id
+			}
 			verifyConcurrentInvariantsG6(t, dbconn)
 
 			baseGraph := testutils.QueryChunkGraph(t, dbconn, ids[0])
