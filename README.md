@@ -81,7 +81,8 @@ If you are new to the project, start here, then continue to [ARCHITECTURE.md](AR
 
 - v1.8 introduces packed storage blocks for new data.
 - The default packed block size is 1 MiB.
-- `COLDKEEP_BLOCK_TARGET_SIZE_MB` exists as an advanced operator tuning override for new writes only.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` exists as an advanced operator tuning override for new writes only. Valid values for v1.8: `1`, `2`, `3` (MiB). Other values log a warning and use the locked default. This override is retained for benchmarking and specialized operator tuning; production deployments should use the default.
+- `COLDKEEP_PACKED_BLOCK_SIZE_MIB` is a legacy fallback environment variable checked only if `COLDKEEP_BLOCK_TARGET_SIZE_MB` is not set. It is accepted for backward compatibility; new configurations should use `COLDKEEP_BLOCK_TARGET_SIZE_MB`.
 - v1.8 reads existing v1.7 repositories without rewriting historical data.
 - v1.8 writes packed blocks for new data through `storage_blocks` and `chunk_block_refs`.
 - Mixed repositories containing legacy v1.7 data and new v1.8 packed blocks are valid steady-state.
