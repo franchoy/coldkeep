@@ -9,8 +9,7 @@ import (
 )
 
 // RestoreService provides restore operations with pluggable chunk resolution.
-// This service layer introduces the Phase 3 read abstraction: ChunkResolver + BlockReader.
-// It allows restore to work with both v1.7 (direct chunks) and v1.8 (block-based) layouts.
+// It handles both v1.7 (direct legacy chunks) and v1.8 (packed block-based) layouts.
 type RestoreService struct {
 	// ChunkResolver determines where restore finds chunks (block-based or legacy).
 	// For v1.7 compatibility, returns a marker with BlockID == 0.
@@ -51,10 +50,8 @@ func (s *RestoreService) ResolveChunkLocation(ctx context.Context, chunkID int64
 	return seg, nil
 }
 
-// ReadChunkFromBlock fetches a chunk from a block using BlockReader.
-// Used in Phase 3+ when ChunkSegment indicates v1.8 block-based layout.
-// IMPORTANT: This is a placeholder for Phase 3 Step 3.
-// Full integration into restore loop comes in Phase 3 Step 3-4.
+// ReadChunkFromBlock fetches a chunk payload from a v1.8 packed block using BlockReader.
+// Called when ChunkSegment.BlockID > 0 (v1.8 block-based layout).
 func (s *RestoreService) ReadChunkFromBlock(ctx context.Context, blockID int64, offset, size int64) ([]byte, error) {
 	if s.BlockReader == nil {
 		return nil, fmt.Errorf("block reader not configured (required for v1.8 reads)")
