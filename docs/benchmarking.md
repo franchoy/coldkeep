@@ -133,7 +133,9 @@ regression reference for CI.
 To regenerate the baseline after an intentional performance change:
 
 ```bash
-coldkeep benchmark run --dataset small --output json > benchmark-baseline.json
+coldkeep benchmark run --dataset small --workers 1 --output json > benchmark-baseline.json
+# Optional CI-parity workers=4 profile capture:
+coldkeep benchmark run --dataset small --workers 4 --output json > benchmark-baseline-w4.json
 ```
 
 ## Scenarios

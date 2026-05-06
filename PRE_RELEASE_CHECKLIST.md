@@ -70,6 +70,7 @@ Expected:
 
 Suggested preflight before Step 1:
 
+- run all commands in this checklist from repository root (`/workspaces/coldkeep` in the dev container),
 - `docker compose` available locally
 - `psql` available locally if you will run host-side smoke or schema checks
 - `jq` available locally if you will run host-side smoke output checks
@@ -93,6 +94,7 @@ docker compose up -d coldkeep_postgres
 
 export COLDKEEP_TEST_DB=1
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+export COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql
 export DB_HOST=127.0.0.1
 export DB_PORT=5432
 export DB_USER=coldkeep
@@ -111,6 +113,10 @@ If `docker compose up -d coldkeep_postgres` fails because port `5432` is already
 allocated, stop or reuse the existing local PostgreSQL container before
 continuing. The remaining steps assume a reachable PostgreSQL instance on the
 host/port above.
+
+Tip: prefer `docker compose exec coldkeep_postgres ...` over `docker exec <container-name> ...`
+in manual steps below. Compose service addressing is stable across different
+project naming schemes; hard-coded container names are not.
 
 ## 2) Run quality-equivalent checks (CI quality job parity)
 
@@ -159,6 +165,10 @@ Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
 `/tmp/coldkeep*`. Do not keep one-off repro scripts or evidence you care about
 under those paths while running this checklist.
 
+Transition note for newcomers: Step 1 exports manual CLI variables used again in
+steps 5-11. Step 3 intentionally unsets/overrides some of them to mirror CI.
+Do not skip `unset` lines in step 3.
+
 ## 3) Run full required CI matrix locally (all gate jobs, both codecs)
 
 ```bash
@@ -195,10 +205,14 @@ if [ -f benchmark-baseline.json ]; then
   cp benchmark-baseline.json benchmark-baseline-committed.json
 fi
 
-./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
+./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-baseline.json
 
 if [ -f benchmark-baseline-committed.json ]; then
-  ./coldkeep benchmark run --dataset small --output json --compare benchmark-baseline-committed.json --threshold 100
+  ./coldkeep benchmark run --dataset small --workers 1 --output json --compare benchmark-baseline-committed.json --threshold 100
+
+  # Optional parity with CI workers=4 profile/compare:
+  ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-baseline-w4.json
+  ./coldkeep benchmark run --dataset small --workers 4 --output json --compare benchmark-baseline-committed.json --threshold 100
 fi
 ```
 
@@ -236,6 +250,9 @@ After step 3, unset or override `COLDKEEP_CODEC` before manual CLI checks below.
 Otherwise the last loop iteration leaves `COLDKEEP_CODEC=aes-gcm`, which changes
 the behavior of later `store` commands.
 
+`--threshold 100` means fail only on disaster-class regression (more than 2x
+slower than baseline for a compared scenario).
+
 ## 4) Run integration umbrella suite (optional extra confidence, not a release gate)
 
 This step is intentionally non-blocking for release sign-off.
@@ -267,8 +284,8 @@ export DB_NAME=coldkeep_manual
 export COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/manual-checks"
 rm -rf "$COLDKEEP_STORAGE_DIR"
 mkdir -p "$COLDKEEP_STORAGE_DIR"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_manual;"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_manual;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_manual;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_manual;"
 
 # Bootstrap the fresh manual-check database once.
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
@@ -301,8 +318,8 @@ Bootstrap ON (clean schema bootstrap path):
 ```bash
 unset COLDKEEP_CODEC
 export DB_NAME=coldkeep_bootstrap_on_probe
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_on_probe;"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_on_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_on_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_on_probe;"
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ./coldkeep stats
 ```
@@ -311,8 +328,8 @@ Bootstrap OFF (fail-fast when schema is missing):
 
 ```bash
 export DB_NAME=coldkeep_bootstrap_off_probe
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_off_probe;"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_off_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_off_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_off_probe;"
 unset COLDKEEP_DB_AUTO_BOOTSTRAP
 # Point to a fresh DB without schema and confirm command fails fast.
 ./coldkeep stats
@@ -325,6 +342,8 @@ Expected: bootstrap on creates/validates schema path successfully; bootstrap off
 From a clean machine/container flow:
 
 Warning: `docker compose down -v` is destructive and removes PostgreSQL volumes.
+This deletes data for all databases in this compose project, including manual
+sandboxes created in earlier steps.
 
 ```bash
 docker compose down -v
@@ -385,6 +404,7 @@ Manual spot-checks (text mode):
 ```bash
 ./coldkeep restore 12 ./out --dry-run
 ./coldkeep remove 12 999 13
+# --fail-fast behavior is meaningful only when multiple IDs/targets are present.
 ```
 
 Confirm:
@@ -433,10 +453,10 @@ printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 ./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
 
 # stored-path remove: confirm remaining_ref_count in JSON output
-./coldkeep remove --stored-path <stored-path-from-above> --output json
+./coldkeep remove --stored-path <actual-stored-path-from-above> --output json
 
 # confirm restore-by-stored-path works
-./coldkeep restore --stored-path <stored-path> --mode override --destination ./out/restored.txt --output json
+./coldkeep restore --stored-path <actual-stored-path-from-above> --mode override --destination ./out/restored.txt --output json
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
@@ -453,7 +473,7 @@ Confirm:
 - `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
 - GC correctly refuses when ref_count drift is present: `error_class=GENERAL`, `invariant_code=GC_REFUSED_INTEGRITY`
 - `repair ref-counts` unblocks subsequent GC and verify
-- Dry-run for `remove --stored-path` correctly returns usage exit code `2` (deferred per design)
+- `remove --stored-path` with `--dry-run` is intentionally rejected today (usage exit code `2`); this is deferred by design
 
 ## Historical Template Sections (v1.5/v1.6)
 
@@ -850,7 +870,7 @@ Additional CLI validation and policy checks:
 - [ ] `snapshot diff --filter added|removed|modified` works as specified
 - [ ] `--path`, `--prefix`, `--pattern`, `--regex`, `--min-size`, `--max-size`, `--modified-after`, and `--modified-before` validate at CLI level
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
-- [ ] `snapshot delete` requires `--force`
+- [ ] `snapshot delete` requires either `--force` or `--dry-run` (do not pass both)
 
 ## 17) Verify snapshot / retention contract (manual gate)
 
