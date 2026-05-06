@@ -1053,7 +1053,7 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		return fmt.Errorf("query reusable completed chunk %d: %w", chunkID, err)
 	}
 
-	if !((summary.blockRows == 1 && summary.packedRows == 0) || (summary.blockRows == 0 && summary.packedRows == 1) || (summary.blockRows == 1 && summary.packedRows == 1)) {
+	if summary.blockRows != 1 || (summary.packedRows != 0 && summary.packedRows != 1) {
 		return fmt.Errorf("chunk %d has invalid physical metadata rows: blocks=%d packed=%d", chunkID, summary.blockRows, summary.packedRows)
 	}
 	if summary.existingContainerRows != 1 {
@@ -2872,7 +2872,6 @@ func storePackedBlockWithWriter(
 	switch transformed.Descriptor.Codec {
 	case blocks.CodecPlain:
 		// Keep legacy v1.8 metadata contract for plain payloads.
-		storageCodec = packedStorageBlockCodecNone
 	case blocks.CodecAESGCM:
 		if len(transformed.Descriptor.Nonce) != packedStorageBlockAESGCMNonceSize {
 			return packedBlockPersistResult{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
