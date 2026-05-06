@@ -846,7 +846,7 @@ Current status:
 - v1.7 controlled-execution performance validation and release-readiness hardening are complete.
 - v1.8 packed block abstraction, AES-GCM packed-block integration, and release hardening are complete.
 
-Next focus is v1.9: block-level compression and full block-level encrypted payloads, building on the v1.8 packed-block foundation.
+Next focus is v1.9: block-level compression, building on the v1.8 packed-block encryption/storage foundation.
 
 ## Contributing
 
