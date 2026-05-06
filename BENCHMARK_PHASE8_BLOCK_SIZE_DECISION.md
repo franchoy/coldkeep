@@ -6,7 +6,9 @@ Status: decision finalized for v1.8 release hardening.
 
 - v1.8 introduces packed storage blocks for new writes.
 - The v1.8 compiled-in default packed block size is 1 MiB.
-- `COLDKEEP_BLOCK_TARGET_SIZE_MB` remains available as an advanced/operator write-time override for benchmarking and workload-specific tuning.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` remains available as an
+  advanced/operator write-time override for benchmarking and
+  workload-specific tuning.
 - v1.8 reads existing v1.7 repositories and writes packed blocks only for new data.
 - Mixed repositories containing legacy v1.7 data and v1.8 packed blocks are valid.
 - v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
@@ -15,8 +17,10 @@ Status: decision finalized for v1.8 release hardening.
 
 Decision note:
 
-- Phase 8 benchmarking remains useful as supporting evidence and retained tooling, but it no longer implies that 2 MiB or 3 MiB are release defaults.
-- Alternative sizes remain benchmark/tuning candidates only; 1 MiB is the locked production default for v1.8.
+- Phase 8 benchmarking remains useful as supporting evidence and retained
+  tooling, but it no longer implies that 2 MiB or 3 MiB are release defaults.
+- Alternative sizes remain benchmark/tuning candidates only; 1 MiB is the
+  locked production default for v1.8.
 
 ## Objective
 
@@ -250,9 +254,9 @@ Purpose:
 Shape:
 
 - Store many small files, then run selective restores:
-   - restore one file
-   - restore 100 random files
-   - restore one nested directory
+  - restore one file
+  - restore 100 random files
+  - restore one nested directory
 
 Interpretation:
 
@@ -290,25 +294,25 @@ Minimum required matrix:
 Recommended full matrix:
 
 - `1 MiB`
-   - Dataset A (large file) x3
-   - Dataset B (many small files) x3
-   - Dataset C (mixed folder) x3
-   - Dataset D (dedup-heavy) x3
-   - Dataset E (selective restore) x3
-   - Dataset F (GC partially-live) x3
+  - Dataset A (large file) x3
+  - Dataset B (many small files) x3
+  - Dataset C (mixed folder) x3
+  - Dataset D (dedup-heavy) x3
+  - Dataset E (selective restore) x3
+  - Dataset F (GC partially-live) x3
 - `2 MiB`
-   - Dataset A (large file) x3
-   - Dataset B (many small files) x3
-   - Dataset C (mixed folder) x3
-   - Dataset D (dedup-heavy) x3
-   - Dataset E (selective restore) x3
-   - Dataset F (GC partially-live) x3
+  - Dataset A (large file) x3
+  - Dataset B (many small files) x3
+  - Dataset C (mixed folder) x3
+  - Dataset D (dedup-heavy) x3
+  - Dataset E (selective restore) x3
+  - Dataset F (GC partially-live) x3
 
 Optional exploratory matrix:
 
 - `3 MiB`
-   - same full A-F matrix, or
-   - focused C/E/F matrix when runtime budget is constrained
+  - same full A-F matrix, or
+  - focused C/E/F matrix when runtime budget is constrained
 
 Why `3` runs per test:
 
@@ -348,7 +352,7 @@ Use strict mode only when it is operationally safe for the benchmark host.
 Fallback disclosure requirement:
 
 - If strict cache control is not available, report explicitly:
-   - `cache state not controlled; results use repeated median runs`
+  - `cache state not controlled; results use repeated median runs`
 
 ## 10. Benchmark Command Harness (Locked)
 
@@ -423,8 +427,8 @@ Harness implementation:
 
 - Canonical sequence runner: `scripts/run_phase8_store_sequence.sh`
 - Output artifacts:
-   - `tmp/bench_phase8_store_sequence/*-stats.json`
-   - `tmp/bench_phase8_store_sequence/*-result.json`
+  - `tmp/bench_phase8_store_sequence/*-stats.json`
+  - `tmp/bench_phase8_store_sequence/*-result.json`
 
 ## 10.2 Restore Benchmark Sequence (Locked)
 
@@ -483,8 +487,8 @@ Definitions:
 - `new_chunks_v2 = chunks_after_v2 - chunks_after_v1`
 - `new_blocks_v2 = blocks_after_v2 - blocks_after_v1`
 - Dedup incremental ratios:
-   - `chunk_incremental_ratio = new_chunks_v2 / chunks_after_v1`
-   - `block_incremental_ratio = new_blocks_v2 / blocks_after_v1`
+  - `chunk_incremental_ratio = new_chunks_v2 / chunks_after_v1`
+  - `block_incremental_ratio = new_blocks_v2 / blocks_after_v1`
 
 Repack guard:
 
@@ -501,9 +505,9 @@ Cross-size decision requirement:
 - Dedup effectiveness should be roughly equivalent between `1 MiB` and `2 MiB`.
 - Chunk identity must remain stable across block-size candidates.
 - If dedup deltas are significant, mark run as `investigate=true` and inspect:
-   - dataset composition drift,
-   - cache state drift,
-   - unexpected write-path differences unrelated to chunking.
+  - dataset composition drift,
+  - cache state drift,
+  - unexpected write-path differences unrelated to chunking.
 
 Output artifacts:
 
@@ -532,10 +536,13 @@ Primary comparison metric between 1 MiB and 2 MiB:
 
 Expected outcome:
 
-- 2 MiB blocks may retain more dead space because each packed block contains more
-  chunks; a partially-live 2 MiB block wastes more bytes than a partially-live 1 MiB block.
-- This is one of the strongest reasons to stay with 1 MiB if throughput difference is small.
-- If retained dead bytes differ significantly, 1 MiB is preferred on storage efficiency grounds.
+- 2 MiB blocks may retain more dead space because each packed block contains
+  more chunks; a partially-live 2 MiB block wastes more bytes than a
+  partially-live 1 MiB block.
+- This is one of the strongest reasons to stay with 1 MiB if throughput
+  difference is small.
+- If retained dead bytes differ significantly, 1 MiB is preferred on storage
+  efficiency grounds.
 
 Canonical scripts:
 
@@ -790,18 +797,63 @@ favours 2 MiB for throughput metrics and disfavours 2 MiB for cost metrics
 (amplification, retained dead bytes, verify time). Leave cells blank until the
 corresponding sequence harness has completed all runs.
 
-| Dataset            | Metric                    | 1 MiB (median) | 2 MiB (median) |    Δ | Decision hint |
-|:-------------------|:--------------------------|---------------:|---------------:|-----:|:--------------|
-| Large file (A)     | Store MB/s                |           12.5 |           12.8 | +2.4% | = (below 10% threshold) |
-| Large file (A)     | Restore MB/s              |           33.2 |           34.0 | +2.4% | = (below 10% threshold) |
-| Small files (B)    | Store MB/s                |          0.175 |          0.174 | −0.6% | = |
-| Small files (B)    | Restore MB/s              |          0.063 |          0.065 | +3.2% | = |
-| Full restore (B)   | Read amplification (×)    |         1.0107 |         1.0107 |   0 % | = |
-| ~~GC partial-live (F)~~ | ~~Retained dead bytes (MiB)~~ | ~~0.00~~ | ~~0.00~~ | ~~0 %~~ | ~~superseded by F2 — see note in decision record~~ |
-| GC partial-live (F2) | Retained dead bytes (MiB) |           8.47 |          12.67 | +49.6% | +1 MiB — 2 MiB disqualified (>20 % threshold) |
-| Verify (A)         | Wall-clock time (s)       |           9.18 |           9.47 | +3.2% | = (below 15% regression limit) |
+- Dataset: Large file (A)
+  Metric: Store MB/s
+  1 MiB (median): 12.5
+  2 MiB (median): 12.8
+  Delta: +2.4%
+  Decision hint: = (below 10% threshold)
 
-**Decision hint key**
+- Dataset: Large file (A)
+  Metric: Restore MB/s
+  1 MiB (median): 33.2
+  2 MiB (median): 34.0
+  Delta: +2.4%
+  Decision hint: = (below 10% threshold)
+
+- Dataset: Small files (B)
+  Metric: Store MB/s
+  1 MiB (median): 0.175
+  2 MiB (median): 0.174
+  Delta: -0.6%
+  Decision hint: =
+
+- Dataset: Small files (B)
+  Metric: Restore MB/s
+  1 MiB (median): 0.063
+  2 MiB (median): 0.065
+  Delta: +3.2%
+  Decision hint: =
+
+- Dataset: Full restore (B)
+  Metric: Read amplification (x)
+  1 MiB (median): 1.0107
+  2 MiB (median): 1.0107
+  Delta: 0%
+  Decision hint: =
+
+- Dataset: ~~GC partial-live (F)~~
+  Metric: ~~Retained dead bytes (MiB)~~
+  1 MiB (median): ~~0.00~~
+  2 MiB (median): ~~0.00~~
+  Delta: ~~0%~~
+  Decision hint: ~~superseded by F2; see note in decision record~~
+
+- Dataset: GC partial-live (F2)
+  Metric: Retained dead bytes (MiB)
+  1 MiB (median): 8.47
+  2 MiB (median): 12.67
+  Delta: +49.6%
+  Decision hint: +1 MiB (2 MiB disqualified, >20% threshold)
+
+- Dataset: Verify (A)
+  Metric: Wall-clock time (s)
+  1 MiB (median): 9.18
+  2 MiB (median): 9.47
+  Delta: +3.2%
+  Decision hint: = (below 15% regression limit)
+
+### Decision hint key
 
 - `+2 MiB` — metric favours 2 MiB by more than the minimum required threshold
   (see section 14).
@@ -815,7 +867,7 @@ corresponding sequence harness has completed all runs.
 > **Fill this section only after all runs are complete and the table above is
 > populated. Do not fill speculatively.**
 
-```
+```text
 DefaultBlockSize = 1 MiB
 
 Rationale:
@@ -847,25 +899,53 @@ to the decision record while any trigger condition is unresolved.
 
 ### 18.1 Correctness triggers (stop immediately)
 
-| Observation | Why it matters |
-|:------------|:---------------|
-| 1 MiB and 2 MiB produce different restored file hashes for the same source tree | Block size must not affect restore correctness; differing hashes indicate a data-path bug. |
-| `verify system --standard` passes but a restore hash differs | Verifier and restore path disagree on block content; one or both are wrong. |
-| Any chunk appears in `chunk_block_refs` after v2 store pointing to a different block than before v2 (repack detected) | Existing chunks must never be repacked; a detected repack breaks the no-mutation invariant. |
+- Observation: 1 MiB and 2 MiB produce different restored file hashes for
+  the same source tree.
+  Why it matters: block size must not affect restore correctness; differing
+  hashes indicate a data-path bug.
+
+- Observation: `verify system --standard` passes but a restore hash differs.
+  Why it matters: verifier and restore path disagree on block content; one or
+  both are wrong.
+
+- Observation: any chunk appears in `chunk_block_refs` after v2 store
+  pointing to a different block than before v2 (repack detected).
+  Why it matters: existing chunks must never be repacked; a detected repack
+  breaks the no-mutation invariant.
 
 Any correctness trigger causes **Phase 8 to stop**. Return to implementation
 and fix the defect before re-running.
 
 ### 18.2 Anomaly triggers (investigate before deciding)
 
-| Observation | Likely cause / what to check |
-|:------------|:-----------------------------|
-| 2 MiB changes the chunk-incremental ratio by > 10 percentage points relative to 1 MiB for the same dataset | Dedup effectiveness should not be sensitive to block size; check packing logic and boundary alignment. |
-| Read amplification exceeds 3× for a normal full-folder restore (non-selective) | Suggests over-reading of packed blocks; check block fan-out and IO path. |
-| `retained_dead_bytes_due_to_packed_blocks` (simulate gc) is higher than total size of removed files | More dead space retained than removed; check partial-live block accounting. |
-| GC deletes more blocks than expected given removal fraction | Could indicate cascade eviction of live-chunk blocks; audit `chunk_block_refs` integrity after gc. |
-| `block_hash` verification wall-clock time is disproportionate relative to store time (e.g. > 2× store time) | Unexpected fan-out or re-read pattern in the verifier; profile IO during verify. |
-| Packed block fill ratio < 50 % for large-file or mixed datasets | Blocks are not being filled to target; investigate packing/flush thresholds. |
+- Observation: 2 MiB changes the chunk-incremental ratio by more than
+  10 percentage points relative to 1 MiB for the same dataset.
+  Likely cause / what to check: dedup effectiveness should not be sensitive to
+  block size; check packing logic and boundary alignment.
+
+- Observation: read amplification exceeds 3x for a normal full-folder restore
+  (non-selective).
+  Likely cause / what to check: suggests over-reading of packed blocks; check
+  block fan-out and IO path.
+
+- Observation: `retained_dead_bytes_due_to_packed_blocks` (simulate gc) is
+  higher than total size of removed files.
+  Likely cause / what to check: more dead space retained than removed; check
+  partial-live block accounting.
+
+- Observation: GC deletes more blocks than expected given removal fraction.
+  Likely cause / what to check: could indicate cascade eviction of live-chunk
+  blocks; audit `chunk_block_refs` integrity after gc.
+
+- Observation: `block_hash` verification wall-clock time is disproportionate
+  relative to store time (for example, greater than 2x store time).
+  Likely cause / what to check: unexpected fan-out or re-read pattern in the
+  verifier; profile IO during verify.
+
+- Observation: packed block fill ratio is less than 50% for large-file or
+  mixed datasets.
+  Likely cause / what to check: blocks are not being filled to target;
+  investigate packing and flush thresholds.
 
 Anomaly triggers do not automatically stop Phase 8, but the root cause must be
 understood and documented before the decision record is written. If the
@@ -943,7 +1023,6 @@ committed to the repository.
 - [ ] This file (`BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`) reflects the final
   decision and is committed as part of the v1.8 release record.
 
-
 ## 20. Phase 8 Final Checklist
 
 All items must be checked before Phase 8 is closed and the v1.8 default is
@@ -972,29 +1051,34 @@ committed. Items are grouped by concern; check them in order.
 
 ### 20.3 Metrics collected
 
-**Throughput**
+#### Throughput
+
 - [ ] Store throughput collected for 1 MiB and 2 MiB (all applicable datasets).
 - [ ] Restore throughput collected for 1 MiB and 2 MiB (all applicable
   datasets).
 - [ ] Verify wall-clock time collected for 1 MiB and 2 MiB.
 
-**GC**
+#### GC
+
 - [ ] GC reclaim bytes collected for 1 MiB and 2 MiB.
 - [ ] `retained_dead_bytes_due_to_packed_blocks` collected for 1 MiB and 2 MiB
   (Dataset F).
 
-**Block layout**
+#### Block layout
+
 - [ ] Block count collected.
 - [ ] Average chunks per block collected.
 - [ ] Average block size collected.
 - [ ] Block fill ratio collected.
 
-**IO**
+#### IO
+
 - [ ] Read amplification collected (bytes read / bytes restored).
 - [ ] Block cache hit/miss collected if instrumentation is available; explicitly
   deferred and noted if not.
 
-**Dedup**
+#### Dedup
+
 - [ ] Dedup effectiveness compared between 1 MiB and 2 MiB (chunk-incremental
   ratio and block-incremental ratio, Dataset D).
 - [ ] Optional compression simulation completed, **or** explicitly deferred with
