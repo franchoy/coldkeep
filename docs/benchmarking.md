@@ -25,9 +25,14 @@ evaluation in v1.7.
 
 ## Running benchmarks
 
-Phase 8 benchmark execution is script-only for v1.8 release hardening. The
-shipped CLI does not expose a `benchmark` command; use the retained helper
-scripts under `scripts/run_phase8_*.sh` and `scripts/compare_phase8_*.py`.
+Phase 8 benchmark execution is script-only for v1.8 release hardening.
+
+The `coldkeep benchmark` command is available in the shipped CLI for ad-hoc
+performance evaluation; it supports `benchmark run` (repeatable workload tests
+with configurable worker count) and `benchmark chunkers` (chunk-algorithm
+comparison). Use the retained helper scripts under `scripts/run_phase8_*.sh`
+and `scripts/compare_phase8_*.py` for large-scale decision-grade matrix runs
+requiring strict isolation and metrics collection.
 
 ```bash
 # Inspect/resume the packed block-size matrix
