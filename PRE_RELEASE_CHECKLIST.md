@@ -270,7 +270,7 @@ Use it to catch broader regressions outside the required CI-equivalent gate set 
 
 ```bash
 unset COLDKEEP_STORAGE_DIR
-unset COLDKEEP_CODEC
+export COLDKEEP_CODEC=plain
 
 go test -p 1 ./tests/... -count=1 -v -timeout 20m
 ```
