@@ -86,9 +86,8 @@ If you are new to the project, start here, then continue to [ARCHITECTURE.md](AR
 - v1.8 writes packed blocks for new data through `storage_blocks` and `chunk_block_refs`.
 - Mixed repositories containing legacy v1.7 data and new v1.8 packed blocks are valid steady-state.
 - v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
-- Both `plain` and `aes-gcm` codec settings work with v1.8 packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, each chunk's encryption nonce and codec metadata are tracked in per-chunk companion `blocks` rows; the packed block container in `storage_blocks` remains `codec=none`.
-- Full block-level encryption (one ciphertext per block) is not part of v1.8; compression is also not enabled in v1.8.
-- v1.9 will build on the packed-block foundation with block-level compression and full block-level encryption.
+- Both `plain` and `aes-gcm` codec settings work end-to-end with v1.8 packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, the full encoded block is AES-GCM encrypted and `storage_blocks.codec` is set to `"aes-gcm"`; stored bytes are a 12-byte nonce prefix followed by the ciphertext. When `COLDKEEP_CODEC=plain`, `storage_blocks.codec` is `"none"` and stored bytes are the plaintext encoded block. The read path (`StorageBlockReader`) handles both layouts transparently using per-block metadata.
+- Full block-level encryption is fully shipped in v1.8. Block-level compression is planned for v1.9.
 
 ## Core Guarantees
 

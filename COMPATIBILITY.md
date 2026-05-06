@@ -126,22 +126,22 @@ Practical consequence:
 - Operators can upgrade safely without forced rewrite, continue restoring historical data, and accept mixed-layout repositories as normal.
 - Readers continue to use persisted per-block metadata, so changing `COLDKEEP_BLOCK_TARGET_SIZE_MB` later does not affect restore of existing blocks.
 
-Packed-block codec boundary (current v1.8 behavior):
+Packed-block codec boundary (v1.8 behavior):
 
-- v1.8 packed blocks persisted in `storage_blocks` use `codec = "none"` at the block level; the block payload is a concatenation of plaintext chunk bytes.
-- Both `plain` and `aes-gcm` codec settings work with packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, individual chunk payloads are encrypted and each chunk's companion `blocks` row carries `codec="aes-gcm"` with a per-chunk nonce; the packed block container remains `codec="none"` at the `storage_blocks` level.
-- Full-block-level encryption (encrypting the entire packed block as one ciphertext) is not part of the v1.8 compatibility contract.
-- Legacy one-chunk `blocks` rows continue to support their existing codec semantics (including `aes-gcm`) per row metadata.
-- Mixed repositories that contain both `plain` and `aes-gcm` companion rows are valid.
+- v1.8 supports both `plain` and `aes-gcm` codec settings for packed-block writes.
+- When `COLDKEEP_CODEC=plain`: `storage_blocks.codec = "none"`; stored payload is the encoded block bytes (plaintext).
+- When `COLDKEEP_CODEC=aes-gcm`: `storage_blocks.codec = "aes-gcm"`; stored payload is a 12-byte AES-GCM nonce prefix followed by the ciphertext of the full encoded block. The read path in `StorageBlockReader` strips the nonce, decrypts, then decodes the block structure.
+- The block binary format header (inside the plaintext encoded block) always uses codec value `0` (`"none"`) regardless of storage-level encryption; it describes chunk layout within the plaintext block, not the storage representation.
+- Legacy single-chunk `blocks` rows carry their own per-row codec and nonce fields independently; the two systems coexist.
+- Mixed repositories with `plain` and `aes-gcm` packed blocks are valid.
 
-Why this is explicit:
+Why `storage_blocks` embeds the nonce in the payload (no dedicated column):
 
-- `storage_blocks` persists block-level metadata (`codec`, `plaintext_size`, `stored_size`, `block_hash`). Individual chunk encryption is tracked via companion `blocks` rows so the read path can decode each chunk independently.
-- Per-block full encryption (single nonce for all chunks in the block) is deferred to v1.9.
+- `storage_blocks` has no dedicated nonce column. The 12-byte AES-GCM nonce is prepended to the ciphertext when writing. The reader identifies the nonce boundary from the fixed nonce size and codec type before decryption.
 
 Forward-looking note:
 
-- Compression is not enabled in v1.8. v1.9 will build on the packed-block foundation with block-level compression and full block-level encrypted payloads.
+- v1.8 does not include block-level compression. v1.9 will extend the packed-block foundation with block-level compression.
 
 Chunker evolution model:
 

@@ -35,6 +35,7 @@ project, do not start here; start with [README.md](README.md).
 - New writes use the packed block layout.
 - Default packed block target size is 1 MiB.
 - `COLDKEEP_BLOCK_TARGET_SIZE_MB` remains available as an advanced/operator write-time tuning override.
+- `COLDKEEP_CODEC=aes-gcm` now fully applies to packed-block writes: `storage_blocks.codec = "aes-gcm"`, stored bytes = 12-byte nonce prefix + AES-GCM ciphertext of the encoded block; the read path decrypts transparently.
 
 ### Compatibility (v1.8 packed-block transition)
 
@@ -45,8 +46,7 @@ project, do not start here; start with [README.md](README.md).
 
 ### Not included (v1.8 packed-block transition)
 
-- Compression is not enabled yet; block-level compression is planned for v1.9.
-- Full block-level encryption (single ciphertext for the entire packed block) is not included; per-chunk AES-GCM via companion rows is used instead. Full block-level encryption is planned for v1.9.
+- Block-level compression is not included; it is planned for v1.9.
 
 ------------------------------------------------------------------------
 

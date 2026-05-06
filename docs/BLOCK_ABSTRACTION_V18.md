@@ -13,12 +13,17 @@ Purpose:
 These values are the baseline for v1.8 unless an explicit later benchmark decision updates them.
 
 ```text
-BlockFormatVersion = 1
-BlockCodec         = "none"
-TargetBlockSize    = 1 * 1024 * 1024   # 1 MiB
-MaxBlockSize       = 1 * 1024 * 1024   # 1 MiB
-BlockHashPolicy    = required
+BlockFormatVersion    = 1
+BlockBinaryCodec      = "none"   # codec field in the block binary header (always plaintext structure)
+StorageBlocksCodec    = "none" | "aes-gcm"  # stored in storage_blocks.codec; depends on COLDKEEP_CODEC
+TargetBlockSize       = 1 * 1024 * 1024   # 1 MiB
+MaxBlockSize          = 1 * 1024 * 1024   # 1 MiB
+BlockHashPolicy       = required
 ```
+
+Note on the two codec concepts:
+- `BlockBinaryCodec` is the codec field embedded in the block binary format header. It always equals `"none"` because the binary format always describes plaintext chunk layout regardless of whether the block is subsequently encrypted.
+- `StorageBlocksCodec` is what gets persisted in `storage_blocks.codec`. It equals `"none"` for plain writes and `"aes-gcm"` for encrypted writes. When `"aes-gcm"`, stored bytes are a 12-byte nonce prefix followed by AES-GCM ciphertext of the full encoded block.
 
 ## Locked Invariants
 
@@ -75,7 +80,7 @@ storage_blocks (
 	id                BIGSERIAL PRIMARY KEY,
 
 	format_version    INT NOT NULL,
-	codec             TEXT NOT NULL, -- "none" for v1.8
+	codec             TEXT NOT NULL, -- "none" for plain writes; "aes-gcm" for encrypted writes
 
 	plaintext_size    BIGINT NOT NULL,
 	stored_size       BIGINT NOT NULL,
@@ -187,11 +192,12 @@ Rules:
 chunks -> pack -> encode -> hash -> encrypt -> store
 ```
 
-Implementation status clarification (current code):
+Implementation status (shipped v1.8):
 
-- Current v1.8 runtime stores packed blocks with packed metadata codec semantics fixed to `none`.
-- Packed-block write path currently requires plain transformed payload for `storage_blocks` persistence.
-- Compression and full-block encrypted packed payload support are deferred to v1.9 and are not part of the shipped v1.8 compatibility contract.
+- v1.8 fully supports both `plain` and `aes-gcm` codec settings for packed-block writes.
+- `COLDKEEP_CODEC=plain`: `storage_blocks.codec = "none"`, stored payload = encoded block bytes.
+- `COLDKEEP_CODEC=aes-gcm`: `storage_blocks.codec = "aes-gcm"`, stored payload = 12-byte nonce ∥ AES-GCM ciphertext of the encoded block. The read path (`StorageBlockReader.decryptBlock`) strips the nonce and decrypts before decoding.
+- Block-level compression is not included in v1.8 and is deferred to v1.9.
 
 Not used:
 
@@ -424,7 +430,8 @@ Release contract summary:
 - The compiled-in default packed block size is 1 MiB.
 - `COLDKEEP_BLOCK_TARGET_SIZE_MB` is an advanced write-time override for operators.
 - v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
-- Compression is not enabled in v1.8 packed-block writes; v1.9 will extend this design with block-level compression.
+- Both `plain` and `aes-gcm` codecs are fully supported for packed-block writes in v1.8. When `COLDKEEP_CODEC=aes-gcm`, `storage_blocks.codec = "aes-gcm"` and the stored payload is a 12-byte nonce prefix followed by AES-GCM ciphertext of the encoded block.
+- Block-level compression is not included in v1.8; v1.9 will extend this design with block-level compression.
 
 ### Default Block Size (Locked for v1.8)
 

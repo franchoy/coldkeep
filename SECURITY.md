@@ -124,7 +124,7 @@ When enabled with a valid `COLDKEEP_KEY`, this provides:
 
 - confidentiality for stored block payloads at rest
 - authenticated decryption failure on ciphertext or nonce tampering
-- support for both legacy single-chunk blocks and v1.8 packed multi-chunk blocks (per-chunk nonce tracked in companion `blocks` rows)
+- support for both legacy single-chunk blocks and v1.8 packed multi-chunk blocks: when `COLDKEEP_CODEC=aes-gcm`, the full encoded block is AES-GCM encrypted and persisted as a nonce-prefixed ciphertext in the container; `storage_blocks.codec` is set to `"aes-gcm"` and the read path decrypts transparently
 
 It does not provide:
 
