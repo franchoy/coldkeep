@@ -197,6 +197,21 @@ func TestLockContainerRowNowaitWithRetryZeroAttemptsReturnsContention(t *testing
 	}
 }
 
+func TestLockContainerRowNowaitWithRetryZeroBaseWaitDoesNotPanic(t *testing.T) {
+	tx := &stubTx{errs: []error{nil, &pq.Error{Code: "55P03"}, nil, nil, nil, &pq.Error{Code: "55P03"}, nil, nil}}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("expected no panic for zero base wait, got: %v", r)
+		}
+	}()
+
+	err := lockContainerRowNowaitWithRetry(tx, nil, 99, 2, 0)
+	if !errors.Is(err, ErrContainerLockContention) {
+		t.Fatalf("expected ErrContainerLockContention, got: %v", err)
+	}
+}
+
 func TestLocalWriterAppendPayloadRefreshesDBSizeBeforeRotationDecision(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

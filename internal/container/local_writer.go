@@ -1,7 +1,9 @@
 package container
 
 import (
+	cryptorand "crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -16,7 +18,7 @@ import (
 
 var ErrContainerLockContention = errors.New("container row lock contention")
 
-var defaultLockRetryAttempts = 8
+var defaultLockRetryAttempts = 10
 
 // defaultLockRetryBaseWait is the base duration for the first backoff interval.
 // Subsequent intervals grow exponentially: baseWait * 2^attempt, capped at defaultLockRetryMaxWait.
@@ -216,6 +218,13 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 }
 
 func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int64, attempts int, baseWait time.Duration) error {
+	if attempts <= 0 {
+		return fmt.Errorf("%w for container %d after %d attempts", ErrContainerLockContention, containerID, attempts)
+	}
+	if baseWait <= 0 {
+		baseWait = time.Millisecond
+	}
+
 	lockQuery := "SELECT id FROM container WHERE id = $1"
 	if dbconn != nil {
 		lockQuery = db.QueryWithOptionalForUpdateNowait(dbconn, lockQuery)
@@ -255,12 +264,27 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 			if backoff > defaultLockRetryMaxWait {
 				backoff = defaultLockRetryMaxWait
 			}
-			jitter := time.Duration(rand.Int63n(int64(baseWait)))
+			// Add bounded jitter tied to current backoff to reduce synchronized retries.
+			jitter := randomDuration(backoff / 2)
 			time.Sleep(backoff + jitter)
 		}
 	}
 
 	return fmt.Errorf("%w for container %d after %d attempts", ErrContainerLockContention, containerID, attempts)
+}
+
+func randomDuration(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+
+	var b [8]byte
+	if _, err := cryptorand.Read(b[:]); err == nil {
+		n := binary.LittleEndian.Uint64(b[:])
+		return time.Duration(n % uint64(max+1))
+	}
+
+	return time.Duration(rand.Int63n(int64(max) + 1))
 }
 
 func isLockNotAvailable(err error) bool {
