@@ -19,7 +19,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## [1.8.0] - 2026-05-06
+## [1.8.0] - 2026-05-07
 
 ### Added (v1.8 packed-block transition)
 
