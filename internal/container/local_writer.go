@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 	"github.com/lib/pq"
 )
 
@@ -26,6 +27,12 @@ var defaultLockRetryBaseWait = 10 * time.Millisecond
 
 // defaultLockRetryMaxWait caps exponential growth to avoid unbounded sleep under sustained contention.
 var defaultLockRetryMaxWait = 500 * time.Millisecond
+
+const (
+	lockRetryAttemptsEnv = "COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS"
+	lockRetryBaseWaitEnv = "COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS"
+	lockRetryMaxWaitEnv  = "COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS"
+)
 
 // LocalPlacement describes where a payload was physically appended.
 type LocalPlacement struct {
@@ -224,6 +231,7 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 	if baseWait <= 0 {
 		baseWait = time.Millisecond
 	}
+	maxWait := lockRetryMaxWaitFromEnv(baseWait)
 
 	lockQuery := "SELECT id FROM container WHERE id = $1"
 	if dbconn != nil {
@@ -261,8 +269,8 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 		}
 		if attempt < attempts-1 {
 			backoff := baseWait * (1 << uint(attempt))
-			if backoff > defaultLockRetryMaxWait {
-				backoff = defaultLockRetryMaxWait
+			if backoff > maxWait {
+				backoff = maxWait
 			}
 			// Add bounded jitter tied to current backoff to reduce synchronized retries.
 			jitter := randomDuration(backoff / 2)
@@ -271,6 +279,40 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 	}
 
 	return fmt.Errorf("%w for container %d after %d attempts", ErrContainerLockContention, containerID, attempts)
+}
+
+func lockRetryAttemptsFromEnv() int {
+	configured := utils_env.GetenvOrDefaultInt64(lockRetryAttemptsEnv, int64(defaultLockRetryAttempts))
+	if configured < 1 {
+		return 1
+	}
+	if configured > 64 {
+		return 64
+	}
+	return int(configured)
+}
+
+func lockRetryBaseWaitFromEnv() time.Duration {
+	configuredMs := utils_env.GetenvOrDefaultInt64(lockRetryBaseWaitEnv, int64(defaultLockRetryBaseWait/time.Millisecond))
+	if configuredMs < 1 {
+		configuredMs = 1
+	}
+	if configuredMs > 2000 {
+		configuredMs = 2000
+	}
+	return time.Duration(configuredMs) * time.Millisecond
+}
+
+func lockRetryMaxWaitFromEnv(baseWait time.Duration) time.Duration {
+	fallbackMs := int64(defaultLockRetryMaxWait / time.Millisecond)
+	configuredMs := utils_env.GetenvOrDefaultInt64(lockRetryMaxWaitEnv, fallbackMs)
+	if configuredMs < int64(baseWait/time.Millisecond) {
+		configuredMs = int64(baseWait / time.Millisecond)
+	}
+	if configuredMs > 5000 {
+		configuredMs = 5000
+	}
+	return time.Duration(configuredMs) * time.Millisecond
 }
 
 func randomDuration(max time.Duration) time.Duration {
@@ -342,7 +384,7 @@ func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 }
 
 func (w *LocalWriter) lockAndRefreshActiveContainer(tx db.DBTX) error {
-	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
+	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, lockRetryAttemptsFromEnv(), lockRetryBaseWaitFromEnv()); err != nil {
 		return err
 	}
 

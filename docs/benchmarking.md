@@ -77,6 +77,18 @@ export DB_SSLMODE=disable
 export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
+Optional contention-tuning environment variables (recommended for shared CI runners):
+
+```bash
+# Increase lock retry resilience under transient PostgreSQL row-lock contention.
+export COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=12
+export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
+export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
+```
+
+Defaults if unset: attempts=10, base wait=10ms, max wait=500ms.
+Bounds are enforced: attempts [1,64], base wait [1ms,2000ms], max wait [base,5000ms].
+
 ### Benchmark output examples
 
 Human table output now includes configured vs effectively used workers:
