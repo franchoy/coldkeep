@@ -516,7 +516,7 @@ Guarantees hold within the documented operating assumptions:
 - container files are not manually altered
 - filesystem honors write + fsync semantics
 - PostgreSQL deployment provides expected transactional, locking, and advisory-lock behavior
-- schema/bootstrap state matches the release migration expectations
+- missing schema is either manually applied or bootstrapped via `COLDKEEP_DB_AUTO_BOOTSTRAP=true`, and existing older schemas auto-upgrade to the required release schema version at startup
 
 ## Interface Correctness Layer (v1.1)
 

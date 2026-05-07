@@ -43,6 +43,9 @@ project, do not start here; start with [README.md](README.md).
 - Mixed legacy/packed repositories are supported.
 - v1.7 is not guaranteed to read v1.8 repositories.
 - Existing v1.7 data is not automatically rewritten during upgrade.
+- Missing PostgreSQL schema requires manual schema application or
+  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`; existing older schemas auto-upgrade at
+  startup.
 
 ### Not included (v1.8 packed-block transition)
 
