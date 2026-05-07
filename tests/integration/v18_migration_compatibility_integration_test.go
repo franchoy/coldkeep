@@ -1113,18 +1113,22 @@ func TestPhase7BuildFixtureWithActualV17BinaryIntegration(t *testing.T) {
 		t.Fatalf("v1.7 binary snapshot create failed: exit=%d stderr=%s", res.ExitCode, res.Stderr)
 	}
 
-	writeDeterministicFileWithSalt(t, inputSet.retainedPath, 160*1024+7, 911)
-	res = testutils.RunColdkeepCommand(t, repoRoot, v17Bin, env, "store", inputSet.retainedPath, "--replace")
-	if res.ExitCode != 0 {
-		t.Fatalf("v1.7 binary replace store failed: exit=%d stderr=%s", res.ExitCode, res.Stderr)
-	}
-
+	// --replace is not a CLI flag; use the Go API directly to store the updated file.
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connect db after v1.7 fixture build: %v", err)
 	}
 	defer func() { _ = dbconn.Close() }()
 
+	writeDeterministicFileWithSalt(t, inputSet.retainedPath, 160*1024+7, 911)
+	sgctx := storage.StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
+		ContainerDir: container.ContainersDir,
+	}
+	if _, err := storage.StoreFileWithStorageContextAndCodecResultWithPolicy(sgctx, inputSet.retainedPath, blocks.CodecPlain, true); err != nil {
+		t.Fatalf("replace store (Go API) for retained path: %v", err)
+	}
 	var hasSnapshot int
 	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM snapshot WHERE id = $1`, "phase7-v17-bin-snap").Scan(&hasSnapshot); err != nil {
 		t.Fatalf("count v1.7 snapshot rows: %v", err)
