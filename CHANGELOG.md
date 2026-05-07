@@ -44,8 +44,8 @@ project, do not start here; start with [README.md](README.md).
 - v1.7 is not guaranteed to read v1.8 repositories.
 - Existing v1.7 data is not automatically rewritten during upgrade.
 - Missing PostgreSQL schema requires manual schema application or
-  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`; existing older schemas auto-upgrade at
-  startup.
+  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded
+  to the required v12 schema at startup.
 
 ### Not included (v1.8 packed-block transition)
 

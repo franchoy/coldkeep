@@ -101,7 +101,7 @@ Review this before starting Step 1.
 
 Operator expectation surface for supported PostgreSQL deployments:
 
-- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
+- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
 - Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
 - Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
 

@@ -17,8 +17,8 @@ integrity verification, GC safety, and snapshot correctness.
 - Existing v1.7 data remains readable; migration is schema-level (v12), not a
   historical payload rewrite.
 - Missing PostgreSQL schema requires manual schema application or
-  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`; existing older schemas auto-upgrade to v12
-  at startup.
+  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded
+  to the required v12 schema at startup.
 
 ## Operator-visible highlights
 

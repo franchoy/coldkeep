@@ -149,9 +149,9 @@ manually applying the schema:
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ```
 
-Without manual schema initialization or this env var, coldkeep will fail fast
-on startup if `schema_version` is missing. Existing older schemas are
-auto-upgraded to the required v12 schema at startup.
+Missing PostgreSQL schema requires manual schema application or
+`COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
+the required v12 schema at startup.
 
 Build:
 
@@ -309,9 +309,9 @@ export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 simulation loop sets it per run (`plain` then `aes-gcm`).
 `COLDKEEP_KEY` is only required when codec is `aes-gcm`; it is ignored by `plain`.
 
-If you do not want auto-bootstrap, apply `db/schema_postgres.sql` manually first
-for missing-schema databases. Existing older schemas are auto-upgraded to v12
-at startup.
+Missing PostgreSQL schema requires manual schema application or
+`COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
+the required v12 schema at startup.
 
 1. Run the quality job equivalent (same intent as CI `quality`):
 
