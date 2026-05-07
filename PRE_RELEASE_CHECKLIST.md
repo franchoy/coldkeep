@@ -82,6 +82,18 @@ Suggested preflight before Step 1:
 - `jq` available locally if you will run host-side smoke output checks
 - `golangci-lint` available locally if you want full quality-job parity
 - no important artifacts stored under `./storage`, `.ci-storage`, or `/tmp/coldkeep*`
+- clean Python bytecode artifacts before packaging release ZIPs:
+
+```bash
+find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+find . -type f -name '*.pyc' -delete
+```
+
+- verify no Python bytecode artifacts remain before packaging:
+
+```bash
+find . -type d -name '__pycache__' -o -type f -name '*.pyc'
+```
 
 ## Prerequisite: PostgreSQL assumptions and operator surface
 
