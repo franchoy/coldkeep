@@ -210,6 +210,22 @@ Users can expect:
 - observable chunker metadata for diagnostics
 - stats visibility for chunk and logical-file version distributions in mixed-version repositories
 
+CLI JSON change classification:
+
+Additive-compatible changes (no `meta.version` bump expected):
+
+- adding optional fields
+- adding nested objects
+- adding new stats categories
+
+Breaking changes (`meta.version` bump required):
+
+- removing fields
+- renaming fields
+- changing field types
+- changing envelope structure
+- changing semantic meaning of existing fields
+
 Users should not assume:
 
 - that switching chunkers preserves dedup metrics for future writes
