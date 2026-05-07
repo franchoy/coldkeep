@@ -22,6 +22,11 @@ go.work
 # =========================
 app/coldkeep
 /coldkeep
+/coldkeep-v*
+
+# checklist/smoke restore output directories
+/out-step*/
+/_smoke_out/
 
 # binaries generated during development
 *.exe
