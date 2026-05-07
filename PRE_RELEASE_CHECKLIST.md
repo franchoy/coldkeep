@@ -697,6 +697,7 @@ go test ./cmd/coldkeep -run 'TestRunSimulateGCCommandJSONContract|TestRunSimulat
 - [ ] `--json` remains suitable for automation
 - [ ] `--trace` and `--trace-json` emit diagnostics to stderr only
 - [ ] Human output is understandable and JSON output keeps stable envelope structure
+- [ ] `meta.version` is treated as the CLI JSON contract version (additive fields remain compatible without version bump; bump only on breaking JSON contract changes)
 - [ ] Observability commands perform zero repository mutations
 
 ### E. Documentation and release artifacts

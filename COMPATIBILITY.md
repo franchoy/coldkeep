@@ -206,6 +206,7 @@ Users can expect:
 
 - stable restore correctness for previously stored logical files
 - stable CLI/JSON contracts within v1.x compatibility policy
+- CLI JSON `meta.version` denotes contract compatibility level and remains stable for additive fields; it bumps only on breaking JSON contract changes
 - observable chunker metadata for diagnostics
 - stats visibility for chunk and logical-file version distributions in mixed-version repositories
 

@@ -381,6 +381,7 @@ Observability command guarantees (v1.6):
 - `simulate gc` previews exact GC reclaimability using the shared GC planning layer (`gc.BuildPlan`), including fully-dead active containers; it is not legacy `gc --dry-run` behavior.
 - GC simulation does not mutate repository state (no database writes and no filesystem writes).
 - JSON output is intended for tooling/automation contracts.
+- `meta.version` is the CLI JSON contract version. It remains `v1.7` for additive, backward-compatible fields (including v1.8 `stats.block_layout` additions) and only bumps on breaking JSON contract changes.
 - Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.
 - `--trace` and `--trace-json` are diagnostics channels; traces are emitted to stderr so stdout data remains stable for piping.
 - v1.8 `stats` includes block-layout observability for packed storage: `storage_blocks_count`, `chunk_block_refs_count`, `avg_chunks_per_block`, `avg_block_plaintext_size`, `avg_block_stored_size`, `avg_block_fill_ratio`, `legacy_block_count`, `packed_block_count`, and `codec_distribution` when packed blocks are present.

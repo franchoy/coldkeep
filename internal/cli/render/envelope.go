@@ -8,6 +8,9 @@ import (
 	"github.com/franchoy/coldkeep/internal/observability"
 )
 
+// cliJSONSchemaVersion tracks the CLI JSON envelope contract version.
+// Keep this stable for additive, backward-compatible payload changes.
+// Bump only when a breaking JSON contract change is introduced.
 const cliJSONSchemaVersion = "v1.7"
 
 type jsonEnvelope struct {
