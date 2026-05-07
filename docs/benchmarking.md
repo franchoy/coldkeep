@@ -180,7 +180,9 @@ CI runs the **small** benchmark dataset on every push:
 
 1. **Always runs the benchmark** and captures a `benchmark-baseline.json` artifact.
 2. **Runs a second pass with `--compare ... --threshold 100`** to catch disasters
-   (any scenario becoming >2× slower fails the job).
+   (any scenario becoming >2× slower fails the job). If the first compare run
+   fails, CI retries once to reduce false failures from transient DB/filesystem
+   contention spikes.
 3. Does **not** enforce tight micro-performance numbers — normal timing variance is expected.
 
 Run the `--compare` flag with the default `--threshold 20` locally to investigate

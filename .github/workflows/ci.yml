@@ -517,19 +517,34 @@ jobs:
             set +e
             diag_dir="${RUNNER_TEMP}/benchmark-diag"
             mkdir -p "$diag_dir"
-            json_file="$diag_dir/benchmark-compare-w1.json"
+            max_attempts=2
+            attempt=1
+            status=1
 
-            ./coldkeep benchmark run --dataset small --workers 1 --output json \
-              --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
-            status=${PIPESTATUS[0]}
+            while [ "$attempt" -le "$max_attempts" ]; do
+              json_file="$diag_dir/benchmark-compare-w1-attempt-${attempt}.json"
 
-            if [ "$status" -ne 0 ]; then
-              echo "benchmark compare failed for workers=1"
+              ./coldkeep benchmark run --dataset small --workers 1 --output json \
+                --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
+              status=${PIPESTATUS[0]}
+
+              if [ "$status" -eq 0 ]; then
+                if [ "$attempt" -gt 1 ]; then
+                  echo "benchmark compare recovered for workers=1 on attempt ${attempt}/${max_attempts}"
+                fi
+                break
+              fi
+
+              echo "benchmark compare failed for workers=1 on attempt ${attempt}/${max_attempts}"
               echo "regression markers (first 20):"
               grep -E 'Benchmark regressions detected|DEGRADATION|\"status\":\"error\"|\"message\":\"benchmark regression' "$json_file" | head -n 20 || true
+              echo "execution stats markers (first 20):"
+              grep -E '\"execution_stats\"|\"workers_used\"|\"container_open_count\"|\"fsync_count\"' "$json_file" | head -n 20 || true
               echo "last 80 lines:"
               tail -n 80 "$json_file" || true
-            fi
+
+              attempt=$((attempt + 1))
+            done
 
             exit "$status"
           fi
@@ -550,19 +565,34 @@ jobs:
             set +e
             diag_dir="${RUNNER_TEMP}/benchmark-diag"
             mkdir -p "$diag_dir"
-            json_file="$diag_dir/benchmark-compare-w4.json"
+            max_attempts=2
+            attempt=1
+            status=1
 
-            ./coldkeep benchmark run --dataset small --workers 4 --output json \
-              --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
-            status=${PIPESTATUS[0]}
+            while [ "$attempt" -le "$max_attempts" ]; do
+              json_file="$diag_dir/benchmark-compare-w4-attempt-${attempt}.json"
 
-            if [ "$status" -ne 0 ]; then
-              echo "benchmark compare failed for workers=4"
+              ./coldkeep benchmark run --dataset small --workers 4 --output json \
+                --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
+              status=${PIPESTATUS[0]}
+
+              if [ "$status" -eq 0 ]; then
+                if [ "$attempt" -gt 1 ]; then
+                  echo "benchmark compare recovered for workers=4 on attempt ${attempt}/${max_attempts}"
+                fi
+                break
+              fi
+
+              echo "benchmark compare failed for workers=4 on attempt ${attempt}/${max_attempts}"
               echo "regression markers (first 20):"
               grep -E 'Benchmark regressions detected|DEGRADATION|\"status\":\"error\"|\"message\":\"benchmark regression' "$json_file" | head -n 20 || true
+              echo "execution stats markers (first 20):"
+              grep -E '\"execution_stats\"|\"workers_used\"|\"container_open_count\"|\"fsync_count\"' "$json_file" | head -n 20 || true
               echo "last 80 lines:"
               tail -n 80 "$json_file" || true
-            fi
+
+              attempt=$((attempt + 1))
+            done
 
             exit "$status"
           fi
