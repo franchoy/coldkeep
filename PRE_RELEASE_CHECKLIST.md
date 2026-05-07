@@ -205,6 +205,12 @@ for codec in plain aes-gcm; do
   # integration-long-run
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
 
+  # integration-refcount-containment (v1.8 Option A hold gate: 25-iteration matrix by default)
+  go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
+
+  # For v1.8 release hold: 1000-iteration stress matrix (validates chunk refcount repair under extreme load)
+  # COLDKEEP_REFCOUNT_STRESS_ITERS=1000 go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
+
   # adversarial
   unset COLDKEEP_STORAGE_DIR
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
@@ -503,6 +509,12 @@ docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -c "UPDA
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
+
+# repair chunk-live-ref-counts: must report updated_chunks and scanned_chunks
+./coldkeep repair chunk-live-ref-counts --output json
+
+# confirm repair chunk-live-ref-counts --batch executes and emits per-item results
+./coldkeep repair chunk-live-ref-counts --batch --output json
 ```
 
 Confirm:
@@ -510,11 +522,14 @@ Confirm:
 - `store --output json` contains `stored_path` field in `data`
 - `verify system --standard --output json` succeeds with no `invariant_code` in payload
 - `repair ref-counts --output json` success payload contains `updated_logical_files` and `scanned_logical_files`
+- `repair chunk-live-ref-counts --output json` success payload contains `updated_chunks` and `scanned_chunks` (v1.8 new)
 - `remove --stored-path --output json` success payload contains `remaining_ref_count`
 - After stored-path removal, `verify system --standard --output json` still passes when graph invariants are healthy
 - `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
+- `repair chunk-live-ref-counts --batch --output json` emits `execution_mode` field and per-item results array (v1.8 new)
 - GC correctly refuses when ref_count drift is present: `error_class=GENERAL`, `invariant_code=GC_REFUSED_INTEGRITY`
 - `repair ref-counts` unblocks subsequent GC and verify
+- `repair chunk-live-ref-counts` unblocks GC and verify when chunk.live_ref_count mismatch is the blocker (v1.8 new)
 - `remove --stored-path` with `--dry-run` is intentionally rejected today (usage exit code `2`); this is deferred by design
 
 ## Historical Template Sections (v1.5/v1.6)
