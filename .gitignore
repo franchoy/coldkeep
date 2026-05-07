@@ -110,3 +110,7 @@ __pycache__/
 # release evidence files
 # =========================
 .release-evidence/
+# =========================
+# manual CI storage files
+# =========================
+.manual-ci-storage/
