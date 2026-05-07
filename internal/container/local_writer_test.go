@@ -197,6 +197,60 @@ func TestLockContainerRowNowaitWithRetryZeroAttemptsReturnsContention(t *testing
 	}
 }
 
+func TestLockContainerRowNowaitWithRetryZeroBaseWaitDoesNotPanic(t *testing.T) {
+	tx := &stubTx{errs: []error{nil, &pq.Error{Code: "55P03"}, nil, nil, nil, &pq.Error{Code: "55P03"}, nil, nil}}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("expected no panic for zero base wait, got: %v", r)
+		}
+	}()
+
+	err := lockContainerRowNowaitWithRetry(tx, nil, 99, 2, 0)
+	if !errors.Is(err, ErrContainerLockContention) {
+		t.Fatalf("expected ErrContainerLockContention, got: %v", err)
+	}
+}
+
+func TestLockRetryAttemptsFromEnvBounds(t *testing.T) {
+	t.Setenv(lockRetryAttemptsEnv, "0")
+	if got := lockRetryAttemptsFromEnv(); got != 1 {
+		t.Fatalf("expected lower bound attempts=1, got %d", got)
+	}
+
+	t.Setenv(lockRetryAttemptsEnv, "999")
+	if got := lockRetryAttemptsFromEnv(); got != 64 {
+		t.Fatalf("expected upper bound attempts=64, got %d", got)
+	}
+
+	t.Setenv(lockRetryAttemptsEnv, "12")
+	if got := lockRetryAttemptsFromEnv(); got != 12 {
+		t.Fatalf("expected attempts=12, got %d", got)
+	}
+}
+
+func TestLockRetryWaitsFromEnvNormalizeAndClamp(t *testing.T) {
+	t.Setenv(lockRetryBaseWaitEnv, "0")
+	if got := lockRetryBaseWaitFromEnv(); got != time.Millisecond {
+		t.Fatalf("expected base wait lower bound 1ms, got %s", got)
+	}
+
+	t.Setenv(lockRetryBaseWaitEnv, "3000")
+	if got := lockRetryBaseWaitFromEnv(); got != 2*time.Second {
+		t.Fatalf("expected base wait upper bound 2s, got %s", got)
+	}
+
+	t.Setenv(lockRetryMaxWaitEnv, "1")
+	if got := lockRetryMaxWaitFromEnv(10 * time.Millisecond); got != 10*time.Millisecond {
+		t.Fatalf("expected max wait to be normalized to base wait, got %s", got)
+	}
+
+	t.Setenv(lockRetryMaxWaitEnv, "9000")
+	if got := lockRetryMaxWaitFromEnv(10 * time.Millisecond); got != 5*time.Second {
+		t.Fatalf("expected max wait upper bound 5s, got %s", got)
+	}
+}
+
 func TestLocalWriterAppendPayloadRefreshesDBSizeBeforeRotationDecision(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

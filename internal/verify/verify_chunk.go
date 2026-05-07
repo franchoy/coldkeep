@@ -166,12 +166,17 @@ func checkPinnedChunkStatus(dbconn *sql.DB) error {
 	_ = rows.Close()
 
 	rows, err = dbconn.QueryContext(ctx, `
-		SELECT c.id, c.pin_count, COUNT(b.chunk_id) AS block_rows
+		SELECT c.id, c.pin_count, COUNT(b.chunk_id) AS block_rows, COUNT(r.chunk_id) AS packed_rows
 		FROM chunk c
 		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
 		WHERE c.pin_count > 0
 		GROUP BY c.id, c.pin_count
-		HAVING COUNT(b.chunk_id) != 1
+		HAVING NOT (
+			(COUNT(b.chunk_id) = 1 AND COUNT(r.chunk_id) = 0) OR
+			(COUNT(b.chunk_id) = 0 AND COUNT(r.chunk_id) = 1) OR
+			(COUNT(b.chunk_id) = 1 AND COUNT(r.chunk_id) = 1)
+		)
 	`)
 	if err != nil {
 		log.Println(" ERROR ")
@@ -184,13 +189,14 @@ func checkPinnedChunkStatus(dbconn *sql.DB) error {
 		var id int64
 		var pinCount int64
 		var blockRows int64
-		if err := rows.Scan(&id, &pinCount, &blockRows); err != nil {
+		var packedRows int64
+		if err := rows.Scan(&id, &pinCount, &blockRows, &packedRows); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan pinned chunk metadata inconsistency: %w", err))
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid pinned chunk metadata: chunk ID %d has pin_count=%d with blocks row count=%d", id, pinCount, blockRows))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid pinned chunk metadata: chunk ID %d has pin_count=%d with blocks row count=%d packed row count=%d", id, pinCount, blockRows, packedRows))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -218,17 +224,23 @@ func checkCompletedChunkBlockCardinality(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Every COMPLETED chunk must map to exactly one blocks row.
+	// Every COMPLETED chunk must have a valid physical mapping:
+	// blocks-only, packed-only, or migration companion (both).
 	log.Printf("Checking completed chunk block cardinality...")
 	var errorList []error
 	var errorCount int
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT c.id, COUNT(b.chunk_id) AS block_rows
+		SELECT c.id, COUNT(b.chunk_id) AS block_rows, COUNT(r.chunk_id) AS packed_rows
 		FROM chunk c
 		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
 		WHERE c.status = $1
 		GROUP BY c.id
-		HAVING COUNT(b.chunk_id) != 1
+		HAVING NOT (
+			(COUNT(b.chunk_id) = 1 AND COUNT(r.chunk_id) = 0) OR
+			(COUNT(b.chunk_id) = 0 AND COUNT(r.chunk_id) = 1) OR
+			(COUNT(b.chunk_id) = 1 AND COUNT(r.chunk_id) = 1)
+		)
 	`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
@@ -240,13 +252,14 @@ func checkCompletedChunkBlockCardinality(dbconn *sql.DB) error {
 	for rows.Next() {
 		var id int64
 		var blockRows int64
-		if err := rows.Scan(&id, &blockRows); err != nil {
+		var packedRows int64
+		if err := rows.Scan(&id, &blockRows, &packedRows); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan completed chunk block cardinality inconsistency: %w", err))
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid completed chunk metadata: chunk ID %d has blocks row count=%d", id, blockRows))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("invalid completed chunk metadata: chunk ID %d has blocks row count=%d packed row count=%d", id, blockRows, packedRows))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -274,17 +287,31 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Check that all chunks have location (container_id + block_offset in blocks) consistent with their status
-	// if status = COMPLETED → blocks row exists with container_id and block_offset
+	// Check that all chunks have physical location metadata consistent with their status.
+	// COMPLETED chunks may be legacy (blocks), packed (chunk_block_refs/storage_blocks), or both.
 
 	log.Printf("Checking chunk offsets consistency with status...")
 	var errorList []error
 	var errorCount int
-	rows1, err := dbconn.QueryContext(ctx, `SELECT c.id, b.container_id, b.block_offset, c.status
-							FROM chunk c
-							LEFT JOIN blocks b ON b.chunk_id = c.id
-							WHERE c.status = $1
-							AND (b.container_id IS NULL OR b.block_offset IS NULL);`, filestate.ChunkCompleted)
+	rows1, err := dbconn.QueryContext(ctx, `
+		SELECT
+			c.id,
+			b.container_id,
+			b.block_offset,
+			c.status,
+			COUNT(b.chunk_id) AS block_rows,
+			COUNT(r.chunk_id) AS packed_rows
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.status = $1
+		GROUP BY c.id, b.container_id, b.block_offset, c.status
+		HAVING NOT (
+			(COUNT(b.chunk_id) = 1 AND COUNT(r.chunk_id) = 0 AND b.container_id IS NOT NULL AND b.block_offset IS NOT NULL) OR
+			(COUNT(b.chunk_id) = 0 AND COUNT(r.chunk_id) = 1) OR
+			(COUNT(b.chunk_id) = 1 AND COUNT(r.chunk_id) = 1 AND b.container_id IS NOT NULL AND b.block_offset IS NOT NULL)
+		)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query completed chunks: %v", err)
@@ -297,17 +324,19 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 		blockContainerID sql.NullInt64
 		blockOffset      sql.NullInt64
 		status           string
+		blockRows        int64
+		packedRows       int64
 	}
 
 	for rows1.Next() {
 		var c chunkInfo
-		if err := rows1.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.status); err != nil {
+		if err := rows1.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.status, &c.blockRows, &c.packedRows); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan completed chunk: %w", err))
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status COMPLETED but missing location info in blocks: container_id=%v block_offset=%v", c.id, c.blockContainerID, c.blockOffset))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status COMPLETED but invalid physical location metadata: blocks=%d packed=%d container_id=%v block_offset=%v", c.id, c.blockRows, c.packedRows, c.blockContainerID, c.blockOffset))
 	}
 
 	if err := rows1.Err(); err != nil {
@@ -318,11 +347,15 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	_ = rows1.Close()
 
 	// if status != COMPLETED → no row should exist in blocks
-	rows2, err := dbconn.QueryContext(ctx, `SELECT c.id, b.container_id, b.block_offset, c.status
-							FROM chunk c
-							LEFT JOIN blocks b ON b.chunk_id = c.id
-							WHERE c.status != $1
-							AND (b.container_id IS NOT NULL OR b.block_offset IS NOT NULL);`, filestate.ChunkCompleted)
+	rows2, err := dbconn.QueryContext(ctx, `
+		SELECT c.id, b.container_id, b.block_offset, c.status, COUNT(r.chunk_id) AS packed_rows
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE c.status != $1
+		GROUP BY c.id, b.container_id, b.block_offset, c.status
+		HAVING (b.container_id IS NOT NULL OR b.block_offset IS NOT NULL OR COUNT(r.chunk_id) > 0)
+	`, filestate.ChunkCompleted)
 	if err != nil {
 		log.Println(" ERROR ")
 		log.Printf("Failed to query non-completed chunks: %v", err)
@@ -332,13 +365,13 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 
 	for rows2.Next() {
 		var c chunkInfo
-		if err := rows2.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.status); err != nil {
+		if err := rows2.Scan(&c.id, &c.blockContainerID, &c.blockOffset, &c.status, &c.packedRows); err != nil {
 			errorCount++
 			errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("failed to scan non-completed chunk: %w", err))
 			continue
 		}
 		errorCount++
-		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status %s but has location info in blocks: container_id=%v block_offset=%v", c.id, c.status, c.blockContainerID, c.blockOffset))
+		errorList = utils_print.AppendToErrorList(errorList, fmt.Errorf("chunk ID %d has status %s but has location metadata in blocks/packed refs: container_id=%v block_offset=%v packed_rows=%d", c.id, c.status, c.blockContainerID, c.blockOffset, c.packedRows))
 	}
 
 	if err := rows2.Err(); err != nil {
@@ -386,6 +419,9 @@ func checkChunkOffsetValidity(dbconn *sql.DB) error {
 		JOIN blocks b ON b.chunk_id = c.id
 		JOIN container cont ON b.container_id = cont.id
 		WHERE c.status = $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id
+			  )
 		  AND cont.quarantine = FALSE
 		ORDER BY b.container_id, b.block_offset;`, filestate.ChunkCompleted)
 	if err != nil {

@@ -76,9 +76,11 @@ func setupAdversarialG6Env(t *testing.T) (*sql.DB, map[string]string, string, st
 func storeFileWithCodecCLIG6(t *testing.T, repoRoot, binPath string, env map[string]string, codec, path string) int64 {
 	t.Helper()
 
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
+
 	payload := testutils.AssertCLIJSONOK(
 		t,
-		testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json"),
+		res,
 		"store",
 	)
 	data := testutils.JSONMap(t, payload, "data")
@@ -91,9 +93,9 @@ func storeFileWithCodecCLIG6Async(repoRoot, binPath string, env map[string]strin
 	cmd := exec.Command(binPath, "store", "--codec", codec, path, "--output", "json")
 	cmd.Dir = repoRoot
 	cmd.Env = testutils.BuildCommandEnv(env)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return 0, fmt.Errorf("store command: %w", err)
+		return 0, fmt.Errorf("store command: %w; output=%s", err, out)
 	}
 	payload, ok := testutils.TryParseLastJSONLine(string(out))
 	if !ok {
@@ -196,7 +198,6 @@ func TestAdversarialG6ConcurrentStoresSameFileConvergeDeterministically(t *testi
 				}
 				ids[res.idx] = res.id
 			}
-
 			verifyConcurrentInvariantsG6(t, dbconn)
 
 			baseGraph := testutils.QueryChunkGraph(t, dbconn, ids[0])

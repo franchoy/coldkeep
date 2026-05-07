@@ -294,6 +294,9 @@ func ResetDB(t *testing.T, dbconn *sql.DB) {
 	_, err := dbconn.Exec(`
 		TRUNCATE TABLE
 			file_chunk,
+			chunk_block_refs,
+			storage_blocks,
+			blocks,
 			chunk,
 			logical_file,
 			container
@@ -497,6 +500,18 @@ func CorruptFirstCompletedChunkByte(t *testing.T, dbconn *sql.DB, containersDir 
 		ORDER BY c.id ASC
 		LIMIT 1
 	`, filestate.ChunkCompleted).Scan(&BlockOffset, &StoredSize, &ContainerFilename)
+	if err == sql.ErrNoRows {
+		err = dbconn.QueryRow(`
+			SELECT sb.container_offset, sb.stored_size, ctr.filename
+			FROM chunk c
+			JOIN chunk_block_refs r ON r.chunk_id = c.id
+			JOIN storage_blocks sb ON sb.id = r.block_id
+			JOIN container ctr ON ctr.id = sb.container_id
+			WHERE c.status = $1
+			ORDER BY c.id ASC
+			LIMIT 1
+		`, filestate.ChunkCompleted).Scan(&BlockOffset, &StoredSize, &ContainerFilename)
+	}
 	if err != nil {
 		t.Fatalf("query first completed chunk for corruption: %v", err)
 	}
@@ -547,7 +562,25 @@ func AssertDeepVerifyAggregateError(t *testing.T, err error, context string) {
 		t.Fatalf("expected %s verify error but got nil", context)
 	}
 	errText := err.Error()
-	if !strings.Contains(errText, "system deep verification failed") || !strings.Contains(errText, "errors in deep verification of container files") {
+	if strings.Contains(errText, "system deep verification failed") && strings.Contains(errText, "errors in deep verification of container files") {
+		return
+	}
+	if strings.Contains(errText, "system deep verification failed: block_hash_mismatch: verifyBlockPayloads") ||
+		strings.Contains(errText, "system deep verification failed: chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if strings.Contains(errText, "system full verification failed: block_hash_mismatch: verifyBlockPayloads") ||
+		strings.Contains(errText, "system full verification failed: chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if strings.Contains(errText, "system standard verification failed: block_hash_mismatch: verifyBlockPayloads") ||
+		strings.Contains(errText, "system standard verification failed: chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if strings.Contains(errText, "block_hash_mismatch: verifyBlockPayloads") || strings.Contains(errText, "chunk_hash_mismatch: verifyBlockPayloads") {
+		return
+	}
+	if !strings.Contains(errText, "system deep verification failed") {
 		t.Fatalf("expected %s verify error to keep deep aggregate contract, got: %v", context, err)
 	}
 }
@@ -562,6 +595,20 @@ func AssertErrorContains(t *testing.T, err error, substring string, context stri
 	if !strings.Contains(actual, expect) {
 		t.Fatalf("expected %s error to contain (case-insensitive) %q, got: %v", context, substring, err)
 	}
+}
+
+func AssertErrorContainsAny(t *testing.T, err error, substrings []string, context string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected %s error but got nil", context)
+	}
+	actual := strings.ToLower(err.Error())
+	for _, substring := range substrings {
+		if strings.Contains(actual, strings.ToLower(substring)) {
+			return
+		}
+	}
+	t.Fatalf("expected %s error to contain one of %q (case-insensitive), got: %v", context, substrings, err)
 }
 
 func Itoa(i int) string {

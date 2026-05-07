@@ -24,6 +24,8 @@ func prepareReadPathRegressionRepo(t *testing.T) string {
 	container.ContainersDir = filepath.Join(tmp, "containers")
 	t.Cleanup(func() { container.ContainersDir = origContainersDir })
 	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	// Keep this regression suite deterministic even when caller env sets aes-gcm.
+	t.Setenv("COLDKEEP_CODEC", "plain")
 	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
@@ -40,6 +42,8 @@ func prepareReadPathRegressionRepo(t *testing.T) string {
 			snapshot_path,
 			physical_file,
 			file_chunk,
+			chunk_block_refs,
+			storage_blocks,
 			blocks,
 			chunk,
 			logical_file,
@@ -94,7 +98,7 @@ func TestReadPathRestoreAfterMigrationIntegration(t *testing.T) {
 		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
 		ContainerDir: container.ContainersDir,
 	}
-	if err := storage.StoreFileWithStorageContext(sgctx, inPath); err != nil {
+	if _, err := storage.StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain); err != nil {
 		t.Fatalf("store file for restore-after-migration regression: %v", err)
 	}
 

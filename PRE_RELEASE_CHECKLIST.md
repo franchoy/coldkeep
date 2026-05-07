@@ -18,22 +18,28 @@ Execution model (step-by-step):
 - Run sections in order. Do not mark a section complete until its "Expected"/"Confirm" checks pass.
 - Capture evidence as you go (command output snippets, failing/success states, and any remediation notes).
 - If a step fails, fix the issue and re-run that step before moving forward.
-- For releases that include snapshot/retention scope, treat sections 14-17 as required release gates after sections 1-13.
+- For releases that include snapshot/retention scope, treat sections 15-17 as required release gates after sections 1-13.
 
-## Release Freeze Policy (v1.7 Phase 9 Step 1)
+Checklist status interpretation for v1.8:
+
+- Active v1.8 blockers are the current release-gate sections (1-11, 15-18).
+- Historical template sections (12-14) are archived reference material only.
+- Unchecked boxes in sections 12-14 are intentional historical state and are not v1.8 blockers unless a release manager explicitly promotes one into the active v1.8 gate.
+
+## Release Freeze Policy (v1.8 Phase 9 Step 1)
 
 Before running the technical release checks below, freeze implementation scope.
 
-Phase 9 goal: prove v1.7 is faster while remaining fully Coldkeep-safe across
-deterministic restore, GC safety, snapshot correctness, crash-safety assumptions,
-stable CLI behavior, measurable performance, and no hidden semantic regressions.
+Phase 9 goal: make v1.8 boring in production: no surprises, no hidden dev
+paths, and every operator-facing behavior documented while preserving
+deterministic restore, GC safety, snapshot correctness, and stable CLI behavior.
 
 Release-positioning note:
 
-- v1.7 improves performance via controlled execution.
-- v1.7 is not a fully concurrent daemon release.
-- v1.7 introduces no storage format change.
-- v1.7 introduces no schema-breaking change.
+- v1.8 introduces packed-block storage metadata for new writes.
+- v1.8 reads v1.7 repositories without forced rewrite.
+- v1.8 default packed block target is 1 MiB.
+- v1.8 keeps mixed legacy/packed repositories as valid steady-state.
 - restore determinism is preserved.
 - GC safety is preserved.
 - snapshot semantics are preserved.
@@ -48,6 +54,12 @@ Allowed during this gate:
 - benchmark reporting polish
 - release notes
 - minor cleanup
+
+Required before final tag creation:
+
+- release notes file for the target version exists (for v1.8: `RELEASE_NOTES_v1.8.0.md`),
+- benchmark command support level is documented clearly (`coldkeep benchmark` CLI vs phase harness scripts),
+- historical phase benchmark reports are marked as archived evidence, not live implementation spec.
 
 Avoid during this gate:
 
@@ -64,11 +76,24 @@ Expected:
 
 Suggested preflight before Step 1:
 
+- run all commands in this checklist from repository root (`/workspaces/coldkeep` in the dev container),
 - `docker compose` available locally
 - `psql` available locally if you will run host-side smoke or schema checks
 - `jq` available locally if you will run host-side smoke output checks
 - `golangci-lint` available locally if you want full quality-job parity
 - no important artifacts stored under `./storage`, `.ci-storage`, or `/tmp/coldkeep*`
+- clean Python bytecode artifacts before packaging release ZIPs:
+
+```bash
+find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+find . -type f -name '*.pyc' -delete
+```
+
+- verify no Python bytecode artifacts remain before packaging:
+
+```bash
+find . -type d -name '__pycache__' -o -type f -name '*.pyc'
+```
 
 ## Prerequisite: PostgreSQL assumptions and operator surface
 
@@ -76,7 +101,7 @@ Review this before starting Step 1.
 
 Operator expectation surface for supported PostgreSQL deployments:
 
-- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. With `COLDKEEP_DB_AUTO_BOOTSTRAP=true`, it may create/validate required schema objects; with bootstrap disabled, missing schema should fail fast.
+- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
 - Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
 - Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
 
@@ -87,6 +112,7 @@ docker compose up -d coldkeep_postgres
 
 export COLDKEEP_TEST_DB=1
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
+export COLDKEEP_SCHEMA_PATH=db/schema_postgres.sql
 export DB_HOST=127.0.0.1
 export DB_PORT=5432
 export DB_USER=coldkeep
@@ -105,6 +131,10 @@ If `docker compose up -d coldkeep_postgres` fails because port `5432` is already
 allocated, stop or reuse the existing local PostgreSQL container before
 continuing. The remaining steps assume a reachable PostgreSQL instance on the
 host/port above.
+
+Tip: prefer `docker compose exec coldkeep_postgres ...` over `docker exec <container-name> ...`
+in manual steps below. Compose service addressing is stable across different
+project naming schemes; hard-coded container names are not.
 
 ## 2) Run quality-equivalent checks (CI quality job parity)
 
@@ -153,6 +183,10 @@ Note: `scripts/clean_test_storage.sh` removes `./storage`, `.ci-storage`, and
 `/tmp/coldkeep*`. Do not keep one-off repro scripts or evidence you care about
 under those paths while running this checklist.
 
+Transition note for newcomers: Step 1 exports manual CLI variables used again in
+steps 5-11. Step 3 intentionally unsets/overrides some of them to mirror CI.
+Do not skip `unset` lines in step 3.
+
 ## 3) Run full required CI matrix locally (all gate jobs, both codecs)
 
 ```bash
@@ -171,6 +205,12 @@ for codec in plain aes-gcm; do
   # integration-long-run
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability|TestRandomizedLongRunLifecycleSoak|TestSnapshotRetentionChurnLongRun'
 
+  # integration-refcount-containment (v1.8 Option A hold gate: 25-iteration matrix by default)
+  go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
+
+  # For v1.8 release hold: 1000-iteration stress matrix (validates chunk refcount repair under extreme load)
+  # COLDKEEP_REFCOUNT_STRESS_ITERS=1000 go test -race -count=1 ./tests/integration/... -run 'TestRefCountContainmentStressMatrix'
+
   # adversarial
   unset COLDKEEP_STORAGE_DIR
   COLDKEEP_LONG_RUN=1 go test -race -count=1 ./tests/adversarial/...
@@ -185,14 +225,28 @@ for codec in plain aes-gcm; do
   scripts/smoke.sh
 done
 
+# Step 3 loop leaves COLDKEEP_CODEC set to the last codec (aes-gcm).
+# Reset it before manual CLI checks in later steps.
+unset COLDKEEP_CODEC
+
 if [ -f benchmark-baseline.json ]; then
   cp benchmark-baseline.json benchmark-baseline-committed.json
 fi
 
-./coldkeep benchmark run --dataset small --output json | tee benchmark-baseline.json
+./coldkeep benchmark run --dataset small --workers 1 --output json \
+  | jq -c 'select(type=="object" and .command=="benchmark" and .data!=null)' \
+  | head -n 1 \
+  | tee benchmark-baseline.json
 
 if [ -f benchmark-baseline-committed.json ]; then
-  ./coldkeep benchmark run --dataset small --output json --compare benchmark-baseline-committed.json --threshold 100
+  ./coldkeep benchmark run --dataset small --workers 1 --output json --compare benchmark-baseline-committed.json --threshold 100
+
+  # Optional parity with CI workers=4 profile/compare:
+  ./coldkeep benchmark run --dataset small --workers 4 --output json \
+    | jq -c 'select(type=="object" and .command=="benchmark" and .data!=null)' \
+    | head -n 1 \
+    | tee benchmark-baseline-w4.json
+  ./coldkeep benchmark run --dataset small --workers 4 --output json --compare benchmark-baseline-committed.json --threshold 100
 fi
 ```
 
@@ -213,9 +267,25 @@ For the snapshot contract gate, run the focused integration suite after the matr
 scripts/run_snapshot_release_gate.sh --count 1
 ```
 
+For the Phase 7 released-v1.7 compatibility proof, run the strict gate below.
+This is a required gate for Phase 7 completion and must use a real released
+v1.7 coldkeep binary (not a local rebuild).
+
+```bash
+COLDKEEP_V17_BIN=/absolute/path/to/released/coldkeep-v1.7 \
+scripts/run_phase7_v17_binary_gate.sh --count 1
+```
+
+Expected: gate fails immediately if `COLDKEEP_V17_BIN` is missing/non-executable,
+and passes only when `TestPhase7BuildFixtureWithActualV17BinaryIntegration`
+executes successfully against the released v1.7 binary.
+
 After step 3, unset or override `COLDKEEP_CODEC` before manual CLI checks below.
 Otherwise the last loop iteration leaves `COLDKEEP_CODEC=aes-gcm`, which changes
 the behavior of later `store` commands.
+
+`--threshold 100` means fail only on disaster-class regression (more than 2x
+slower than baseline for a compared scenario).
 
 ## 4) Run integration umbrella suite (optional extra confidence, not a release gate)
 
@@ -223,6 +293,9 @@ This step is intentionally non-blocking for release sign-off.
 Use it to catch broader regressions outside the required CI-equivalent gate set in steps 2-3.
 
 ```bash
+unset COLDKEEP_STORAGE_DIR
+export COLDKEEP_CODEC=plain
+
 go test -p 1 ./tests/... -count=1 -v -timeout 20m
 ```
 
@@ -231,6 +304,8 @@ The `-p 1` package-level serialization avoids cross-package interference when
 multiple test packages share the same PostgreSQL instance.
 
 New maintainer note: if this step fails while steps 2-3 passed, treat it as extra investigation work, not an automatic release blocker. The required release gate remains the CI-parity flow above.
+
+If step 4 fails and steps 2-3 passed, capture the failure as investigation work and continue release gating from step 5. If steps 2-3 also failed, fix and re-run steps 2-3 first.
 
 ## 5) Run doctor
 
@@ -241,15 +316,15 @@ database. If you continue from those steps without resetting `DB_NAME` and
 `COLDKEEP_STORAGE_DIR`, doctor/stats/verify may legitimately report missing
 containers from an earlier storage path rather than a product defect.
 
-Recommended newcomer-safe reset before steps 5-11:
+Step 5A (recommended newcomer-safe reset before steps 5-11):
 
 ```bash
 export DB_NAME=coldkeep_manual
 export COLDKEEP_STORAGE_DIR="$PWD/.ci-storage/manual-checks"
 rm -rf "$COLDKEEP_STORAGE_DIR"
 mkdir -p "$COLDKEEP_STORAGE_DIR"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_manual;"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_manual;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_manual;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_manual;"
 
 # Bootstrap the fresh manual-check database once.
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
@@ -258,6 +333,8 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 
 Use this reset whenever you want steps 5-11 to validate the CLI against a fresh,
 known-good manual sandbox instead of the DB/storage state left behind by the CI-parity loop.
+
+Step 5B (run doctor):
 
 ```bash
 unset COLDKEEP_CODEC
@@ -282,8 +359,8 @@ Bootstrap ON (clean schema bootstrap path):
 ```bash
 unset COLDKEEP_CODEC
 export DB_NAME=coldkeep_bootstrap_on_probe
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_on_probe;"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_on_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_on_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_on_probe;"
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ./coldkeep stats
 ```
@@ -292,20 +369,24 @@ Bootstrap OFF (fail-fast when schema is missing):
 
 ```bash
 export DB_NAME=coldkeep_bootstrap_off_probe
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_off_probe;"
-docker exec coldkeep-coldkeep_postgres-1 psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_off_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "DROP DATABASE IF EXISTS coldkeep_bootstrap_off_probe;"
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d postgres -c "CREATE DATABASE coldkeep_bootstrap_off_probe;"
 unset COLDKEEP_DB_AUTO_BOOTSTRAP
 # Point to a fresh DB without schema and confirm command fails fast.
 ./coldkeep stats
 ```
 
 Expected: bootstrap on creates/validates schema path successfully; bootstrap off fails fast on missing schema.
+Expected bootstrap-off failure shape: non-zero exit plus missing-schema diagnostics (for example `schema_version`/relation-not-found style errors from PostgreSQL).
 
 ## 8) Test clean install path
 
-From a clean machine/container flow:
+Warning: destructive operation ahead.
+`docker compose down -v` removes PostgreSQL volumes and deletes data for all
+databases in this compose project, including manual sandboxes created in
+earlier steps.
 
-Warning: `docker compose down -v` is destructive and removes PostgreSQL volumes.
+From a clean machine/container flow:
 
 ```bash
 docker compose down -v
@@ -366,6 +447,7 @@ Manual spot-checks (text mode):
 ```bash
 ./coldkeep restore 12 ./out --dry-run
 ./coldkeep remove 12 999 13
+# --fail-fast behavior is meaningful only when multiple IDs/targets are present.
 ```
 
 Confirm:
@@ -407,20 +489,32 @@ printf '%s\n' "$hello_json" | jq -r '.data.stored_path'
 # repair ref-counts: must report updated_logical_files
 ./coldkeep repair ref-counts --output json
 
-# corrupt a ref_count and confirm verify detects it
+# corrupt logical_file.ref_count and confirm verify detects it
 # (manual DB update + verify — covers GC_REFUSED_INTEGRITY and PHYSICAL_GRAPH_REFCOUNT_MISMATCH)
+first_file_id=$(docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -At -c "SELECT id FROM logical_file ORDER BY id LIMIT 1")
+docker compose exec -T coldkeep_postgres psql -U coldkeep -d "$DB_NAME" -c "UPDATE logical_file SET ref_count = ref_count + 1 WHERE id = ${first_file_id};"
+./coldkeep gc --output json
+./coldkeep verify system --standard --output json
 
-# confirm restore-by-stored-path works while the mapping still exists
-./coldkeep restore --stored-path "$stored_path" --mode override --destination ./out/restored.txt --output json
+# repair the intentional drift and confirm verify/GC recover
+./coldkeep repair ref-counts --output json
+./coldkeep verify system --standard --output json
+./coldkeep gc --dry-run --output json
 
 # stored-path remove: confirm remaining_ref_count in JSON output
-./coldkeep remove --stored-path <stored-path-from-above> --output json
+./coldkeep remove --stored-path "$stored_path" --output json
 
-# confirm restore-by-stored-path works
-./coldkeep restore --stored-path <stored-path> --mode override --destination ./out/restored.txt --output json
+# restore-by-file-id remains the supported restore contract surface.
+# (restore-by-stored-path is not currently part of the CLI contract.)
 
 # confirm repair ref-counts --batch executes and emits per-item results
 ./coldkeep repair ref-counts --batch --output json
+
+# repair chunk-live-ref-counts: must report updated_chunks and scanned_chunks
+./coldkeep repair chunk-live-ref-counts --output json
+
+# confirm repair chunk-live-ref-counts --batch executes and emits per-item results
+./coldkeep repair chunk-live-ref-counts --batch --output json
 ```
 
 Confirm:
@@ -428,15 +522,32 @@ Confirm:
 - `store --output json` contains `stored_path` field in `data`
 - `verify system --standard --output json` succeeds with no `invariant_code` in payload
 - `repair ref-counts --output json` success payload contains `updated_logical_files` and `scanned_logical_files`
-- `restore --stored-path --output json` succeeds before the stored-path mapping is removed
+- `repair chunk-live-ref-counts --output json` success payload contains `updated_chunks` and `scanned_chunks` (v1.8 new)
 - `remove --stored-path --output json` success payload contains `remaining_ref_count`
-- After all mappings are removed, `verify system --standard --output json` still passes (ref_count=0 logical_file is valid)
+- After stored-path removal, `verify system --standard --output json` still passes when graph invariants are healthy
 - `repair ref-counts --batch --output json` emits `execution_mode` field and per-item results array
+- `repair chunk-live-ref-counts --batch --output json` emits `execution_mode` field and per-item results array (v1.8 new)
 - GC correctly refuses when ref_count drift is present: `error_class=GENERAL`, `invariant_code=GC_REFUSED_INTEGRITY`
 - `repair ref-counts` unblocks subsequent GC and verify
-- Dry-run for `remove --stored-path` correctly returns usage exit code `2` (deferred per design)
+- `repair chunk-live-ref-counts` unblocks GC and verify when chunk.live_ref_count mismatch is the blocker (v1.8 new)
+- `remove --stored-path` with `--dry-run` is intentionally rejected today (usage exit code `2`); this is deferred by design
 
-## 12) Verify v1.5 CDC / chunker-evolution contract
+## Historical Template Sections (v1.5/v1.6)
+
+Sections 12-14 are retained as historical release templates for prior release
+tracks (v1.5/v1.6). Unchecked boxes in these sections are intentional and do
+not represent unfinished blockers for the current v1.8 release.
+
+Historical status marker:
+
+- Sections 12-14 are archived reference templates only.
+- They are explicitly non-gating for v1.8 final sign-off.
+- Keep checklist boxes unchanged in these sections to preserve historical parity.
+
+For v1.8 final tagging, use the active release-gate flow in earlier sections
+plus the snapshot sign-off sections that follow.
+
+## 12) Historical Template (Archived, Non-gating) - v1.5 CDC / chunker-evolution contract
 
 Use this section for releases that include chunker-evolution behavior, default
 chunker policy changes, or compatibility-contract updates.
@@ -546,7 +657,7 @@ go test ./internal/chunk -run 'TestBothChunkersDeterministic|TestBothChunkersRec
 go test ./internal/chunk/fastcdc -run 'TestDeterministicChunkBoundariesAndData' -count=1
 ```
 
-## 13) Verify v1.6 observability / simulation contract
+## 13) Historical Template (Archived, Non-gating) - v1.6 observability / simulation contract
 
 Release-ready definition:
 
@@ -601,6 +712,7 @@ go test ./cmd/coldkeep -run 'TestRunSimulateGCCommandJSONContract|TestRunSimulat
 - [ ] `--json` remains suitable for automation
 - [ ] `--trace` and `--trace-json` emit diagnostics to stderr only
 - [ ] Human output is understandable and JSON output keeps stable envelope structure
+- [ ] `meta.version` is treated as the CLI JSON contract version (additive fields remain compatible without version bump; bump only on breaking JSON contract changes)
 - [ ] Observability commands perform zero repository mutations
 
 ### E. Documentation and release artifacts
@@ -620,14 +732,16 @@ rg -n 'deep inspect output can be large|--deep --limit N|JSON output is intended
 rg -n 'Release highlights \(1\.6\.0\)|observability|simulate gc|trace-json' CHANGELOG.md
 ```
 
-### F. Final CI commands (explicit rerun)
+### F. Final CI commands (historical template note)
 
-- [ ] `go test ./...` passes
-- [ ] `go test -race ./...` passes
+For this historical v1.6 template, prefer the CI-parity gate flow already defined in sections 2-3 for modern release validation. Use the commands below only as additional exploratory reruns, not as current release blockers.
+
+- [ ] `go test ./...` (exploratory historical sweep)
+- [ ] `go test -race ./...` (exploratory historical sweep)
 - [ ] `go vet ./...` passes
 - [ ] Integration suite passes (`go test ./tests/integration/...`)
 
-## 14) Sign-off
+## 14) Historical Template (Archived, Non-gating) - Sign-off
 
 - [ ] Quality parity checks passed
 - [ ] Full local CI matrix simulation passed (both codecs)
@@ -712,7 +826,7 @@ Package tests:
 
 - [ ] `internal/snapshot` covers create / restore / diff / query behavior
 - [ ] `internal/retention` covers current-only / snapshot-only / shared retention
-- [ ] `internal/maintenance/gc` covers snapshot-retained container protection
+- [ ] `internal/maintenance` covers snapshot-retained container protection
 - [ ] `internal/verify` covers snapshot reachability anomalies
 - [ ] Stats/reporting tests include snapshot retention visibility
 
@@ -822,11 +936,16 @@ Additional CLI validation and policy checks:
 - [ ] `snapshot diff --filter added|removed|modified` works as specified
 - [ ] `--path`, `--prefix`, `--pattern`, `--regex`, `--min-size`, `--max-size`, `--modified-after`, and `--modified-before` validate at CLI level
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
-- [ ] `snapshot delete` requires `--force`
+- [ ] `snapshot delete` requires either `--force` or `--dry-run` (do not pass both)
 
 ## 17) Verify snapshot / retention contract (manual gate)
 
 Run this manual lifecycle gate after core CI/test gates pass.
+
+Naming note for this gate: `pre-gc-gate` is the `snapshot_id` system identifier.
+Create it with `--id`, then pass it positionally to `snapshot restore`,
+`snapshot diff`, and `snapshot delete`. If you also set `--label`, treat it as
+metadata only (never as a command target).
 
 ```bash
 # Prefer a single retaining snapshot for this gate unless you intentionally want
@@ -854,8 +973,6 @@ Run this manual lifecycle gate after core CI/test gates pass.
 # confirm GC eligibility changes only after delete
 ./coldkeep gc --dry-run --output json
 ```
-
-Naming note: in this gate, `pre-gc-gate` is the `snapshot_id` system identifier. It is created explicitly with `--id` and then passed positionally to `snapshot restore`, `snapshot diff`, and `snapshot delete`. If you also set `--label`, treat it as metadata only (never as a command target).
 
 Confirm:
 

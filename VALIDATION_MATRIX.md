@@ -16,8 +16,8 @@ first and only drill into evidence rows relevant to the behavior you are changin
 
 Guarantee IDs (G1–G17+) are part of the public validation contract.
 
-- IDs are stable across v0.10, v1.0, v1.1, v1.2, v1.3, and v1.4+
-- v1.5 (chunker-evolution), v1.6 (observability/simulation), and v1.7 (deterministic performance foundation) do not introduce new guarantee IDs
+- IDs are stable across v0.10, v1.0, v1.1, v1.2, v1.3, v1.4, v1.5, v1.6, v1.7, and v1.8
+- v1.5 (chunker-evolution), v1.6 (observability/simulation), v1.7 (deterministic performance foundation), and v1.8 (packed block abstraction + AES-GCM integration) do not introduce new guarantee IDs
 - Guarantees may be reworded, but IDs must not change
 - New guarantees must use new IDs (G18, G19, ...)
 
@@ -30,13 +30,14 @@ the maintained v1.x guarantee-to-evidence contract: v1.0 storage-core
 guarantees (G1-G8), v1.1 interface-correctness extensions (G9), v1.2 physical-file
 graph coherence guarantees (G10-G13), and v1.3 snapshot-retention guarantees (G14-G17),
 with v1.4 clarifying lineage semantics, v1.5 adding chunker-evolution compatibility
-contract clarity, v1.6 adding observability and simulation contract hardening, and
-v1.7 adding controlled-execution performance validation language -
+contract clarity, v1.6 adding observability and simulation contract hardening,
+v1.7 adding controlled-execution performance validation language, and v1.8 adding
+packed block abstraction and AES-GCM packed-block integration —
 none of which introduce new guarantee IDs.
 
 ## Scope
 
-- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+/v1.4+/v1.5+/v1.6+/v1.7+ interface and observability contracts
+- Target: single-node trust model for v1.0 core plus v1.1+/v1.2+/v1.3+/v1.4+/v1.5+/v1.6+/v1.7+/v1.8+ interface, observability, and block-abstraction contracts
 - Surface: existing `verify` and `doctor` contracts (no new top-level validate command)
 - Goal: each guarantee maps to automated evidence (verify checks, tests, or both)
 

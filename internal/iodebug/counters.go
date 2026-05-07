@@ -18,6 +18,7 @@ type Counters struct {
 	BytesWritten           int64 `json:"bytes_written"`
 	BytesRead              int64 `json:"bytes_read"`
 	SnapshotMetadataWrites int64 `json:"snapshot_metadata_write_count"`
+	BlockDecodeCount       int64 `json:"block_decode_count"`
 }
 
 type processRecord struct {
@@ -37,6 +38,7 @@ var (
 	bytesWritten           atomic.Int64
 	bytesRead              atomic.Int64
 	snapshotMetadataWrites atomic.Int64
+	blockDecodeCount       atomic.Int64
 )
 
 // StartOperation resets in-process metrics so captured counters are scoped to
@@ -52,6 +54,7 @@ func StartOperation() {
 	bytesWritten.Store(0)
 	bytesRead.Store(0)
 	snapshotMetadataWrites.Store(0)
+	blockDecodeCount.Store(0)
 }
 
 func isEnabled() bool {
@@ -110,6 +113,13 @@ func AddBytesRead(n int64) {
 	bytesRead.Add(n)
 }
 
+func IncBlockDecode() {
+	if !isEnabled() {
+		return
+	}
+	blockDecodeCount.Add(1)
+}
+
 func Snapshot() Counters {
 	return Counters{
 		ContainerAppendCount:   containerAppendCount.Load(),
@@ -119,6 +129,7 @@ func Snapshot() Counters {
 		BytesWritten:           bytesWritten.Load(),
 		BytesRead:              bytesRead.Load(),
 		SnapshotMetadataWrites: snapshotMetadataWrites.Load(),
+		BlockDecodeCount:       blockDecodeCount.Load(),
 	}
 }
 

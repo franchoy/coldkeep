@@ -1,7 +1,9 @@
 package container
 
 import (
+	cryptorand "crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -11,12 +13,13 @@ import (
 	"time"
 
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 	"github.com/lib/pq"
 )
 
 var ErrContainerLockContention = errors.New("container row lock contention")
 
-var defaultLockRetryAttempts = 8
+var defaultLockRetryAttempts = 10
 
 // defaultLockRetryBaseWait is the base duration for the first backoff interval.
 // Subsequent intervals grow exponentially: baseWait * 2^attempt, capped at defaultLockRetryMaxWait.
@@ -24,6 +27,12 @@ var defaultLockRetryBaseWait = 10 * time.Millisecond
 
 // defaultLockRetryMaxWait caps exponential growth to avoid unbounded sleep under sustained contention.
 var defaultLockRetryMaxWait = 500 * time.Millisecond
+
+const (
+	lockRetryAttemptsEnv = "COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS"
+	lockRetryBaseWaitEnv = "COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS"
+	lockRetryMaxWaitEnv  = "COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS"
+)
 
 // LocalPlacement describes where a payload was physically appended.
 type LocalPlacement struct {
@@ -216,6 +225,14 @@ func (w *LocalWriter) AppendPayload(tx db.DBTX, payload []byte) (LocalPlacement,
 }
 
 func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int64, attempts int, baseWait time.Duration) error {
+	if attempts <= 0 {
+		return fmt.Errorf("%w for container %d after %d attempts", ErrContainerLockContention, containerID, attempts)
+	}
+	if baseWait <= 0 {
+		baseWait = time.Millisecond
+	}
+	maxWait := lockRetryMaxWaitFromEnv(baseWait)
+
 	lockQuery := "SELECT id FROM container WHERE id = $1"
 	if dbconn != nil {
 		lockQuery = db.QueryWithOptionalForUpdateNowait(dbconn, lockQuery)
@@ -252,15 +269,64 @@ func lockContainerRowNowaitWithRetry(tx db.DBTX, dbconn *sql.DB, containerID int
 		}
 		if attempt < attempts-1 {
 			backoff := baseWait * (1 << uint(attempt))
-			if backoff > defaultLockRetryMaxWait {
-				backoff = defaultLockRetryMaxWait
+			if backoff > maxWait {
+				backoff = maxWait
 			}
-			jitter := time.Duration(rand.Int63n(int64(baseWait)))
+			// Add bounded jitter tied to current backoff to reduce synchronized retries.
+			jitter := randomDuration(backoff / 2)
 			time.Sleep(backoff + jitter)
 		}
 	}
 
 	return fmt.Errorf("%w for container %d after %d attempts", ErrContainerLockContention, containerID, attempts)
+}
+
+func lockRetryAttemptsFromEnv() int {
+	configured := utils_env.GetenvOrDefaultInt64(lockRetryAttemptsEnv, int64(defaultLockRetryAttempts))
+	if configured < 1 {
+		return 1
+	}
+	if configured > 64 {
+		return 64
+	}
+	return int(configured)
+}
+
+func lockRetryBaseWaitFromEnv() time.Duration {
+	configuredMs := utils_env.GetenvOrDefaultInt64(lockRetryBaseWaitEnv, int64(defaultLockRetryBaseWait/time.Millisecond))
+	if configuredMs < 1 {
+		configuredMs = 1
+	}
+	if configuredMs > 2000 {
+		configuredMs = 2000
+	}
+	return time.Duration(configuredMs) * time.Millisecond
+}
+
+func lockRetryMaxWaitFromEnv(baseWait time.Duration) time.Duration {
+	fallbackMs := int64(defaultLockRetryMaxWait / time.Millisecond)
+	configuredMs := utils_env.GetenvOrDefaultInt64(lockRetryMaxWaitEnv, fallbackMs)
+	if configuredMs < int64(baseWait/time.Millisecond) {
+		configuredMs = int64(baseWait / time.Millisecond)
+	}
+	if configuredMs > 5000 {
+		configuredMs = 5000
+	}
+	return time.Duration(configuredMs) * time.Millisecond
+}
+
+func randomDuration(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+
+	var b [8]byte
+	if _, err := cryptorand.Read(b[:]); err == nil {
+		n := binary.LittleEndian.Uint64(b[:])
+		return time.Duration(n % uint64(max+1))
+	}
+
+	return time.Duration(rand.Int63n(int64(max) + 1))
 }
 
 func isLockNotAvailable(err error) bool {
@@ -318,7 +384,7 @@ func (w *LocalWriter) ensureActiveExcluding(tx db.DBTX, excludeID int64) error {
 }
 
 func (w *LocalWriter) lockAndRefreshActiveContainer(tx db.DBTX) error {
-	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, defaultLockRetryAttempts, defaultLockRetryBaseWait); err != nil {
+	if err := lockContainerRowNowaitWithRetry(tx, w.dbconn, w.activeID, lockRetryAttemptsFromEnv(), lockRetryBaseWaitFromEnv()); err != nil {
 		return err
 	}
 

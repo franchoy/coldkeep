@@ -5,13 +5,13 @@ import "context"
 // PlainTransformer stores chunks as-is without any transformation.
 type PlainTransformer struct{}
 
-func (t *PlainTransformer) Encode(_ context.Context, in EncodeInput) (*EncodedBlock, error) {
+func (t *PlainTransformer) Encode(_ context.Context, in EncodeInput) (*TransformedBlock, error) {
 	// Phase 6 Step 8: Avoid unnecessary byte copies
 	// Plaintext is used once to create the payload - no mutation after encoding
 	// Caller never modifies in.Plaintext after this encode call
 	payload := in.Plaintext
 
-	return &EncodedBlock{
+	return &TransformedBlock{
 		Descriptor: Descriptor{
 			ChunkID:       in.ChunkID,
 			Codec:         CodecPlain,

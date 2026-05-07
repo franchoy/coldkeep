@@ -213,6 +213,21 @@ func TestCrossConsistency_SimulateGCMatchesGCPlanExactly(t *testing.T) {
 	if gcSim.Summary.PartiallyDeadContainers != plan.Summary.PartiallyDeadContainers {
 		t.Fatalf("partially_dead_containers: simulate=%d gc_plan=%d", gcSim.Summary.PartiallyDeadContainers, plan.Summary.PartiallyDeadContainers)
 	}
+	if gcSim.Summary.PackedBlocksLive != plan.Summary.PackedBlocksLive {
+		t.Fatalf("packed_blocks_live: simulate=%d gc_plan=%d", gcSim.Summary.PackedBlocksLive, plan.Summary.PackedBlocksLive)
+	}
+	if gcSim.Summary.PackedBlocksDead != plan.Summary.PackedBlocksDead {
+		t.Fatalf("packed_blocks_dead: simulate=%d gc_plan=%d", gcSim.Summary.PackedBlocksDead, plan.Summary.PackedBlocksDead)
+	}
+	if gcSim.Summary.PackedBytesLive != plan.Summary.PackedBytesLive {
+		t.Fatalf("packed_bytes_live: simulate=%d gc_plan=%d", gcSim.Summary.PackedBytesLive, plan.Summary.PackedBytesLive)
+	}
+	if gcSim.Summary.PackedBytesReclaimable != plan.Summary.PackedBytesReclaimable {
+		t.Fatalf("packed_bytes_reclaimable: simulate=%d gc_plan=%d", gcSim.Summary.PackedBytesReclaimable, plan.Summary.PackedBytesReclaimable)
+	}
+	if gcSim.Summary.RetainedDeadBytesDueToPackedBlocks != plan.Summary.RetainedDeadBytesDueToPackedBlocks {
+		t.Fatalf("retained_dead_bytes_due_to_packed_blocks: simulate=%d gc_plan=%d", gcSim.Summary.RetainedDeadBytesDueToPackedBlocks, plan.Summary.RetainedDeadBytesDueToPackedBlocks)
+	}
 
 	// Reachable + unreachable must sum to total chunks in the plan
 	if plan.ReachableChunks+plan.Summary.UnreachableChunks != plan.TotalChunks {

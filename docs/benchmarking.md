@@ -25,26 +25,44 @@ evaluation in v1.7.
 
 ## Running benchmarks
 
+Phase 8 benchmark execution is script-only for v1.8 release hardening.
+
+The `coldkeep benchmark` command is available in the shipped CLI for ad-hoc
+performance evaluation; it supports `benchmark run` (repeatable workload tests
+with configurable worker count) and `benchmark chunkers` (chunk-algorithm
+comparison). Use the retained helper scripts under `scripts/run_phase8_*.sh`
+and `scripts/compare_phase8_*.py` for large-scale decision-grade matrix runs
+requiring strict isolation and metrics collection.
+
+Support level summary:
+
+- `coldkeep benchmark run|chunkers`: supported CLI surface for local/ad-hoc
+   benchmarking and regression inspection.
+- `scripts/run_phase8_*.sh` + `scripts/compare_phase8_*.py`: release
+   decision-grade harness for the v1.8 block-size decision record.
+- Historical phase reports (`BENCHMARK_PHASE4_STEP9.md`,
+   `BENCHMARK_PHASE8_BLOCK_SIZE_DECISION.md`): archived evidence docs, not live
+   implementation specs.
+
 ```bash
-# Quick run against a local Postgres instance
-coldkeep benchmark run --dataset small
+# Inspect/resume the packed block-size matrix
+scripts/run_phase8_blocksize_matrix.sh --list-missing
 
-# JSON output (suitable for tooling and baseline comparison)
-coldkeep benchmark run --dataset small --output json
+# Resume or execute the matrix
+scripts/run_phase8_blocksize_matrix.sh
 
-# Compare against a recorded baseline
-coldkeep benchmark run --dataset small --output json --compare benchmark-baseline.json
+# Summarize completed artifacts
+python3 scripts/summarize_phase8_blocksize.py --input-dir tmp/bench_phase8
 
-# Available presets: small | medium | large
-coldkeep benchmark run --dataset medium --repeat 3
+# Focused sequence runners remain available for single-slice experiments
+scripts/run_phase8_store_sequence.sh <BLOCK_MB> <DATASET_PATH> <RUN_ID>
+scripts/run_phase8_restore_sequence.sh <BLOCK_MB> <DATASET_PATH> <RUN_ID>
+scripts/run_phase8_dedup_sequence.sh <BLOCK_MB> <DATASET_ROOT> <RUN_ID>
+scripts/run_phase8_gc_sequence.sh <BLOCK_MB> <DATASET_ROOT> <RUN_ID>
 
-# Override store-folder benchmark worker concurrency for experiments
-coldkeep benchmark run --dataset small --workers 1
-coldkeep benchmark run --dataset small --workers 4
-
-# Medium runs can exceed default DB operation timeout on busy local machines
-export COLDKEEP_DB_OPERATION_TIMEOUT_MS=1800000
-coldkeep benchmark run --dataset medium --workers 4 --output json
+# Compare focused result documents
+python3 scripts/compare_phase8_dedup_results.py <result_1m.json> <result_2m.json>
+python3 scripts/compare_phase8_gc_results.py <result_1m.json> <result_2m.json>
 ```
 
 Required environment for deterministic benchmark runs:
@@ -58,6 +76,18 @@ export DB_NAME=coldkeep
 export DB_SSLMODE=disable
 export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
+
+Optional contention-tuning environment variables (recommended for shared CI runners):
+
+```bash
+# Increase lock retry resilience under transient PostgreSQL row-lock contention.
+export COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=12
+export COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS=15
+export COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS=900
+```
+
+Defaults if unset: attempts=10, base wait=10ms, max wait=500ms.
+Bounds are enforced: attempts [1,64], base wait [1ms,2000ms], max wait [base,5000ms].
 
 ### Benchmark output examples
 
@@ -115,7 +145,9 @@ regression reference for CI.
 To regenerate the baseline after an intentional performance change:
 
 ```bash
-coldkeep benchmark run --dataset small --output json > benchmark-baseline.json
+coldkeep benchmark run --dataset small --workers 1 --output json > benchmark-baseline.json
+# Optional CI-parity workers=4 profile capture:
+coldkeep benchmark run --dataset small --workers 4 --output json > benchmark-baseline-w4.json
 ```
 
 ## Scenarios
@@ -160,7 +192,9 @@ CI runs the **small** benchmark dataset on every push:
 
 1. **Always runs the benchmark** and captures a `benchmark-baseline.json` artifact.
 2. **Runs a second pass with `--compare ... --threshold 100`** to catch disasters
-   (any scenario becoming >2× slower fails the job).
+   (any scenario becoming >2× slower fails the job). If the first compare run
+   fails, CI retries once to reduce false failures from transient DB/filesystem
+   contention spikes.
 3. Does **not** enforce tight micro-performance numbers — normal timing variance is expected.
 
 Run the `--compare` flag with the default `--threshold 20` locally to investigate
@@ -644,6 +678,28 @@ End-of-phase matrix:
 go run ./cmd/coldkeep benchmark run --dataset medium --workers 1 --output json
 go run ./cmd/coldkeep benchmark run --dataset medium --workers 4 --output json
 ```
+
+For the Phase 8 packed block-size decision matrix, use the resumable helper:
+
+```bash
+# Show what is already complete vs missing/incomplete
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep DB_SSLMODE=disable \
+scripts/run_phase8_blocksize_matrix.sh --list-missing
+
+# Resume only missing or incomplete runs (builds once, writes JSON atomically)
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=coldkeep DB_PASSWORD=coldkeep DB_NAME=coldkeep DB_SSLMODE=disable \
+scripts/run_phase8_blocksize_matrix.sh
+
+# Generate an aggregated markdown/json summary from the collected JSON files
+python3 scripts/summarize_phase8_blocksize.py \
+   --input-dir tmp/bench_phase8 \
+   --output tmp/bench_phase8/summary.md \
+   --json-output tmp/bench_phase8/summary.json
+```
+
+The helper skips only outputs that already contain a valid `"status":"ok"`
+payload, so interrupted Codespace sessions can resume without restarting the
+whole matrix.
 
 Recorded outputs for Step 12:
 

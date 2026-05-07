@@ -116,3 +116,49 @@ func TestRepairLogicalRefCountsResultWithDBRefusesOrphanPhysicalRows(t *testing.
 		t.Fatalf("expected invariant code %s, got code=%q ok=%v err=%v", invariants.CodeRepairRefusedOrphanRows, code, ok, err)
 	}
 }
+
+func TestRepairChunkLiveRefCountsResultWithDBRepairsMismatch(t *testing.T) {
+	dbconn := openMaintenanceSQLiteDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var logicalID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
+		"chunk-repair.bin", int64(11), strings.Repeat("c", 64), filestate.LogicalFileCompleted, int64(1),
+	).Scan(&logicalID); err != nil {
+		t.Fatalf("insert logical file: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		strings.Repeat("d", 64), int64(11), filestate.ChunkCompleted, int64(9), int64(0), int64(0), "v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, $3)`,
+		logicalID, chunkID, int64(0),
+	); err != nil {
+		t.Fatalf("insert file_chunk: %v", err)
+	}
+
+	result, err := RepairChunkLiveRefCountsResultWithDB(dbconn)
+	if err != nil {
+		t.Fatalf("repair chunk live_ref_count: %v", err)
+	}
+	if result.UpdatedChunks != 1 {
+		t.Fatalf("expected one repaired chunk row, got %+v", result)
+	}
+
+	var liveRef int64
+	if err := dbconn.QueryRow(`SELECT live_ref_count FROM chunk WHERE id = $1`, chunkID).Scan(&liveRef); err != nil {
+		t.Fatalf("read repaired chunk.live_ref_count: %v", err)
+	}
+	if liveRef != 1 {
+		t.Fatalf("expected repaired live_ref_count=1, got %d", liveRef)
+	}
+}

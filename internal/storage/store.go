@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -22,11 +23,45 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 type payloadStatefulWriter interface {
 	AppendPayload(tx db.DBTX, payload []byte) (container.LocalPlacement, error)
 	FinalizeContainer() error
+}
+
+const defaultPackedBlockTargetSizeBytes int64 = 1 << 20
+const defaultPackedBlockTargetSizeMB int64 = 1
+
+func packedBlockTargetSizeBytesFromEnv() int64 {
+	blockSizeMB := int64(0)
+	if _, ok := os.LookupEnv("COLDKEEP_BLOCK_TARGET_SIZE_MB"); ok {
+		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_BLOCK_TARGET_SIZE_MB", defaultPackedBlockTargetSizeMB)
+	} else {
+		blockSizeMB = utils_env.GetenvOrDefaultInt64("COLDKEEP_PACKED_BLOCK_SIZE_MIB", defaultPackedBlockTargetSizeMB)
+	}
+
+	if blockSizeMB <= 0 {
+		log.Printf("invalid packed block target size mb=%d; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
+		return defaultPackedBlockTargetSizeBytes
+	}
+
+	// v1.8 final default is locked to 1 MiB (1 << 20 bytes).
+	// The COLDKEEP_BLOCK_TARGET_SIZE_MB override is retained for operator tuning and testing.
+	// Only validated sizes (1, 2, 3 MiB from Phase 8 benchmarking) are accepted for override.
+	// Production deployments should use the default; override is for evaluating alternative sizes on specific workloads.
+	if blockSizeMB != 1 && blockSizeMB != 2 && blockSizeMB != 3 {
+		log.Printf("unsupported packed block target size mb=%d; v1.8 supports override values 1,2,3; using locked default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
+		return defaultPackedBlockTargetSizeBytes
+	}
+
+	if blockSizeMB > (1<<63-1)/(1<<20) {
+		log.Printf("packed block target size mb=%d overflows int64 bytes; using default %d bytes", blockSizeMB, defaultPackedBlockTargetSizeBytes)
+		return defaultPackedBlockTargetSizeBytes
+	}
+
+	return blockSizeMB << 20
 }
 
 // preparedFile is the internal output of the CPU-side preparation phase.
@@ -146,7 +181,7 @@ func commitPreparedChunksWithContext(
 	ctx context.Context,
 	dbconn *sql.DB,
 	writer payloadStatefulWriter,
-	blockRepo *blocks.Repository,
+	_ *blocks.Repository,
 	transformer blocks.Transformer,
 	sgctx StorageContext,
 	commitInfo commitInfoForChunks,
@@ -180,26 +215,247 @@ func commitPreparedChunksWithContext(
 		return result, nil
 	}
 
+	// Step 8 invariant: the commit/pack/write path must consume an ordered chunk
+	// stream. Worker completion order from any upstream parallel prep is not a
+	// valid source of layout order.
+	for i, ch := range preparedChunks {
+		if ch.Index != i {
+			return StoreFileResult{}, fmt.Errorf("prepared chunks out of order: got index %d at position %d", ch.Index, i)
+		}
+	}
+
+	type pendingPackedChunk struct {
+		chunkID  int64
+		hash     string
+		prepared preparedChunk
+	}
+
+	builder := blocks.NewBlockBuilder(packedBlockTargetSizeBytesFromEnv())
+	pendingPacked := make([]pendingPackedChunk, 0, 8)
+	pendingPackedHashes := make(map[string]struct{})
+
+	flushPackedPending := func() error {
+		if builder.Empty() {
+			return nil
+		}
+
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
+			tx, err := dbconn.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+
+			persisted, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder)
+			if err != nil {
+				_ = tx.Rollback()
+				var brokenOpenErr *container.BrokenOpenContainerError
+				if errors.As(err, &brokenOpenErr) {
+					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID, sgctx.EffectiveContainerDir()); quarantineErr != nil {
+						return errors.Join(err, fmt.Errorf("quarantine broken open container %d after rollback: %w", brokenOpenErr.ContainerID, quarantineErr))
+					}
+					return err
+				}
+				if errors.Is(err, container.ErrContainerLockContention) || errors.Is(err, container.ErrContainerFull) {
+					continue
+				}
+
+				for _, pending := range pendingPacked {
+					if _, err3 := dbconn.ExecContext(
+						ctx,
+						`UPDATE chunk SET status = $1 WHERE id = $2`,
+						filestate.ChunkAborted,
+						pending.chunkID,
+					); err3 != nil {
+						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+							return errors.Join(err3, rbErr)
+						}
+						return err3
+					}
+				}
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return errors.Join(err, rbErr)
+				}
+				return err
+			}
+
+			for _, pending := range pendingPacked {
+				segment, ok := persisted.Segments[pending.chunkID]
+				if !ok {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(fmt.Errorf("missing packed segment metadata for chunk %d", pending.chunkID), rbErr)
+					}
+					return fmt.Errorf("missing packed segment metadata for chunk %d", pending.chunkID)
+				}
+
+				if _, err := tx.ExecContext(
+					ctx,
+					`UPDATE chunk SET status = $1 WHERE id = $2`,
+					filestate.ChunkCompleted,
+					pending.chunkID,
+				); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+
+				legacyCodec := "plain"
+				legacyNonce := []byte{}
+				legacyOffset := persisted.Placement.Offset + segment.Offset
+				legacyStoredSize := segment.Size
+
+				if persisted.StorageCodec == string(blocks.CodecAESGCM) {
+					legacyCodec = string(blocks.CodecAESGCM)
+					legacyNonce = append(legacyNonce, persisted.LegacyNonce...)
+					// AES-GCM packed payload stores one encrypted block blob per append.
+					// Companion rows should point at the block start for compatibility lookups.
+					legacyOffset = persisted.Placement.Offset
+					legacyStoredSize = persisted.StoredSize
+				}
+
+				if err := insertLegacyCompanionBlockRowWithContext(
+					ctx,
+					tx,
+					pending.chunkID,
+					legacyCodec,
+					legacyNonce,
+					persisted.Placement.ContainerID,
+					legacyOffset,
+					segment.Size,
+					legacyStoredSize,
+				); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+
+				if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, pending.chunkID, pending.prepared.Index, true); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+			}
+
+			if persisted.Placement.Rotated {
+				if err := container.UpdateContainerSize(tx, persisted.Placement.PreviousID, persisted.Placement.PreviousSize); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+				if err := sealContainerWithWriter(tx, writer, persisted.Placement.PreviousID, persisted.Placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					quarantineErr := quarantineContainerNow(sgctx.DB, persisted.Placement.PreviousID, sgctx.EffectiveContainerDir())
+					if quarantineErr != nil {
+						return errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", persisted.Placement.PreviousID, quarantineErr))
+					}
+					return err
+				}
+			}
+
+			if err := container.UpdateContainerSize(tx, persisted.Placement.ContainerID, persisted.Placement.NewContainerSize); err != nil {
+				_ = tx.Rollback()
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return errors.Join(err, rbErr)
+				}
+				return err
+			}
+
+			if persisted.Placement.Full {
+				if err := markContainerSealingInTx(tx, persisted.Placement.ContainerID); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					return err
+				}
+				if err := writer.FinalizeContainer(); err != nil {
+					_ = tx.Rollback()
+					quarantineErr := quarantineWriterActiveContainer(writer)
+					if quarantineErr != nil {
+						return errors.Join(err, fmt.Errorf("quarantine active container after finalize failure: %w", quarantineErr))
+					}
+					return err
+				}
+				if err := sealContainerWithWriter(tx, writer, persisted.Placement.ContainerID, persisted.Placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
+					_ = tx.Rollback()
+					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+						return errors.Join(err, rbErr)
+					}
+					quarantineErr := quarantineContainerNow(sgctx.DB, persisted.Placement.ContainerID, sgctx.EffectiveContainerDir())
+					if quarantineErr != nil {
+						return errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", persisted.Placement.ContainerID, quarantineErr))
+					}
+					return err
+				}
+			}
+
+			if err = tx.Commit(); err != nil {
+				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
+					return errors.Join(err, rbErr)
+				}
+				return err
+			}
+			acknowledgeWriterAppendCommitted(writer)
+
+			builder.Reset()
+			pendingPacked = pendingPacked[:0]
+			for hash := range pendingPackedHashes {
+				delete(pendingPackedHashes, hash)
+			}
+			return nil
+		}
+	}
+
 	// Deterministic sequential commit of all prepared chunks
 	for _, prepared := range preparedChunks {
 		if err := ctx.Err(); err != nil {
 			return StoreFileResult{}, err
 		}
 
+		// Prevent claim waits only when this prepared hash is already buffered in
+		// pending packed chunks. Distinct hashes can continue batching.
+		if _, pendingDup := pendingPackedHashes[prepared.Hash]; pendingDup {
+			if err := flushPackedPending(); err != nil {
+				return StoreFileResult{}, err
+			}
+		}
+
 		// Use precomputed hash and data; no re-allocation or re-hashing in this loop.
 		// Try to claim chunk for this hash (concurrency-safe)
-		claimedChunkID, chunkStatus, _, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, commitInfo.validationContainerDir)
+		claimedChunkID, chunkStatus, isNewChunkClaim, err := claimChunkWithContext(ctx, dbconn, prepared.Hash, int64(prepared.Size), activeVersionString, commitInfo.validationContainerDir)
 		if err != nil {
 			return StoreFileResult{}, err
 		}
 
+		// Phase 4 Step 2 invariant: dedup decision happens before packing/writing.
+		// If chunk is already COMPLETED, never write/pack again; only link reference.
 		if chunkStatus == filestate.ChunkCompleted {
+			if err := flushPackedPending(); err != nil {
+				return StoreFileResult{}, err
+			}
+
 			// Chunk already stored and ready: just link it to the logical file
 			tx, err := dbconn.BeginTx(ctx, nil)
 			if err != nil {
 				return StoreFileResult{}, err
 			}
 
+			// Preserve logical recipe order: file_chunk.chunk_order comes from prepared.Index.
 			if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
 				_ = tx.Rollback()
 				return StoreFileResult{}, err
@@ -213,202 +469,66 @@ func commitPreparedChunksWithContext(
 			continue // Move to next chunk
 		}
 
-		// At this point, we have a chunk row in "PROCESSING" status.
-		// Append payload and complete the chunk.
-		for {
-			if err := ctx.Err(); err != nil {
-				return StoreFileResult{}, err
-			}
-			tx, err := dbconn.BeginTx(ctx, nil)
-			if err != nil {
-				return StoreFileResult{}, err
-			}
-
-			// Append chunk data to container file using precomputed metadata
-			placement, _, err := storeChunkAsPlainBlockWithWriter(
-				ctx,
-				tx,
-				blockRepo,
-				writer,
-				claimedChunkID,
-				prepared.Hash,
-				prepared.Data,
-				transformer,
-			)
-
-			if err != nil {
-				_ = tx.Rollback()
-				var brokenOpenErr *container.BrokenOpenContainerError
-				if errors.As(err, &brokenOpenErr) {
-					if quarantineErr := quarantineContainerNow(sgctx.DB, brokenOpenErr.ContainerID, sgctx.EffectiveContainerDir()); quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine broken open container %d after rollback: %w", brokenOpenErr.ContainerID, quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-				if errors.Is(err, container.ErrContainerLockContention) {
-					continue
-				}
-				if errors.Is(err, container.ErrContainerFull) {
-					continue
-				}
-				existingBlock, getBlockErr := blockRepo.GetByChunkID(ctx, claimedChunkID)
-				if getBlockErr == nil && existingBlock != nil {
-					// Retry scenario: block metadata already exists for this chunk ID.
-					tx2, err2 := dbconn.BeginTx(ctx, nil)
-					if err2 != nil {
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if _, err2 = tx2.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err2 != nil {
-						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if err2 = linkFileChunkWithContext(ctx, tx2, commitInfo.fileID, claimedChunkID, prepared.Index, true); err2 != nil {
-						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if err2 = tx2.Commit(); err2 != nil {
-						_ = tx2.Rollback()
-						if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-							return StoreFileResult{}, errors.Join(err2, rbErr)
-						}
-						return StoreFileResult{}, err2
-					}
-
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, rbErr
-					}
-					break
-				}
-				if getBlockErr != nil && !errors.Is(getBlockErr, sql.ErrNoRows) {
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(getBlockErr, rbErr)
-					}
-					return StoreFileResult{}, getBlockErr
-				}
-
-				if _, err3 := dbconn.ExecContext(
-					ctx,
-					`UPDATE chunk SET status = $1 WHERE id = $2`,
-					filestate.ChunkAborted,
-					claimedChunkID,
-				); err3 != nil {
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err3, rbErr)
-					}
-					return StoreFileResult{}, err3
-				}
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-
-			// Mark chunk as completed
-			if _, err := tx.ExecContext(
-				ctx,
-				`UPDATE chunk SET status = $1 WHERE id = $2`,
-				filestate.ChunkCompleted,
-				claimedChunkID,
-			); err != nil {
-				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-
-			if placement.Rotated {
-				// Contract: LocalWriter only handles physical finalize/close on rotation.
-				if err := container.UpdateContainerSize(tx, placement.PreviousID, placement.PreviousSize); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					return StoreFileResult{}, err
-				}
-				if err := sealContainerWithWriter(tx, writer, placement.PreviousID, placement.PreviousFilename, sgctx.EffectiveContainerDir()); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					quarantineErr := quarantineContainerNow(sgctx.DB, placement.PreviousID, sgctx.EffectiveContainerDir())
-					if quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine rotated container %d after seal failure: %w", placement.PreviousID, quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-			}
-
-			// Always persist size for the container that received this payload.
-			if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
-				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-
-			// Link file ↔ chunk using prepared index for deterministic order
-			if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
-				_ = tx.Rollback()
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-			if placement.Full {
-				// Mark sealing in the current transaction, which already owns the row lock.
-				if err := markContainerSealingInTx(tx, placement.ContainerID); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					return StoreFileResult{}, err
-				}
-				if err := writer.FinalizeContainer(); err != nil {
-					_ = tx.Rollback()
-					quarantineErr := quarantineWriterActiveContainer(writer)
-					if quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine active container after finalize failure: %w", quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-				// Contract: FinalizeContainer only closes physical file handle; DB seal is required here.
-				if err := sealContainerWithWriter(tx, writer, placement.ContainerID, placement.Filename, sgctx.EffectiveContainerDir()); err != nil {
-					_ = tx.Rollback()
-					if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-						return StoreFileResult{}, errors.Join(err, rbErr)
-					}
-					quarantineErr := quarantineContainerNow(sgctx.DB, placement.ContainerID, sgctx.EffectiveContainerDir())
-					if quarantineErr != nil {
-						return StoreFileResult{}, errors.Join(err, fmt.Errorf("quarantine full container %d after seal failure: %w", placement.ContainerID, quarantineErr))
-					}
-					return StoreFileResult{}, err
-				}
-			}
-
-			if err = tx.Commit(); err != nil {
-				if rbErr := rollbackWriterLastAppendWithQuarantine(writer); rbErr != nil {
-					return StoreFileResult{}, errors.Join(err, rbErr)
-				}
-				return StoreFileResult{}, err
-			}
-			acknowledgeWriterAppendCommitted(writer)
-
-			break
+		if chunkStatus != filestate.ChunkProcessing {
+			return StoreFileResult{}, fmt.Errorf("unexpected chunk status %q for chunk_id=%d before write boundary", chunkStatus, claimedChunkID)
 		}
+
+		if !isNewChunkClaim {
+			// This is a reclaimed processing claim (e.g. previously aborted/corrupted chunk).
+			// It is intentionally rewritten to repair state, not a dedup duplicate write.
+			log.Printf("event=store_chunk_reclaim action=write_rebuild file_id=%d chunk_id=%d hash=%s", commitInfo.fileID, claimedChunkID, prepared.Hash)
+
+			hasPackedRef, err := chunkHasPackedRefWithContext(ctx, dbconn, claimedChunkID)
+			if err != nil {
+				return StoreFileResult{}, err
+			}
+			hasLegacyBlock, err := chunkHasLegacyBlockWithContext(ctx, dbconn, claimedChunkID)
+			if err != nil {
+				return StoreFileResult{}, err
+			}
+			if hasPackedRef || hasLegacyBlock {
+				tx, err := dbconn.BeginTx(ctx, nil)
+				if err != nil {
+					return StoreFileResult{}, err
+				}
+
+				if _, err := tx.ExecContext(ctx, `UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, claimedChunkID); err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+
+				if err := linkFileChunkWithContext(ctx, tx, commitInfo.fileID, claimedChunkID, prepared.Index, true); err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+
+				if err := tx.Commit(); err != nil {
+					_ = tx.Rollback()
+					return StoreFileResult{}, err
+				}
+				continue
+			}
+		}
+
+		if builder.ShouldFlushBeforeAdd(int64(prepared.Size)) {
+			if err := flushPackedPending(); err != nil {
+				return StoreFileResult{}, err
+			}
+		}
+
+		if err := builder.Add(blocks.PendingChunk{
+			ChunkID: claimedChunkID,
+			Data:    prepared.Data,
+			Size:    int64(prepared.Size),
+		}); err != nil {
+			return StoreFileResult{}, err
+		}
+		pendingPacked = append(pendingPacked, pendingPackedChunk{chunkID: claimedChunkID, hash: prepared.Hash, prepared: prepared})
+		pendingPackedHashes[prepared.Hash] = struct{}{}
+	}
+
+	if err := flushPackedPending(); err != nil {
+		return StoreFileResult{}, err
 	}
 
 	// Atomically verify all chunks are linked and mark logical file as COMPLETED.
@@ -681,6 +801,10 @@ type preparedChunk struct {
 	Data           []byte
 }
 
+// Test hook: lets tests inject per-index delay/behavior to emulate
+// out-of-order worker completion. Keep nil in production.
+var testPrepareChunksWorkerHook func(index int)
+
 // prepareChunksWithContext materializes chunk metadata deterministically.
 // It computes hashes for chunkers that didn't provide them.
 func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunkerVersion string) ([]preparedChunk, error) {
@@ -688,36 +812,84 @@ func prepareChunksWithContext(ctx context.Context, results []chunk.Result, chunk
 		return []preparedChunk{}, nil
 	}
 
-	prepared := make([]preparedChunk, 0, len(results))
-	chunkHasher := sha256.New()
-	hashBuf := make([]byte, 0, sha256.Size)
-	for i, res := range results {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		data := res.Data
-		hash := res.Info.Hash
-		if strings.TrimSpace(hash) == "" {
-			chunkHasher.Reset()
-			_, _ = chunkHasher.Write(data)
-			hashBuf = chunkHasher.Sum(hashBuf[:0])
-			hash = hex.EncodeToString(hashBuf)
-		}
-
-		prepared = append(prepared, preparedChunk{
-			Index:          i,
-			Offset:         res.Info.Offset,
-			Size:           len(data),
-			Hash:           hash,
-			ChunkerVersion: chunkerVersion,
-			Data:           data,
-		})
+	type preparedResult struct {
+		idx int
+		ch  preparedChunk
+		err error
 	}
 
-	sort.Slice(prepared, func(i, j int) bool {
-		return prepared[i].Index < prepared[j].Index
-	})
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(results) {
+		workerCount = len(results)
+	}
+
+	jobs := make(chan int)
+	resultsCh := make(chan preparedResult, len(results))
+
+	var wg sync.WaitGroup
+	worker := func() {
+		defer wg.Done()
+		chunkHasher := sha256.New()
+		hashBuf := make([]byte, 0, sha256.Size)
+		for i := range jobs {
+			if err := ctx.Err(); err != nil {
+				resultsCh <- preparedResult{err: err}
+				continue
+			}
+			if testPrepareChunksWorkerHook != nil {
+				testPrepareChunksWorkerHook(i)
+			}
+
+			res := results[i]
+			data := res.Data
+			hash := res.Info.Hash
+			if strings.TrimSpace(hash) == "" {
+				chunkHasher.Reset()
+				_, _ = chunkHasher.Write(data)
+				hashBuf = chunkHasher.Sum(hashBuf[:0])
+				hash = hex.EncodeToString(hashBuf)
+			}
+
+			resultsCh <- preparedResult{
+				idx: i,
+				ch: preparedChunk{
+					Index:          i,
+					Offset:         res.Info.Offset,
+					Size:           len(data),
+					Hash:           hash,
+					ChunkerVersion: chunkerVersion,
+					Data:           data,
+				},
+			}
+		}
+	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	go func() {
+		defer close(jobs)
+		for i := range results {
+			jobs <- i
+		}
+	}()
+
+	prepared := make([]preparedChunk, len(results))
+	for i := 0; i < len(results); i++ {
+		item := <-resultsCh
+		if item.err != nil {
+			wg.Wait()
+			return nil, item.err
+		}
+		prepared[item.idx] = item.ch
+	}
+	wg.Wait()
+
 	for i, ch := range prepared {
 		if ch.Index != i {
 			return nil, fmt.Errorf("non-contiguous chunk index: got %d want %d", ch.Index, i)
@@ -788,6 +960,7 @@ type semanticReuseSuspicionSummary struct {
 
 type reusableCompletedChunkSummary struct {
 	blockRows                int64
+	packedRows               int64
 	existingContainerRows    int64
 	quarantinedContainerRows int64
 }
@@ -861,13 +1034,18 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 	err := dbconn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(b.id) AS block_rows,
+			COUNT(r.chunk_id) AS packed_rows,
 			COUNT(ctr.id) AS existing_container_rows,
 			COALESCE(SUM(CASE WHEN ctr.quarantine THEN 1 ELSE 0 END), 0) AS quarantined_container_rows
-		FROM blocks b
-		LEFT JOIN container ctr ON ctr.id = b.container_id
-		WHERE b.chunk_id = $1
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
 	`, chunkID).Scan(
 		&summary.blockRows,
+		&summary.packedRows,
 		&summary.existingContainerRows,
 		&summary.quarantinedContainerRows,
 	)
@@ -875,8 +1053,8 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		return fmt.Errorf("query reusable completed chunk %d: %w", chunkID, err)
 	}
 
-	if summary.blockRows != 1 {
-		return fmt.Errorf("chunk %d has invalid block metadata rows: expected 1 got %d", chunkID, summary.blockRows)
+	if summary.blockRows != 1 || (summary.packedRows != 0 && summary.packedRows != 1) {
+		return fmt.Errorf("chunk %d has invalid physical metadata rows: blocks=%d packed=%d", chunkID, summary.blockRows, summary.packedRows)
 	}
 	if summary.existingContainerRows != 1 {
 		return fmt.Errorf("chunk %d has missing container metadata", chunkID)
@@ -898,10 +1076,19 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		maxSize       int64
 	)
 	err = dbconn.QueryRowContext(ctx, `
-		SELECT ctr.id, ctr.filename, b.block_offset, b.stored_size, ctr.current_size, ctr.max_size
-		FROM blocks b
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE b.chunk_id = $1
+		SELECT
+			ctr.id,
+			ctr.filename,
+			COALESCE(b.block_offset, sb.container_offset),
+			COALESCE(b.stored_size, sb.stored_size),
+			ctr.current_size,
+			ctr.max_size
+		FROM chunk c
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
+		WHERE c.id = $1
 	`, chunkID).Scan(
 		&containerID,
 		&filename,
@@ -986,12 +1173,14 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 				COUNT(*) AS chunk_refs,
 				COALESCE(SUM(CASE WHEN oc.chunk_order <> oc.expected_order THEN 1 ELSE 0 END), 0) AS broken_chunk_orders,
 				COALESCE(SUM(CASE WHEN c.id IS NULL OR c.status <> $2 THEN 1 ELSE 0 END), 0) AS invalid_chunks,
-				COALESCE(SUM(CASE WHEN b.id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
+				COALESCE(SUM(CASE WHEN b.id IS NULL AND r.block_id IS NULL THEN 1 ELSE 0 END), 0) AS missing_blocks,
 				COALESCE(SUM(CASE WHEN ctr.id IS NULL THEN 1 ELSE 0 END), 0) AS invalid_containers
 			FROM ordered_chunks oc
 			LEFT JOIN chunk c ON c.id = oc.chunk_id
 			LEFT JOIN blocks b ON b.chunk_id = oc.chunk_id
-			LEFT JOIN container ctr ON ctr.id = b.container_id
+			LEFT JOIN chunk_block_refs r ON r.chunk_id = oc.chunk_id
+			LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+			LEFT JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
 		)
 		SELECT
 			tf.total_size,
@@ -1049,8 +1238,11 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	rows, err := dbconn.QueryContext(ctx, `
 		       SELECT DISTINCT ctr.id, ctr.filename
 		       FROM file_chunk fc
-		       JOIN blocks b ON b.chunk_id = fc.chunk_id
-		       JOIN container ctr ON ctr.id = b.container_id
+		       JOIN chunk c ON c.id = fc.chunk_id
+		       LEFT JOIN blocks b ON b.chunk_id = c.id
+		       LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		       LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		       JOIN container ctr ON ctr.id = COALESCE(b.container_id, sb.container_id)
 		       WHERE fc.logical_file_id = $1
 	       `, fileID)
 	if err != nil {
@@ -1179,6 +1371,11 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 		}
 	}()
 
+	restoreService := &RestoreService{
+		ChunkResolver: NewDualCompatChunkResolver(dbconn),
+		BlockReader:   NewStorageBlockReader(dbconn, containersDir),
+	}
+
 	transformerCache := make(map[blocks.Codec]blocks.Transformer)
 	var expectedOrder int64
 
@@ -1188,53 +1385,66 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 		}
 		expectedOrder++
 
-		if containerfilename != chunkRow.filename {
-			if filecontainer != nil {
-				if closeErr := filecontainer.Close(); closeErr != nil {
-					return fmt.Errorf("close container %q during semantic validation: %w", containerfilename, closeErr)
+		seg, segErr := restoreService.ResolveChunkLocation(ctx, chunkRow.chunkID)
+		if segErr != nil {
+			return fmt.Errorf("resolve chunk for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, segErr)
+		}
+
+		var plaintext []byte
+		if seg != nil && seg.BlockID > 0 {
+			plaintext, err = restoreService.ReadChunkFromBlock(ctx, seg.BlockID, seg.Offset, seg.Size)
+			if err != nil {
+				return fmt.Errorf("read packed chunk for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
+			}
+		} else {
+			if containerfilename != chunkRow.filename {
+				if filecontainer != nil {
+					if closeErr := filecontainer.Close(); closeErr != nil {
+						return fmt.Errorf("close container %q during semantic validation: %w", containerfilename, closeErr)
+					}
+					filecontainer = nil
 				}
-				filecontainer = nil
+
+				containerPath := filepath.Join(containersDir, chunkRow.filename)
+				filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+				if err != nil {
+					return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+				}
+				containerfilename = chunkRow.filename
 			}
 
-			containerPath := filepath.Join(containersDir, chunkRow.filename)
-			filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
+			payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
 			if err != nil {
-				return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+				return fmt.Errorf("read payload for semantic validation from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
 			}
-			containerfilename = chunkRow.filename
-		}
 
-		payload, err := container.ReadPayloadAt(filecontainer, chunkRow.blockOffset, chunkRow.storedSize)
-		if err != nil {
-			return fmt.Errorf("read payload for semantic validation from container=%s offset=%d size=%d: %w", chunkRow.filename, chunkRow.blockOffset, chunkRow.storedSize, err)
-		}
+			codec := blocks.Codec(chunkRow.blocksCodec)
+			transformer, ok := transformerCache[codec]
+			if !ok {
+				transformer, err = blocks.GetBlockTransformer(codec)
+				if err != nil {
+					return fmt.Errorf("get block transformer for semantic validation codec %s: %w", chunkRow.blocksCodec, err)
+				}
+				transformerCache[codec] = transformer
+			}
 
-		codec := blocks.Codec(chunkRow.blocksCodec)
-		transformer, ok := transformerCache[codec]
-		if !ok {
-			transformer, err = blocks.GetBlockTransformer(codec)
+			plaintext, err = transformer.Decode(ctx, blocks.DecodeInput{
+				ChunkHash: chunkRow.expectedChunkHash,
+				Descriptor: blocks.Descriptor{
+					ChunkID:       chunkRow.chunkID,
+					Codec:         codec,
+					FormatVersion: chunkRow.blocksFormatVersion,
+					PlaintextSize: chunkRow.plaintextSize,
+					StoredSize:    chunkRow.storedSize,
+					Nonce:         chunkRow.blocksNonce,
+					ContainerID:   chunkRow.blocksContainerID,
+					BlockOffset:   chunkRow.blockOffset,
+				},
+				Payload: payload,
+			})
 			if err != nil {
-				return fmt.Errorf("get block transformer for semantic validation codec %s: %w", chunkRow.blocksCodec, err)
+				return fmt.Errorf("decode payload for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
 			}
-			transformerCache[codec] = transformer
-		}
-
-		plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-			ChunkHash: chunkRow.expectedChunkHash,
-			Descriptor: blocks.Descriptor{
-				ChunkID:       chunkRow.chunkID,
-				Codec:         codec,
-				FormatVersion: chunkRow.blocksFormatVersion,
-				PlaintextSize: chunkRow.plaintextSize,
-				StoredSize:    chunkRow.storedSize,
-				Nonce:         chunkRow.blocksNonce,
-				ContainerID:   chunkRow.blocksContainerID,
-				BlockOffset:   chunkRow.blockOffset,
-			},
-			Payload: payload,
-		})
-		if err != nil {
-			return fmt.Errorf("decode payload for semantic validation file=%d chunk_id=%d: %w", fileID, chunkRow.chunkID, err)
 		}
 
 		if int64(len(plaintext)) != chunkRow.plaintextSize {
@@ -2478,6 +2688,61 @@ func buildFileJobs(paths []string) []FileJob {
 	return jobs
 }
 
+func insertLegacyCompanionBlockRowWithContext(
+	ctx context.Context,
+	tx *sql.Tx,
+	chunkID int64,
+	codec string,
+	nonce []byte,
+	containerID int64,
+	containerOffset int64,
+	plaintextSize int64,
+	storedSize int64,
+) error {
+	if codec == "" {
+		codec = "plain"
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, $2, 1, $3, $4, $5, $6, $7)`,
+		chunkID,
+		codec,
+		plaintextSize,
+		storedSize,
+		nonce,
+		containerID,
+		containerOffset,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func chunkHasPackedRefWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) (bool, error) {
+	var marker int
+	err := dbconn.QueryRowContext(ctx, `SELECT 1 FROM chunk_block_refs WHERE chunk_id = $1 LIMIT 1`, chunkID).Scan(&marker)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func chunkHasLegacyBlockWithContext(ctx context.Context, dbconn *sql.DB, chunkID int64) (bool, error) {
+	var marker int
+	err := dbconn.QueryRowContext(ctx, `SELECT 1 FROM blocks WHERE chunk_id = $1 LIMIT 1`, chunkID).Scan(&marker)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func sleepWithContext(ctx context.Context, wait time.Duration) error {
 	if wait <= 0 {
 		select {
@@ -2535,6 +2800,149 @@ func storeChunkAsPlainBlockWithWriter(
 	}
 
 	return placement, &encoded.Descriptor, nil
+}
+
+type packedBlockPersistResult struct {
+	BlockID      int64
+	BlockHash    []byte
+	StorageCodec string
+	LegacyNonce  []byte
+	Placement    container.LocalPlacement
+	StoredSize   int64
+	Segments     map[int64]packedChunkSegment
+}
+
+type packedChunkSegment struct {
+	Offset int64
+	Size   int64
+}
+
+const packedStorageBlockCodecNone = "none"
+const packedStorageBlockAESGCMNonceSize = 12
+
+// storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
+//
+// Atomic order (single transaction boundary):
+//  1. Encode plaintext block bytes
+//  2. Compute mandatory block hash on plaintext encoded bytes
+//  3. Transform/encrypt encoded block bytes
+//  4. Append transformed bytes to container
+//  5. Insert storage_blocks row
+//  6. Insert chunk_block_refs rows
+//
+// Invariant: no chunk_block_refs row is written before a successful storage_blocks
+// insert in the same transaction.
+func storePackedBlockWithWriter(
+	ctx context.Context,
+	tx *sql.Tx,
+	writer payloadStatefulWriter,
+	transformer blocks.Transformer,
+	builder *blocks.BlockBuilder,
+) (packedBlockPersistResult, error) {
+	if builder == nil || builder.Empty() {
+		return packedBlockPersistResult{}, fmt.Errorf("packed block flush requires non-empty builder")
+	}
+
+	// 1-2) Build block and compute mandatory hash over encoded plaintext bytes.
+	encodedBlock, _, err := builder.Build()
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	plaintextEncoded, err := blocks.EncodeBlock(encodedBlock)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	blockHash := blocks.ComputeBlockHash(plaintextEncoded)
+
+	// 3) Transform/encrypt encoded bytes for physical storage.
+	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
+		ChunkID:   0,
+		ChunkHash: hex.EncodeToString(blockHash),
+		Plaintext: plaintextEncoded,
+	})
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	storageCodec := packedStorageBlockCodecNone
+	legacyNonce := []byte{}
+	storedPayload := transformed.Payload
+	switch transformed.Descriptor.Codec {
+	case blocks.CodecPlain:
+		// Keep legacy v1.8 metadata contract for plain payloads.
+	case blocks.CodecAESGCM:
+		if len(transformed.Descriptor.Nonce) != packedStorageBlockAESGCMNonceSize {
+			return packedBlockPersistResult{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
+		}
+		// storage_blocks has no nonce column, so prefix nonce into stored payload.
+		storedPayload = make([]byte, 0, len(transformed.Descriptor.Nonce)+len(transformed.Payload))
+		storedPayload = append(storedPayload, transformed.Descriptor.Nonce...)
+		storedPayload = append(storedPayload, transformed.Payload...)
+		storageCodec = string(blocks.CodecAESGCM)
+		legacyNonce = append(legacyNonce, transformed.Descriptor.Nonce...)
+	default:
+		return packedBlockPersistResult{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
+	}
+
+	// 4) Append transformed payload to container.
+	placement, err := writer.AppendPayload(tx, storedPayload)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// 5) Insert storage_blocks metadata row.
+	var blockID int64
+	if err := tx.QueryRowContext(
+		ctx,
+		`INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, stored_size,
+			container_id, container_offset, block_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		1,
+		storageCodec,
+		int64(len(plaintextEncoded)),
+		int64(len(storedPayload)),
+		placement.ContainerID,
+		placement.Offset,
+		blockHash,
+	).Scan(&blockID); err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// 6) Insert chunk -> packed-block placement rows.
+	payloadPrefixBytes := int64(len(plaintextEncoded) - len(encodedBlock.Payload))
+	segments := make(map[int64]packedChunkSegment, len(encodedBlock.Entries))
+	for _, entry := range encodedBlock.Entries {
+		segments[int64(entry.ChunkID)] = packedChunkSegment{
+			Offset: payloadPrefixBytes + int64(entry.Offset),
+			Size:   int64(entry.Size),
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+			 VALUES ($1, $2, $3, $4)`,
+			int64(entry.ChunkID),
+			blockID,
+			int64(entry.Offset),
+			int64(entry.Size),
+		); err != nil {
+			return packedBlockPersistResult{}, err
+		}
+	}
+
+	return packedBlockPersistResult{
+		BlockID:      blockID,
+		BlockHash:    blockHash,
+		StorageCodec: storageCodec,
+		LegacyNonce:  legacyNonce,
+		Placement:    placement,
+		StoredSize:   int64(len(storedPayload)),
+		Segments:     segments,
+	}, nil
 }
 
 // Store payload bytes directly in a container and return offset/size metadata.

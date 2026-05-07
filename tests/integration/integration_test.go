@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,9 +23,11 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/snapshot"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -272,7 +275,7 @@ func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
 	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
 	env := testutils.DefaultCLIEnv(container.ContainersDir)
 
-	payload := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(
+	benchmarkRes := testutils.RunColdkeepCommand(
 		t,
 		repoRoot,
 		binPath,
@@ -282,7 +285,24 @@ func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
 		"--dataset", "small",
 		"--workers", "4",
 		"--output", "json",
-	), "benchmark")
+	)
+	if benchmarkRes.ExitCode != 0 {
+		t.Fatalf("benchmark run failed: exit=%d stderr=%s", benchmarkRes.ExitCode, benchmarkRes.Stderr)
+	}
+	jsonLines := testutils.ParseJSONLines(benchmarkRes.Stdout)
+	var payload map[string]any
+	for _, candidate := range jsonLines {
+		if _, ok := candidate["data"]; ok {
+			payload = candidate
+			break
+		}
+	}
+	if payload == nil {
+		t.Fatalf("expected benchmark JSON payload with data object, got stdout=%s", benchmarkRes.Stdout)
+	}
+	if status, _ := payload["status"].(string); status != "ok" {
+		t.Fatalf("expected benchmark status=ok, got payload=%v", payload)
+	}
 
 	data := testutils.JSONMap(t, payload, "data")
 	aggStats := testutils.JSONMap(t, data, "execution_stats")
@@ -5434,8 +5454,8 @@ func TestDoctorRepeatedRecoverableStateConvergesAndPreservesLiveData(t *testing.
 func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 	testgate.RequireDB(t)
 
-	// --- Subtest 1: old schema version is rejected with actionable message ---
-	t.Run("old_schema_version_rejected", func(t *testing.T) {
+	// --- Subtest 1: old schema version is auto-migrated to current version ---
+	t.Run("old_schema_version_auto_migrated", func(t *testing.T) {
 		// Connect raw; bypass EnsurePostgresSchema so we can manipulate schema_version.
 		mainDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = mainDB.Close() }()
@@ -5464,19 +5484,16 @@ func TestSchemaBootstrapVersionReleaseGate(t *testing.T) {
 		testDB := testutils.OpenRawPostgresDB(t, "")
 		defer func() { _ = testDB.Close() }()
 
-		err := db.EnsurePostgresSchema(testDB)
-		testutils.AssertErrorContains(t, err, "postgres schema version too old", "postgres schema release gate old version")
+		if err := db.EnsurePostgresSchema(testDB); err != nil {
+			t.Fatalf("EnsurePostgresSchema must auto-migrate old schema version: %v", err)
+		}
 
-		// Verify failure classification and actionable operator message.
-		errMsg := err.Error()
-		for _, want := range []string{
-			"postgres schema version too old",
-			"have 1",
-			"apply db/schema_postgres.sql",
-		} {
-			if !strings.Contains(errMsg, want) {
-				t.Errorf("expected %q in error message, got: %q", want, errMsg)
-			}
+		var migratedVersion int
+		if err := testDB.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&migratedVersion); err != nil {
+			t.Fatalf("read migrated schema_version: %v", err)
+		}
+		if migratedVersion <= 1 {
+			t.Fatalf("expected schema_version to advance beyond downgraded version 1, got %d", migratedVersion)
 		}
 	})
 
@@ -5629,20 +5646,13 @@ func TestSchemaStartupOperatorMessagingReleaseGate(t *testing.T) {
 		env["DB_NAME"] = dbName
 
 		res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats")
-		if res.ExitCode == 0 {
-			t.Fatalf("stats must fail for outdated schema version; Stdout=%q Stderr=%q", res.Stdout, res.Stderr)
+		if res.ExitCode != 0 {
+			t.Fatalf("stats must auto-migrate outdated schema and succeed; ExitCode=%d Stdout=%q Stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
 		}
 
 		errText := strings.TrimSpace(res.Stderr)
-		for _, want := range []string{
-			"ERROR[GENERAL]:",
-			"failed to connect to DB:",
-			"postgres schema version too old",
-			"apply db/schema_postgres.sql",
-		} {
-			if !strings.Contains(errText, want) {
-				t.Errorf("expected old-schema CLI message to contain %q, got: %q", want, errText)
-			}
+		if strings.Contains(strings.ToLower(errText), "postgres schema version too old") {
+			t.Errorf("did not expect old-schema rejection after auto-migration, got: %q", errText)
 		}
 	})
 
@@ -7440,7 +7450,7 @@ func TestVerifyStandard(t *testing.T) {
 		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-			"found 1 errors in checkContainersFileExistence checks",
+			"physical_missing: verifyBlockPayloads: open container for block",
 			"verify-standard/full missing container file",
 		)
 	})
@@ -7517,7 +7527,7 @@ func TestVerifyFull(t *testing.T) {
 		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-			"found 1 errors in checkContainersFileExistence checks",
+			"physical_missing: verifyBlockPayloads: open container for block",
 			"verify-full missing container file",
 		)
 	})
@@ -7638,6 +7648,10 @@ func TestVerifyFileStandardDetectsMissingChunkMetadata(t *testing.T) {
 
 	if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, record.ChunkID); err != nil {
 		t.Fatalf("delete block row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, record.ChunkID); err != nil {
+		t.Fatalf("delete chunk_block_refs row: %v", err)
 	}
 
 	if _, err := dbconn.Exec(`DELETE FROM chunk WHERE id = $1`, record.ChunkID); err != nil {
@@ -7906,8 +7920,10 @@ func TestVerifySystemDeepDetectsChunkDataCorruption(t *testing.T) {
 		errStr := strings.ToLower(err.Error())
 		if !strings.Contains(errStr, "chunk hash mismatch") &&
 			!strings.Contains(errStr, "no restorable chunks found") &&
-			!strings.Contains(errStr, "restored file hash mismatch") {
-			t.Fatalf("expected plain-chunk-corruption restore error to contain (case-insensitive) %q or %q or %q, got: %v", "chunk hash mismatch", "no restorable chunks found", "restored file hash mismatch", err)
+			!strings.Contains(errStr, "restored file hash mismatch") &&
+			!strings.Contains(errStr, "verify block") &&
+			!strings.Contains(errStr, "hash mismatch") {
+			t.Fatalf("expected plain-chunk-corruption restore error to contain (case-insensitive) %q or %q or %q or block hash mismatch wording, got: %v", "chunk hash mismatch", "no restorable chunks found", "restored file hash mismatch", err)
 		}
 	}
 }
@@ -7943,23 +7959,25 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	}
 
 	var storedCodec string
-	var nonceLen int
+	var storedSize int64
+	var plaintextSize int64
 	err = dbconn.QueryRow(`
-		SELECT b.codec, OCTET_LENGTH(b.nonce)
+		SELECT sb.codec, sb.stored_size, sb.plaintext_size
 		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+		JOIN storage_blocks sb ON sb.id = r.block_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
-	`, result.FileID).Scan(&storedCodec, &nonceLen)
+	`, result.FileID).Scan(&storedCodec, &storedSize, &plaintextSize)
 	if err != nil {
-		t.Fatalf("query aes-gcm block metadata: %v", err)
+		t.Fatalf("query aes-gcm storage_blocks metadata: %v", err)
 	}
 	if storedCodec != string(blocks.CodecAESGCM) {
 		t.Fatalf("expected stored codec %q, got %q", blocks.CodecAESGCM, storedCodec)
 	}
-	if nonceLen == 0 {
-		t.Fatal("expected aes-gcm block nonce to be present")
+	if storedSize <= plaintextSize {
+		t.Fatalf("expected stored_size to exceed plaintext_size for aes-gcm packed block: stored=%d plaintext=%d", storedSize, plaintextSize)
 	}
 
 	testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
@@ -8016,27 +8034,36 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 		t.Fatalf("store aes-gcm file: %v", err)
 	}
 
-	var ChunkID int64
-	var nonce []byte
+	var containerName string
+	var blockOffset int64
 	err = dbconn.QueryRow(`
-		SELECT b.chunk_id, b.nonce
+		SELECT c.filename, sb.container_offset
 		FROM file_chunk fc
-		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		JOIN container c ON c.id = sb.container_id
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order ASC
 		LIMIT 1
-	`, result.FileID).Scan(&ChunkID, &nonce)
+	`, result.FileID).Scan(&containerName, &blockOffset)
 	if err != nil {
-		t.Fatalf("query aes-gcm nonce metadata: %v", err)
-	}
-	if len(nonce) == 0 {
-		t.Fatal("expected aes-gcm nonce to be present")
+		t.Fatalf("query aes-gcm packed block placement: %v", err)
 	}
 
-	tamperedNonce := append([]byte(nil), nonce...)
-	tamperedNonce[0] ^= 0x7F
-	if _, err := dbconn.Exec(`UPDATE blocks SET nonce = $1 WHERE chunk_id = $2`, tamperedNonce, ChunkID); err != nil {
-		t.Fatalf("tamper nonce metadata: %v", err)
+	containerPath := filepath.Join(container.ContainersDir, containerName)
+	f, err := os.OpenFile(containerPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container for nonce tamper: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	b := make([]byte, 1)
+	if _, err := f.ReadAt(b, blockOffset); err != nil {
+		t.Fatalf("read nonce prefix byte: %v", err)
+	}
+	b[0] ^= 0x7F
+	if _, err := f.WriteAt(b, blockOffset); err != nil {
+		t.Fatalf("write tampered nonce prefix byte: %v", err)
 	}
 
 	testutils.AssertDeepVerifyAggregateError(
@@ -8338,17 +8365,15 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		t.Fatalf("store file: %v", err)
 	}
 
-	var secondChunkID int64
+	var secondBlockID int64
 	var secondBlockOffset int64
 	err = dbconn.QueryRow(`
-		SELECT b.chunk_id, b.block_offset
-		FROM blocks b
-		JOIN chunk c ON c.id = b.chunk_id
-		WHERE c.status = $1
-		ORDER BY b.container_id ASC, b.block_offset ASC
+		SELECT sb.id, sb.container_offset
+		FROM storage_blocks sb
+		ORDER BY sb.container_id ASC, sb.container_offset ASC
 		OFFSET 1
 		LIMIT 1
-	`, filestate.ChunkCompleted).Scan(&secondChunkID, &secondBlockOffset)
+	`).Scan(&secondBlockID, &secondBlockOffset)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			t.Skip("not enough completed chunks to validate offset continuity")
@@ -8356,14 +8381,17 @@ func TestVerifySystemFullDetectsNonContiguousOffsets(t *testing.T) {
 		t.Fatalf("query second chunk: %v", err)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE blocks SET block_offset = $1 WHERE chunk_id = $2`, secondBlockOffset+1, secondChunkID); err != nil {
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET container_offset = $1 WHERE id = $2`, secondBlockOffset+1, secondBlockID); err != nil {
 		t.Fatalf("corrupt block offset continuity: %v", err)
 	}
 
-	testutils.AssertErrorContains(
+	testutils.AssertErrorContainsAny(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-		"found 2 errors in checkChunkOffsetValidity checks",
+		[]string{
+			"verifyStorageBlocks: storage_blocks rows with impossible container ranges",
+			"verifyChunkBlockRefs: chunk",
+		},
 		"system-full non-contiguous-offsets",
 	)
 }
@@ -8397,14 +8425,12 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	}
 
 	rows, err := dbconn.Query(`
-		SELECT b.block_offset, b.stored_size, ctr.filename
-		FROM chunk c
-		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
-		WHERE c.status = $1
-		ORDER BY b.container_id ASC, b.block_offset ASC
+		SELECT sb.container_offset, sb.stored_size, ctr.filename
+		FROM storage_blocks sb
+		JOIN container ctr ON ctr.id = sb.container_id
+		ORDER BY sb.container_id ASC, sb.container_offset ASC
 		LIMIT 2
-	`, filestate.ChunkCompleted)
+	`)
 	if err != nil {
 		t.Fatalf("query chunks for corruption: %v", err)
 	}
@@ -8453,7 +8479,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
-		"found 2 errors in deep verification of container files",
+		"block_hash_mismatch: verifyBlockPayloads",
 		"system-deep multiple corrupted chunks",
 	)
 }
@@ -9345,6 +9371,180 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 		t.Fatalf("final full verify after randomized long-run soak: %v", err)
 	}
 	assertBoundedCleanup("final")
+}
+
+func TestRefCountContainmentStressMatrix(t *testing.T) {
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	iterations := 25
+	if raw := strings.TrimSpace(os.Getenv("COLDKEEP_REFCOUNT_STRESS_ITERS")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			t.Fatalf("invalid COLDKEEP_REFCOUNT_STRESS_ITERS=%q", raw)
+		}
+		iterations = n
+	}
+
+	t.Setenv("COLDKEEP_BLOCK_TARGET_SIZE_MB", "1")
+	t.Setenv("COLDKEEP_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+
+	type cfg struct {
+		name    string
+		codec   blocks.Codec
+		workers int
+	}
+
+	matrix := []cfg{
+		{name: "plain_w1", codec: blocks.CodecPlain, workers: 1},
+		{name: "plain_w4", codec: blocks.CodecPlain, workers: 4},
+		{name: "aesgcm_w1", codec: blocks.CodecAESGCM, workers: 1},
+		{name: "aesgcm_w4", codec: blocks.CodecAESGCM, workers: 4},
+	}
+
+	for _, tc := range matrix {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			origContainersDir := container.ContainersDir
+			container.ContainersDir = filepath.Join(tmp, "containers")
+			t.Cleanup(func() { container.ContainersDir = origContainersDir })
+			t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+			t.Setenv("COLDKEEP_CODEC", string(tc.codec))
+			testutils.ResetStorage(t)
+
+			dbconn, err := db.ConnectDB()
+			if err != nil {
+				t.Fatalf("connectDB: %v", err)
+			}
+			defer dbconn.Close()
+
+			testutils.ApplySchema(t, dbconn)
+			testutils.ResetDB(t, dbconn)
+
+			sgctx := testutils.NewTestContext(dbconn)
+			inputDir := filepath.Join(tmp, "input")
+			restoreDir := filepath.Join(tmp, "restore")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+			if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+				t.Fatalf("mkdir restore: %v", err)
+			}
+
+			countChunkRefMismatches := func() int64 {
+				t.Helper()
+				var n int64
+				if err := dbconn.QueryRow(`
+					SELECT COUNT(*)
+					FROM (
+						SELECT c.id
+						FROM chunk c
+						LEFT JOIN file_chunk fc ON c.id = fc.chunk_id
+						GROUP BY c.id, c.live_ref_count
+						HAVING c.live_ref_count <> COUNT(fc.chunk_id)
+					) AS mismatch
+				`).Scan(&n); err != nil {
+					t.Fatalf("count chunk ref mismatches: %v", err)
+				}
+				return n
+			}
+
+			for i := 0; i < iterations; i++ {
+				base := filepath.Join(inputDir, fmt.Sprintf("iter-%04d", i))
+				if err := os.MkdirAll(base, 0o755); err != nil {
+					t.Fatalf("iter %d mkdir base: %v", i, err)
+				}
+
+				a := filepath.Join(base, "a.bin")
+				b := filepath.Join(base, "b.bin")
+				c := filepath.Join(base, "c.bin")
+				overlap := filepath.Join(base, "b-overlap.bin")
+
+				payloadA := bytes.Repeat([]byte{byte((i*7 + 11) % 251)}, 64*1024+((i%5)*1024))
+				payloadB := bytes.Repeat([]byte{byte((i*13 + 19) % 251)}, 96*1024+((i%7)*1024))
+				payloadC := bytes.Repeat([]byte{byte((i*17 + 23) % 251)}, 128*1024+((i%3)*1024))
+
+				if err := os.WriteFile(a, payloadA, 0o644); err != nil {
+					t.Fatalf("iter %d write a: %v", i, err)
+				}
+				if err := os.WriteFile(b, payloadB, 0o644); err != nil {
+					t.Fatalf("iter %d write b: %v", i, err)
+				}
+				if err := os.WriteFile(c, payloadC, 0o644); err != nil {
+					t.Fatalf("iter %d write c: %v", i, err)
+				}
+				if err := os.WriteFile(overlap, payloadB, 0o644); err != nil {
+					t.Fatalf("iter %d write overlap: %v", i, err)
+				}
+
+				opts := execution.DefaultOptions()
+				opts.StoreFolderWorkers = tc.workers
+				if err := storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, base, tc.codec, opts); err != nil {
+					t.Fatalf("iter %d store-folder: %v", i, err)
+				}
+
+				if err := storage.StoreFileWithStorageContextAndCodec(sgctx, overlap, tc.codec); err != nil {
+					t.Fatalf("iter %d overlap store: %v", i, err)
+				}
+
+				snapshotID := fmt.Sprintf("stress-%s-%04d", tc.name, i)
+				if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
+					ID:   snapshotID,
+					Type: "full",
+				}); err != nil {
+					t.Fatalf("iter %d create snapshot: %v", i, err)
+				}
+
+				if err := snapshot.DeleteSnapshot(context.Background(), dbconn, snapshotID); err != nil {
+					t.Fatalf("iter %d delete snapshot: %v", i, err)
+				}
+
+				var removeID int64
+				if err := dbconn.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, a).Scan(&removeID); err != nil {
+					t.Fatalf("iter %d resolve remove-by-id: %v", i, err)
+				}
+				if err := storage.RemoveFileWithDB(dbconn, removeID); err != nil {
+					t.Fatalf("iter %d remove by id: %v", i, err)
+				}
+
+				if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(sgctx, b); err != nil {
+					t.Fatalf("iter %d remove by stored path: %v", i, err)
+				}
+
+				if _, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir); err != nil {
+					t.Fatalf("iter %d gc dry-run: %v", i, err)
+				}
+				if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+					t.Fatalf("iter %d gc real: %v", i, err)
+				}
+
+				if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+					t.Fatalf("iter %d verify: %v", i, err)
+				}
+
+				var keepID int64
+				if err := dbconn.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, c).Scan(&keepID); err != nil {
+					t.Fatalf("iter %d resolve restore id: %v", i, err)
+				}
+
+				out := filepath.Join(restoreDir, fmt.Sprintf("iter-%04d-c.restored.bin", i))
+				if err := storage.RestoreFileWithDB(dbconn, keepID, out); err != nil {
+					t.Fatalf("iter %d restore: %v", i, err)
+				}
+
+				wantHash := testutils.SHA256File(t, c)
+				gotHash := testutils.SHA256File(t, out)
+				if gotHash != wantHash {
+					t.Fatalf("iter %d restore hash mismatch: want %s got %s", i, wantHash, gotHash)
+				}
+
+				if mismatches := countChunkRefMismatches(); mismatches != 0 {
+					t.Fatalf("iter %d chunk live_ref_count mismatch count=%d", i, mismatches)
+				}
+			}
+		})
+	}
 }
 
 func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
@@ -13467,10 +13667,14 @@ func TestRepeatedJitteredStoreGCRestoreInterleaving(t *testing.T) {
 			results <- err
 		}()
 
+		var interleaveErr error
 		for i := 0; i < 3; i++ {
-			if err := <-results; err != nil {
-				t.Fatalf("round %d interleaving operation failed: %v", round, err)
+			if err := <-results; err != nil && interleaveErr == nil {
+				interleaveErr = err
 			}
+		}
+		if interleaveErr != nil {
+			t.Fatalf("round %d interleaving operation failed: %v", round, interleaveErr)
 		}
 
 		if got := testutils.MustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
@@ -13627,10 +13831,14 @@ func TestRepeatedJitteredStoreGCRestoreRemoveInterleaving(t *testing.T) {
 			results <- storage.RemoveFileWithDB(dbconn, victimID)
 		}()
 
+		var interleaveErr error
 		for i := 0; i < 4; i++ {
-			if err := <-results; err != nil {
-				t.Fatalf("round %d four-way interleaving operation failed: %v", round, err)
+			if err := <-results; err != nil && interleaveErr == nil {
+				interleaveErr = err
 			}
+		}
+		if interleaveErr != nil {
+			t.Fatalf("round %d four-way interleaving operation failed: %v", round, interleaveErr)
 		}
 
 		if got := testutils.MustRead(t, restoreOut); !bytes.Equal(got, keepBytes) {
@@ -14138,10 +14346,14 @@ func TestConcurrentStoreMultiChunkFilesAtomicCompletion(t *testing.T) {
 	}
 
 	// Collect errors
+	var concurrentStoreErr error
 	for i := 0; i < fileCount; i++ {
-		if err := <-errChan; err != nil {
-			t.Fatalf("concurrent store error: %v", err)
+		if err := <-errChan; err != nil && concurrentStoreErr == nil {
+			concurrentStoreErr = err
 		}
+	}
+	if concurrentStoreErr != nil {
+		t.Fatalf("concurrent store error: %v", concurrentStoreErr)
 	}
 
 	// Verify all files stored successfully with valid chunk sequences

@@ -2579,41 +2579,13 @@ func TestInferOutputModeFromArgsSupportsSnapshotJSON(t *testing.T) {
 	}
 }
 
-func TestInferOutputModeFromArgsSupportsBenchmarkJSON(t *testing.T) {
-	mode := inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output", "json"})
-	if mode != outputModeJSON {
-		t.Fatalf("expected benchmark --output json to infer json mode, got %q", mode)
-	}
-
-	mode = inferOutputModeFromArgs([]string{"benchmark", "chunkers", "--output=json"})
-	if mode != outputModeJSON {
-		t.Fatalf("expected benchmark --output=json to infer json mode, got %q", mode)
-	}
-
-	mode = inferOutputModeFromArgs([]string{"benchmark", "run", "--output", "json"})
-	if mode != outputModeJSON {
-		t.Fatalf("expected benchmark run --output json to infer json mode, got %q", mode)
-	}
-}
-
-func TestResolveOutputModeAllowsBenchmarkTableOnly(t *testing.T) {
-	mode, err := resolveOutputMode(parsedCommandLine{
-		method: "benchmark",
-		flags:  map[string][]string{"output": {"table"}},
-	})
-	if err != nil {
-		t.Fatalf("expected benchmark table output to be accepted, got %v", err)
-	}
-	if mode != outputModeText {
-		t.Fatalf("expected benchmark table output to map to text mode, got %q", mode)
-	}
-
-	_, err = resolveOutputMode(parsedCommandLine{
+func TestResolveOutputModeRejectsTableOutput(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
 		method: "stats",
 		flags:  map[string][]string{"output": {"table"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid --output value") {
-		t.Fatalf("expected non-benchmark table output to be rejected, got %v", err)
+		t.Fatalf("expected table output to be rejected, got %v", err)
 	}
 }
 
@@ -2653,7 +2625,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -2702,7 +2674,7 @@ func TestRunVerifyCommandNoTargetIncludesDidYouMeanHint(t *testing.T) {
 	if !strings.Contains(msg, "Usage: coldkeep verify <system|file <fileID>>") {
 		t.Fatalf("expected verify usage in error message, got: %q", msg)
 	}
-	if !strings.Contains(msg, "Did you mean: coldkeep verify system --standard") {
+	if !strings.Contains(msg, "Did you mean: coldkeep verify system --fast") {
 		t.Fatalf("expected did-you-mean hint in error message, got: %q", msg)
 	}
 }
@@ -6954,6 +6926,17 @@ func TestRunStatsCommandJSONContract(t *testing.T) {
 				UniqueReferenced: 3,
 				ChunkerVersions:  []observability.VersionStat{{Version: "v2-fastcdc", Chunks: 3, Bytes: 1024}},
 			},
+			BlockLayout: observability.BlockLayoutStats{
+				StorageBlocksCount:    4,
+				ChunkBlockRefsCount:   9,
+				AvgChunksPerBlock:     2.25,
+				AvgBlockPlaintextSize: 786432,
+				AvgBlockStoredSize:    786432,
+				AvgBlockFillRatio:     0.75,
+				PackedBlockCount:      4,
+				LegacyBlockCount:      1,
+				CodecDistribution:     map[string]int64{"none": 4},
+			},
 			Containers: observability.ContainerStats{TotalBytes: 2048},
 			Warnings:   []observability.ObservationWarning{{Code: "STATS_WARNING", Message: "stats warning"}},
 		}, nil
@@ -6993,6 +6976,58 @@ func TestRunStatsCommandJSONContract(t *testing.T) {
 	assertJSONNumber(t, chunks, "completed_bytes", 1024)
 	if human, ok := chunks["completed_bytes"].(string); ok && strings.Contains(human, "KiB") {
 		t.Fatalf("expected numeric completed_bytes, got formatted string %q", human)
+	}
+	blockLayout, ok := data["block_layout"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected block_layout object, got %T", data["block_layout"])
+	}
+	assertJSONNumber(t, blockLayout, "storage_blocks_count", 4)
+	assertJSONNumber(t, blockLayout, "chunk_block_refs_count", 9)
+	assertJSONNumber(t, blockLayout, "avg_block_plaintext_size", 786432)
+	assertJSONNumber(t, blockLayout, "avg_block_stored_size", 786432)
+	assertJSONNumber(t, blockLayout, "packed_block_count", 4)
+	assertJSONNumber(t, blockLayout, "legacy_block_count", 1)
+	if got, ok := blockLayout["avg_chunks_per_block"].(float64); !ok || got != 2.25 {
+		t.Fatalf("avg_chunks_per_block mismatch: got=%v", blockLayout["avg_chunks_per_block"])
+	}
+	if got, ok := blockLayout["avg_block_fill_ratio"].(float64); !ok || got != 0.75 {
+		t.Fatalf("avg_block_fill_ratio mismatch: got=%v", blockLayout["avg_block_fill_ratio"])
+	}
+	codecDistribution, ok := blockLayout["codec_distribution"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected codec_distribution object, got %T", blockLayout["codec_distribution"])
+	}
+	assertJSONNumber(t, codecDistribution, "none", 4)
+}
+
+func TestPrintCLIErrorJSONPreservesPackedBlockVerifyMessage(t *testing.T) {
+	err := verifyError(errors.New("block_hash_mismatch: verifyBlockPayloads: packed block integrity mismatch"))
+
+	output := captureStderr(t, func() {
+		code := printCLIError(err, outputModeJSON)
+		if code != exitVerify {
+			t.Fatalf("expected verify exit code %d, got %d", exitVerify, code)
+		}
+	})
+
+	var payload map[string]any
+	if parseErr := json.Unmarshal([]byte(output), &payload); parseErr != nil {
+		t.Fatalf("parse JSON payload: %v\noutput=%q", parseErr, output)
+	}
+
+	if got, _ := payload["error_class"].(string); got != "VERIFY" {
+		t.Fatalf("error_class mismatch: got=%v", payload["error_class"])
+	}
+	message, _ := payload["message"].(string)
+	if !strings.Contains(message, "block_hash_mismatch") {
+		t.Fatalf("expected packed-block verify category in message, got=%v", payload)
+	}
+	encodedError, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested error object, got %T", payload["error"])
+	}
+	if got, _ := encodedError["message"].(string); !strings.Contains(got, "packed block integrity mismatch") {
+		t.Fatalf("expected packed-block integrity detail in nested error message, got=%v", encodedError)
 	}
 }
 
@@ -7548,11 +7583,53 @@ func TestRunRepairCommandRejectsUnknownTarget(t *testing.T) {
 		positionals: []string{"wrong-target"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep repair ref-counts") {
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep repair <ref-counts|chunk-live-ref-counts>") {
 		t.Fatalf("expected repair usage error, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRepairCommandChunkLiveRefCountsJSONSuccess(t *testing.T) {
+	originalRepair := repairChunkLiveRefCountsPhase
+	defer func() {
+		repairChunkLiveRefCountsPhase = originalRepair
+	}()
+
+	repairChunkLiveRefCountsPhase = func() (maintenance.RepairChunkLiveRefCountsResult, error) {
+		return maintenance.RepairChunkLiveRefCountsResult{
+			ScannedChunks: 8,
+			UpdatedChunks: 3,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"chunk-live-ref-counts"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runRepairCommand chunk-live-ref-counts json failed: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse repair JSON output: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("repair JSON missing data object: payload=%v", payload)
+	}
+	if got, _ := data["target"].(string); got != "chunk-live-ref-counts" {
+		t.Fatalf("expected target=chunk-live-ref-counts, got payload=%v", payload)
+	}
+	if got := int64(data["updated_chunks"].(float64)); got != 3 {
+		t.Fatalf("expected updated_chunks=3, got payload=%v", payload)
 	}
 }
 
@@ -7747,12 +7824,17 @@ func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
 					DeletedSnapshots: opts.AssumeDeletedSnapshots,
 				},
 				Summary: observability.GCSimulationSummary{
-					ReachableChunks:            10,
-					UnreachableChunks:          2,
-					LogicallyReclaimableBytes:  200,
-					PhysicallyReclaimableBytes: 100,
-					FullyReclaimableContainers: 1,
-					PartiallyDeadContainers:    1,
+					ReachableChunks:                    10,
+					UnreachableChunks:                  2,
+					LogicallyReclaimableBytes:          200,
+					PhysicallyReclaimableBytes:         100,
+					FullyReclaimableContainers:         1,
+					PartiallyDeadContainers:            1,
+					PackedBlocksLive:                   3,
+					PackedBlocksDead:                   2,
+					PackedBytesLive:                    300,
+					PackedBytesReclaimable:             120,
+					RetainedDeadBytesDueToPackedBlocks: 40,
 				},
 				Containers: []observability.ContainerSimulationImpact{{
 					ContainerID:        7,
@@ -7822,6 +7904,11 @@ func TestRunSimulateGCCommandJSONNestedSchema(t *testing.T) {
 	assertJSONNumber(t, summary, "physically_reclaimable_bytes", 100)
 	assertJSONNumber(t, summary, "fully_reclaimable_containers", 1)
 	assertJSONNumber(t, summary, "partially_dead_containers", 1)
+	assertJSONNumber(t, summary, "packed_blocks_live", 3)
+	assertJSONNumber(t, summary, "packed_blocks_dead", 2)
+	assertJSONNumber(t, summary, "packed_bytes_live", 300)
+	assertJSONNumber(t, summary, "packed_bytes_reclaimable", 120)
+	assertJSONNumber(t, summary, "retained_dead_bytes_due_to_packed_blocks", 40)
 	if _, exists := gcNode["containers"]; exists {
 		t.Fatalf("expected gc.containers omitted without --containers flag, got %v", gcNode["containers"])
 	}
@@ -7841,12 +7928,17 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 				Exact:   true,
 				Mutated: false,
 				Summary: observability.GCSimulationSummary{
-					ReachableChunks:            3,
-					UnreachableChunks:          2,
-					LogicallyReclaimableBytes:  150 * 1024 * 1024,
-					PhysicallyReclaimableBytes: 100 * 1024 * 1024,
-					FullyReclaimableContainers: 1,
-					PartiallyDeadContainers:    1,
+					ReachableChunks:                    3,
+					UnreachableChunks:                  2,
+					LogicallyReclaimableBytes:          150 * 1024 * 1024,
+					PhysicallyReclaimableBytes:         100 * 1024 * 1024,
+					FullyReclaimableContainers:         1,
+					PartiallyDeadContainers:            1,
+					PackedBlocksLive:                   2,
+					PackedBlocksDead:                   1,
+					PackedBytesLive:                    90 * 1024 * 1024,
+					PackedBytesReclaimable:             20 * 1024 * 1024,
+					RetainedDeadBytesDueToPackedBlocks: 10 * 1024 * 1024,
 				},
 				Containers: []observability.ContainerSimulationImpact{
 					{ContainerID: 1, Filename: "full.bin", ReclaimableBytes: 100, LiveBytesAfterGC: 0, ReclaimableChunks: 2, TotalChunks: 2, FullyReclaimable: true},
@@ -7882,6 +7974,9 @@ func TestRunSimulateGCCommandTextOutputFromNestedSummary(t *testing.T) {
 	}
 	if !strings.Contains(output, "Reclaimable") || !strings.Contains(output, "logical_bytes: 150 MiB") || !strings.Contains(output, "physical_bytes_now: 100 MiB") {
 		t.Fatalf("expected reclaimable section with MiB formatting, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Packed") || !strings.Contains(output, "packed_blocks_live: 2") || !strings.Contains(output, "packed_blocks_dead: 1") || !strings.Contains(output, "packed_bytes_live: 90 MiB") || !strings.Contains(output, "packed_bytes_reclaimable: 20 MiB") || !strings.Contains(output, "retained_dead_bytes_due_to_packed_blocks: 10 MiB") {
+		t.Fatalf("expected packed metrics section, got:\n%s", output)
 	}
 	if !strings.Contains(output, "Containers") || !strings.Contains(output, "fully_reclaimable: 1") || !strings.Contains(output, "partially_dead: 1") {
 		t.Fatalf("expected containers summary section, got:\n%s", output)

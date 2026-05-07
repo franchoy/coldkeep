@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -12,6 +13,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -23,6 +25,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/execution"
 	gcpkg "github.com/franchoy/coldkeep/internal/gc"
+	verifypkg "github.com/franchoy/coldkeep/internal/verify"
 
 	"github.com/franchoy/coldkeep/internal/db"
 	filestate "github.com/franchoy/coldkeep/internal/status"
@@ -31,6 +34,7 @@ import (
 
 type syncFailWriter struct {
 	offset          int64
+	appendCalls     int
 	quarantineErr   error
 	quarantineCalls int
 	db              *sql.DB
@@ -41,6 +45,7 @@ func (w *syncFailWriter) FinalizeContainer() error {
 }
 
 func (w *syncFailWriter) AppendPayload(_ db.DBTX, payload []byte) (container.LocalPlacement, error) {
+	w.appendCalls++
 	offset := w.offset
 	w.offset += int64(len(payload))
 	return container.LocalPlacement{
@@ -129,6 +134,234 @@ func (c fixedBoundaryChunker) ChunkFile(path string) ([]chunk.Result, error) {
 	}, nil
 }
 
+type duplicateChunker struct {
+	version chunk.Version
+	payload []byte
+}
+
+type scriptedChunker struct {
+	version  chunk.Version
+	payloads [][]byte
+}
+
+func (c duplicateChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c duplicateChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	left := append([]byte(nil), c.payload...)
+	right := append([]byte(nil), c.payload...)
+	return []chunk.Result{
+		{Info: chunk.Info{Size: int64(len(left)), Offset: 0}, Data: left},
+		{Info: chunk.Info{Size: int64(len(right)), Offset: int64(len(left))}, Data: right},
+	}, nil
+}
+
+func (c scriptedChunker) Version() chunk.Version {
+	return c.version
+}
+
+func (c scriptedChunker) ChunkFile(path string) ([]chunk.Result, error) {
+	results := make([]chunk.Result, 0, len(c.payloads))
+	offset := int64(0)
+	for _, p := range c.payloads {
+		payload := append([]byte(nil), p...)
+		results = append(results, chunk.Result{
+			Info: chunk.Info{Size: int64(len(payload)), Offset: offset},
+			Data: payload,
+		})
+		offset += int64(len(payload))
+	}
+	return results, nil
+}
+
+func concatPayloads(payloads [][]byte) []byte {
+	total := 0
+	for _, p := range payloads {
+		total += len(p)
+	}
+	out := make([]byte, 0, total)
+	for _, p := range payloads {
+		out = append(out, p...)
+	}
+	return out
+}
+
+func storeScriptedFile(t *testing.T, dbconn *sql.DB, workDir, fileName string, payloads [][]byte) StoreFileResult {
+	t.Helper()
+	inPath := filepath.Join(workDir, fileName)
+	if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("write scripted input file: %v", err)
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+		Chunker: scriptedChunker{
+			version:  chunk.VersionV1SimpleRolling,
+			payloads: payloads,
+		},
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store scripted file %q: %v", fileName, err)
+	}
+	return result
+}
+
+func restoreFileBytesForTest(t *testing.T, dbconn *sql.DB, fileID int64, workDir, outName string) []byte {
+	t.Helper()
+	outPath := filepath.Join(workDir, outName)
+	if _, err := restoreFileWithDBAndDir(dbconn, fileID, outPath, workDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore file id=%d: %v", fileID, err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	return data
+}
+
+type packingSnapshot struct {
+	BlockCount          int
+	ChunksPerBlock      []int
+	ChunkHashesByBlocks [][]string
+}
+
+func loadPackingSnapshot(t *testing.T, dbconn *sql.DB) packingSnapshot {
+	t.Helper()
+
+	var blockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockCount); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+
+	rows, err := dbconn.Query(
+		`SELECT r.block_id, c.chunk_hash
+		 FROM chunk_block_refs r
+		 JOIN chunk c ON c.id = r.chunk_id
+		 ORDER BY r.block_id, r.offset_in_block`,
+	)
+	if err != nil {
+		t.Fatalf("query chunk_block_refs layout: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	snapshot := packingSnapshot{BlockCount: blockCount}
+	var currentBlockID int64 = -1
+	for rows.Next() {
+		var blockID int64
+		var chunkHash string
+		if err := rows.Scan(&blockID, &chunkHash); err != nil {
+			t.Fatalf("scan chunk_block_refs layout: %v", err)
+		}
+		if currentBlockID != blockID {
+			snapshot.ChunksPerBlock = append(snapshot.ChunksPerBlock, 0)
+			snapshot.ChunkHashesByBlocks = append(snapshot.ChunkHashesByBlocks, []string{})
+			currentBlockID = blockID
+		}
+		last := len(snapshot.ChunksPerBlock) - 1
+		snapshot.ChunksPerBlock[last]++
+		snapshot.ChunkHashesByBlocks[last] = append(snapshot.ChunkHashesByBlocks[last], chunkHash)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate chunk_block_refs layout: %v", err)
+	}
+
+	return snapshot
+}
+
+func TestPackedBlockTargetSizeBytesFromEnv(t *testing.T) {
+	newKey := "COLDKEEP_BLOCK_TARGET_SIZE_MB"
+	legacyKey := "COLDKEEP_PACKED_BLOCK_SIZE_MIB"
+
+	restoreEnv := func() func() {
+		origNew, hasNew := os.LookupEnv(newKey)
+		origLegacy, hasLegacy := os.LookupEnv(legacyKey)
+		return func() {
+			if hasNew {
+				_ = os.Setenv(newKey, origNew)
+			} else {
+				_ = os.Unsetenv(newKey)
+			}
+			if hasLegacy {
+				_ = os.Setenv(legacyKey, origLegacy)
+			} else {
+				_ = os.Unsetenv(legacyKey)
+			}
+		}
+	}
+
+	t.Run("default when no env configured", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		_ = os.Unsetenv(newKey)
+		_ = os.Unsetenv(legacyKey)
+
+		if got := packedBlockTargetSizeBytesFromEnv(); got != defaultPackedBlockTargetSizeBytes {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv default mismatch: got=%d want=%d", got, defaultPackedBlockTargetSizeBytes)
+		}
+	})
+
+	t.Run("uses new env key when valid", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "2")
+		_ = os.Unsetenv(legacyKey)
+
+		const want int64 = 2 << 20
+		if got := packedBlockTargetSizeBytesFromEnv(); got != want {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv new key mismatch: got=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("invalid non-positive values fallback to default", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "0")
+
+		if got := packedBlockTargetSizeBytesFromEnv(); got != defaultPackedBlockTargetSizeBytes {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv invalid value mismatch: got=%d want=%d", got, defaultPackedBlockTargetSizeBytes)
+		}
+	})
+
+	t.Run("values outside benchmark candidate set fallback to default", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "4")
+
+		if got := packedBlockTargetSizeBytesFromEnv(); got != defaultPackedBlockTargetSizeBytes {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv unsupported value mismatch: got=%d want=%d", got, defaultPackedBlockTargetSizeBytes)
+		}
+	})
+
+	t.Run("new key takes precedence over legacy key", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		t.Setenv(newKey, "2")
+		t.Setenv(legacyKey, "3")
+
+		const want int64 = 2 << 20
+		if got := packedBlockTargetSizeBytesFromEnv(); got != want {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv precedence mismatch: got=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("legacy key remains backward compatible when new key is unset", func(t *testing.T) {
+		cleanup := restoreEnv()
+		t.Cleanup(cleanup)
+		_ = os.Unsetenv(newKey)
+		t.Setenv(legacyKey, "2")
+
+		const want int64 = 2 << 20
+		if got := packedBlockTargetSizeBytesFromEnv(); got != want {
+			t.Fatalf("packedBlockTargetSizeBytesFromEnv legacy compatibility mismatch: got=%d want=%d", got, want)
+		}
+	})
+}
+
 func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	service := NewStoreService(nil, nil)
 	resolved, err := service.ResolveActiveChunker()
@@ -145,6 +378,949 @@ func TestNewStoreServiceResolvesRegistryDefaultChunker(t *testing.T) {
 	}
 	if service.Repository() != nil {
 		t.Fatal("expected nil repository when constructor is given nil")
+	}
+}
+
+func TestStoreDedupCheckHappensBeforeWriteBoundary(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "dup.txt")
+	if err := os.WriteFile(inPath, []byte("placeholder-file-content"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn)
+	codec, err := blocks.ParseCodec("plain")
+	if err != nil {
+		t.Fatalf("parse plain codec: %v", err)
+	}
+
+	chunkPayload := []byte("same-chunk-bytes")
+	dupChunker := duplicateChunker{version: chunk.VersionV1SimpleRolling, payload: chunkPayload}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: workDir,
+		Chunker:      dupChunker,
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, codec)
+	if err != nil {
+		t.Fatalf("store file with duplicate chunks: %v", err)
+	}
+	if result.FileID <= 0 {
+		t.Fatalf("expected valid file id, got %d", result.FileID)
+	}
+
+	var chunkRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRows); err != nil {
+		t.Fatalf("count chunk rows: %v", err)
+	}
+	if chunkRows != 1 {
+		t.Fatalf("expected one deduplicated chunk row, got %d", chunkRows)
+	}
+
+	var fileChunkRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&fileChunkRows); err != nil {
+		t.Fatalf("count file_chunk rows: %v", err)
+	}
+	if fileChunkRows != 2 {
+		t.Fatalf("expected two file_chunk references for duplicate recipe entries, got %d", fileChunkRows)
+	}
+
+	rows, err := dbconn.Query(
+		`SELECT chunk_order FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`,
+		result.FileID,
+	)
+	if err != nil {
+		t.Fatalf("query file_chunk recipe order: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	chunkOrders := make([]int, 0, 2)
+	for rows.Next() {
+		var order int
+		if err := rows.Scan(&order); err != nil {
+			t.Fatalf("scan file_chunk chunk_order: %v", err)
+		}
+		chunkOrders = append(chunkOrders, order)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate file_chunk chunk_order rows: %v", err)
+	}
+	if len(chunkOrders) != 2 || chunkOrders[0] != 0 || chunkOrders[1] != 1 {
+		t.Fatalf("file recipe order must remain source-of-truth [0,1], got %v", chunkOrders)
+	}
+
+	var blockRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM blocks`).Scan(&blockRows); err != nil {
+		t.Fatalf("count blocks rows: %v", err)
+	}
+	if blockRows != 1 {
+		t.Fatalf("expected one persisted block row for deduplicated chunk, got %d", blockRows)
+	}
+}
+
+func TestStoreMixedExistingAndNewChunksPacksOnlyNewAndPreservesRecipeOrder(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "mixed-existing-new.bin")
+	if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn)
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+	blockRepo := &blocks.Repository{DB: dbconn}
+
+	hashHex := func(payload []byte) string {
+		sum := sha256.Sum256(payload)
+		return hex.EncodeToString(sum[:])
+	}
+
+	insertChunk := func(hash string, size int64, status string) int64 {
+		t.Helper()
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, 0, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			size,
+			status,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk: %v", err)
+		}
+		return chunkID
+	}
+
+	payloadA := []byte("chunk-A-existing-legacy")
+	payloadB := []byte("chunk-B-new")
+	payloadC := []byte("chunk-C-existing-packed")
+	payloadD := []byte("chunk-D-new")
+
+	hashA := hashHex(payloadA)
+	hashB := hashHex(payloadB)
+	hashC := hashHex(payloadC)
+	hashD := hashHex(payloadD)
+
+	// Seed A as existing legacy block.
+	chunkAID := insertChunk(hashA, int64(len(payloadA)), filestate.ChunkProcessing)
+	txA, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin txA: %v", err)
+	}
+	placementA, _, err := storeChunkAsPlainBlockWithWriter(context.Background(), txA, blockRepo, writer, chunkAID, hashA, payloadA, transformer)
+	if err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("seed legacy chunk A: %v", err)
+	}
+	if _, err := txA.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkAID); err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("mark chunk A completed: %v", err)
+	}
+	if err := container.UpdateContainerSize(txA, placementA.ContainerID, placementA.NewContainerSize); err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("update container size for A: %v", err)
+	}
+	if err := txA.Commit(); err != nil {
+		_ = txA.Rollback()
+		t.Fatalf("commit seed A: %v", err)
+	}
+	acknowledgeWriterAppendCommitted(writer)
+
+	// Seed C as existing previously packed block (+ compatibility companion row).
+	chunkCID := insertChunk(hashC, int64(len(payloadC)), filestate.ChunkProcessing)
+	builderC := blocks.NewBlockBuilder(1 << 20)
+	if err := builderC.Add(blocks.PendingChunk{ChunkID: chunkCID, Data: payloadC, Size: int64(len(payloadC))}); err != nil {
+		t.Fatalf("build packed chunk C: %v", err)
+	}
+	txC, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin txC: %v", err)
+	}
+	persistedC, err := storePackedBlockWithWriter(context.Background(), txC, writer, transformer, builderC)
+	if err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("seed packed chunk C: %v", err)
+	}
+	if _, err := txC.Exec(`UPDATE chunk SET status = $1 WHERE id = $2`, filestate.ChunkCompleted, chunkCID); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("mark chunk C completed: %v", err)
+	}
+	if err := insertLegacyCompanionBlockRowWithContext(
+		context.Background(),
+		txC,
+		chunkCID,
+		"plain",
+		[]byte{},
+		persistedC.Placement.ContainerID,
+		persistedC.Placement.Offset,
+		int64(len(payloadC)),
+		int64(len(payloadC)),
+	); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("insert companion block row for C: %v", err)
+	}
+	if err := container.UpdateContainerSize(txC, persistedC.Placement.ContainerID, persistedC.Placement.NewContainerSize); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("update container size for C: %v", err)
+	}
+	if err := txC.Commit(); err != nil {
+		_ = txC.Rollback()
+		t.Fatalf("commit seed C: %v", err)
+	}
+	acknowledgeWriterAppendCommitted(writer)
+
+	var storageBlocksBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlocksBefore); err != nil {
+		t.Fatalf("count storage_blocks before: %v", err)
+	}
+	var refsBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsBefore); err != nil {
+		t.Fatalf("count chunk_block_refs before: %v", err)
+	}
+
+	chunker := scriptedChunker{
+		version:  chunk.VersionV1SimpleRolling,
+		payloads: [][]byte{payloadA, payloadB, payloadC, payloadD},
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: workDir,
+		Chunker:      chunker,
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store mixed existing/new file: %v", err)
+	}
+
+	rows, err := dbconn.Query(
+		`SELECT fc.chunk_order, c.chunk_hash
+		 FROM file_chunk fc
+		 JOIN chunk c ON c.id = fc.chunk_id
+		 WHERE fc.logical_file_id = $1
+		 ORDER BY fc.chunk_order`,
+		result.FileID,
+	)
+	if err != nil {
+		t.Fatalf("query file recipe rows: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	gotHashes := make([]string, 0, 4)
+	for rows.Next() {
+		var order int
+		var hash string
+		if err := rows.Scan(&order, &hash); err != nil {
+			t.Fatalf("scan recipe row: %v", err)
+		}
+		if order != len(gotHashes) {
+			t.Fatalf("unexpected recipe order: got %d at position %d", order, len(gotHashes))
+		}
+		gotHashes = append(gotHashes, hash)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate recipe rows: %v", err)
+	}
+
+	wantHashes := []string{hashA, hashB, hashC, hashD}
+	if len(gotHashes) != len(wantHashes) {
+		t.Fatalf("recipe length mismatch: got %d want %d", len(gotHashes), len(wantHashes))
+	}
+	for i := range wantHashes {
+		if gotHashes[i] != wantHashes[i] {
+			t.Fatalf("recipe hash mismatch at index %d: got %q want %q", i, gotHashes[i], wantHashes[i])
+		}
+	}
+
+	var storageBlocksAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlocksAfter); err != nil {
+		t.Fatalf("count storage_blocks after: %v", err)
+	}
+	if storageBlocksAfter-storageBlocksBefore != 2 {
+		t.Fatalf("expected exactly two new packed storage_blocks rows (B and D), got delta %d", storageBlocksAfter-storageBlocksBefore)
+	}
+
+	var refsAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsAfter); err != nil {
+		t.Fatalf("count chunk_block_refs after: %v", err)
+	}
+	if refsAfter-refsBefore != 2 {
+		t.Fatalf("expected exactly two new chunk_block_refs rows (B and D), got delta %d", refsAfter-refsBefore)
+	}
+
+	var refsForA int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs r JOIN chunk c ON c.id = r.chunk_id WHERE c.chunk_hash = $1`, hashA).Scan(&refsForA); err != nil {
+		t.Fatalf("count refs for A: %v", err)
+	}
+	if refsForA != 0 {
+		t.Fatalf("expected no packed refs for existing legacy chunk A, got %d", refsForA)
+	}
+
+	outPath := filepath.Join(workDir, "mixed-restore.bin")
+	if _, err := restoreFileWithDBAndDir(dbconn, result.FileID, outPath, workDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore mixed file: %v", err)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	want := append(append(append([]byte{}, payloadA...), payloadB...), append(payloadC, payloadD...)...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("restored bytes mismatch: got=%q want=%q", string(got), string(want))
+	}
+}
+
+func TestStep10NewChunksArePacked(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	payloads := [][]byte{
+		[]byte("step10-pack-1"),
+		[]byte("step10-pack-2"),
+		[]byte("step10-pack-3"),
+		[]byte("step10-pack-4"),
+	}
+
+	result := storeScriptedFile(t, dbconn, workDir, "step10-pack.bin", payloads)
+
+	var chunkCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&chunkCount); err != nil {
+		t.Fatalf("count file chunks: %v", err)
+	}
+	var storageBlockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlockCount); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+	if storageBlockCount >= chunkCount {
+		t.Fatalf("expected packed layout with fewer blocks than chunks: blocks=%d chunks=%d", storageBlockCount, chunkCount)
+	}
+
+	var multiChunkBlockCount int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM (
+			SELECT block_id
+			FROM chunk_block_refs
+			GROUP BY block_id
+			HAVING COUNT(*) > 1
+		 )`,
+	).Scan(&multiChunkBlockCount); err != nil {
+		t.Fatalf("count multi-chunk blocks: %v", err)
+	}
+	if multiChunkBlockCount < 1 {
+		t.Fatalf("expected at least one packed block with >1 chunk ref")
+	}
+
+	given := concatPayloads(payloads)
+	restored := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, "step10-pack.restore")
+	if !bytes.Equal(restored, given) {
+		t.Fatalf("restored bytes mismatch")
+	}
+}
+
+func TestStep10DuplicatesAreNotRepacked(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	payloads := [][]byte{
+		[]byte("dup-pack-A"),
+		[]byte("dup-pack-B"),
+		[]byte("dup-pack-C"),
+	}
+
+	first := storeScriptedFile(t, dbconn, workDir, "dup-first.bin", payloads)
+
+	var blocksBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blocksBefore); err != nil {
+		t.Fatalf("count storage_blocks before: %v", err)
+	}
+	var refsBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsBefore); err != nil {
+		t.Fatalf("count chunk_block_refs before: %v", err)
+	}
+
+	second := storeScriptedFile(t, dbconn, workDir, "dup-second.bin", payloads)
+
+	var blocksAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blocksAfter); err != nil {
+		t.Fatalf("count storage_blocks after: %v", err)
+	}
+	if blocksAfter != blocksBefore {
+		t.Fatalf("expected second store to create no new storage_blocks; before=%d after=%d", blocksBefore, blocksAfter)
+	}
+	var refsAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsAfter); err != nil {
+		t.Fatalf("count chunk_block_refs after: %v", err)
+	}
+	if refsAfter != refsBefore {
+		t.Fatalf("expected second store to create no new chunk_block_refs; before=%d after=%d", refsBefore, refsAfter)
+	}
+
+	loadRecipeChunkIDs := func(fileID int64) []int64 {
+		t.Helper()
+		rows, err := dbconn.Query(`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order`, fileID)
+		if err != nil {
+			t.Fatalf("query file recipe ids: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		ids := make([]int64, 0, len(payloads))
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan chunk id: %v", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate chunk ids: %v", err)
+		}
+		return ids
+	}
+
+	firstIDs := loadRecipeChunkIDs(first.FileID)
+	secondIDs := loadRecipeChunkIDs(second.FileID)
+	if !reflect.DeepEqual(firstIDs, secondIDs) {
+		t.Fatalf("expected second recipe to reuse existing chunk ids; first=%v second=%v", firstIDs, secondIDs)
+	}
+
+	want := concatPayloads(payloads)
+	if got := restoreFileBytesForTest(t, dbconn, first.FileID, workDir, "dup-first.restore"); !bytes.Equal(got, want) {
+		t.Fatalf("first restore mismatch")
+	}
+	if got := restoreFileBytesForTest(t, dbconn, second.FileID, workDir, "dup-second.restore"); !bytes.Equal(got, want) {
+		t.Fatalf("second restore mismatch")
+	}
+}
+
+func TestStep10OperationEndTailBlockFlushed(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	payloads := [][]byte{[]byte("tail-block-small-data")}
+	result := storeScriptedFile(t, dbconn, workDir, "tail.bin", payloads)
+
+	var storageBlockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlockCount); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+	if storageBlockCount != 1 {
+		t.Fatalf("expected exactly one tail storage block, got %d", storageBlockCount)
+	}
+	var refCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refCount); err != nil {
+		t.Fatalf("count chunk_block_refs: %v", err)
+	}
+	if refCount < 1 {
+		t.Fatalf("expected at least one chunk_block_ref for tail flush")
+	}
+
+	want := concatPayloads(payloads)
+	if got := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, "tail.restore"); !bytes.Equal(got, want) {
+		t.Fatalf("restored tail bytes mismatch")
+	}
+}
+
+func TestStep10OversizedChunkStoredAlone(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	huge := bytes.Repeat([]byte("H"), (1<<20)+4096)
+	small := []byte("tiny")
+	payloads := [][]byte{huge, small}
+	result := storeScriptedFile(t, dbconn, workDir, "oversized.bin", payloads)
+
+	hugeHashBytes := sha256.Sum256(huge)
+	hugeHash := hex.EncodeToString(hugeHashBytes[:])
+
+	var hugeBlockID int64
+	if err := dbconn.QueryRow(
+		`SELECT r.block_id
+		 FROM chunk_block_refs r
+		 JOIN chunk c ON c.id = r.chunk_id
+		 WHERE c.chunk_hash = $1`,
+		hugeHash,
+	).Scan(&hugeBlockID); err != nil {
+		t.Fatalf("find oversized chunk block: %v", err)
+	}
+
+	var blockRefCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs WHERE block_id = $1`, hugeBlockID).Scan(&blockRefCount); err != nil {
+		t.Fatalf("count refs in oversized block: %v", err)
+	}
+	if blockRefCount != 1 {
+		t.Fatalf("expected oversized chunk block to contain exactly one chunk, got %d", blockRefCount)
+	}
+
+	want := concatPayloads(payloads)
+	if got := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, "oversized.restore"); !bytes.Equal(got, want) {
+		t.Fatalf("restored oversized bytes mismatch")
+	}
+}
+
+func TestStep10DeterministicPackingAcrossFreshRepos(t *testing.T) {
+	runScenario := func() (packingSnapshot, []byte) {
+		t.Helper()
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			t.Fatalf("open sqlite db: %v", err)
+		}
+		defer func() { _ = dbconn.Close() }()
+		if err := db.RunMigrations(dbconn); err != nil {
+			t.Fatalf("run migrations: %v", err)
+		}
+
+		workDir := t.TempDir()
+		payloads := [][]byte{
+			bytes.Repeat([]byte("A"), 400*1024),
+			bytes.Repeat([]byte("B"), 400*1024),
+			bytes.Repeat([]byte("C"), 400*1024),
+			bytes.Repeat([]byte("D"), 400*1024),
+		}
+		result := storeScriptedFile(t, dbconn, workDir, "deterministic.bin", payloads)
+		snapshot := loadPackingSnapshot(t, dbconn)
+		restored := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, "deterministic.restore")
+		return snapshot, restored
+	}
+
+	snapA, restoredA := runScenario()
+	snapB, restoredB := runScenario()
+
+	if snapA.BlockCount != snapB.BlockCount {
+		t.Fatalf("block count mismatch: A=%d B=%d", snapA.BlockCount, snapB.BlockCount)
+	}
+	if !reflect.DeepEqual(snapA.ChunksPerBlock, snapB.ChunksPerBlock) {
+		t.Fatalf("chunks-per-block pattern mismatch: A=%v B=%v", snapA.ChunksPerBlock, snapB.ChunksPerBlock)
+	}
+	if !reflect.DeepEqual(snapA.ChunkHashesByBlocks, snapB.ChunkHashesByBlocks) {
+		t.Fatalf("chunk order inside blocks mismatch")
+	}
+	if !bytes.Equal(restoredA, restoredB) {
+		t.Fatalf("restored bytes mismatch across fresh repos")
+	}
+}
+
+func TestStep10MixedExistingAndNewChunksOverlapFiles(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	file1Chunks := [][]byte{[]byte("A-overlap"), []byte("B-overlap"), []byte("C-overlap")}
+	file2Chunks := [][]byte{[]byte("A-overlap"), []byte("D-overlap"), []byte("C-overlap"), []byte("E-overlap")}
+
+	file1 := storeScriptedFile(t, dbconn, workDir, "overlap-1.bin", file1Chunks)
+
+	var blocksBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blocksBefore); err != nil {
+		t.Fatalf("count storage_blocks before overlap-2: %v", err)
+	}
+
+	file2 := storeScriptedFile(t, dbconn, workDir, "overlap-2.bin", file2Chunks)
+
+	var blocksAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blocksAfter); err != nil {
+		t.Fatalf("count storage_blocks after overlap-2: %v", err)
+	}
+	if blocksAfter <= blocksBefore {
+		t.Fatalf("expected new chunks to create packed blocks; before=%d after=%d", blocksBefore, blocksAfter)
+	}
+
+	hash := func(p []byte) string {
+		sum := sha256.Sum256(p)
+		return hex.EncodeToString(sum[:])
+	}
+	hashA := hash([]byte("A-overlap"))
+	hashC := hash([]byte("C-overlap"))
+	hashD := hash([]byte("D-overlap"))
+	hashE := hash([]byte("E-overlap"))
+
+	var reusedRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk WHERE chunk_hash IN ($1, $2)`, hashA, hashC).Scan(&reusedRows); err != nil {
+		t.Fatalf("count reused chunk rows: %v", err)
+	}
+	if reusedRows != 2 {
+		t.Fatalf("expected reused existing chunks A/C to map to two chunk rows, got %d", reusedRows)
+	}
+
+	var newPackedRefs int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk_block_refs r
+		 JOIN chunk c ON c.id = r.chunk_id
+		 WHERE c.chunk_hash IN ($1, $2)`,
+		hashD,
+		hashE,
+	).Scan(&newPackedRefs); err != nil {
+		t.Fatalf("count refs for new chunks D/E: %v", err)
+	}
+	if newPackedRefs < 2 {
+		t.Fatalf("expected new chunks D/E to be packed with refs, got %d", newPackedRefs)
+	}
+
+	if got := restoreFileBytesForTest(t, dbconn, file1.FileID, workDir, "overlap-1.restore"); !bytes.Equal(got, concatPayloads(file1Chunks)) {
+		t.Fatalf("restore overlap file1 mismatch")
+	}
+	if got := restoreFileBytesForTest(t, dbconn, file2.FileID, workDir, "overlap-2.restore"); !bytes.Equal(got, concatPayloads(file2Chunks)) {
+		t.Fatalf("restore overlap file2 mismatch")
+	}
+}
+
+func TestStep10CrashSafetyNoIncompletePackedMetadataAfterRollbackFailure(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (id, filename, current_size, max_size, sealed, quarantine)
+		 VALUES (1, $1, $2, $3, FALSE, FALSE)`,
+		"step10-crash-container.bin",
+		container.ContainerHdrLen,
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "step10-crash.bin")
+	if err := os.WriteFile(inPath, []byte("trigger-rollback-cleanup-failure"), 0o600); err != nil {
+		t.Fatalf("write crash input: %v", err)
+	}
+
+	rollbackCause := errors.New("step10 injected rollback failure")
+	writer := &rollbackCleanupFailureWriter{
+		rollbackErr:         rollbackCause,
+		quarantineContainer: 1,
+		db:                  dbconn,
+	}
+
+	_, err = StoreFileWithStorageContextAndCodecResult(StorageContext{
+		DB:           dbconn,
+		Writer:       writer,
+		ContainerDir: workDir,
+	}, inPath, blocks.CodecPlain)
+	if !errors.Is(err, rollbackCause) {
+		t.Fatalf("expected rollback cause in surfaced error, got: %v", err)
+	}
+
+	var danglingRefs int
+	if err := dbconn.QueryRow(
+		`SELECT COUNT(*)
+		 FROM chunk_block_refs r
+		 LEFT JOIN storage_blocks b ON b.id = r.block_id
+		 WHERE b.id IS NULL`,
+	).Scan(&danglingRefs); err != nil {
+		t.Fatalf("count dangling refs: %v", err)
+	}
+	if danglingRefs != 0 {
+		t.Fatalf("expected no metadata refs to incomplete blocks, got dangling=%d", danglingRefs)
+	}
+
+	if err := verifypkg.VerifySystemStandardWithContainersDir(dbconn, workDir); err != nil {
+		t.Fatalf("verify system standard after rollback regression: %v", err)
+	}
+}
+
+func TestStorePackedBlockWithWriterCommitWritesBlockAndRefsAtomically(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	insertChunk := func(hash string, size int64) int64 {
+		t.Helper()
+		var chunkID int64
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+			 VALUES ($1, $2, $3, 1, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			size,
+			filestate.ChunkProcessing,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert chunk: %v", err)
+		}
+		return chunkID
+	}
+
+	chunk1 := insertChunk("packed-commit-1", 3)
+	chunk2 := insertChunk("packed-commit-2", 4)
+
+	builder := blocks.NewBlockBuilder(64)
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunk1, Data: []byte("abc"), Size: 3}); err != nil {
+		t.Fatalf("add chunk1: %v", err)
+	}
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunk2, Data: []byte("wxyz"), Size: 4}); err != nil {
+		t.Fatalf("add chunk2: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+
+	ctx := context.Background()
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	result, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("store packed block: %v", err)
+	}
+
+	encodedBlock, _, err := builder.Build()
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("rebuild expected encoded block: %v", err)
+	}
+	encodedPlaintext, err := blocks.EncodeBlock(encodedBlock)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("encode expected plaintext block: %v", err)
+	}
+	if result.BlockID <= 0 {
+		_ = tx.Rollback()
+		t.Fatalf("expected persisted storage_blocks id, got %d", result.BlockID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit packed block tx: %v", err)
+	}
+
+	var storageBlockRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlockRows); err != nil {
+		t.Fatalf("count storage_blocks: %v", err)
+	}
+	if storageBlockRows != 1 {
+		t.Fatalf("expected one storage_blocks row, got %d", storageBlockRows)
+	}
+
+	var formatVersion int
+	var codec string
+	var plaintextSize int64
+	var storedSize int64
+	var containerID int64
+	var containerOffset int64
+	var blockHash []byte
+	if err := dbconn.QueryRow(
+		`SELECT format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash
+		 FROM storage_blocks
+		 WHERE id = $1`,
+		result.BlockID,
+	).Scan(&formatVersion, &codec, &plaintextSize, &storedSize, &containerID, &containerOffset, &blockHash); err != nil {
+		t.Fatalf("read storage_blocks metadata: %v", err)
+	}
+	if formatVersion != 1 {
+		t.Fatalf("storage_blocks.format_version: got %d want 1", formatVersion)
+	}
+	if codec != "none" {
+		t.Fatalf("storage_blocks.codec: got %q want %q", codec, "none")
+	}
+	if plaintextSize != int64(len(encodedPlaintext)) {
+		t.Fatalf("storage_blocks.plaintext_size: got %d want %d", plaintextSize, len(encodedPlaintext))
+	}
+	if storedSize != result.StoredSize {
+		t.Fatalf("storage_blocks.stored_size: got %d want %d", storedSize, result.StoredSize)
+	}
+	if containerID != result.Placement.ContainerID {
+		t.Fatalf("storage_blocks.container_id: got %d want %d", containerID, result.Placement.ContainerID)
+	}
+	if containerOffset != result.Placement.Offset {
+		t.Fatalf("storage_blocks.container_offset: got %d want %d", containerOffset, result.Placement.Offset)
+	}
+	if !bytes.Equal(blockHash, result.BlockHash) {
+		t.Fatalf("storage_blocks.block_hash mismatch")
+	}
+
+	var refRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRows); err != nil {
+		t.Fatalf("count chunk_block_refs: %v", err)
+	}
+	if refRows != 2 {
+		t.Fatalf("expected two chunk_block_refs rows, got %d", refRows)
+	}
+
+	var c1BlockID, c1Offset, c1Size int64
+	if err := dbconn.QueryRow(
+		`SELECT block_id, offset_in_block, size_in_block
+		 FROM chunk_block_refs
+		 WHERE chunk_id = $1`,
+		chunk1,
+	).Scan(&c1BlockID, &c1Offset, &c1Size); err != nil {
+		t.Fatalf("read chunk1 refs: %v", err)
+	}
+	if c1BlockID != result.BlockID || c1Offset != 0 || c1Size != 3 {
+		t.Fatalf("chunk1 refs mismatch: block_id=%d offset=%d size=%d", c1BlockID, c1Offset, c1Size)
+	}
+
+	var c2BlockID, c2Offset, c2Size int64
+	if err := dbconn.QueryRow(
+		`SELECT block_id, offset_in_block, size_in_block
+		 FROM chunk_block_refs
+		 WHERE chunk_id = $1`,
+		chunk2,
+	).Scan(&c2BlockID, &c2Offset, &c2Size); err != nil {
+		t.Fatalf("read chunk2 refs: %v", err)
+	}
+	if c2BlockID != result.BlockID || c2Offset != 3 || c2Size != 4 {
+		t.Fatalf("chunk2 refs mismatch: block_id=%d offset=%d size=%d", c2BlockID, c2Offset, c2Size)
+	}
+
+	var danglingRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM chunk_block_refs r
+		LEFT JOIN storage_blocks b ON b.id = r.block_id
+		WHERE b.id IS NULL
+	`).Scan(&danglingRefs); err != nil {
+		t.Fatalf("count dangling refs: %v", err)
+	}
+	if danglingRefs != 0 {
+		t.Fatalf("expected no dangling chunk_block_refs, got %d", danglingRefs)
+	}
+}
+
+func TestStorePackedBlockWithWriterRollbackLeavesNoRefsOrBlockRows(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
+		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling')
+		 RETURNING id`,
+		"packed-rollback",
+		4,
+		filestate.ChunkProcessing,
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	builder := blocks.NewBlockBuilder(64)
+	if err := builder.Add(blocks.PendingChunk{ChunkID: chunkID, Data: []byte("data"), Size: 4}); err != nil {
+		t.Fatalf("add chunk: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("get plain transformer: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+
+	ctx := context.Background()
+	tx, err := dbconn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	if _, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("store packed block before rollback: %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+
+	var storageBlockRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&storageBlockRows); err != nil {
+		t.Fatalf("count storage_blocks after rollback: %v", err)
+	}
+	if storageBlockRows != 0 {
+		t.Fatalf("expected zero storage_blocks rows after rollback, got %d", storageBlockRows)
+	}
+
+	var refRows int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRows); err != nil {
+		t.Fatalf("count chunk_block_refs after rollback: %v", err)
+	}
+	if refRows != 0 {
+		t.Fatalf("expected zero chunk_block_refs rows after rollback, got %d", refRows)
 	}
 }
 

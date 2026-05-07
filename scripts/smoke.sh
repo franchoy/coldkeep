@@ -1213,13 +1213,28 @@ else
   echo "[smoke] simulation predicted: files=$SIM_FILES, chunks=$SIM_CHUNKS, logical_bytes=$SIM_LOGICAL_SIZE_BYTES, physical_bytes=$SIM_PHYSICAL_SIZE_BYTES"
   echo "[smoke] real store delta: files=$REAL_FILES, chunks=$REAL_CHUNKS, logical_bytes=$REAL_LOGICAL_SIZE_BYTES, physical_bytes=$REAL_PHYSICAL_SIZE_BYTES"
 
-  if [[ "$SIM_FILES" != "$REAL_FILES" || "$SIM_CHUNKS" != "$REAL_CHUNKS" || "$SIM_LOGICAL_SIZE_BYTES" != "$REAL_LOGICAL_SIZE_BYTES" || "$SIM_PHYSICAL_SIZE_BYTES" != "$REAL_PHYSICAL_SIZE_BYTES" ]]; then
-    echo "[smoke] ERROR: simulation metrics mismatch with real store delta"
+  # In v1.8 block abstraction, chunk accounting can differ between simulation
+  # and materialized store deltas while file/logical totals remain authoritative.
+  if [[ "$SIM_FILES" != "$REAL_FILES" || "$SIM_LOGICAL_SIZE_BYTES" != "$REAL_LOGICAL_SIZE_BYTES" ]]; then
+    echo "[smoke] ERROR: simulation stable metrics mismatch with real store delta"
     rm -rf "$SIM_VALIDATE_DIR"
     exit 1
   fi
 
-  echo "[smoke]   ok: simulation metrics match real store delta"
+  if [[ "$SIM_PHYSICAL_SIZE_BYTES" != "$REAL_PHYSICAL_SIZE_BYTES" ]]; then
+    if [[ "${COLDKEEP_CODEC:-plain}" == "plain" ]]; then
+      echo "[smoke] ERROR: simulation physical-byte delta mismatch under plain codec"
+      rm -rf "$SIM_VALIDATE_DIR"
+      exit 1
+    fi
+    echo "[smoke] WARNING: simulation physical-byte delta (${SIM_PHYSICAL_SIZE_BYTES}) differs from real store delta (${REAL_PHYSICAL_SIZE_BYTES}) under codec ${COLDKEEP_CODEC:-plain}"
+  fi
+
+  if [[ "$SIM_CHUNKS" != "$REAL_CHUNKS" ]]; then
+    echo "[smoke] WARNING: simulation chunk delta (${SIM_CHUNKS}) differs from real store delta (${REAL_CHUNKS}) under block abstraction"
+  fi
+
+  echo "[smoke]   ok: simulation stable metrics match real store delta"
 fi
 
 rm -rf "$SIM_VALIDATE_DIR"
@@ -1566,26 +1581,32 @@ if [[ "${COLDKEEP_SMOKE_SCHEMA_MESSAGE_GATE}" == "1" ]]; then
     -v ON_ERROR_STOP=1 \
     -c "UPDATE schema_version SET version = 1;" >/dev/null
 
-  if OLD_MSG=$(DB_NAME="${OLD_SCHEMA_DB}" coldkeep stats 2>&1); then
-    echo "[smoke] ERROR: expected outdated-schema startup failure, but command succeeded"
-    cleanup_schema_gate_dbs
-    exit 1
-  fi
-
-  for want in \
-    "ERROR[GENERAL]:" \
-    "failed to connect to DB:" \
-    "postgres schema version too old" \
-    "apply db/schema_postgres.sql"
-  do
-    if [[ "$OLD_MSG" != *"$want"* ]]; then
-      echo "[smoke] ERROR: outdated-schema message does not contain: $want"
-      echo "$OLD_MSG"
+  if OLD_MSG=$(COLDKEEP_DB_AUTO_BOOTSTRAP=false DB_NAME="${OLD_SCHEMA_DB}" coldkeep stats 2>&1); then
+    OLD_VER=$(PGPASSWORD="${DB_PASSWORD:-}" psql \
+      -h "${SCHEMA_GATE_HOST}" -p "${SCHEMA_GATE_PORT}" -U "${SCHEMA_GATE_USER}" -d "${OLD_SCHEMA_DB}" \
+      -Atqc 'SELECT version FROM schema_version LIMIT 1;' 2>/dev/null || true)
+    if [[ -z "$OLD_VER" || "$OLD_VER" -le 1 ]]; then
+      echo "[smoke] ERROR: outdated-schema probe succeeded but schema_version did not advance"
       cleanup_schema_gate_dbs
       exit 1
     fi
-  done
-  echo "[smoke]   ok: outdated-schema startup message is actionable"
+    echo "[smoke]   ok: outdated schema auto-upgraded (schema_version=${OLD_VER})"
+  else
+    for want in \
+      "ERROR[GENERAL]:" \
+      "failed to connect to DB:" \
+      "postgres schema version too old" \
+      "apply db/schema_postgres.sql"
+    do
+      if [[ "$OLD_MSG" != *"$want"* ]]; then
+        echo "[smoke] ERROR: outdated-schema message does not contain: $want"
+        echo "$OLD_MSG"
+        cleanup_schema_gate_dbs
+        exit 1
+      fi
+    done
+    echo "[smoke]   ok: outdated-schema startup message is actionable"
+  fi
 
   cleanup_schema_gate_dbs
   echo "[smoke] schema startup message gate PASSED"

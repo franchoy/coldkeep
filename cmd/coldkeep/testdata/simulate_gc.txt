@@ -12,6 +12,13 @@ Reclaimable
   logical_bytes: 3 MiB
   physical_bytes_now: 2 MiB
 
+Packed
+  packed_blocks_live: 0
+  packed_blocks_dead: 0
+  packed_bytes_live: 0 MiB
+  packed_bytes_reclaimable: 0 MiB
+  retained_dead_bytes_due_to_packed_blocks: 0 MiB
+
 Containers
   fully_reclaimable: 1
   partially_dead: 2

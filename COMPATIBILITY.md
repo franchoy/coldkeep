@@ -109,6 +109,40 @@ Practical consequence:
 
 ## Versioning Rules
 
+### v1.8 Packed-Block Compatibility Clarification
+
+Contract:
+
+- v1.8 reads repositories created by v1.7.
+- New writes made by v1.8 use packed-block metadata (`storage_blocks`, `chunk_block_refs`).
+- The compiled-in default packed block size in v1.8 is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` is an advanced/operator override that affects new writes only.
+- Repositories that contain both legacy v1.7 data and v1.8 packed-block data are expected.
+- v1.7 must not be assumed to read v1.8 packed-block data.
+- Upgrading to v1.8 does not automatically rewrite existing v1.7 data.
+
+Practical consequence:
+
+- Operators can upgrade safely without forced rewrite, continue restoring historical data, and accept mixed-layout repositories as normal.
+- Readers continue to use persisted per-block metadata, so changing `COLDKEEP_BLOCK_TARGET_SIZE_MB` later does not affect restore of existing blocks.
+
+Packed-block codec boundary (v1.8 behavior):
+
+- v1.8 supports both `plain` and `aes-gcm` codec settings for packed-block writes.
+- When `COLDKEEP_CODEC=plain`: `storage_blocks.codec = "none"`; stored payload is the encoded block bytes (plaintext).
+- When `COLDKEEP_CODEC=aes-gcm`: `storage_blocks.codec = "aes-gcm"`; stored payload is a 12-byte AES-GCM nonce prefix followed by the ciphertext of the full encoded block. The read path in `StorageBlockReader` strips the nonce, decrypts, then decodes the block structure.
+- The block binary format header (inside the plaintext encoded block) always uses codec value `0` (`"none"`) regardless of storage-level encryption; it describes chunk layout within the plaintext block, not the storage representation.
+- Legacy single-chunk `blocks` rows carry their own per-row codec and nonce fields independently; the two systems coexist.
+- Mixed repositories with `plain` and `aes-gcm` packed blocks are valid.
+
+Why `storage_blocks` embeds the nonce in the payload (no dedicated column):
+
+- `storage_blocks` has no dedicated nonce column. The 12-byte AES-GCM nonce is prepended to the ciphertext when writing. The reader identifies the nonce boundary from the fixed nonce size and codec type before decryption.
+
+Forward-looking note:
+
+- v1.8 does not include block-level compression. v1.9 will extend the packed-block foundation with block-level compression.
+
 Chunker evolution model:
 
 Current chunker versions include:
@@ -172,8 +206,25 @@ Users can expect:
 
 - stable restore correctness for previously stored logical files
 - stable CLI/JSON contracts within v1.x compatibility policy
+- CLI JSON `meta.version` denotes contract compatibility level and remains stable for additive fields; it bumps only on breaking JSON contract changes
 - observable chunker metadata for diagnostics
 - stats visibility for chunk and logical-file version distributions in mixed-version repositories
+
+CLI JSON change classification:
+
+Additive-compatible changes (no `meta.version` bump expected):
+
+- adding optional fields
+- adding nested objects
+- adding new stats categories
+
+Breaking changes (`meta.version` bump required):
+
+- removing fields
+- renaming fields
+- changing field types
+- changing envelope structure
+- changing semantic meaning of existing fields
 
 Users should not assume:
 

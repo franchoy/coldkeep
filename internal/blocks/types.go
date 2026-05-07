@@ -1,6 +1,7 @@
 package blocks
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -28,6 +29,52 @@ type Descriptor struct {
 	UpdatedAt     time.Time
 }
 
+// Block represents a physical stored block unit for the v1.8 packed-block model.
+// It captures the persisted block metadata shared by write, read, and verify paths.
+type Block struct {
+	ID              int64
+	FormatVersion   int
+	Codec           string
+	PlaintextSize   int64
+	StoredSize      int64
+	ContainerID     int64
+	ContainerOffset int64
+	BlockHash       []byte
+}
+
+// ChunkSegment represents one chunk placement inside a physical block.
+// Offset and Size are relative to decoded plaintext block bytes.
+type ChunkSegment struct {
+	ChunkID int64
+	BlockID int64
+	Offset  int64
+	Size    int64
+}
+
+// BlockStore is the storage-block retrieval boundary for packed layouts.
+// The interface intentionally remains minimal to keep storage access decoupled.
+type BlockStore interface {
+	GetBlock(blockID int64) (*Block, error)
+}
+
+// ChunkLocator resolves chunk placement inside a physical block.
+// It isolates lookup logic from restore and verification execution paths.
+type ChunkLocator interface {
+	GetChunkSegment(chunkID int64) (*ChunkSegment, error)
+}
+
+// BlockReader provides context-aware read access to decoded blocks.
+// It supports both legacy and packed repository read flows.
+type BlockReader interface {
+	ReadBlock(ctx context.Context, blockID int64) (*EncodedBlock, error)
+}
+
+// ChunkResolver provides context-aware resolution of chunk placement inside blocks.
+// It supports chunk lookup across legacy and packed layouts.
+type ChunkResolver interface {
+	ResolveChunk(ctx context.Context, chunkID int64) (*ChunkSegment, error)
+}
+
 type EncodeInput struct {
 	ChunkID   int64
 	ChunkHash string
@@ -40,7 +87,7 @@ type DecodeInput struct {
 	Payload    []byte
 }
 
-type EncodedBlock struct {
+type TransformedBlock struct {
 	Descriptor Descriptor
 	Payload    []byte
 }

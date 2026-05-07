@@ -8,7 +8,7 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
-v1.6 adds observability and tooling contract hardening.
+v1.8 adds packed storage blocks and completes AES-GCM packed-block integration.
 
 For the current operator-facing contract, see [README.md](README.md).
 For guarantee-to-evidence mapping, see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
@@ -16,6 +16,40 @@ For release-gate execution, see [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST
 
 Use this file for milestone history and release deltas. If you are new to the
 project, do not start here; start with [README.md](README.md).
+
+------------------------------------------------------------------------
+
+## [1.8.0] - 2026-05-07
+
+### Added (v1.8 packed-block transition)
+
+- v1.8 packed block abstraction.
+- Multiple chunks per storage block (`storage_blocks` + `chunk_block_refs`).
+- Mandatory block hash validation for packed-block integrity.
+- Packed-block-aware `verify`, `gc`, and `restore` behavior.
+- AES-GCM packed-block integration: `COLDKEEP_CODEC=aes-gcm` now works end-to-end with packed writes; per-chunk nonce and codec metadata are tracked in companion `blocks` rows.
+- Block-layout stats and benchmarking documentation updates.
+
+### Changed (v1.8 packed-block transition)
+
+- New writes use the packed block layout.
+- Default packed block target size is 1 MiB.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` remains available as an advanced/operator write-time tuning override.
+- `COLDKEEP_CODEC=aes-gcm` now fully applies to packed-block writes: `storage_blocks.codec = "aes-gcm"`, stored bytes = 12-byte nonce prefix + AES-GCM ciphertext of the encoded block; the read path decrypts transparently.
+
+### Compatibility (v1.8 packed-block transition)
+
+- v1.8 reads v1.7 repositories.
+- Mixed legacy/packed repositories are supported.
+- v1.7 is not guaranteed to read v1.8 repositories.
+- Existing v1.7 data is not automatically rewritten during upgrade.
+- Missing PostgreSQL schema requires manual schema application or
+  `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded
+  to the required v12 schema at startup.
+
+### Not included (v1.8 packed-block transition)
+
+- Block-level compression is not included; it is planned for v1.9.
 
 ------------------------------------------------------------------------
 

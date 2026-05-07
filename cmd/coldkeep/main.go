@@ -136,6 +136,7 @@ var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
+var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var runGCPhase = maintenance.RunGCWithContainersDirResult
 var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
@@ -602,7 +603,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "benchmark", "doctor", "snapshot", "config", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
 		return
 	}
 
@@ -757,6 +758,8 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 func verifyLevelToString(level verify.VerifyLevel) string {
 	switch level {
+	case verify.VerifyFast:
+		return "fast"
 	case verify.VerifyStandard:
 		return "standard"
 	case verify.VerifyFull:
@@ -793,18 +796,11 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	case "", "text", "human":
 		return outputModeText, nil
 	case "table":
-		if parsed.method == "benchmark" {
-			return outputModeText, nil
-		}
 		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	case "json":
 		return outputModeJSON, nil
 	default:
-		allowed := "human, text, json"
-		if parsed.method == "benchmark" {
-			allowed = "human, text, table, json"
-		}
-		return outputModeText, usageErrorf("invalid --output value %q (allowed: %s)", value, allowed)
+		return outputModeText, usageErrorf("invalid --output value %q (allowed: human, text, json)", value)
 	}
 }
 
@@ -840,7 +836,6 @@ var outputSupportedCommands = map[string]bool{
 	"repair":       true,
 	"gc":           true,
 	"simulate":     true,
-	"benchmark":    true,
 	"snapshot":     true,
 }
 
@@ -2028,38 +2023,72 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return emitBatchCommandReport("repair", report, outputMode)
 	}
 
-	if len(parsed.positionals) != 1 || parsed.positionals[0] != "ref-counts" {
-		return usageErrorf("Usage: coldkeep repair ref-counts [--output <text|json>]")
+	if len(parsed.positionals) != 1 {
+		return usageErrorf("Usage: coldkeep repair <ref-counts|chunk-live-ref-counts> [--output <text|json>]")
 	}
 
-	result, err := repairLogicalRefCountsPhase()
-	if err != nil {
-		return verifyError(fmt.Errorf("repair ref-counts failed: %w", err))
-	}
-
-	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "repair",
-			"data": map[string]any{
-				"target":                    "ref-counts",
-				"scanned_logical_files":     result.ScannedLogicalFiles,
-				"updated_logical_files":     result.UpdatedLogicalFiles,
-				"orphan_physical_file_rows": result.OrphanPhysicalFileRows,
-			},
+	target := strings.TrimSpace(parsed.positionals[0])
+	switch target {
+	case "ref-counts":
+		result, err := repairLogicalRefCountsPhase()
+		if err != nil {
+			return verifyError(fmt.Errorf("repair ref-counts failed: %w", err))
 		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
-	}
 
-	fmt.Printf("Recomputed logical_file.ref_count from physical_file rows. scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d\n",
-		result.ScannedLogicalFiles,
-		result.UpdatedLogicalFiles,
-		result.OrphanPhysicalFileRows,
-	)
-	fmt.Printf("Hint: %s\n", doctorOperationalHint)
-	return nil
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "repair",
+				"data": map[string]any{
+					"target":                    "ref-counts",
+					"scanned_logical_files":     result.ScannedLogicalFiles,
+					"updated_logical_files":     result.UpdatedLogicalFiles,
+					"orphan_physical_file_rows": result.OrphanPhysicalFileRows,
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		fmt.Printf("Recomputed logical_file.ref_count from physical_file rows. scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d\n",
+			result.ScannedLogicalFiles,
+			result.UpdatedLogicalFiles,
+			result.OrphanPhysicalFileRows,
+		)
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		return nil
+
+	case "chunk-live-ref-counts":
+		result, err := repairChunkLiveRefCountsPhase()
+		if err != nil {
+			return verifyError(fmt.Errorf("repair chunk-live-ref-counts failed: %w", err))
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "repair",
+				"data": map[string]any{
+					"target":         "chunk-live-ref-counts",
+					"scanned_chunks": result.ScannedChunks,
+					"updated_chunks": result.UpdatedChunks,
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		fmt.Printf("Recomputed chunk.live_ref_count from file_chunk rows. scanned_chunks=%d updated_chunks=%d\n",
+			result.ScannedChunks,
+			result.UpdatedChunks,
+		)
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		return nil
+	default:
+		return usageErrorf("Usage: coldkeep repair <ref-counts|chunk-live-ref-counts> [--output <text|json>]")
+	}
 }
 
 type preparedRepairTarget struct {
@@ -2086,7 +2115,7 @@ func prepareRepairTargets(raw []batch.RawTarget) []preparedRepairTarget {
 			continue
 		}
 
-		if target != "ref-counts" {
+		if target != "ref-counts" && target != "chunk-live-ref-counts" {
 			prepared = append(prepared, preparedRepairTarget{
 				Executable: false,
 				Result: batch.ItemResult{
@@ -2126,34 +2155,62 @@ func executeRepairPrepared(failFast bool, targets []preparedRepairTarget) batch.
 			continue
 		}
 
-		result, err := repairLogicalRefCountsPhase()
-		if err != nil {
-			item := batch.ItemResult{
-				RawValue: target.Target,
-				Status:   batch.ResultFailed,
-				Message:  fmt.Sprintf("repair ref-counts failed: %v", err),
+		switch target.Target {
+		case "ref-counts":
+			result, err := repairLogicalRefCountsPhase()
+			if err != nil {
+				item := batch.ItemResult{
+					RawValue: target.Target,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("repair ref-counts failed: %v", err),
+				}
+				if code, ok := invariants.Code(err); ok {
+					item.InvariantCode = code
+					item.RecommendedAction = invariants.RecommendedActionForCode(code)
+				}
+				results = append(results, item)
+				if failFast {
+					break
+				}
+				continue
 			}
-			if code, ok := invariants.Code(err); ok {
-				item.InvariantCode = code
-				item.RecommendedAction = invariants.RecommendedActionForCode(code)
-			}
-			results = append(results, item)
-			if failFast {
-				break
-			}
-			continue
-		}
 
-		results = append(results, batch.ItemResult{
-			RawValue: target.Target,
-			Status:   batch.ResultSuccess,
-			Message: fmt.Sprintf(
-				"repaired scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d",
-				result.ScannedLogicalFiles,
-				result.UpdatedLogicalFiles,
-				result.OrphanPhysicalFileRows,
-			),
-		})
+			results = append(results, batch.ItemResult{
+				RawValue: target.Target,
+				Status:   batch.ResultSuccess,
+				Message: fmt.Sprintf(
+					"repaired scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d",
+					result.ScannedLogicalFiles,
+					result.UpdatedLogicalFiles,
+					result.OrphanPhysicalFileRows,
+				),
+			})
+
+		case "chunk-live-ref-counts":
+			result, err := repairChunkLiveRefCountsPhase()
+			if err != nil {
+				item := batch.ItemResult{
+					RawValue: target.Target,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("repair chunk-live-ref-counts failed: %v", err),
+				}
+				if code, ok := invariants.Code(err); ok {
+					item.InvariantCode = code
+					item.RecommendedAction = invariants.RecommendedActionForCode(code)
+				}
+				results = append(results, item)
+				if failFast {
+					break
+				}
+				continue
+			}
+
+			results = append(results, batch.ItemResult{
+				RawValue: target.Target,
+				Status:   batch.ResultSuccess,
+				Message:  fmt.Sprintf("repaired scanned_chunks=%d updated_chunks=%d", result.ScannedChunks, result.UpdatedChunks),
+			})
+		}
 	}
 
 	report := batch.NewReport(batch.OperationRepair, false, results)
@@ -2273,11 +2330,11 @@ func printFileRecordsTable(records []listing.FileRecord) {
 // online checker during active writes, where transient metadata/data divergence
 // can produce false positives.
 func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "fast", "standard", "full", "deep", "output"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) == 0 {
-		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--standard|--full|--deep]\nDid you mean: coldkeep verify system --standard")
+		return usageErrorf("Usage: coldkeep verify <system|file <fileID>> [--fast|--standard|--full|--deep]\nDid you mean: coldkeep verify system --fast")
 	}
 
 	verifyLevel, err := parseVerifyLevel(parsed)
@@ -2289,7 +2346,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	switch target {
 	case "system":
 		if len(parsed.positionals) > 2 {
-			return usageErrorf("Usage: coldkeep verify system [--standard|--full|--deep]")
+			return usageErrorf("Usage: coldkeep verify system [--fast|--standard|--full|--deep]")
 		}
 		verifyErr := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, target, 0, verifyLevel)
 		if verifyErr != nil {
@@ -2301,7 +2358,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return nil
 	case "file":
 		if len(parsed.positionals) < 2 || len(parsed.positionals) > 3 {
-			return usageErrorf("Usage: coldkeep verify file <fileID> [--standard|--full|--deep]")
+			return usageErrorf("Usage: coldkeep verify file <fileID> [--fast|--standard|--full|--deep]")
 		}
 
 		fileID, err := strconv.ParseInt(parsed.positionals[1], 10, 64)
@@ -4760,11 +4817,10 @@ func printHelp() {
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  remove --stored-paths <path> [<path> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Batch remove physical path mappings in deterministic input order"},
 		{"  repair ref-counts [--batch] [--input <file>] [--fail-fast] [--output <text|json>]", "Recompute logical_file.ref_count from physical_file rows (explicit repair)"},
+		{"  repair chunk-live-ref-counts [--batch] [--input <file>] [--fail-fast] [--output <text|json>]", "Recompute chunk.live_ref_count from file_chunk rows (explicit repair)"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},
-		{"  benchmark chunkers [--output <text|json>]", "Run deterministic chunker comparison benchmark (observational; no repository state changes)"},
-		{"  benchmark run [--dataset <small|medium|large>] [--repeat <N>] [--workers <N>] [--output <table|json>]", "Run full benchmark scenario suite using dataset presets"},
 		{"  stats [--output <human|json>] [--json] [--containers] [--trace|--trace-json]", "Show repository statistics (read-only); use --containers for opt-in container detail output"},
 		{"  inspect <entity> <id> [--relations] [--reverse] [--deep] [--limit <n>] [--output <human|json>] [--json] [--trace|--trace-json]", "Inspect one entity (file|snapshot|chunk|container) through the read-only observability pipeline"},
 		{"  verify [target] [fileID] [options]", "Observational layered integrity verification (assumes recovered state; verification phase is read-only; default: --standard)"},
@@ -4830,6 +4886,7 @@ func printHelp() {
 	fmt.Println("  COLDKEEP_DB_CONN_MAX_IDLE_TIME_MS (default: 300000)")
 	fmt.Println("  COLDKEEP_STORAGE_DIR (default: ./storage/containers)")
 	fmt.Println("  COLDKEEP_CONTAINER_MAX_SIZE_MB (default: 64)")
+	fmt.Println("  COLDKEEP_BLOCK_TARGET_SIZE_MB (default: 1; advanced operator override for new writes)")
 	fmt.Println("  COLDKEEP_LOGICAL_FILE_WAIT_MS (default: 100)")
 	fmt.Println("  COLDKEEP_CHUNK_WAIT_MS (default: 100)")
 	fmt.Println("  COLDKEEP_MAX_CLAIM_POLL_WAIT_MS (default: 2000)")
@@ -4843,6 +4900,9 @@ func printHelp() {
 	fmt.Println("    off: graph-only reuse checks (fastest, no payload/hash re-validation)")
 	fmt.Println("    suspicious: deep semantic checks only for risk signals (recommended)")
 	fmt.Println("    always: deep semantic checks for every reuse candidate (highest read/CPU cost)")
+	fmt.Println("  COLDKEEP_QUIET_HEALTHY_STARTUP_RECOVERY (default: off)")
+	fmt.Println("    true/1/yes/on: suppress healthy startup recovery logs in text mode")
+	fmt.Println("    recovery logs still replay automatically when corrective actions/errors occur")
 	fmt.Println("  Startup recovery is corrective/state-changing and runs automatically before: store, store-folder, restore, remove, repair, gc, stats, list, search, verify, snapshot")
 	fmt.Println("  Verify is observational and assumes recovered state (its verification phase is read-only)")
 	fmt.Println("  Doctor runs its own corrective recovery pass even if startup recovery already ran")
@@ -5155,6 +5215,9 @@ func searchArgs(parsed parsedCommandLine) []string {
 
 func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 	selected := make([]verify.VerifyLevel, 0, 1)
+	if parsed.hasFlag("fast") {
+		selected = append(selected, verify.VerifyFast)
+	}
 	if parsed.hasFlag("standard") {
 		selected = append(selected, verify.VerifyStandard)
 	}
@@ -5183,6 +5246,8 @@ func parseVerifyLevel(parsed parsedCommandLine) (verify.VerifyLevel, error) {
 		}
 
 		switch positionalLevel {
+		case "fast":
+			return verify.VerifyFast, nil
 		case "standard":
 			return verify.VerifyStandard, nil
 		case "full":

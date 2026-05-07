@@ -39,6 +39,13 @@ func TestEnsurePostgresSchemaFailsWhenDBIsNil(t *testing.T) {
 	}
 }
 
+func TestEnsureSchemaFailsWhenDBIsNil(t *testing.T) {
+	err := EnsureSchema(nil)
+	if err == nil || !strings.Contains(err.Error(), "nil DB connection") {
+		t.Fatalf("expected nil-DB error contract, got: %v", err)
+	}
+}
+
 func TestRunMigrationsSucceedsOnSQLiteInMemory(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -48,6 +55,18 @@ func TestRunMigrationsSucceedsOnSQLiteInMemory(t *testing.T) {
 
 	if err := RunMigrations(dbconn); err != nil {
 		t.Fatalf("expected RunMigrations to succeed on sqlite, got: %v", err)
+	}
+}
+
+func TestEnsureSchemaSucceedsOnSQLiteInMemory(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := EnsureSchema(dbconn); err != nil {
+		t.Fatalf("expected EnsureSchema to succeed on sqlite, got: %v", err)
 	}
 }
 
@@ -77,6 +96,20 @@ func TestRunMigrationsRejectsNonSQLiteBackend(t *testing.T) {
 	err = RunMigrations(dbconn)
 	if err == nil || !strings.Contains(err.Error(), "RunMigrations requires sqlite backend") {
 		t.Fatalf("expected non-sqlite error contract, got: %v", err)
+	}
+}
+
+func TestEnsureSchemaRejectsUnsupportedBackend(t *testing.T) {
+	registerDummyDriver()
+	dbconn, err := sql.Open("dummy", "")
+	if err != nil {
+		t.Fatalf("open dummy db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	err = EnsureSchema(dbconn)
+	if err == nil || !strings.Contains(err.Error(), "EnsureSchema does not support backend") {
+		t.Fatalf("expected unsupported backend error contract, got: %v", err)
 	}
 }
 
@@ -156,8 +189,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 11 {
-		t.Fatalf("expected schema version 11 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 12 {
+		t.Fatalf("expected schema version 12 after first migration pass, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -199,8 +232,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 11 {
-		t.Fatalf("expected schema version to stay 11 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 12 {
+		t.Fatalf("expected schema version to stay 12 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -237,6 +270,7 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"UPDATE schema_version SET version = 9 WHERE version < 9",
 		"UPDATE schema_version SET version = 10 WHERE version < 10",
 		"UPDATE schema_version SET version = 11 WHERE version < 11",
+		"UPDATE schema_version SET version = 12 WHERE version < 12",
 		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
 		"CREATE TABLE IF NOT EXISTS repository_config",
 		"ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id",
@@ -279,8 +313,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 11 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 11, got %d", schemaVersion)
+	if schemaVersion != 12 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 12, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -424,8 +458,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 11 {
-		t.Fatalf("expected schema version 11 after migration, got %d", schemaVersion)
+	if schemaVersion != 12 {
+		t.Fatalf("expected schema version 12 after migration, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -874,8 +908,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
-	if schemaVersion != 11 {
-		t.Fatalf("expected schema_version=11 after fresh postgres bootstrap, got %d", schemaVersion)
+	if schemaVersion != 12 {
+		t.Fatalf("expected schema_version=12 after fresh postgres bootstrap, got %d", schemaVersion)
 	}
 
 	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {
@@ -1013,6 +1047,104 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	}
 	if pathRows != 1 {
 		t.Fatalf("expected exactly one normalized snapshot_path row after rerun, got %d", pathRows)
+	}
+}
+
+func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
+	if os.Getenv("COLDKEEP_TEST_DB") == "" {
+		t.Skip("Set COLDKEEP_TEST_DB=1 to run live postgres migration tests")
+	}
+
+	host := getenvOrDefault("DB_HOST", "127.0.0.1")
+	port := getenvOrDefault("DB_PORT", "5432")
+	user := getenvOrDefault("DB_USER", "coldkeep")
+	password := getenvOrDefault("DB_PASSWORD", "coldkeep")
+	sslMode := getenvOrDefault("DB_SSLMODE", "disable")
+	maintenanceDB := getenvOrDefault("COLDKEEP_TEST_DB_MAINTENANCE", "postgres")
+
+	adminConnStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		host,
+		port,
+		user,
+		password,
+		maintenanceDB,
+		sslMode,
+	)
+	adminDB, err := sql.Open("postgres", adminConnStr)
+	if err != nil {
+		t.Fatalf("open postgres admin connection: %v", err)
+	}
+	defer func() { _ = adminDB.Close() }()
+
+	if err := adminDB.Ping(); err != nil {
+		t.Fatalf("ping postgres admin connection: %v", err)
+	}
+
+	testDBName := fmt.Sprintf("coldkeep_postgres_auto_upgrade_%d", time.Now().UnixNano())
+	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", testDBName)); err != nil {
+		t.Fatalf("create temporary postgres database %s: %v", testDBName, err)
+	}
+	defer func() {
+		_, _ = adminDB.Exec(`
+			SELECT pg_terminate_backend(pid)
+			FROM pg_stat_activity
+			WHERE datname = $1 AND pid <> pg_backend_pid()
+		`, testDBName)
+		_, _ = adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", testDBName))
+	}()
+
+	testConnStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		host,
+		port,
+		user,
+		password,
+		testDBName,
+		sslMode,
+	)
+	dbconn, err := sql.Open("postgres", testConnStr)
+	if err != nil {
+		t.Fatalf("open postgres test database connection: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := dbconn.Ping(); err != nil {
+		t.Fatalf("ping postgres test database connection: %v", err)
+	}
+
+	schemaSQL, err := loadPostgresSchema()
+	if err != nil {
+		t.Fatalf("load postgres schema SQL: %v", err)
+	}
+	if _, err := dbconn.Exec(schemaSQL); err != nil {
+		t.Fatalf("apply postgres schema SQL: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE schema_version SET version = 11 WHERE version < 11`); err != nil {
+		t.Fatalf("downgrade schema_version to 11 for migration test: %v", err)
+	}
+
+	t.Setenv("DB_HOST", host)
+	t.Setenv("DB_PORT", port)
+	t.Setenv("DB_USER", user)
+	t.Setenv("DB_PASSWORD", password)
+	t.Setenv("DB_SSLMODE", sslMode)
+	t.Setenv("DB_NAME", testDBName)
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
+
+	opened, err := ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db should auto-migrate existing postgres schema v11: %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	var schemaVersion int
+	if err := opened.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema_version after auto-migration: %v", err)
+	}
+	if schemaVersion != 12 {
+		t.Fatalf("expected schema_version=12 after automatic postgres migration from v11, got %d", schemaVersion)
 	}
 }
 

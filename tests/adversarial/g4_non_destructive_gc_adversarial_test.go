@@ -76,9 +76,11 @@ func setupAdversarialG4Env(t *testing.T) (*sql.DB, map[string]string, string, st
 func storeFileWithCodecCLIG4(t *testing.T, repoRoot, binPath string, env map[string]string, codec, path string) int64 {
 	t.Helper()
 
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
+
 	payload := testutils.AssertCLIJSONOK(
 		t,
-		testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json"),
+		res,
 		"store",
 	)
 	data := testutils.JSONMap(t, payload, "data")

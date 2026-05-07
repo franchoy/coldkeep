@@ -4,7 +4,7 @@ Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.
 
-The project currently has eight explicit correctness layers:
+The project currently has nine explicit correctness layers:
 
 - storage correctness (v1.0 core)
 - interaction correctness for CLI/automation contracts (v1.1)
@@ -14,6 +14,7 @@ The project currently has eight explicit correctness layers:
 - chunker-evolution compatibility clarity (v1.5)
 - observability and simulation contract hardening (v1.6)
 - deterministic performance foundation through controlled execution and benchmark-backed validation (v1.7)
+- packed storage block abstraction, AES-GCM packed-block integration, and release hardening (v1.8)
 
 The project originated as a research prototype, and continues to
 prioritize correctness, determinism, and clarity over feature velocity.
@@ -148,8 +149,9 @@ manually applying the schema:
 export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 ```
 
-Without manual schema initialization or this env var, coldkeep will fail fast
-on startup if `schema_version` is missing.
+Missing PostgreSQL schema requires manual schema application or
+`COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
+the required v12 schema at startup.
 
 Build:
 
@@ -307,7 +309,9 @@ export COLDKEEP_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 simulation loop sets it per run (`plain` then `aes-gcm`).
 `COLDKEEP_KEY` is only required when codec is `aes-gcm`; it is ignored by `plain`.
 
-If you do not want auto-bootstrap, apply `db/schema_postgres.sql` manually first.
+Missing PostgreSQL schema requires manual schema application or
+`COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
+the required v12 schema at startup.
 
 1. Run the quality job equivalent (same intent as CI `quality`):
 

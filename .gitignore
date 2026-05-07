@@ -22,6 +22,11 @@ go.work
 # =========================
 app/coldkeep
 /coldkeep
+/coldkeep-v*
+
+# checklist/smoke restore output directories
+/out-step*/
+/_smoke_out/
 
 # binaries generated during development
 *.exe
@@ -98,3 +103,19 @@ out/
 # phase output
 # =========================
 .phase_*
+
+# =========================
+# ignore pycache directories and files
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# =========================
+# release evidence files
+# =========================
+.release-evidence/
+# =========================
+# manual CI storage files
+# =========================
+.manual-ci-storage/

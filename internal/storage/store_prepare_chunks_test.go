@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/chunk/fastcdc"
@@ -137,6 +138,39 @@ func TestPrepareChunksWithContextPreservesChunkIndexes(t *testing.T) {
 	for i, p := range prepared {
 		if p.Index != i {
 			t.Errorf("Index mismatch at position %d: got %d, want %d", i, p.Index, i)
+		}
+	}
+}
+
+func TestPrepareChunksWithContextKeepsOrderedStreamWhenWorkersFinishOutOfOrder(t *testing.T) {
+	results := []chunk.Result{
+		{Info: chunk.Info{Offset: 0}, Data: []byte("A")},
+		{Info: chunk.Info{Offset: 1}, Data: []byte("B")},
+		{Info: chunk.Info{Offset: 2}, Data: []byte("C")},
+		{Info: chunk.Info{Offset: 3}, Data: []byte("D")},
+	}
+
+	testPrepareChunksWorkerHook = func(index int) {
+		// Force completions away from index order: low indexes sleep longer.
+		time.Sleep(time.Duration((len(results)-index)*5) * time.Millisecond)
+	}
+	defer func() { testPrepareChunksWorkerHook = nil }()
+
+	prepared, err := prepareChunksWithContext(context.Background(), results, string(chunk.VersionV1SimpleRolling))
+	if err != nil {
+		t.Fatalf("prepareChunksWithContext: %v", err)
+	}
+
+	if len(prepared) != len(results) {
+		t.Fatalf("prepared length mismatch: got %d want %d", len(prepared), len(results))
+	}
+
+	for i := range prepared {
+		if prepared[i].Index != i {
+			t.Fatalf("prepared stream must be index-ordered: got index %d at position %d", prepared[i].Index, i)
+		}
+		if !bytes.Equal(prepared[i].Data, results[i].Data) {
+			t.Fatalf("prepared data order mismatch at position %d", i)
 		}
 	}
 }

@@ -187,15 +187,17 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		return fmt.Errorf("logical file %d has no chunks", fileId)
 	}
 
-	//ensure all chunks have status COMPLETED and have associated blocks
+	// Ensure all chunks have status COMPLETED and have associated physical mapping
+	// through either legacy blocks rows or packed chunk_block_refs rows.
 	chunkrows, err := dbconn.QueryContext(ctx, `SELECT
 									c.id,
 									c.status,
 									b.id,
+									EXISTS(SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id) AS has_packed,
 									COALESCE(c.chunker_version, '')
 								FROM chunk c
 								JOIN file_chunk fc ON fc.chunk_id = c.id
-								JOIN blocks b ON b.chunk_id = c.id
+								LEFT JOIN blocks b ON b.chunk_id = c.id
 								WHERE fc.logical_file_id = $1
 								ORDER BY fc.chunk_order ASC`, fileId)
 	if err != nil {
@@ -208,14 +210,15 @@ func VerifyFileStandardWithContainersDir(dbconn *sql.DB, fileId int, containersD
 		var chunkid int
 		var chunkStatus string
 		var blockId sql.NullInt64
+		var hasPacked bool
 		var chunkChunkerVersion string
-		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId, &chunkChunkerVersion); err != nil {
+		if err := chunkrows.Scan(&chunkid, &chunkStatus, &blockId, &hasPacked, &chunkChunkerVersion); err != nil {
 			return fmt.Errorf("failed to scan chunk info: %w", err)
 		}
 		if chunkStatus != filestate.ChunkCompleted {
 			return fmt.Errorf("chunk with ID %d has invalid status: expected COMPLETED but got %s", chunkid, chunkStatus)
 		}
-		if !blockId.Valid {
+		if !blockId.Valid && !hasPacked {
 			return fmt.Errorf("chunk %d has no associated block", chunkid)
 		}
 		// chunk.chunker_version is chunk-origin metadata. Verify asserts presence,

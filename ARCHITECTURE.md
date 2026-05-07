@@ -14,6 +14,7 @@ Companion documents:
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
+- [docs/BLOCK_ABSTRACTION_V18.md](docs/BLOCK_ABSTRACTION_V18.md) for v1.8 packed-block design lock constants and invariants
 
 ## System Overview
 
@@ -37,6 +38,7 @@ Correctness has eight explicit layers:
 - v1.5 chunker-evolution compatibility clarity: mixed-version repositories are first-class, write-default policy is explicit and new-writes-only
 - v1.6 observability and simulation contract hardening: read-only introspection, exact GC simulation parity, tooling-safe trace channel behavior
 - v1.7 deterministic performance foundation: controlled execution, benchmark-backed validation, and release-readiness safety proof without storage-format or schema-breaking changes
+- v1.8 packed block abstraction: multiple chunks per physical storage block, AES-GCM packed-block integration, and release hardening while preserving all existing correctness guarantees
 
 Migration philosophy:
 
@@ -57,6 +59,19 @@ This deep version of the architecture captures five linked aspects:
 This diagram is a mental anchor for how guarantees compose across layers.
 
 ```text
++------------------------------------------------------------+
+| Block Abstraction (v1.8)                                   |
+|------------------------------------------------------------|
+| Packed multi-chunk storage blocks (storage_blocks +        |
+|   chunk_block_refs)                                        |
+| AES-GCM packed-block integration (per-chunk companion rows)|
+| Dual-compat read path (legacy + packed)                    |
+| Block-level integrity hash                                 |
+| COLDKEEP_BLOCK_TARGET_SIZE_MB operator override            |
++------------------------------------------------------------+
+    ^
+    | extends snapshot retention layer
+    |
 +------------------------------------------------------------+
 | Snapshot-Based Retention (v1.3 introduced, v1.4 clarified)|
 |------------------------------------------------------------|
@@ -105,7 +120,7 @@ This diagram is a mental anchor for how guarantees compose across layers.
 +------------------------------------------------------------+
 | Physical Storage Model                                     |
 |------------------------------------------------------------|
-| logical_file -> chunk -> blocks -> container               |
+| logical_file -> chunk -> blocks/storage_blocks -> container|
 | Append-only containers + transactional DB                  |
 +------------------------------------------------------------+
 ```
@@ -117,13 +132,15 @@ Core entities:
 - logical_file: user-visible logical file (name, size, file hash, lifecycle state)
 - chunk: content-addressed chunk identity (chunk hash, size, reference/pin counters, lifecycle state)
 - file_chunk: ordered mapping between logical files and their chunks
-- blocks: physical placement and codec metadata for each chunk
+- blocks: physical placement and codec metadata for each chunk (legacy single-chunk layout)
+- storage_blocks: v1.8 packed physical block (container placement, block hash, codec, sizes)
+- chunk_block_refs: v1.8 per-chunk placement inside a packed storage block
 - container: physical append-only container file on disk
 
 Storage pipeline:
 
 ```text
-logical_file -> file_chunk -> chunk -> blocks -> container
+logical_file -> file_chunk -> chunk -> blocks / storage_blocks+chunk_block_refs -> container
 ```
 
 ## Chunking Model
@@ -499,7 +516,7 @@ Guarantees hold within the documented operating assumptions:
 - container files are not manually altered
 - filesystem honors write + fsync semantics
 - PostgreSQL deployment provides expected transactional, locking, and advisory-lock behavior
-- schema/bootstrap state matches the release migration expectations
+- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
 
 ## Interface Correctness Layer (v1.1)
 

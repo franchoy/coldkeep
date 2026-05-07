@@ -73,9 +73,11 @@ func setupAdversarialG2Env(t *testing.T) (*sql.DB, map[string]string, string, st
 func storeFileWithCodecCLIG2(t *testing.T, repoRoot, binPath string, env map[string]string, codec, path string) int64 {
 	t.Helper()
 
+	res := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json")
+
 	payload := testutils.AssertCLIJSONOK(
 		t,
-		testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "store", "--codec", codec, path, "--output", "json"),
+		res,
 		"store",
 	)
 	data := testutils.JSONMap(t, payload, "data")
@@ -415,6 +417,9 @@ func TestAdversarialG2VerifyRejectsCompletedChunkMissingBlockRow(t *testing.T) {
 			record := testutils.FetchFirstFileChunkRecord(t, dbconn, fileID)
 			if _, err := dbconn.Exec(`DELETE FROM blocks WHERE chunk_id = $1`, record.ChunkID); err != nil {
 				t.Fatalf("delete blocks row for completed chunk: %v", err)
+			}
+			if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE chunk_id = $1`, record.ChunkID); err != nil {
+				t.Fatalf("delete chunk_block_refs row for completed chunk: %v", err)
 			}
 
 			verifyRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,

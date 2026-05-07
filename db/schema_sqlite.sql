@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 11 WHERE version < 11;
-INSERT OR IGNORE INTO schema_version(version) VALUES (11);
+UPDATE schema_version SET version = 12 WHERE version < 12;
+INSERT OR IGNORE INTO schema_version(version) VALUES (12);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +114,29 @@ CREATE TABLE IF NOT EXISTS blocks (
 
 CREATE INDEX IF NOT EXISTS idx_blocks_container_id ON blocks(container_id);
 CREATE INDEX IF NOT EXISTS idx_blocks_codec ON blocks(codec);
+
+CREATE TABLE IF NOT EXISTS storage_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  format_version INTEGER NOT NULL CHECK (format_version > 0),
+  codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
+  plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+  stored_size INTEGER NOT NULL CHECK (stored_size > 0),
+  container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+  container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
+  block_hash BLOB NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_storage_blocks_container_id ON storage_blocks(container_id);
+
+CREATE TABLE IF NOT EXISTS chunk_block_refs (
+  chunk_id INTEGER NOT NULL PRIMARY KEY REFERENCES chunk(id) ON DELETE RESTRICT,
+  block_id INTEGER NOT NULL REFERENCES storage_blocks(id) ON DELETE RESTRICT,
+  offset_in_block INTEGER NOT NULL CHECK (offset_in_block >= 0),
+  size_in_block INTEGER NOT NULL CHECK (size_in_block > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(block_id);
 
 CREATE TABLE IF NOT EXISTS snapshot (
   id TEXT PRIMARY KEY,
