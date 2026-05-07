@@ -136,6 +136,7 @@ var doctorSchemaVersionPhase = db.QueryCurrentSchemaVersion
 var doctorVerifyPhase = maintenance.VerifyCommandWithContainersDir
 var doctorSystemAuditPhase = maintenance.CollectSystemAuditSummary
 var repairLogicalRefCountsPhase = maintenance.RepairLogicalRefCountsResultRun
+var repairChunkLiveRefCountsPhase = maintenance.RepairChunkLiveRefCountsResultRun
 var runGCPhase = maintenance.RunGCWithContainersDirResult
 var startupRecoveryPhase = recovery.SystemRecoveryReportWithContainersDir
 var loadDefaultStorageContextPhase = storage.LoadDefaultStorageContext
@@ -2022,38 +2023,72 @@ func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return emitBatchCommandReport("repair", report, outputMode)
 	}
 
-	if len(parsed.positionals) != 1 || parsed.positionals[0] != "ref-counts" {
-		return usageErrorf("Usage: coldkeep repair ref-counts [--output <text|json>]")
+	if len(parsed.positionals) != 1 {
+		return usageErrorf("Usage: coldkeep repair <ref-counts|chunk-live-ref-counts> [--output <text|json>]")
 	}
 
-	result, err := repairLogicalRefCountsPhase()
-	if err != nil {
-		return verifyError(fmt.Errorf("repair ref-counts failed: %w", err))
-	}
-
-	if outputMode == outputModeJSON {
-		payload := map[string]any{
-			"status":  "ok",
-			"command": "repair",
-			"data": map[string]any{
-				"target":                    "ref-counts",
-				"scanned_logical_files":     result.ScannedLogicalFiles,
-				"updated_logical_files":     result.UpdatedLogicalFiles,
-				"orphan_physical_file_rows": result.OrphanPhysicalFileRows,
-			},
+	target := strings.TrimSpace(parsed.positionals[0])
+	switch target {
+	case "ref-counts":
+		result, err := repairLogicalRefCountsPhase()
+		if err != nil {
+			return verifyError(fmt.Errorf("repair ref-counts failed: %w", err))
 		}
-		encoded, _ := json.Marshal(payload)
-		fmt.Println(string(encoded))
-		return nil
-	}
 
-	fmt.Printf("Recomputed logical_file.ref_count from physical_file rows. scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d\n",
-		result.ScannedLogicalFiles,
-		result.UpdatedLogicalFiles,
-		result.OrphanPhysicalFileRows,
-	)
-	fmt.Printf("Hint: %s\n", doctorOperationalHint)
-	return nil
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "repair",
+				"data": map[string]any{
+					"target":                    "ref-counts",
+					"scanned_logical_files":     result.ScannedLogicalFiles,
+					"updated_logical_files":     result.UpdatedLogicalFiles,
+					"orphan_physical_file_rows": result.OrphanPhysicalFileRows,
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		fmt.Printf("Recomputed logical_file.ref_count from physical_file rows. scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d\n",
+			result.ScannedLogicalFiles,
+			result.UpdatedLogicalFiles,
+			result.OrphanPhysicalFileRows,
+		)
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		return nil
+
+	case "chunk-live-ref-counts":
+		result, err := repairChunkLiveRefCountsPhase()
+		if err != nil {
+			return verifyError(fmt.Errorf("repair chunk-live-ref-counts failed: %w", err))
+		}
+
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":  "ok",
+				"command": "repair",
+				"data": map[string]any{
+					"target":         "chunk-live-ref-counts",
+					"scanned_chunks": result.ScannedChunks,
+					"updated_chunks": result.UpdatedChunks,
+				},
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+
+		fmt.Printf("Recomputed chunk.live_ref_count from file_chunk rows. scanned_chunks=%d updated_chunks=%d\n",
+			result.ScannedChunks,
+			result.UpdatedChunks,
+		)
+		fmt.Printf("Hint: %s\n", doctorOperationalHint)
+		return nil
+	default:
+		return usageErrorf("Usage: coldkeep repair <ref-counts|chunk-live-ref-counts> [--output <text|json>]")
+	}
 }
 
 type preparedRepairTarget struct {
@@ -2080,7 +2115,7 @@ func prepareRepairTargets(raw []batch.RawTarget) []preparedRepairTarget {
 			continue
 		}
 
-		if target != "ref-counts" {
+		if target != "ref-counts" && target != "chunk-live-ref-counts" {
 			prepared = append(prepared, preparedRepairTarget{
 				Executable: false,
 				Result: batch.ItemResult{
@@ -2120,34 +2155,62 @@ func executeRepairPrepared(failFast bool, targets []preparedRepairTarget) batch.
 			continue
 		}
 
-		result, err := repairLogicalRefCountsPhase()
-		if err != nil {
-			item := batch.ItemResult{
-				RawValue: target.Target,
-				Status:   batch.ResultFailed,
-				Message:  fmt.Sprintf("repair ref-counts failed: %v", err),
+		switch target.Target {
+		case "ref-counts":
+			result, err := repairLogicalRefCountsPhase()
+			if err != nil {
+				item := batch.ItemResult{
+					RawValue: target.Target,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("repair ref-counts failed: %v", err),
+				}
+				if code, ok := invariants.Code(err); ok {
+					item.InvariantCode = code
+					item.RecommendedAction = invariants.RecommendedActionForCode(code)
+				}
+				results = append(results, item)
+				if failFast {
+					break
+				}
+				continue
 			}
-			if code, ok := invariants.Code(err); ok {
-				item.InvariantCode = code
-				item.RecommendedAction = invariants.RecommendedActionForCode(code)
-			}
-			results = append(results, item)
-			if failFast {
-				break
-			}
-			continue
-		}
 
-		results = append(results, batch.ItemResult{
-			RawValue: target.Target,
-			Status:   batch.ResultSuccess,
-			Message: fmt.Sprintf(
-				"repaired scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d",
-				result.ScannedLogicalFiles,
-				result.UpdatedLogicalFiles,
-				result.OrphanPhysicalFileRows,
-			),
-		})
+			results = append(results, batch.ItemResult{
+				RawValue: target.Target,
+				Status:   batch.ResultSuccess,
+				Message: fmt.Sprintf(
+					"repaired scanned_logical_files=%d updated_logical_files=%d orphan_physical_file_rows=%d",
+					result.ScannedLogicalFiles,
+					result.UpdatedLogicalFiles,
+					result.OrphanPhysicalFileRows,
+				),
+			})
+
+		case "chunk-live-ref-counts":
+			result, err := repairChunkLiveRefCountsPhase()
+			if err != nil {
+				item := batch.ItemResult{
+					RawValue: target.Target,
+					Status:   batch.ResultFailed,
+					Message:  fmt.Sprintf("repair chunk-live-ref-counts failed: %v", err),
+				}
+				if code, ok := invariants.Code(err); ok {
+					item.InvariantCode = code
+					item.RecommendedAction = invariants.RecommendedActionForCode(code)
+				}
+				results = append(results, item)
+				if failFast {
+					break
+				}
+				continue
+			}
+
+			results = append(results, batch.ItemResult{
+				RawValue: target.Target,
+				Status:   batch.ResultSuccess,
+				Message:  fmt.Sprintf("repaired scanned_chunks=%d updated_chunks=%d", result.ScannedChunks, result.UpdatedChunks),
+			})
+		}
 	}
 
 	report := batch.NewReport(batch.OperationRepair, false, results)
@@ -4754,6 +4817,7 @@ func printHelp() {
 		{"  remove --stored-path <path> [--output <text|json>]", "Remove one current-state physical path mapping"},
 		{"  remove --stored-paths <path> [<path> ...] [--input <file>] [--dry-run] [--fail-fast] [--output <text|json>]", "Batch remove physical path mappings in deterministic input order"},
 		{"  repair ref-counts [--batch] [--input <file>] [--fail-fast] [--output <text|json>]", "Recompute logical_file.ref_count from physical_file rows (explicit repair)"},
+		{"  repair chunk-live-ref-counts [--batch] [--input <file>] [--fail-fast] [--output <text|json>]", "Recompute chunk.live_ref_count from file_chunk rows (explicit repair)"},
 		{"  gc [options]", "Run garbage collection (state-changing unless --dry-run)"},
 		{"    (no options)", "Remove unreferenced data"},
 		{"    --dry-run", "Show what would be removed without deleting"},

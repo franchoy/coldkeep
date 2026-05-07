@@ -7583,11 +7583,53 @@ func TestRunRepairCommandRejectsUnknownTarget(t *testing.T) {
 		positionals: []string{"wrong-target"},
 		flags:       map[string][]string{},
 	}, outputModeText)
-	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep repair ref-counts") {
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep repair <ref-counts|chunk-live-ref-counts>") {
 		t.Fatalf("expected repair usage error, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunRepairCommandChunkLiveRefCountsJSONSuccess(t *testing.T) {
+	originalRepair := repairChunkLiveRefCountsPhase
+	defer func() {
+		repairChunkLiveRefCountsPhase = originalRepair
+	}()
+
+	repairChunkLiveRefCountsPhase = func() (maintenance.RepairChunkLiveRefCountsResult, error) {
+		return maintenance.RepairChunkLiveRefCountsResult{
+			ScannedChunks: 8,
+			UpdatedChunks: 3,
+		}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runRepairCommand(parsedCommandLine{
+			method:      "repair",
+			positionals: []string{"chunk-live-ref-counts"},
+			flags: map[string][]string{
+				"output": {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runRepairCommand chunk-live-ref-counts json failed: %v", err)
+		}
+	})
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse repair JSON output: %v output=%q", err, output)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("repair JSON missing data object: payload=%v", payload)
+	}
+	if got, _ := data["target"].(string); got != "chunk-live-ref-counts" {
+		t.Fatalf("expected target=chunk-live-ref-counts, got payload=%v", payload)
+	}
+	if got := int64(data["updated_chunks"].(float64)); got != 3 {
+		t.Fatalf("expected updated_chunks=3, got payload=%v", payload)
 	}
 }
 

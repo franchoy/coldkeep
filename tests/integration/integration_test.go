@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,9 +23,11 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/execution"
 	"github.com/franchoy/coldkeep/internal/listing"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/recovery"
+	"github.com/franchoy/coldkeep/internal/snapshot"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 	"github.com/franchoy/coldkeep/internal/storage"
 	"github.com/franchoy/coldkeep/internal/verify"
@@ -9368,6 +9371,180 @@ func TestRandomizedLongRunLifecycleSoak(t *testing.T) {
 		t.Fatalf("final full verify after randomized long-run soak: %v", err)
 	}
 	assertBoundedCleanup("final")
+}
+
+func TestRefCountContainmentStressMatrix(t *testing.T) {
+	testgate.RequireDB(t)
+	testgate.RequireLongRun(t)
+
+	iterations := 25
+	if raw := strings.TrimSpace(os.Getenv("COLDKEEP_REFCOUNT_STRESS_ITERS")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			t.Fatalf("invalid COLDKEEP_REFCOUNT_STRESS_ITERS=%q", raw)
+		}
+		iterations = n
+	}
+
+	t.Setenv("COLDKEEP_BLOCK_TARGET_SIZE_MB", "1")
+	t.Setenv("COLDKEEP_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+
+	type cfg struct {
+		name    string
+		codec   blocks.Codec
+		workers int
+	}
+
+	matrix := []cfg{
+		{name: "plain_w1", codec: blocks.CodecPlain, workers: 1},
+		{name: "plain_w4", codec: blocks.CodecPlain, workers: 4},
+		{name: "aesgcm_w1", codec: blocks.CodecAESGCM, workers: 1},
+		{name: "aesgcm_w4", codec: blocks.CodecAESGCM, workers: 4},
+	}
+
+	for _, tc := range matrix {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			origContainersDir := container.ContainersDir
+			container.ContainersDir = filepath.Join(tmp, "containers")
+			t.Cleanup(func() { container.ContainersDir = origContainersDir })
+			t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+			t.Setenv("COLDKEEP_CODEC", string(tc.codec))
+			testutils.ResetStorage(t)
+
+			dbconn, err := db.ConnectDB()
+			if err != nil {
+				t.Fatalf("connectDB: %v", err)
+			}
+			defer dbconn.Close()
+
+			testutils.ApplySchema(t, dbconn)
+			testutils.ResetDB(t, dbconn)
+
+			sgctx := testutils.NewTestContext(dbconn)
+			inputDir := filepath.Join(tmp, "input")
+			restoreDir := filepath.Join(tmp, "restore")
+			if err := os.MkdirAll(inputDir, 0o755); err != nil {
+				t.Fatalf("mkdir input: %v", err)
+			}
+			if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+				t.Fatalf("mkdir restore: %v", err)
+			}
+
+			countChunkRefMismatches := func() int64 {
+				t.Helper()
+				var n int64
+				if err := dbconn.QueryRow(`
+					SELECT COUNT(*)
+					FROM (
+						SELECT c.id
+						FROM chunk c
+						LEFT JOIN file_chunk fc ON c.id = fc.chunk_id
+						GROUP BY c.id, c.live_ref_count
+						HAVING c.live_ref_count <> COUNT(fc.chunk_id)
+					) AS mismatch
+				`).Scan(&n); err != nil {
+					t.Fatalf("count chunk ref mismatches: %v", err)
+				}
+				return n
+			}
+
+			for i := 0; i < iterations; i++ {
+				base := filepath.Join(inputDir, fmt.Sprintf("iter-%04d", i))
+				if err := os.MkdirAll(base, 0o755); err != nil {
+					t.Fatalf("iter %d mkdir base: %v", i, err)
+				}
+
+				a := filepath.Join(base, "a.bin")
+				b := filepath.Join(base, "b.bin")
+				c := filepath.Join(base, "c.bin")
+				overlap := filepath.Join(base, "b-overlap.bin")
+
+				payloadA := bytes.Repeat([]byte{byte((i*7 + 11) % 251)}, 64*1024+((i%5)*1024))
+				payloadB := bytes.Repeat([]byte{byte((i*13 + 19) % 251)}, 96*1024+((i%7)*1024))
+				payloadC := bytes.Repeat([]byte{byte((i*17 + 23) % 251)}, 128*1024+((i%3)*1024))
+
+				if err := os.WriteFile(a, payloadA, 0o644); err != nil {
+					t.Fatalf("iter %d write a: %v", i, err)
+				}
+				if err := os.WriteFile(b, payloadB, 0o644); err != nil {
+					t.Fatalf("iter %d write b: %v", i, err)
+				}
+				if err := os.WriteFile(c, payloadC, 0o644); err != nil {
+					t.Fatalf("iter %d write c: %v", i, err)
+				}
+				if err := os.WriteFile(overlap, payloadB, 0o644); err != nil {
+					t.Fatalf("iter %d write overlap: %v", i, err)
+				}
+
+				opts := execution.DefaultOptions()
+				opts.StoreFolderWorkers = tc.workers
+				if err := storage.StoreFolderWithStorageContextAndCodecAndOptions(sgctx, base, tc.codec, opts); err != nil {
+					t.Fatalf("iter %d store-folder: %v", i, err)
+				}
+
+				if err := storage.StoreFileWithStorageContextAndCodec(sgctx, overlap, tc.codec); err != nil {
+					t.Fatalf("iter %d overlap store: %v", i, err)
+				}
+
+				snapshotID := fmt.Sprintf("stress-%s-%04d", tc.name, i)
+				if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
+					ID:   snapshotID,
+					Type: "full",
+				}); err != nil {
+					t.Fatalf("iter %d create snapshot: %v", i, err)
+				}
+
+				if err := snapshot.DeleteSnapshot(context.Background(), dbconn, snapshotID); err != nil {
+					t.Fatalf("iter %d delete snapshot: %v", i, err)
+				}
+
+				var removeID int64
+				if err := dbconn.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, a).Scan(&removeID); err != nil {
+					t.Fatalf("iter %d resolve remove-by-id: %v", i, err)
+				}
+				if err := storage.RemoveFileWithDB(dbconn, removeID); err != nil {
+					t.Fatalf("iter %d remove by id: %v", i, err)
+				}
+
+				if _, err := storage.RemoveFileByStoredPathWithStorageContextResult(sgctx, b); err != nil {
+					t.Fatalf("iter %d remove by stored path: %v", i, err)
+				}
+
+				if _, err := maintenance.RunGCWithContainersDirResult(true, container.ContainersDir); err != nil {
+					t.Fatalf("iter %d gc dry-run: %v", i, err)
+				}
+				if _, err := maintenance.RunGCWithContainersDirResult(false, container.ContainersDir); err != nil {
+					t.Fatalf("iter %d gc real: %v", i, err)
+				}
+
+				if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyStandard); err != nil {
+					t.Fatalf("iter %d verify: %v", i, err)
+				}
+
+				var keepID int64
+				if err := dbconn.QueryRow(`SELECT logical_file_id FROM physical_file WHERE path = $1`, c).Scan(&keepID); err != nil {
+					t.Fatalf("iter %d resolve restore id: %v", i, err)
+				}
+
+				out := filepath.Join(restoreDir, fmt.Sprintf("iter-%04d-c.restored.bin", i))
+				if err := storage.RestoreFileWithDB(dbconn, keepID, out); err != nil {
+					t.Fatalf("iter %d restore: %v", i, err)
+				}
+
+				wantHash := testutils.SHA256File(t, c)
+				gotHash := testutils.SHA256File(t, out)
+				if gotHash != wantHash {
+					t.Fatalf("iter %d restore hash mismatch: want %s got %s", i, wantHash, gotHash)
+				}
+
+				if mismatches := countChunkRefMismatches(); mismatches != 0 {
+					t.Fatalf("iter %d chunk live_ref_count mismatch count=%d", i, mismatches)
+				}
+			}
+		})
+	}
 }
 
 func TestGCRestorePinRaceContainerNotDeleted(t *testing.T) {
