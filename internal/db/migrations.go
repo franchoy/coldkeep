@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 13
+const requiredPostgresSchemaVersion = 15
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -740,6 +740,41 @@ func loadSQLiteSchema() (string, error) {
 	return dbschema.SQLiteSchema, nil
 }
 
+func runSQLiteStorageBlocksCompressionMetadataMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	// Add compression_ratio and payload_hash columns to storage_blocks table.
+	// This enables explicit threading of compression metadata through persistence pipeline.
+	// Migration is idempotent: columns added with defaults.
+
+	hasRatioCol, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", "compression_ratio")
+	if err != nil {
+		return fmt.Errorf("check compression_ratio column: %w", err)
+	}
+	if !hasRatioCol {
+		if _, err := dbconn.ExecContext(ctx, "ALTER TABLE storage_blocks ADD COLUMN compression_ratio REAL DEFAULT 1.0"); err != nil {
+			return fmt.Errorf("add compression_ratio column: %w", err)
+		}
+	}
+
+	hasHashCol, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", "payload_hash")
+	if err != nil {
+		return fmt.Errorf("check payload_hash column: %w", err)
+	}
+	if !hasHashCol {
+		if _, err := dbconn.ExecContext(ctx, "ALTER TABLE storage_blocks ADD COLUMN payload_hash TEXT"); err != nil {
+			return fmt.Errorf("add payload_hash column: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, "DELETE FROM schema_version WHERE version < 15"); err != nil {
+		return fmt.Errorf("clean schema_version before 15: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, "INSERT OR IGNORE INTO schema_version(version) VALUES (15)"); err != nil {
+		return fmt.Errorf("insert schema_version 15: %w", err)
+	}
+
+	return nil
+}
 func loadPostgresSchema() (string, error) {
 	if dbschema.PostgresSchema == "" {
 		return "", errors.New("embedded postgres schema is empty")
@@ -929,6 +964,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteRepositoryCompressionConfigMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteStorageBlocksCompressionMetadataMigration(tx, ctx); err != nil {
 		return err
 	}
 

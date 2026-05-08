@@ -66,9 +66,10 @@ type ChunkEntry struct {
 // EncodedBlock is the in-memory representation of a decoded/constructed
 // plaintext block format payload in v1 layout.
 type EncodedBlock struct {
-	Header  BlockHeader
-	Entries []ChunkEntry
-	Payload []byte
+	Header   BlockHeader
+	Entries  []ChunkEntry
+	Payload  []byte
+	Metadata TransformMetadata
 }
 
 // GetChunk returns one chunk slice by table index from the payload.

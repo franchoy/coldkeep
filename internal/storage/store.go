@@ -2845,6 +2845,7 @@ type packedBlockEncoded struct {
 	encodedBlock     *blocks.EncodedBlock
 	plaintextEncoded []byte
 	blockHash        []byte
+	metadata         blocks.TransformMetadata
 }
 
 // packedBlockTransformed holds the result of the transform stage.
@@ -2852,6 +2853,7 @@ type packedBlockTransformed struct {
 	storedPayload []byte
 	storageCodec  string
 	legacyNonce   []byte
+	metadata      blocks.TransformMetadata
 }
 
 // buildAndEncodePackedBlock builds the block from the builder, serializes it to
@@ -2868,11 +2870,18 @@ func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded
 	}
 
 	blockHash := blocks.ComputeBlockHash(plaintextEncoded)
+	metadata := blocks.TransformMetadata{
+		PayloadHash:      hex.EncodeToString(blockHash),
+		CompressionCodec: packedStorageBlockCodecNone,
+		CompressionRatio: 1.0,
+	}
+	encodedBlock.Metadata = metadata
 
 	return packedBlockEncoded{
 		encodedBlock:     encodedBlock,
 		plaintextEncoded: plaintextEncoded,
 		blockHash:        blockHash,
+		metadata:         metadata,
 	}, nil
 }
 
@@ -2913,10 +2922,16 @@ func applyPackedBlockTransforms(
 		return packedBlockTransformed{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
 	}
 
+	metadata := enc.metadata
+	if len(enc.plaintextEncoded) > 0 {
+		metadata.CompressionRatio = float64(len(storedPayload)) / float64(len(enc.plaintextEncoded))
+	}
+
 	return packedBlockTransformed{
 		storedPayload: storedPayload,
 		storageCodec:  storageCodec,
 		legacyNonce:   legacyNonce,
+		metadata:      metadata,
 	}, nil
 }
 
@@ -2944,8 +2959,9 @@ func persistPackedBlockMetadata(
 		ctx,
 		`INSERT INTO storage_blocks (
 			format_version, codec, plaintext_size, stored_size,
-			container_id, container_offset, block_hash
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			container_id, container_offset, block_hash,
+			compression_codec, compression_ratio, payload_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING id`,
 		1,
 		tr.storageCodec,
@@ -2954,6 +2970,9 @@ func persistPackedBlockMetadata(
 		placement.ContainerID,
 		placement.Offset,
 		enc.blockHash,
+		tr.metadata.CompressionCodec,
+		tr.metadata.CompressionRatio,
+		tr.metadata.PayloadHash,
 	).Scan(&blockID); err != nil {
 		return 0, nil, err
 	}

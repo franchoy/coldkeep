@@ -475,6 +475,8 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset BIGINT NOT NULL CHECK (container_offset >= 0),
   block_hash BYTEA NOT NULL,
+   compression_ratio REAL DEFAULT 1.0,
+   payload_hash TEXT,
   compressed_hash BYTEA,
   physical_hash BYTEA,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -509,5 +511,22 @@ VALUES ('default_block_compression', 'none')
 ON CONFLICT (key) DO NOTHING;
 
 UPDATE schema_version SET version = 13 WHERE version < 13;
+
+-- Schema version 14: repository compression defaults in config table.
+INSERT INTO repository_config(key, value)
+VALUES ('compression', 'none')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO repository_config(key, value)
+VALUES ('compression_level', '3')
+ON CONFLICT (key) DO NOTHING;
+
+UPDATE schema_version SET version = 14 WHERE version < 14;
+
+-- Schema version 15: packed-block transform metadata columns.
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_ratio REAL DEFAULT 1.0;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+
+UPDATE schema_version SET version = 15 WHERE version < 15;
 
 COMMIT;

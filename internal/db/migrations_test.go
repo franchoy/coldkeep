@@ -189,8 +189,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 14 {
-		t.Fatalf("expected schema version 14 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 15 {
+		t.Fatalf("expected schema version 15 after first migration pass, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -209,7 +209,7 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 		t.Fatalf("expected repository default block compression=none on fresh install, got %q", configuredDefaultCompression)
 	}
 
-	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
+	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash", "compression_ratio", "payload_hash"} {
 		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
 			t.Fatalf("expected storage_blocks.%s after migration", columnName)
 		}
@@ -251,8 +251,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 14 {
-		t.Fatalf("expected schema version to stay 14 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 15 {
+		t.Fatalf("expected schema version to stay 15 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -291,6 +291,8 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"UPDATE schema_version SET version = 11 WHERE version < 11",
 		"UPDATE schema_version SET version = 12 WHERE version < 12",
 		"UPDATE schema_version SET version = 13 WHERE version < 13",
+		"UPDATE schema_version SET version = 14 WHERE version < 14",
+		"UPDATE schema_version SET version = 15 WHERE version < 15",
 		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
 		"CREATE TABLE IF NOT EXISTS repository_config",
 		"VALUES ('default_block_compression', 'none')",
@@ -308,6 +310,8 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_ratio REAL DEFAULT 1.0",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS payload_hash TEXT",
 	}
 
 	for _, check := range checks {
@@ -341,8 +345,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 13 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 13, got %d", schemaVersion)
+	if schemaVersion != 15 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 15, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -384,7 +388,7 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 		t.Fatalf("expected direct sqlite bootstrap default_block_compression=none, got %q", configuredDefaultCompression)
 	}
 
-	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
+	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash", "compression_ratio", "payload_hash"} {
 		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
 			t.Fatalf("expected storage_blocks.%s in direct sqlite bootstrap", columnName)
 		}
@@ -508,8 +512,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 14 {
-		t.Fatalf("expected schema version 14 after migration, got %d", schemaVersion)
+	if schemaVersion != 15 {
+		t.Fatalf("expected schema version 15 after migration, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -782,11 +786,11 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 14 {
-		t.Fatalf("expected schema version 14 after v12 migration, got %d", schemaVersion)
+	if schemaVersion != 15 {
+		t.Fatalf("expected schema version 15 after v12 migration, got %d", schemaVersion)
 	}
 
-	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
+	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash", "compression_ratio", "payload_hash"} {
 		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
 			t.Fatalf("expected storage_blocks.%s after v12 migration", columnName)
 		}
@@ -1116,8 +1120,8 @@ func TestPostgresFreshBootstrapCreatesPhaseOneV8Schema(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after bootstrap: %v", err)
 	}
-	if schemaVersion != 12 {
-		t.Fatalf("expected schema_version=12 after fresh postgres bootstrap, got %d", schemaVersion)
+	if schemaVersion != 15 {
+		t.Fatalf("expected schema_version=15 after fresh postgres bootstrap, got %d", schemaVersion)
 	}
 
 	for _, tableName := range []string{"snapshot", "snapshot_path", "snapshot_file"} {
@@ -1351,8 +1355,8 @@ func TestEnsurePostgresSchemaAutoMigratesVersionElevenToTwelve(t *testing.T) {
 	if err := opened.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version after auto-migration: %v", err)
 	}
-	if schemaVersion != 12 {
-		t.Fatalf("expected schema_version=12 after automatic postgres migration from v11, got %d", schemaVersion)
+	if schemaVersion != 15 {
+		t.Fatalf("expected schema_version=15 after automatic postgres migration from v11, got %d", schemaVersion)
 	}
 }
 
@@ -1982,13 +1986,13 @@ func TestRunMigrationsCreatesCompressionConfigDefaults(t *testing.T) {
 		t.Fatalf("expected compression_level='3', got %q", compressionLevel)
 	}
 
-	// Verify schema_version is at least 14
+	// Verify schema_version is at least 15
 	var schemaVersion int
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion < 14 {
-		t.Fatalf("expected schema_version >= 14, got %d", schemaVersion)
+	if schemaVersion < 15 {
+		t.Fatalf("expected schema_version >= 15, got %d", schemaVersion)
 	}
 }
 

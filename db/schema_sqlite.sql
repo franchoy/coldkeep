@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 13 WHERE version < 13;
-INSERT OR IGNORE INTO schema_version(version) VALUES (13);
+   	UPDATE schema_version SET version = 15 WHERE version < 15;
+   	INSERT OR IGNORE INTO schema_version(version) VALUES (15);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
   block_hash BLOB NOT NULL,
+   compression_ratio REAL DEFAULT 1.0,
+   payload_hash TEXT,
   compressed_hash BLOB,
   physical_hash BLOB,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

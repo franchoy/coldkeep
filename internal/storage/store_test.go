@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -4338,4 +4339,59 @@ func TestCompressionConfigDoesNotAffectWriteBehavior(t *testing.T) {
 	// 1. persistPackedBlockMetadata() doesn't read compression config
 	// 2. tr.storageCodec is always "plain" or "aes-gcm" (encryption, not compression)
 	// 3. Config is semantic preparation for Phase 2, not operational yet
+}
+
+func TestStoreFilePersistsTransformMetadataColumns(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	payloads := [][]byte{
+		[]byte("meta-pack-a"),
+		[]byte("meta-pack-b"),
+		[]byte("meta-pack-c"),
+	}
+
+	_ = storeScriptedFile(t, dbconn, workDir, "meta-pack.bin", payloads)
+
+	var (
+		compressionCodec string
+		compressionRatio float64
+		payloadHash      sql.NullString
+		plaintextSize    int64
+		storedSize       int64
+		blockHash        []byte
+	)
+	if err := dbconn.QueryRow(`
+		SELECT compression_codec, compression_ratio, payload_hash, plaintext_size, stored_size, block_hash
+		FROM storage_blocks
+		ORDER BY id ASC
+		LIMIT 1
+	`).Scan(&compressionCodec, &compressionRatio, &payloadHash, &plaintextSize, &storedSize, &blockHash); err != nil {
+		t.Fatalf("read storage_blocks metadata row: %v", err)
+	}
+
+	if compressionCodec != "none" {
+		t.Fatalf("expected compression_codec=none, got %q", compressionCodec)
+	}
+	if !payloadHash.Valid || payloadHash.String == "" {
+		t.Fatalf("expected non-empty payload_hash, got valid=%v value=%q", payloadHash.Valid, payloadHash.String)
+	}
+
+	expectedPayloadHash := hex.EncodeToString(blockHash)
+	if payloadHash.String != expectedPayloadHash {
+		t.Fatalf("payload_hash mismatch: got %q want %q", payloadHash.String, expectedPayloadHash)
+	}
+
+	expectedRatio := float64(storedSize) / float64(plaintextSize)
+	if math.Abs(compressionRatio-expectedRatio) > 1e-9 {
+		t.Fatalf("compression_ratio mismatch: got %.12f want %.12f", compressionRatio, expectedRatio)
+	}
 }
