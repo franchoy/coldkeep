@@ -13,7 +13,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/iodebug"
 	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
-	gziptransform "github.com/franchoy/coldkeep/internal/storage/transforms/gzip"
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
@@ -319,16 +318,13 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 
 	// Stage 3b: Decompress if a compression codec was applied during the write path.
 	// Write order: compress → encrypt; Read order: decrypt → decompress.
-	// The logical block bytes (before any transform) are recovered here.
+	// Phase 1 boundary: compression is not activated; all stored blocks must have
+	// codec "none". If a block with a non-none codec is encountered it means the
+	// database was written by a future version — return a clear error.
+	// Phase 2 will wire in gzip (and other codec) decompression here.
 	logicalBytes := plaintext
-	if meta.Metadata.Compression.Codec == gziptransform.Name {
-		decompressed, err := gziptransform.NewDefault().Decode(plaintext)
-		if err != nil {
-			return nil, fmt.Errorf("decompress block %d (gzip): %w", meta.ID, err)
-		}
-		logicalBytes = decompressed
-	} else if meta.Metadata.Compression.Codec != "" && meta.Metadata.Compression.Codec != "none" {
-		return nil, fmt.Errorf("block %d: unsupported compression codec %q", meta.ID, meta.Metadata.Compression.Codec)
+	if meta.Metadata.Compression.Codec != "" && meta.Metadata.Compression.Codec != "none" {
+		return nil, fmt.Errorf("block %d: unsupported compression codec %q (Phase 1: compression not yet activated)", meta.ID, meta.Metadata.Compression.Codec)
 	}
 
 	if int64(len(logicalBytes)) != meta.Metadata.Sizes.PlaintextSize {

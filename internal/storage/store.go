@@ -770,15 +770,18 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		validationContainerDir = ""
 	}
 
-	compressionCodecName := utils_env.GetenvOrDefault("COLDKEEP_COMPRESSION", "none")
-	ct, err := loadCompressionTransform(compressionCodecName)
-	if err != nil {
-		return nil, fmt.Errorf("initialize compression codec %q: %w", compressionCodecName, err)
+	// Phase 1: compression is prepared but not activated. The COLDKEEP_COMPRESSION
+	// env var is reserved for Phase 2 activation; it is intentionally ignored here.
+	// Activation will be wired in once the full transform pipeline is validated.
+	if envCodec := utils_env.GetenvOrDefault("COLDKEEP_COMPRESSION", "none"); envCodec != "none" && envCodec != "" {
+		// Log that the env var is set but will not take effect in Phase 1.
+		// This is intentional: the variable is reserved for future activation.
+		_ = envCodec // suppressed until Phase 2 activation
 	}
 
 	return &storeFileRuntime{
 		transformer:            transformer,
-		compression:            storeRuntimeCompression{transform: ct, codec: compressionCodecName},
+		compression:            storeRuntimeCompression{transform: nil, codec: "none"},
 		blockRepo:              &blocks.Repository{DB: sgctx.DB},
 		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
 		validationContainerDir: validationContainerDir,
