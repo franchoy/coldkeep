@@ -146,15 +146,20 @@ func (r *StorageBlockReader) decodeLogicalBlock(blockID int64, plaintextBytes []
 
 // blockMetadata represents the persistent metadata about a block.
 type blockMetadata struct {
-	ID              int64
-	FormatVersion   int
-	Codec           string
-	PlaintextSize   int64
-	StoredSize      int64
-	ContainerName   string
-	ContainerOffset int64
-	BlockHash       []byte
-	Nonce           []byte
+	ID               int64
+	FormatVersion    int
+	Codec            string
+	PlaintextSize    int64
+	CompressionCodec string
+	CompressionLevel *int
+	CompressedSize   *int64
+	StoredSize       int64
+	ContainerName    string
+	ContainerOffset  int64
+	BlockHash        []byte
+	CompressedHash   []byte
+	PhysicalHash     []byte
+	Nonce            []byte
 }
 
 // loadBlockMetadata queries storage_blocks and container tables to get full block metadata.
@@ -165,8 +170,10 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 
 	query := `
 		SELECT 
-			b.id, b.format_version, b.codec, b.plaintext_size, b.stored_size,
-			b.container_offset, b.block_hash, c.filename
+			b.id, b.format_version, b.codec, b.plaintext_size,
+			b.compression_codec, b.compression_level, b.compressed_size,
+			b.stored_size, b.container_offset, b.block_hash,
+			b.compressed_hash, b.physical_hash, c.filename
 		FROM storage_blocks b
 		JOIN container c ON b.container_id = c.id
 		WHERE b.id = $1
@@ -175,15 +182,25 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 
 	var meta blockMetadata
 	var codecStr string
+	var compressionCodec string
+	var compressionLevel sql.NullInt64
+	var compressedSize sql.NullInt64
+	var compressedHash []byte
+	var physicalHash []byte
 
 	err := r.db.QueryRowContext(ctx, query, blockID).Scan(
 		&meta.ID,
 		&meta.FormatVersion,
 		&codecStr,
 		&meta.PlaintextSize,
+		&compressionCodec,
+		&compressionLevel,
+		&compressedSize,
 		&meta.StoredSize,
 		&meta.ContainerOffset,
 		&meta.BlockHash,
+		&compressedHash,
+		&physicalHash,
 		&meta.ContainerName,
 	)
 	if err == sql.ErrNoRows {
@@ -194,6 +211,17 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 	}
 
 	meta.Codec = codecStr
+	meta.CompressionCodec = compressionCodec
+	if compressionLevel.Valid {
+		level := int(compressionLevel.Int64)
+		meta.CompressionLevel = &level
+	}
+	if compressedSize.Valid {
+		size := compressedSize.Int64
+		meta.CompressedSize = &size
+	}
+	meta.CompressedHash = compressedHash
+	meta.PhysicalHash = physicalHash
 
 	// Validate metadata
 	if meta.PlaintextSize <= 0 {

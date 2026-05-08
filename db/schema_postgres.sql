@@ -460,6 +460,8 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   format_version INTEGER NOT NULL CHECK (format_version > 0),
   codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
   plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+  compression_codec TEXT NOT NULL DEFAULT 'none',
+  compression_level INTEGER,
   compressed_size BIGINT CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size BIGINT NOT NULL CHECK (stored_size > 0),
   container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
@@ -467,7 +469,6 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   block_hash BYTEA NOT NULL,
   compressed_hash BYTEA,
   physical_hash BYTEA,
-  transform_chain TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -485,10 +486,15 @@ CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(blo
 UPDATE schema_version SET version = 12 WHERE version < 12;
 
 -- Schema version 13: transform-aware packed-block metadata.
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_codec TEXT;
+UPDATE storage_blocks SET compression_codec = 'none' WHERE compression_codec IS NULL;
+ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET DEFAULT 'none';
+ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET NOT NULL;
+
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA;
-ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS transform_chain TEXT;
 
 INSERT INTO repository_config(key, value)
 VALUES ('default_block_compression', 'none')

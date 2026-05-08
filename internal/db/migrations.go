@@ -588,6 +588,8 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 			format_version INTEGER NOT NULL CHECK (format_version > 0),
 			codec TEXT NOT NULL,
 			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			compression_codec TEXT NOT NULL DEFAULT 'none',
+			compression_level INTEGER,
 			compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0),
 			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
 			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
@@ -595,7 +597,6 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 			block_hash BLOB NOT NULL,
 			compressed_hash BLOB,
 			physical_hash BLOB,
-			transform_chain TEXT,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`); err != nil {
@@ -650,10 +651,11 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 			name string
 			sql  string
 		}{
+			{name: "compression_codec", sql: `ALTER TABLE storage_blocks ADD COLUMN compression_codec TEXT NOT NULL DEFAULT 'none'`},
+			{name: "compression_level", sql: `ALTER TABLE storage_blocks ADD COLUMN compression_level INTEGER`},
 			{name: "compressed_size", sql: `ALTER TABLE storage_blocks ADD COLUMN compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0)`},
 			{name: "compressed_hash", sql: `ALTER TABLE storage_blocks ADD COLUMN compressed_hash BLOB`},
 			{name: "physical_hash", sql: `ALTER TABLE storage_blocks ADD COLUMN physical_hash BLOB`},
-			{name: "transform_chain", sql: `ALTER TABLE storage_blocks ADD COLUMN transform_chain TEXT`},
 		} {
 			hasColumn, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", columnSpec.name)
 			if err != nil {

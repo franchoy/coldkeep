@@ -209,10 +209,15 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 		t.Fatalf("expected repository default block compression=none on fresh install, got %q", configuredDefaultCompression)
 	}
 
-	for _, columnName := range []string{"compressed_size", "compressed_hash", "physical_hash", "transform_chain"} {
+	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
 		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
 			t.Fatalf("expected storage_blocks.%s after migration", columnName)
 		}
+	}
+
+	var freshCompressionCodec string
+	if err := dbconn.QueryRow(`SELECT compression_codec FROM storage_blocks LIMIT 1`).Scan(&freshCompressionCodec); err != nil && !strings.Contains(err.Error(), "sql: no rows in result set") {
+		t.Fatalf("read storage_blocks.compression_codec after migration: %v", err)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -296,10 +301,13 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"DROP INDEX IF EXISTS idx_snapshot_file_path",
 		"CREATE INDEX IF NOT EXISTS idx_snapshot_file_path_id ON snapshot_file(path_id)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id)",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_codec TEXT",
+		"ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET DEFAULT 'none'",
+		"ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET NOT NULL",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA",
-		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS transform_chain TEXT",
 	}
 
 	for _, check := range checks {
@@ -376,10 +384,18 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 		t.Fatalf("expected direct sqlite bootstrap default_block_compression=none, got %q", configuredDefaultCompression)
 	}
 
-	for _, columnName := range []string{"compressed_size", "compressed_hash", "physical_hash", "transform_chain"} {
+	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
 		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
 			t.Fatalf("expected storage_blocks.%s in direct sqlite bootstrap", columnName)
 		}
+	}
+
+	var bootstrapCompressionCodec string
+	if err := dbconn.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'storage_blocks'`).Scan(&bootstrapCompressionCodec); err != nil {
+		t.Fatalf("read sqlite storage_blocks DDL: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "compression_codec text not null default 'none'") {
+		t.Fatalf("expected storage_blocks DDL to include compression_codec default none, got %q", bootstrapCompressionCodec)
 	}
 }
 
@@ -770,7 +786,7 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 		t.Fatalf("expected schema version 13 after v12 migration, got %d", schemaVersion)
 	}
 
-	for _, columnName := range []string{"compressed_size", "compressed_hash", "physical_hash", "transform_chain"} {
+	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
 		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
 			t.Fatalf("expected storage_blocks.%s after v12 migration", columnName)
 		}
@@ -785,29 +801,37 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	}
 
 	var migrated struct {
-		plaintextSize  int64
-		storedSize     int64
-		compressedSize sql.NullInt64
-		compressedHash []byte
-		physicalHash   []byte
-		transformChain sql.NullString
+		plaintextSize    int64
+		storedSize       int64
+		compressionCodec string
+		compressionLevel sql.NullInt64
+		compressedSize   sql.NullInt64
+		compressedHash   []byte
+		physicalHash     []byte
 	}
 	if err := dbconn.QueryRow(`
-		SELECT plaintext_size, stored_size, compressed_size, compressed_hash, physical_hash, transform_chain
+		SELECT plaintext_size, stored_size, compression_codec, compression_level, compressed_size, compressed_hash, physical_hash
 		FROM storage_blocks
 		LIMIT 1
 	`).Scan(
 		&migrated.plaintextSize,
 		&migrated.storedSize,
+		&migrated.compressionCodec,
+		&migrated.compressionLevel,
 		&migrated.compressedSize,
 		&migrated.compressedHash,
 		&migrated.physicalHash,
-		&migrated.transformChain,
 	); err != nil {
 		t.Fatalf("read migrated storage block row: %v", err)
 	}
 	if migrated.plaintextSize != 64 || migrated.storedSize != 64 {
 		t.Fatalf("unexpected migrated storage block sizes: plaintext=%d stored=%d", migrated.plaintextSize, migrated.storedSize)
+	}
+	if migrated.compressionCodec != "none" {
+		t.Fatalf("expected migrated compression_codec=none, got %q", migrated.compressionCodec)
+	}
+	if migrated.compressionLevel.Valid {
+		t.Fatalf("expected migrated compression_level to remain NULL, got %d", migrated.compressionLevel.Int64)
 	}
 	if migrated.compressedSize.Valid {
 		t.Fatalf("expected migrated compressed_size to remain NULL, got %d", migrated.compressedSize.Int64)
@@ -817,9 +841,6 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	}
 	if migrated.physicalHash != nil {
 		t.Fatalf("expected migrated physical_hash to remain NULL, got %x", migrated.physicalHash)
-	}
-	if migrated.transformChain.Valid {
-		t.Fatalf("expected migrated transform_chain to remain NULL, got %q", migrated.transformChain.String)
 	}
 
 	if _, err := dbconn.Exec(`UPDATE repository_config SET value = 'zstd' WHERE key = 'default_block_compression'`); err != nil {

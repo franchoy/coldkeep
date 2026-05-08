@@ -32,14 +32,19 @@ type Descriptor struct {
 // Block represents a physical stored block unit for the v1.8 packed-block model.
 // It captures the persisted block metadata shared by write, read, and verify paths.
 type Block struct {
-	ID              int64
-	FormatVersion   int
-	Codec           string
-	PlaintextSize   int64
-	StoredSize      int64
-	ContainerID     int64
-	ContainerOffset int64
-	BlockHash       []byte
+	ID               int64
+	FormatVersion    int
+	Codec            string
+	PlaintextSize    int64
+	CompressionCodec string
+	CompressionLevel *int
+	CompressedSize   *int64
+	StoredSize       int64
+	ContainerID      int64
+	ContainerOffset  int64
+	BlockHash        []byte
+	CompressedHash   []byte
+	PhysicalHash     []byte
 }
 
 // ChunkSegment represents one chunk placement inside a physical block.

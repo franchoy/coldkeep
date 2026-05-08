@@ -218,3 +218,62 @@ func TestStorageBlockReaderMetadataValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestStorageBlockReaderLoadBlockMetadataIncludesTransformAwareFields(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbconn.Close()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.ExecContext(context.Background(), `
+		INSERT INTO container (id, filename, max_size, created_at)
+		VALUES (1, 'test.bin', 1048576, CURRENT_TIMESTAMP)
+	`); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.ExecContext(context.Background(), `
+		INSERT INTO storage_blocks (
+			id, format_version, codec, plaintext_size,
+			compression_codec, compression_level, compressed_size,
+			stored_size, container_id, container_offset,
+			block_hash, compressed_hash, physical_hash
+		)
+		VALUES (1, 1, 'none', 100, 'zstd', 7, 80, 108, 1, 12, x'0102', x'0304', x'0506')
+	`); err != nil {
+		t.Fatalf("insert storage_blocks row: %v", err)
+	}
+
+	reader := NewStorageBlockReader(dbconn, "/tmp")
+	meta, err := reader.loadBlockMetadata(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("load block metadata: %v", err)
+	}
+
+	if meta.CompressionCodec != "zstd" {
+		t.Fatalf("compression codec: got %q want %q", meta.CompressionCodec, "zstd")
+	}
+	if meta.CompressionLevel == nil || *meta.CompressionLevel != 7 {
+		t.Fatalf("compression level: got %v want 7", meta.CompressionLevel)
+	}
+	if meta.CompressedSize == nil || *meta.CompressedSize != 80 {
+		t.Fatalf("compressed size: got %v want 80", meta.CompressedSize)
+	}
+	if got := fmt.Sprintf("%x", meta.CompressedHash); got != "0304" {
+		t.Fatalf("compressed hash: got %s want %s", got, "0304")
+	}
+	if got := fmt.Sprintf("%x", meta.PhysicalHash); got != "0506" {
+		t.Fatalf("physical hash: got %s want %s", got, "0506")
+	}
+	if meta.StoredSize != 108 {
+		t.Fatalf("stored size: got %d want %d", meta.StoredSize, 108)
+	}
+	if meta.PlaintextSize != 100 {
+		t.Fatalf("plaintext size: got %d want %d", meta.PlaintextSize, 100)
+	}
+}
