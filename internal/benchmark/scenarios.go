@@ -416,6 +416,7 @@ func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error
 	env := withScenarioEnv(os.Environ(), map[string]string{
 		"COLDKEEP_STORAGE_DIR": filepath.Join(ctx.RepoPath, "storage", "containers"),
 		"COLDKEEP_CODEC":       cfg.Codec,
+		"COLDKEEP_COMPRESSION": "none",
 	}, cfg.ExtraEnv)
 
 	spec := CommandSpec{

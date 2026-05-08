@@ -143,6 +143,53 @@ func TestStoreFileReadsMixedCompressionBlocksAfterRepositoryDefaultChangesStep36
 	}
 }
 
+func TestStoreFileDefaultsToNoCompressionWhenRepoCompressionConfigMissingStep37(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`DELETE FROM repository_config WHERE key IN ('compression', 'compression_level')`); err != nil {
+		t.Fatalf("delete compression config rows: %v", err)
+	}
+
+	t.Setenv("COLDKEEP_COMPRESSION", "")
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "")
+
+	workDir := t.TempDir()
+	payload := bytes.Repeat([]byte("step37-default-none-"), 32)
+	inPath := filepath.Join(workDir, "step37-default-none.txt")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+	}, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store file: %v", err)
+	}
+
+	var codec string
+	if err := dbconn.QueryRow(`SELECT compression_codec FROM storage_blocks ORDER BY id DESC LIMIT 1`).Scan(&codec); err != nil {
+		t.Fatalf("read persisted compression codec: %v", err)
+	}
+	if codec != "none" {
+		t.Fatalf("expected compression_codec=none for fresh/no-config repository, got %q", codec)
+	}
+
+	if got := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, "step37-default-none.restore"); !bytes.Equal(got, payload) {
+		t.Fatalf("restored payload mismatch")
+	}
+}
+
 func (w *syncFailWriter) FinalizeContainer() error {
 	return nil
 }

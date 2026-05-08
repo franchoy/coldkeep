@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
+}
+
 func TestCoreScenariosReturnsExpectedNames(t *testing.T) {
 	scenarios := CoreScenarios(ScenarioConfig{})
 	if len(scenarios) != 9 {
@@ -142,6 +152,45 @@ func TestScenarioVerifySystemDeepRunsVerifyCommand(t *testing.T) {
 	}
 	if !containsCommand(joined, "verify system --deep") {
 		t.Fatalf("expected verify system --deep command, got=%v", joined)
+	}
+}
+
+func TestRunColdkeepSetsCompressionNoneByDefaultStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_COMPRESSION"); got != "none" {
+		t.Fatalf("expected COLDKEEP_COMPRESSION=none, got %q", got)
+	}
+}
+
+func TestRunColdkeepAllowsCompressionOverrideStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+		ExtraEnv: map[string]string{
+			"COLDKEEP_COMPRESSION": "zstd",
+		},
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_COMPRESSION"); got != "zstd" {
+		t.Fatalf("expected COLDKEEP_COMPRESSION override=zstd, got %q", got)
 	}
 }
 

@@ -9,9 +9,8 @@ const (
 	CompressionNone = "none"
 	CompressionZstd = "zstd"
 
-	// DefaultCompressionCodec is the recommended codec for new compression-capable
-	// metadata once compression activation is enabled in later Phase 3 steps.
-	DefaultCompressionCodec = CompressionZstd
+	// DefaultCompressionCodec keeps compression disabled unless explicitly enabled.
+	DefaultCompressionCodec = CompressionNone
 	DefaultCompressionLevel = 3
 )
 
