@@ -4801,3 +4801,194 @@ func TestStoreFileCompressionRunsBeforeEncryption(t *testing.T) {
 		t.Fatalf("physical_hash must be computed on persisted payload bytes: got=%x want=%x", got, physicalHash)
 	}
 }
+
+func TestStoreFilePopulatesCompressionMetadataMatrix(t *testing.T) {
+	type blockMetaRow struct {
+		compressionCodec string
+		compressionLevel sql.NullInt64
+		plaintextSize    int64
+		compressedSize   sql.NullInt64
+		storedSize       int64
+		blockHash        []byte
+		compressedHash   []byte
+		physicalHash     []byte
+	}
+
+	tcs := []struct {
+		name              string
+		codec             blocks.Codec
+		compressionCodec  string
+		compressionLevel  string
+		enableEncryption  bool
+		expectCodec       string
+		expectLevel       *int64
+		expectStoredEqCmp bool
+		expectPhysEqCmp   bool
+	}{
+		{
+			name:              "none-no-encryption",
+			codec:             blocks.CodecPlain,
+			compressionCodec:  "none",
+			compressionLevel:  "3",
+			enableEncryption:  false,
+			expectCodec:       "none",
+			expectLevel:       nil,
+			expectStoredEqCmp: true,
+			expectPhysEqCmp:   true,
+		},
+		{
+			name:              "none-aes-gcm",
+			codec:             blocks.CodecAESGCM,
+			compressionCodec:  "none",
+			compressionLevel:  "3",
+			enableEncryption:  true,
+			expectCodec:       "none",
+			expectLevel:       nil,
+			expectStoredEqCmp: false,
+			expectPhysEqCmp:   false,
+		},
+		{
+			name:              "zstd-no-encryption",
+			codec:             blocks.CodecPlain,
+			compressionCodec:  "zstd",
+			compressionLevel:  "3",
+			enableEncryption:  false,
+			expectCodec:       "zstd",
+			expectLevel:       func() *int64 { v := int64(3); return &v }(),
+			expectStoredEqCmp: true,
+			expectPhysEqCmp:   true,
+		},
+		{
+			name:              "zstd-aes-gcm",
+			codec:             blocks.CodecAESGCM,
+			compressionCodec:  "zstd",
+			compressionLevel:  "3",
+			enableEncryption:  true,
+			expectCodec:       "zstd",
+			expectLevel:       func() *int64 { v := int64(3); return &v }(),
+			expectStoredEqCmp: false,
+			expectPhysEqCmp:   false,
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("COLDKEEP_COMPRESSION", tc.compressionCodec)
+			t.Setenv("COLDKEEP_COMPRESSION_LEVEL", tc.compressionLevel)
+			if tc.enableEncryption {
+				t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+			} else {
+				t.Setenv("COLDKEEP_KEY", "")
+			}
+
+			dbconn, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("open sqlite db: %v", err)
+			}
+			defer func() { _ = dbconn.Close() }()
+
+			if err := db.RunMigrations(dbconn); err != nil {
+				t.Fatalf("run migrations: %v", err)
+			}
+
+			workDir := t.TempDir()
+			inPath := filepath.Join(workDir, tc.name+"-meta.bin")
+			if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+				t.Fatalf("write input file: %v", err)
+			}
+
+			sgctx := StorageContext{
+				DB:           dbconn,
+				Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+				ContainerDir: workDir,
+				Chunker: scriptedChunker{version: chunk.VersionV1SimpleRolling, payloads: [][]byte{
+					bytes.Repeat([]byte("phase3-meta-a"), 64),
+					bytes.Repeat([]byte("phase3-meta-b"), 64),
+				}},
+			}
+
+			if _, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, tc.codec); err != nil {
+				t.Fatalf("store file: %v", err)
+			}
+
+			var row blockMetaRow
+			if err := dbconn.QueryRow(`
+				SELECT compression_codec, compression_level,
+				       plaintext_size, compressed_size, stored_size,
+				       block_hash, compressed_hash, physical_hash
+				FROM storage_blocks
+				ORDER BY id DESC
+				LIMIT 1
+			`).Scan(
+				&row.compressionCodec,
+				&row.compressionLevel,
+				&row.plaintextSize,
+				&row.compressedSize,
+				&row.storedSize,
+				&row.blockHash,
+				&row.compressedHash,
+				&row.physicalHash,
+			); err != nil {
+				t.Fatalf("read storage metadata row: %v", err)
+			}
+
+			if row.compressionCodec != tc.expectCodec {
+				t.Fatalf("compression_codec mismatch: got %q want %q", row.compressionCodec, tc.expectCodec)
+			}
+			if tc.expectLevel == nil {
+				if row.compressionLevel.Valid {
+					t.Fatalf("expected NULL compression_level for codec=%q, got %d", row.compressionCodec, row.compressionLevel.Int64)
+				}
+			} else {
+				if !row.compressionLevel.Valid {
+					t.Fatalf("expected non-NULL compression_level for codec=%q", row.compressionCodec)
+				}
+				if row.compressionLevel.Int64 != *tc.expectLevel {
+					t.Fatalf("compression_level mismatch: got %d want %d", row.compressionLevel.Int64, *tc.expectLevel)
+				}
+			}
+
+			if !row.compressedSize.Valid {
+				t.Fatalf("expected non-NULL compressed_size")
+			}
+			if row.plaintextSize <= 0 || row.compressedSize.Int64 <= 0 || row.storedSize <= 0 {
+				t.Fatalf("expected positive sizes: plaintext=%d compressed=%d stored=%d", row.plaintextSize, row.compressedSize.Int64, row.storedSize)
+			}
+
+			// Global invariants.
+			if len(row.blockHash) != 32 || len(row.compressedHash) != 32 || len(row.physicalHash) != 32 {
+				t.Fatalf("expected 32-byte digests: block=%d compressed=%d physical=%d", len(row.blockHash), len(row.compressedHash), len(row.physicalHash))
+			}
+
+			// Compression=none invariants.
+			if row.compressionCodec == "none" {
+				if row.compressedSize.Int64 != row.plaintextSize {
+					t.Fatalf("none codec invariant violated: compressed_size=%d plaintext_size=%d", row.compressedSize.Int64, row.plaintextSize)
+				}
+				if !bytes.Equal(row.compressedHash, row.blockHash) {
+					t.Fatalf("none codec invariant violated: compressed_hash != block_hash")
+				}
+			}
+
+			if tc.expectStoredEqCmp {
+				if row.storedSize != row.compressedSize.Int64 {
+					t.Fatalf("stored/compressed relationship violated: stored=%d compressed=%d", row.storedSize, row.compressedSize.Int64)
+				}
+			} else {
+				if row.storedSize < row.compressedSize.Int64 {
+					t.Fatalf("expected stored_size >= compressed_size, got stored=%d compressed=%d", row.storedSize, row.compressedSize.Int64)
+				}
+			}
+
+			if tc.expectPhysEqCmp {
+				if !bytes.Equal(row.physicalHash, row.compressedHash) {
+					t.Fatalf("expected physical_hash == compressed_hash")
+				}
+			} else {
+				if bytes.Equal(row.physicalHash, row.compressedHash) {
+					t.Fatalf("expected physical_hash != compressed_hash")
+				}
+			}
+		})
+	}
+}
