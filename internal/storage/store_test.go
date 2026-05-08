@@ -4415,3 +4415,119 @@ func TestStoreFilePersistsTransformMetadataColumns(t *testing.T) {
 		t.Fatalf("expected 32-byte physical_hash, got %d bytes", len(physicalHash))
 	}
 }
+
+func TestStoreFilePhysicalHashLayerSemantics(t *testing.T) {
+	tcs := []struct {
+		name                     string
+		codec                    blocks.Codec
+		setEncryptionKey         bool
+		expectPhysicalEqualsHash bool
+	}{
+		{
+			name:                     "plain-no-compression",
+			codec:                    blocks.CodecPlain,
+			setEncryptionKey:         false,
+			expectPhysicalEqualsHash: true,
+		},
+		{
+			name:                     "aesgcm-no-compression",
+			codec:                    blocks.CodecAESGCM,
+			setEncryptionKey:         true,
+			expectPhysicalEqualsHash: false,
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setEncryptionKey {
+				t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+			} else {
+				t.Setenv("COLDKEEP_KEY", "")
+			}
+
+			dbconn, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("open sqlite db: %v", err)
+			}
+			defer func() { _ = dbconn.Close() }()
+
+			if err := db.RunMigrations(dbconn); err != nil {
+				t.Fatalf("run migrations: %v", err)
+			}
+
+			workDir := t.TempDir()
+			inPath := filepath.Join(workDir, "physical-hash-layer.bin")
+			if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+				t.Fatalf("write input file: %v", err)
+			}
+
+			sgctx := StorageContext{
+				DB:           dbconn,
+				Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+				ContainerDir: workDir,
+				Chunker: scriptedChunker{
+					version: chunk.VersionV1SimpleRolling,
+					payloads: [][]byte{
+						[]byte("hash-layer-a"),
+						[]byte("hash-layer-b"),
+					},
+				},
+			}
+
+			if _, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, tc.codec); err != nil {
+				t.Fatalf("store file: %v", err)
+			}
+
+			var (
+				blockHash       []byte
+				compressedHash  []byte
+				physicalHash    []byte
+				containerOffset int64
+				storedSize      int64
+				containerFile   string
+			)
+
+			if err := dbconn.QueryRow(`
+				SELECT b.block_hash, b.compressed_hash, b.physical_hash,
+				       b.container_offset, b.stored_size, c.filename
+				FROM storage_blocks b
+				JOIN container c ON c.id = b.container_id
+				ORDER BY b.id ASC
+				LIMIT 1
+			`).Scan(&blockHash, &compressedHash, &physicalHash, &containerOffset, &storedSize, &containerFile); err != nil {
+				t.Fatalf("read storage block hash layers: %v", err)
+			}
+
+			if !bytes.Equal(blockHash, compressedHash) {
+				t.Fatalf("expected block_hash == compressed_hash for compression=none")
+			}
+
+			if tc.expectPhysicalEqualsHash {
+				if !bytes.Equal(physicalHash, blockHash) {
+					t.Fatalf("expected physical_hash == block_hash for plain/no-compression")
+				}
+			} else {
+				if bytes.Equal(physicalHash, blockHash) {
+					t.Fatalf("expected physical_hash != block_hash for aes-gcm/no-compression")
+				}
+			}
+
+			containerPath := filepath.Join(workDir, containerFile)
+			fh, err := os.Open(containerPath)
+			if err != nil {
+				t.Fatalf("open container file %q: %v", containerPath, err)
+			}
+			defer func() { _ = fh.Close() }()
+
+			storedPayload := make([]byte, storedSize)
+			if _, err := fh.ReadAt(storedPayload, containerOffset); err != nil {
+				t.Fatalf("read stored payload at offset %d size %d: %v", containerOffset, storedSize, err)
+			}
+
+			physicalFromContainer := blocks.HashPhysical(storedPayload)
+			if !bytes.Equal(physicalHash, physicalFromContainer) {
+				t.Fatalf("physical_hash mismatch vs container bytes: db=%x container=%x", physicalHash, physicalFromContainer)
+			}
+		})
+	}
+}
