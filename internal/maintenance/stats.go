@@ -46,6 +46,11 @@ type BlockStats struct {
 	AvgChunksPerBlock float64          `json:"avg_chunks_per_block"`
 	AvgPlaintextSize  float64          `json:"avg_block_plaintext_size"`
 	AvgStoredSize     float64          `json:"avg_block_stored_size"`
+	LogicalBytes      int64            `json:"logical_bytes"`
+	CompressedBytes   int64            `json:"compressed_bytes"`
+	StoredBytes       int64            `json:"stored_bytes"`
+	CompressionRatio  float64          `json:"compression_ratio"`
+	PhysicalRatio     float64          `json:"physical_ratio"`
 	FillRatio         float64          `json:"avg_block_fill_ratio"`
 	LegacyBlocks      int64            `json:"legacy_block_count"`
 	PackedBlocks      int64            `json:"packed_block_count"`
@@ -417,6 +422,22 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 		FROM storage_blocks
 	`).Scan(&out.AvgPlaintextSize, &out.AvgStoredSize); err != nil {
 		return BlockStats{}, fmt.Errorf("avg packed block sizes: %w", err)
+	}
+
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(plaintext_size), 0),
+			COALESCE(SUM(COALESCE(compressed_size, CASE WHEN COALESCE(compression_codec, 'none') = 'none' THEN plaintext_size END, stored_size)), 0),
+			COALESCE(SUM(stored_size), 0)
+		FROM storage_blocks
+	`).Scan(&out.LogicalBytes, &out.CompressedBytes, &out.StoredBytes); err != nil {
+		return BlockStats{}, fmt.Errorf("aggregate compression sizes: %w", err)
+	}
+	if out.CompressedBytes > 0 {
+		out.CompressionRatio = float64(out.LogicalBytes) / float64(out.CompressedBytes)
+	}
+	if out.StoredBytes > 0 {
+		out.PhysicalRatio = float64(out.LogicalBytes) / float64(out.StoredBytes)
 	}
 
 	if out.StorageBlocks > 0 {

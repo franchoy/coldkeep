@@ -490,6 +490,22 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	if blockStats.AvgStoredSize != 480 {
 		t.Fatalf("avg stored size mismatch: got=%.2f want=480", blockStats.AvgStoredSize)
 	}
+	if blockStats.LogicalBytes != 512 {
+		t.Fatalf("logical bytes mismatch: got=%d want=512", blockStats.LogicalBytes)
+	}
+	if blockStats.CompressedBytes != 512 {
+		t.Fatalf("compressed bytes mismatch with legacy NULL compressed_size fallback: got=%d want=512", blockStats.CompressedBytes)
+	}
+	if blockStats.StoredBytes != 480 {
+		t.Fatalf("stored bytes mismatch: got=%d want=480", blockStats.StoredBytes)
+	}
+	if math.Abs(blockStats.CompressionRatio-1.0) > 1e-9 {
+		t.Fatalf("compression ratio mismatch for compression=none: got=%.9f want=1.000000000", blockStats.CompressionRatio)
+	}
+	wantPhysicalRatio := float64(512) / float64(480)
+	if math.Abs(blockStats.PhysicalRatio-wantPhysicalRatio) > 1e-9 {
+		t.Fatalf("physical ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalRatio, wantPhysicalRatio)
+	}
 	wantFillRatio := float64(512) / float64(2*1024*1024)
 	if math.Abs(blockStats.FillRatio-wantFillRatio) > 1e-9 {
 		t.Fatalf("fill ratio mismatch: got=%.9f want=%.9f", blockStats.FillRatio, wantFillRatio)
@@ -504,5 +520,68 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	}
 	if stats.BlockStats.StorageBlocks != 1 || stats.BlockStats.ChunkBlockRefs != 2 {
 		t.Fatalf("runStats block stats mismatch: %+v", stats.BlockStats)
+	}
+}
+
+func TestCollectBlockStatsCompressionAggregatesMixedRepository(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-compression.bin", 0, 64*1024*1024)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := containerRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, compression_codec)
+		VALUES
+			(1, 'none', 100, 100, ?, 0, x'11', 'none'),
+			(1, 'none', 1000, 350, ?, 100, x'22', 'zstd')
+	`, containerID, containerID); err != nil {
+		t.Fatalf("insert storage blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_size = 300 WHERE block_hash = x'22'`); err != nil {
+		t.Fatalf("set zstd compressed_size: %v", err)
+	}
+
+	blockStats, err := CollectBlockStats(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("CollectBlockStats: %v", err)
+	}
+
+	if blockStats.StorageBlocks != 2 {
+		t.Fatalf("storage blocks mismatch: got=%d want=2", blockStats.StorageBlocks)
+	}
+	if blockStats.LogicalBytes != 1100 {
+		t.Fatalf("logical bytes mismatch: got=%d want=1100", blockStats.LogicalBytes)
+	}
+	if blockStats.CompressedBytes != 400 {
+		t.Fatalf("compressed bytes mismatch: got=%d want=400", blockStats.CompressedBytes)
+	}
+	if blockStats.StoredBytes != 450 {
+		t.Fatalf("stored bytes mismatch: got=%d want=450", blockStats.StoredBytes)
+	}
+	if blockStats.CompressionRatio <= 1.0 {
+		t.Fatalf("expected compression ratio > 1.0 for repetitive zstd data, got=%.4f", blockStats.CompressionRatio)
+	}
+	wantCompressionRatio := float64(1100) / float64(400)
+	if math.Abs(blockStats.CompressionRatio-wantCompressionRatio) > 1e-9 {
+		t.Fatalf("compression ratio mismatch: got=%.9f want=%.9f", blockStats.CompressionRatio, wantCompressionRatio)
+	}
+	wantPhysicalRatio := float64(1100) / float64(450)
+	if math.Abs(blockStats.PhysicalRatio-wantPhysicalRatio) > 1e-9 {
+		t.Fatalf("physical ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalRatio, wantPhysicalRatio)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+	if stats.BlockStats.LogicalBytes != 1100 || stats.BlockStats.CompressedBytes != 400 || stats.BlockStats.StoredBytes != 450 {
+		t.Fatalf("runStats compression aggregate mismatch: %+v", stats.BlockStats)
 	}
 }

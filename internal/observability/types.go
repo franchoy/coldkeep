@@ -90,6 +90,11 @@ type BlockLayoutStats struct {
 	AvgChunksPerBlock     float64          `json:"avg_chunks_per_block"`
 	AvgBlockPlaintextSize float64          `json:"avg_block_plaintext_size"`
 	AvgBlockStoredSize    float64          `json:"avg_block_stored_size"`
+	LogicalBytes          int64            `json:"logical_bytes"`
+	CompressedBytes       int64            `json:"compressed_bytes"`
+	StoredBytes           int64            `json:"stored_bytes"`
+	CompressionRatio      float64          `json:"compression_ratio"`
+	PhysicalRatio         float64          `json:"physical_ratio"`
 	AvgBlockFillRatio     float64          `json:"avg_block_fill_ratio"`
 	LegacyBlockCount      int64            `json:"legacy_block_count"`
 	PackedBlockCount      int64            `json:"packed_block_count"`
