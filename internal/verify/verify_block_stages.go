@@ -23,6 +23,7 @@ type blockStagePayloads struct {
 	storedBytes      []byte // Layer 3: raw on-disk bytes
 	compressedBytes  []byte // Layer 2: future compressed payload (nil today)
 	plaintextEncoded []byte // Layer 1: decrypted/decoded plaintext block bytes
+	hashes           blocks.BlockHashes
 }
 
 // verifyPhysicalPayloadStage is Stage 1 of the block verification pipeline.

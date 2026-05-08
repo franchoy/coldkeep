@@ -141,6 +141,9 @@ type restoreChunkRow struct {
 	plaintextSize       int64
 	storedSize          int64
 	expectedChunkHash   string
+	blockHash           []byte
+	compressedHash      []byte
+	physicalHash        []byte
 	chunkerVersion      string
 	chunkSize           int64
 	blocksCodec         string
@@ -204,6 +207,9 @@ type restoreChunk struct {
 	Status string
 	// BlockID: v1.8 block ID (0 for v1.7 legacy)
 	BlockID int64
+	// BlockHashes carries packed-block hash metadata when this chunk is restored
+	// from storage_blocks (v1.8 path). Legacy v1.7 chunks may have empty values.
+	BlockHashes blocks.BlockHashes
 }
 
 // restoreRecipe represents a complete restore plan for one logical file.
@@ -229,9 +235,14 @@ func buildRestoreRecipe(logicalFileID int64, originalName, expectedHash string, 
 	chunks := make([]restoreChunk, len(chunkRows))
 	for i, row := range chunkRows {
 		chunks[i] = restoreChunk{
-			Index:            row.chunkOrder,
-			ID:               row.chunkID,
-			Hash:             row.expectedChunkHash,
+			Index: row.chunkOrder,
+			ID:    row.chunkID,
+			Hash:  row.expectedChunkHash,
+			BlockHashes: blocks.BlockHashes{
+				LogicalHash:    row.blockHash,
+				CompressedHash: row.compressedHash,
+				PhysicalHash:   row.physicalHash,
+			},
 			PlaintextSize:    row.plaintextSize,
 			StoredSize:       row.storedSize,
 			Offset:           row.blockOffset,
@@ -529,6 +540,9 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			COALESCE(b.plaintext_size, c.size),
 			COALESCE(b.stored_size, c.size),
 			c.chunk_hash,
+			sb.block_hash,
+			sb.compressed_hash,
+			sb.physical_hash,
 			c.chunker_version,
 			c.size,
 			COALESCE(b.codec, 'plain'),
@@ -563,6 +577,9 @@ func pinLogicalFileRestoreChunksWithContext(ctx context.Context, dbconn *sql.DB,
 			&row.plaintextSize,
 			&row.storedSize,
 			&row.expectedChunkHash,
+			&row.blockHash,
+			&row.compressedHash,
+			&row.physicalHash,
 			&row.chunkerVersion,
 			&row.chunkSize,
 			&row.blocksCodec,

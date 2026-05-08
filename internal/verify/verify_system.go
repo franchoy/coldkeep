@@ -298,6 +298,8 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 									sb.stored_size,
 									sb.plaintext_size,
 									encode(sb.block_hash, 'hex') AS block_hash_hex,
+									encode(sb.compressed_hash, 'hex') AS compressed_hash_hex,
+									encode(sb.physical_hash, 'hex') AS physical_hash_hex,
 									sb.codec,
 									sb.format_version
 								FROM storage_blocks sb
@@ -328,13 +330,17 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 				var storedSize int64
 				var plaintextSize int64
 				var blockHash string
+				var compressedHash sql.NullString
+				var physicalHash sql.NullString
 				var codec string
 				var formatVersion int
-				if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &blockHash, &codec, &formatVersion); err != nil {
+				if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &blockHash, &compressedHash, &physicalHash, &codec, &formatVersion); err != nil {
 					log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
 					appendDeepError(fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
 					continue
 				}
+				_ = compressedHash
+				_ = physicalHash
 
 				if blockOffset < 0 || storedSize <= 0 {
 					log.Printf("Invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize)

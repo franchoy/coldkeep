@@ -2690,3 +2690,78 @@ func TestRestoreFailureDoesNotLeaveStalePins(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRestoreRecipeCarriesLegacyNilBlockHashes(t *testing.T) {
+	rows := []restoreChunkRow{{
+		chunkOrder:          0,
+		blockOffset:         0,
+		plaintextSize:       5,
+		storedSize:          5,
+		expectedChunkHash:   "abc123",
+		blockHash:           nil,
+		compressedHash:      nil,
+		physicalHash:        nil,
+		chunkerVersion:      "v1-simple-rolling",
+		chunkSize:           5,
+		blocksCodec:         "plain",
+		blocksFormatVersion: 1,
+		blocksNonce:         nil,
+		blocksContainerID:   0,
+		filename:            "",
+		chunkStatus:         filestate.ChunkCompleted,
+		maxSize:             container.GetContainerMaxSize(),
+		chunkID:             10,
+	}}
+
+	recipe := buildRestoreRecipe(1, "legacy.bin", "filehash", 5, rows, []int64{10})
+	if len(recipe.Chunks) != 1 {
+		t.Fatalf("expected 1 chunk in recipe, got %d", len(recipe.Chunks))
+	}
+	h := recipe.Chunks[0].BlockHashes
+	if h.LogicalHash != nil || h.CompressedHash != nil || h.PhysicalHash != nil {
+		t.Fatalf("expected nil block hash metadata for legacy row, got logical=%x compressed=%x physical=%x", h.LogicalHash, h.CompressedHash, h.PhysicalHash)
+	}
+}
+
+func TestBuildRestoreRecipeCarriesBlockHashMetadata(t *testing.T) {
+	logical := []byte{0x01, 0x02}
+	compressed := []byte{0x03, 0x04}
+	physical := []byte{0x05, 0x06}
+
+	rows := []restoreChunkRow{{
+		chunkOrder:          0,
+		blockOffset:         0,
+		plaintextSize:       7,
+		storedSize:          7,
+		expectedChunkHash:   "def456",
+		blockHash:           logical,
+		compressedHash:      compressed,
+		physicalHash:        physical,
+		chunkerVersion:      "v2-fastcdc",
+		chunkSize:           7,
+		blocksCodec:         "none",
+		blocksFormatVersion: 1,
+		blocksNonce:         nil,
+		blocksContainerID:   42,
+		filename:            "packed.bin",
+		chunkStatus:         filestate.ChunkCompleted,
+		maxSize:             container.GetContainerMaxSize(),
+		chunkID:             11,
+	}}
+
+	recipe := buildRestoreRecipe(2, "packed.bin", "filehash2", 7, rows, []int64{11})
+	if len(recipe.Chunks) != 1 {
+		t.Fatalf("expected 1 chunk in recipe, got %d", len(recipe.Chunks))
+	}
+
+	h := recipe.Chunks[0].BlockHashes
+	if !bytes.Equal(h.LogicalHash, logical) {
+		t.Fatalf("logical hash mismatch: got %x want %x", h.LogicalHash, logical)
+	}
+	if !bytes.Equal(h.CompressedHash, compressed) {
+		t.Fatalf("compressed hash mismatch: got %x want %x", h.CompressedHash, compressed)
+	}
+	if !bytes.Equal(h.PhysicalHash, physical) {
+		t.Fatalf("physical hash mismatch: got %x want %x", h.PhysicalHash, physical)
+	}
+}

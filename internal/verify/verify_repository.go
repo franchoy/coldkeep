@@ -444,7 +444,8 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	log.Printf("Checking packed block payload and segment integrity...")
 
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT sb.id, sb.format_version, sb.codec, sb.plaintext_size, sb.container_offset, sb.stored_size, sb.block_hash, c.filename, c.max_size
+		SELECT sb.id, sb.format_version, sb.codec, sb.plaintext_size, sb.container_offset, sb.stored_size,
+		       sb.block_hash, sb.compressed_hash, sb.physical_hash, c.filename, c.max_size
 		FROM storage_blocks sb
 		JOIN container c ON c.id = sb.container_id
 		WHERE c.quarantine = FALSE
@@ -462,7 +463,9 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 		plaintextSize   int64
 		containerOffset int64
 		storedSize      int64
-		blockHash       []byte
+		logicalHash     []byte
+		compressedHash  []byte
+		physicalHash    []byte
 		filename        string
 		maxSize         int64
 	}
@@ -470,7 +473,19 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	blocksToVerify := make([]blockRow, 0)
 	for rows.Next() {
 		var b blockRow
-		if err := rows.Scan(&b.id, &b.formatVersion, &b.codec, &b.plaintextSize, &b.containerOffset, &b.storedSize, &b.blockHash, &b.filename, &b.maxSize); err != nil {
+		if err := rows.Scan(
+			&b.id,
+			&b.formatVersion,
+			&b.codec,
+			&b.plaintextSize,
+			&b.containerOffset,
+			&b.storedSize,
+			&b.logicalHash,
+			&b.compressedHash,
+			&b.physicalHash,
+			&b.filename,
+			&b.maxSize,
+		); err != nil {
 			return verifyCategoryError(verifyErrMetadataInvalid, "verifyBlockPayloads: scan storage block row", err)
 		}
 		blocksToVerify = append(blocksToVerify, b)
@@ -549,8 +564,13 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			storedBytes:      storedBytes,
 			compressedBytes:  nil, // Phase 3: populated after decompression
 			plaintextEncoded: plaintextEncoded,
+			hashes: blocks.BlockHashes{
+				LogicalHash:    b.logicalHash,
+				CompressedHash: b.compressedHash,
+				PhysicalHash:   b.physicalHash,
+			},
 		}
-		if err := runBlockVerifyStages(ctx, dbconn, b.id, b.blockHash, stagePayloads); err != nil {
+		if err := runBlockVerifyStages(ctx, dbconn, b.id, b.logicalHash, stagePayloads); err != nil {
 			return err
 		}
 
