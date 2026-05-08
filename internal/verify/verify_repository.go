@@ -17,7 +17,6 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 )
 
 const (
@@ -504,111 +503,32 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	}
 
 	strictMode := verifyStrictPackedSegmentsEnabled()
-	transformers := make(map[blocks.Codec]blocks.Transformer)
+	reader := FilesystemContainerReader{ContainersDir: containersDir}
 
 	for _, b := range blocksToVerify {
-		path := filepath.Join(containersDir, b.filename)
-		fc, err := container.OpenReadOnlyContainer(path, b.maxSize)
+		var compressionLevel *int
+		if b.compressionLevel.Valid {
+			v := int(b.compressionLevel.Int64)
+			compressionLevel = &v
+		}
+
+		verified, err := VerifyStoredBlock(ctx, BlockStorageMetadata{
+			BlockID:          b.id,
+			ContainerID:      b.containerID,
+			ContainerOffset:  b.containerOffset,
+			ContainerName:    b.filename,
+			ContainerMaxSize: b.maxSize,
+			FormatVersion:    b.formatVersion,
+			Codec:            b.codec,
+			PlaintextSize:    b.plaintextSize,
+			StoredSize:       b.storedSize,
+			CompressionCodec: b.compressionCodec,
+			CompressionLevel: compressionLevel,
+			LogicalHash:      b.logicalHash,
+			CompressedHash:   b.compressedHash,
+			PhysicalHash:     b.physicalHash,
+		}, reader)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return verifyCategoryError(verifyErrPhysicalMissing, fmt.Sprintf("verifyBlockPayloads: open container for block %d", b.id), err)
-			}
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: open container for block %d", b.id), err)
-		}
-
-		storedBytes, readErr := container.ReadPayloadAt(fc, b.containerOffset, b.storedSize)
-		closeErr := fc.Close()
-		if readErr != nil {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: read payload for block %d", b.id), readErr)
-		}
-		if closeErr != nil {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: close container for block %d", b.id), closeErr)
-		}
-
-		codec, err := resolveVerifyStorageBlockCodec(b.codec)
-		if err != nil {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d invalid codec metadata", b.id), err)
-		}
-
-		transformer := transformers[codec]
-		if transformer == nil {
-			transformer, err = blocks.GetBlockTransformer(codec)
-			if err != nil {
-				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d get transformer codec=%s", b.id, codec), err)
-			}
-			transformers[codec] = transformer
-		}
-
-		decodePayload := storedBytes
-		descriptorNonce := []byte(nil)
-		if codec == blocks.CodecAESGCM {
-			if len(storedBytes) <= packedStorageBlockAESGCMNonceSize {
-				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d stored payload too small for aes-gcm nonce prefix", b.id), nil)
-			}
-			descriptorNonce = append([]byte(nil), storedBytes[:packedStorageBlockAESGCMNonceSize]...)
-			decodePayload = storedBytes[packedStorageBlockAESGCMNonceSize:]
-		}
-
-		preDecompressionPayload, err := transformer.Decode(ctx, blocks.DecodeInput{
-			Descriptor: blocks.Descriptor{
-				ChunkID:       0,
-				Codec:         codec,
-				FormatVersion: int(b.formatVersion),
-				PlaintextSize: b.plaintextSize,
-				StoredSize:    b.storedSize,
-				Nonce:         descriptorNonce,
-				ContainerID:   0,
-				BlockOffset:   b.containerOffset,
-			},
-			Payload: decodePayload,
-		})
-		if err != nil {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d transform/decrypt failed", b.id), err)
-		}
-
-		compressionCodec := strings.TrimSpace(strings.ToLower(b.compressionCodec))
-		if compressionCodec == "" {
-			compressionCodec = storagecompression.CompressionNone
-		}
-		var compressor storagecompression.Compressor
-		if compressionCodec == storagecompression.CompressionZstd {
-			level := storagecompression.DefaultCompressionLevel
-			if b.compressionLevel.Valid {
-				level = int(b.compressionLevel.Int64)
-			}
-			comp, err := storagecompression.NewZstdCompressor(level)
-			if err != nil {
-				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d initialize compression codec=%s level=%d", b.id, compressionCodec, level), err)
-			}
-			compressor = comp
-		} else {
-			comp, err := storagecompression.Lookup(compressionCodec)
-			if err != nil {
-				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d resolve compression codec=%s", b.id, compressionCodec), err)
-			}
-			compressor = comp
-		}
-
-		plaintextEncoded, err := compressor.Decompress(preDecompressionPayload, b.plaintextSize)
-		if err != nil {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d decompress codec=%s", b.id, compressionCodec), err)
-		}
-		if int64(len(plaintextEncoded)) != b.plaintextSize {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d plaintext size mismatch metadata=%d decoded=%d", b.id, b.plaintextSize, len(plaintextEncoded)), nil)
-		}
-
-		stagePayloads := blockStagePayloads{
-			storedBytes:      storedBytes,
-			compressedBytes:  preDecompressionPayload,
-			plaintextEncoded: plaintextEncoded,
-			hashes: blocks.BlockHashes{
-				LogicalHash:    b.logicalHash,
-				CompressedHash: b.compressedHash,
-				PhysicalHash:   b.physicalHash,
-			},
-		}
-		loc := verifyBlockLocation{blockID: b.id, containerID: b.containerID, offset: b.containerOffset}
-		if err := runBlockVerifyStages(ctx, dbconn, loc, b.logicalHash, stagePayloads); err != nil {
 			return err
 		}
 
@@ -616,17 +536,13 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			continue
 		}
 
-		decoded, err := blocks.DecodeBlock(plaintextEncoded)
-		if err != nil {
-			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: decode block %d", b.id), err)
-		}
+		decoded := verified.DecodedBlock
 		if err := verifyDecodedBlockHeaderAndTable(b.id, b.formatVersion, b.codec, decoded); err != nil {
 			return err
 		}
 		if err := verifyDecodedChunkSliceHashes(ctx, dbconn, b.id, decoded); err != nil {
 			return err
 		}
-
 		if err := verifyDecodedBlockSegmentsAgainstRefs(ctx, dbconn, b.id, decoded, strictMode); err != nil {
 			return err
 		}
@@ -634,13 +550,6 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 
 	log.Println(" SUCCESS ")
 	return nil
-}
-
-type verifyChunkRefSegment struct {
-	chunkID   int64
-	offset    uint64
-	size      uint64
-	chunkSize int64
 }
 
 func resolveVerifyStorageBlockCodec(raw string) (blocks.Codec, error) {
@@ -656,6 +565,13 @@ func resolveVerifyStorageBlockCodec(raw string) (blocks.Codec, error) {
 		return "", err
 	}
 	return codec, nil
+}
+
+type verifyChunkRefSegment struct {
+	chunkID   int64
+	offset    uint64
+	size      uint64
+	chunkSize int64
 }
 
 func verifyDecodedBlockHeaderAndTable(blockID int64, formatVersion int64, codec string, decoded *blocks.EncodedBlock) error {
