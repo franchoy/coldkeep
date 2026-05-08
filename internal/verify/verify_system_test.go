@@ -901,6 +901,89 @@ func TestVerifyRepositorySupportsMixedRepo(t *testing.T) {
 	}
 }
 
+func TestVerifyRepositorySupportsMixedBlockTypeMatrixInSingleRun(t *testing.T) {
+	// Repository defaults are store-time hints and must not influence verify-time
+	// decoding for already persisted rows.
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	t.Setenv("COLDKEEP_COMPRESSION_CODEC", "none")
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "1")
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+
+	// 1) legacy uncompressed block
+	_ = seedVerifyLegacyBlockFixture(t, dbconn, containersDir, []byte("matrix-legacy-uncompressed"))
+
+	// 2) new uncompressed block with all hashes present
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("matrix-new-uncompressed-with-hashes")}, blocks.CodecPlain, storagecompression.CompressionNone)
+
+	// 3) compressed unencrypted block
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("matrix-compressed-unencrypted")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	// 4) compressed encrypted block
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("matrix-compressed-encrypted")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	var legacyCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM blocks b
+		WHERE NOT EXISTS (
+			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id
+		)
+	`).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy blocks in matrix fixture: %v", err)
+	}
+	if legacyCount < 1 {
+		t.Fatalf("expected at least one legacy block in mixed matrix fixture")
+	}
+
+	var newUncompressedWithHashes int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE codec = 'none'
+		  AND lower(trim(compression_codec)) = 'none'
+		  AND compressed_hash IS NOT NULL AND length(compressed_hash) > 0
+		  AND physical_hash IS NOT NULL AND length(physical_hash) > 0
+	`).Scan(&newUncompressedWithHashes); err != nil {
+		t.Fatalf("count new uncompressed hashed blocks in matrix fixture: %v", err)
+	}
+	if newUncompressedWithHashes < 1 {
+		t.Fatalf("expected at least one new uncompressed block with all hashes in mixed matrix fixture")
+	}
+
+	var compressedUnencryptedCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE codec = 'none' AND lower(trim(compression_codec)) = 'zstd'
+	`).Scan(&compressedUnencryptedCount); err != nil {
+		t.Fatalf("count compressed unencrypted blocks in matrix fixture: %v", err)
+	}
+	if compressedUnencryptedCount < 1 {
+		t.Fatalf("expected at least one compressed unencrypted block in mixed matrix fixture")
+	}
+
+	var compressedEncryptedCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE codec = 'aes-gcm' AND lower(trim(compression_codec)) = 'zstd'
+	`).Scan(&compressedEncryptedCount); err != nil {
+		t.Fatalf("count compressed encrypted blocks in matrix fixture: %v", err)
+	}
+	if compressedEncryptedCount < 1 {
+		t.Fatalf("expected at least one compressed encrypted block in mixed matrix fixture")
+	}
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected one VerifyRepository run to handle mixed legacy/new/compressed/encrypted blocks, got: %v", err)
+	}
+}
+
 func TestVerifyBlockPayloadsDetectsSegmentOutOfBounds(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
