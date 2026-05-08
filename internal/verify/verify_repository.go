@@ -548,10 +548,10 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 		if err := verifyDecodedBlockHeaderAndTable(b.id, b.formatVersion, b.codec, decoded); err != nil {
 			return err
 		}
-		if err := verifyDecodedChunkSliceHashes(ctx, dbconn, b.id, decoded); err != nil {
+		if err := verifyDecodedChunkSliceHashes(ctx, dbconn, b.id, b.containerID, b.containerOffset, decoded); err != nil {
 			return err
 		}
-		if err := verifyDecodedBlockSegmentsAgainstRefs(ctx, dbconn, b.id, decoded, strictMode); err != nil {
+		if err := verifyDecodedBlockSegmentsAgainstRefs(ctx, dbconn, b.id, b.containerID, b.containerOffset, decoded, strictMode); err != nil {
 			return err
 		}
 	}
@@ -634,11 +634,13 @@ func verifyDecodedBlockHeaderAndTable(blockID int64, formatVersion int64, codec 
 	return nil
 }
 
-func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID int64, decoded *blocks.EncodedBlock) error {
+func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID int64, containerID int64, containerOffset int64, decoded *blocks.EncodedBlock) error {
+	meta := verifyBlockFailureMeta(VerifyStageChunkRefs, blockID, containerID, containerOffset)
+
 	for i, entry := range decoded.Entries {
 		chunkBytes, err := blocks.SliceChunkFromPayload(decoded.Payload, entry)
 		if err != nil {
-			return verifyCategoryError(verifyErrUnsupportedBlock, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d slice failed at entry=%d", blockID, entry.ChunkID, i), err)
+			return verifyStageError(verifyErrUnsupportedBlock, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d slice failed at entry=%d", blockID, entry.ChunkID, i), err)
 		}
 
 		sum := sha256.Sum256(chunkBytes)
@@ -647,20 +649,22 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 		var expected string
 		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, int64(entry.ChunkID)).Scan(&expected); err != nil {
 			if err == sql.ErrNoRows {
-				return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i), nil)
+				return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i), nil)
 			}
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d load chunk hash for chunk %d", blockID, entry.ChunkID), err)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d load chunk hash for chunk %d", blockID, entry.ChunkID), err)
 		}
 
 		if !strings.EqualFold(strings.TrimSpace(expected), computed) {
-			return verifyCategoryError(verifyErrChunkHashMismatch, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected)), nil)
+			return verifyStageError(verifyErrChunkHashMismatch, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected)), nil)
 		}
 	}
 
 	return nil
 }
 
-func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, blockID int64, decoded *blocks.EncodedBlock, strictMode bool) error {
+func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, blockID int64, containerID int64, containerOffset int64, decoded *blocks.EncodedBlock, strictMode bool) error {
+	meta := verifyBlockFailureMeta(VerifyStageChunkRefs, blockID, containerID, containerOffset)
+
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT r.chunk_id, r.offset_in_block, r.size_in_block, c.size
 		FROM chunk_block_refs r
@@ -669,7 +673,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		ORDER BY r.offset_in_block ASC
 	`, blockID)
 	if err != nil {
-		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: query chunk refs for block %d", blockID), err)
+		return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: query chunk refs for block %d", blockID), err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -680,16 +684,16 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		var size int64
 		var chunkSize int64
 		if err := rows.Scan(&chunkID, &offset, &size, &chunkSize); err != nil {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: scan chunk ref for block %d", blockID), err)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: scan chunk ref for block %d", blockID), err)
 		}
 		if offset < 0 {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d has negative offset_in_block for chunk %d", blockID, chunkID), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has negative offset_in_block for chunk %d", blockID, chunkID), nil)
 		}
 		if size <= 0 {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d has non-positive size_in_block for chunk %d", blockID, chunkID), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has non-positive size_in_block for chunk %d", blockID, chunkID), nil)
 		}
 		if chunkSize > 0 && size != chunkSize {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d size mismatch ref=%d chunk.size=%d", blockID, chunkID, size, chunkSize), nil)
 		}
 		segments = append(segments, verifyChunkRefSegment{
 			chunkID:   chunkID,
@@ -699,7 +703,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: iterate chunk refs for block %d", blockID), err)
+		return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: iterate chunk refs for block %d", blockID), err)
 	}
 	decodedEntriesByKey := make(map[verifyChunkRefSegment]struct{}, len(decoded.Entries))
 	for _, e := range decoded.Entries {
@@ -722,14 +726,14 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	for _, s := range segments {
 		k := verifyChunkRefSegment{chunkID: s.chunkID, offset: s.offset, size: s.size}
 		if _, ok := decodedEntriesByKey[k]; !ok {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk_block_ref references chunk not in encoded block table chunk=%d offset=%d size=%d", blockID, s.chunkID, s.offset, s.size), nil)
 		}
 	}
 
 	for _, e := range decoded.Entries {
 		k := verifyChunkRefSegment{chunkID: int64(e.ChunkID), offset: e.Offset, size: e.Size}
 		if _, ok := refsByKey[k]; !ok {
-			return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
+			return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
 		}
 	}
 
@@ -737,7 +741,7 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	for _, s := range segments {
 		end := s.offset + s.size
 		if end < s.offset || end > payloadSize {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d segment out of payload bounds offset=%d size=%d payload=%d", blockID, s.chunkID, s.offset, s.size, payloadSize), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d segment out of payload bounds offset=%d size=%d payload=%d", blockID, s.chunkID, s.offset, s.size, payloadSize), nil)
 		}
 	}
 
@@ -751,20 +755,20 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 	prevEnd := uint64(0)
 	for i, s := range segments {
 		if i > 0 && s.offset < prevEnd {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d has overlapping segments around chunk %d", blockID, s.chunkID), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d has overlapping segments around chunk %d", blockID, s.chunkID), nil)
 		}
 		prevEnd = s.offset + s.size
 	}
 
 	if strictMode {
 		if len(decoded.Entries) != len(segments) {
-			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry count mismatch decoded=%d refs=%d", blockID, len(decoded.Entries), len(segments)), nil)
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry count mismatch decoded=%d refs=%d", blockID, len(decoded.Entries), len(segments)), nil)
 		}
 		for i := range decoded.Entries {
 			e := decoded.Entries[i]
 			s := segments[i]
 			if int64(e.ChunkID) != s.chunkID || e.Offset != s.offset || e.Size != s.size {
-				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i), nil)
+				return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i), nil)
 			}
 		}
 	}

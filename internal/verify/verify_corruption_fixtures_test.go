@@ -315,6 +315,63 @@ func assertBlockDecodeStageVerifyFailure(t *testing.T, err error, blockID int64)
 	}
 }
 
+func assertChunkRefsStageVerifyFailure(t *testing.T, err error, blockID int64, category string, detailSubstring string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStageChunkRefs {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStageChunkRefs, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if category != "" && !strings.HasPrefix(err.Error(), category+":") {
+		t.Fatalf("expected category prefix %q, got: %v", category+":", err)
+	}
+	if detailSubstring != "" && !strings.Contains(err.Error(), detailSubstring) {
+		t.Fatalf("expected error containing %q, got: %v", detailSubstring, err)
+	}
+}
+
+func blockChunkIDs(t *testing.T, dbconn *sql.DB, blockID int64) []int64 {
+	t.Helper()
+
+	rows, err := dbconn.Query(`SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 ORDER BY offset_in_block ASC`, blockID)
+	if err != nil {
+		t.Fatalf("query chunk ids for block %d: %v", blockID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan chunk id for block %d: %v", blockID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate chunk ids for block %d: %v", blockID, err)
+	}
+	if len(ids) == 0 {
+		t.Fatalf("expected at least one chunk ref for block %d", blockID)
+	}
+	return ids
+}
+
 func rewritePackedBlockAndHashesForDecodeFixture(t *testing.T, repo verifyCorruptionRepo, blockID int64, mutate func([]byte)) {
 	t.Helper()
 
@@ -729,5 +786,79 @@ func TestCorruptionFixtureChunkRefOffsetsAndLengths(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "invalid chunk_block_refs ranges") {
 			t.Fatalf("expected invalid chunk_block_refs ranges error, got: %v", err)
 		}
+	})
+}
+
+func TestCorruptionFixtureChunkRefsStageConsistencyFailures(t *testing.T) {
+	t.Run("chunk index mismatch", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("AA"), []byte("BB")}, nil)
+
+		ids := blockChunkIDs(t, dbconn, blockID)
+		res, err := dbconn.Exec(`
+			INSERT INTO chunk (chunk_hash, size, status)
+			VALUES ($1, $2, 'COMPLETED')
+		`, strings.Repeat("9", 64), int64(2))
+		if err != nil {
+			t.Fatalf("insert unreferenced chunk for chunk-index mismatch fixture: %v", err)
+		}
+		newChunkID, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("load inserted chunk id: %v", err)
+		}
+
+		if _, err := dbconn.Exec(`UPDATE chunk_block_refs SET chunk_id = $1 WHERE block_id = $2 AND chunk_id = $3`, newChunkID, blockID, ids[0]); err != nil {
+			t.Fatalf("mutate chunk ref chunk_id mismatch: %v", err)
+		}
+
+		err = verifyBlockPayloads(dbconn, repo.containersDir)
+		assertChunkRefsStageVerifyFailure(t, err, blockID, verifyErrMetadataInvalid, "chunk_block_ref references chunk not in encoded block table")
+	})
+
+	t.Run("chunk offset mismatch", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("ABCD")}, nil)
+		chunkID := firstChunkIDForBlock(t, dbconn, blockID)
+
+		UpdateChunkBlockRefField(t, repo, blockID, chunkID, "offset_in_block", int64(1))
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		assertChunkRefsStageVerifyFailure(t, err, blockID, verifyErrMetadataInvalid, "chunk_block_ref references chunk not in encoded block table")
+	})
+
+	t.Run("chunk length mismatch", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("ABCD")}, nil)
+		chunkID := firstChunkIDForBlock(t, dbconn, blockID)
+
+		UpdateChunkBlockRefField(t, repo, blockID, chunkID, "size_in_block", int64(1))
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		assertChunkRefsStageVerifyFailure(t, err, blockID, verifyErrMetadataInvalid, "size mismatch")
+	})
+
+	t.Run("chunk hash mapping mismatch", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("ABCD")}, nil)
+		chunkID := firstChunkIDForBlock(t, dbconn, blockID)
+
+		if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("0", 64), chunkID); err != nil {
+			t.Fatalf("mutate chunk hash mapping: %v", err)
+		}
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		assertChunkRefsStageVerifyFailure(t, err, blockID, verifyErrChunkHashMismatch, "hash mismatch")
 	})
 }

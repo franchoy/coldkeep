@@ -897,6 +897,31 @@ func TestStorageBlockReaderMalformedLogicalBlockDecodeFailsWithoutPartialOutput(
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "malformed-logical-decode.restore", "decode block")
 }
 
+func TestStorageBlockReaderCorruptedChunkRefsDoNotProduceSilentInvalidRestore(t *testing.T) {
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionNone)
+
+	var chunkID int64
+	if err := dbconn.QueryRow(`SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 ORDER BY offset_in_block LIMIT 1`, blockID).Scan(&chunkID); err != nil {
+		t.Fatalf("load first chunk id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk_block_refs SET offset_in_block = $1 WHERE block_id = $2 AND chunk_id = $3`, int64(1), blockID, chunkID); err != nil {
+		t.Fatalf("corrupt chunk offset mapping: %v", err)
+	}
+
+	outPath := filepath.Join(workDir, "corrupted-chunk-refs.restore")
+	_, err := restoreFileWithDBAndDir(dbconn, fileID, outPath, workDir, RestoreOptions{Overwrite: true})
+	if err == nil {
+		t.Fatalf("expected restore failure for corrupted chunk refs")
+	}
+	if !strings.Contains(err.Error(), "restored file hash mismatch") && !strings.Contains(err.Error(), "missing chunk") && !strings.Contains(err.Error(), "out of bounds") && !strings.Contains(err.Error(), "invalid table/payload layout") {
+		t.Fatalf("expected restore failure tied to invalid chunk refs, got: %v", err)
+	}
+	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected restore output to be absent after failure, stat err=%v", statErr)
+	}
+}
+
 func TestStorageBlockReaderLogicalHashMismatchOnCompressedFixture(t *testing.T) {
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
 
