@@ -8,11 +8,20 @@ import (
 const (
 	CompressionNone = "none"
 	CompressionZstd = "zstd"
+
+	// DefaultCompressionCodec is the recommended codec for new compression-capable
+	// metadata once compression activation is enabled in later Phase 3 steps.
+	DefaultCompressionCodec = CompressionZstd
+	DefaultCompressionLevel = 3
 )
 
 // ErrUnsupportedCompression is returned when codec lookup receives
 // an unknown compression codec name.
 var ErrUnsupportedCompression = fmt.Errorf("unsupported compression codec")
+
+// ErrInvalidCompressionLevel is returned when a compression level is outside
+// the supported range for the selected codec.
+var ErrInvalidCompressionLevel = fmt.Errorf("invalid compression level")
 
 // Compressor provides a codec-stable compression/decompression contract.
 type Compressor interface {
@@ -33,7 +42,7 @@ func Lookup(codec string) (Compressor, error) {
 	case CompressionNone:
 		return noneCompressor{}, nil
 	case CompressionZstd:
-		return zstdCompressor{}, nil
+		return NewZstdCompressor(DefaultCompressionLevel)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedCompression, codec)
 	}
