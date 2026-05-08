@@ -442,3 +442,44 @@ func TestStorageBlockReaderLegacyNullPhysicalHashStillReads(t *testing.T) {
 		t.Fatalf("expected legacy NULL physical_hash row to read successfully, got: %v", err)
 	}
 }
+
+func TestStorageBlockReaderCompressedHashMismatchAfterDecrypt(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecAESGCM)
+
+	var compressedHash []byte
+	if err := dbconn.QueryRow(`SELECT compressed_hash FROM storage_blocks WHERE id = $1`, blockID).Scan(&compressedHash); err != nil {
+		t.Fatalf("load compressed_hash: %v", err)
+	}
+	if len(compressedHash) == 0 {
+		t.Fatal("expected non-empty compressed_hash for new row")
+	}
+
+	tampered := append([]byte(nil), compressedHash...)
+	tampered[0] ^= 0x01
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = $1 WHERE id = $2`, tampered, blockID); err != nil {
+		t.Fatalf("tamper compressed_hash: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "compressed payload hash mismatch") {
+		t.Fatalf("expected compressed payload hash mismatch, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected compressed-hash stage failure after physical stage, got: %v", err)
+	}
+}
+
+func TestStorageBlockReaderLegacyNullCompressedHashStillReads(t *testing.T) {
+	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = NULL WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set compressed_hash null: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	if _, err := r.ReadBlock(context.Background(), blockID); err != nil {
+		t.Fatalf("expected legacy NULL compressed_hash row to read successfully, got: %v", err)
+	}
+}

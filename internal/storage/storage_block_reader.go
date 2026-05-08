@@ -123,7 +123,6 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	if err != nil {
 		return nil, err
 	}
-
 	return encodedBlock, nil
 }
 
@@ -156,6 +155,26 @@ func (r *StorageBlockReader) verifyPhysicalHash(blockID int64, storedBytes []byt
 	computed := blocks.HashPhysical(storedBytes)
 	if !bytes.Equal(computed, physicalHash) {
 		return fmt.Errorf("physical payload hash mismatch for block %d", blockID)
+	}
+	return nil
+}
+
+// verifyCompressedHash checks decrypted pre-decompression payload bytes against
+// storage_blocks.compressed_hash when present.
+//
+// Compatibility rule: legacy rows may have NULL/empty compressed_hash and must
+// not fail this stage.
+func (r *StorageBlockReader) verifyCompressedHash(blockID int64, preDecompressionPayload []byte, compressedHash []byte) error {
+	if !r.verifyHash {
+		return nil
+	}
+	if len(compressedHash) == 0 {
+		return nil
+	}
+
+	computed := blocks.HashCompressed(preDecompressionPayload)
+	if !bytes.Equal(computed, compressedHash) {
+		return fmt.Errorf("compressed payload hash mismatch for block %d", blockID)
 	}
 	return nil
 }
@@ -342,6 +361,13 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 	})
 	if err != nil {
 		return nil, fmt.Errorf("decode block: %w", err)
+	}
+
+	// Stage 3a: Verify compressed hash at the pre-decompression boundary.
+	// With compression disabled (codec=none), plaintext is still the encoded
+	// logical block bytes. Legacy rows may have NULL compressed_hash and skip.
+	if err := r.verifyCompressedHash(meta.ID, plaintext, meta.Metadata.Hashes.CompressedHash); err != nil {
+		return nil, err
 	}
 
 	// Stage 3b: Decompress if a compression codec was applied during the write path.
