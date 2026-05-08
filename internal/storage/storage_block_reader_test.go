@@ -16,6 +16,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
+	"github.com/franchoy/coldkeep/internal/verify"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -800,11 +801,11 @@ func TestStorageBlockReaderDecompressionFailureAfterCompressedHashFixtureUpdate(
 
 	r := NewStorageBlockReader(dbconn, workDir)
 	_, err := r.ReadBlock(context.Background(), blockID)
-	if err == nil || !strings.Contains(err.Error(), "decompress codec=\"zstd\"") {
+	if err == nil || (!strings.Contains(err.Error(), "decompress codec=\"zstd\"") && !strings.Contains(err.Error(), "decompress codec=zstd")) {
 		t.Fatalf("expected decompression failure, got: %v", err)
 	}
 
-	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-decompression-failure.restore", "decompress codec=\"zstd\"")
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-decompression-failure.restore", "decompress codec=zstd")
 }
 
 func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialOutput(t *testing.T) {
@@ -820,7 +821,7 @@ func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialO
 	if err == nil {
 		t.Fatalf("expected decompression/plaintext size mismatch failure, got nil")
 	}
-	if !strings.Contains(err.Error(), "plaintext size mismatch") && !strings.Contains(err.Error(), "decompress codec=\"zstd\"") {
+	if !strings.Contains(err.Error(), "plaintext size mismatch") && !strings.Contains(err.Error(), "decompress codec=\"zstd\"") && !strings.Contains(err.Error(), "decompress codec=zstd") {
 		t.Fatalf("expected decompression-stage plaintext mismatch error, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "logical block hash mismatch") {
@@ -887,14 +888,14 @@ func TestStorageBlockReaderMalformedLogicalBlockDecodeFailsWithoutPartialOutput(
 	}()
 
 	_, err := r.ReadBlock(context.Background(), blockID)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || (!strings.Contains(err.Error(), "decode block") && !strings.Contains(err.Error(), "decode logical block")) {
 		t.Fatalf("expected decode failure for malformed logical payload, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "logical block hash mismatch") {
 		t.Fatalf("expected decode-stage failure, not logical hash mismatch: %v", err)
 	}
 
-	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "malformed-logical-decode.restore", "decode block")
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "malformed-logical-decode.restore", "decode logical block")
 }
 
 func TestStorageBlockReaderCorruptedChunkRefsDoNotProduceSilentInvalidRestore(t *testing.T) {
@@ -967,4 +968,183 @@ func TestStorageBlockReaderLogicalHashMismatchOnCompressedFixture(t *testing.T) 
 	}
 
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-logical-hash-mismatch.restore", "logical block hash mismatch")
+}
+
+func stageFromErr(err error) verify.VerifyStage {
+	var vf *verify.VerifyFailure
+	if errors.As(err, &vf) && vf != nil {
+		return vf.Stage
+	}
+	return ""
+}
+
+func assertRestoreVerifyStageCompatibility(t *testing.T, verifyErr, restoreErr error) {
+	t.Helper()
+
+	vStage := stageFromErr(verifyErr)
+	rStage := stageFromErr(restoreErr)
+
+	if vStage == "" {
+		if strings.Contains(verifyErr.Error(), "verifyChunkBlockRefs") {
+			if strings.Contains(restoreErr.Error(), "invalid table/payload layout") || strings.Contains(restoreErr.Error(), "restored file hash mismatch") {
+				return
+			}
+			t.Fatalf("expected chunk-ref compatible restore failure for structural verifyChunkBlockRefs error, got: %v", restoreErr)
+		}
+		t.Fatalf("expected verify error to include stage metadata, got: %v", verifyErr)
+	}
+
+	if rStage == vStage {
+		return
+	}
+
+	// Compatibility allowance: restore can surface chunk reference corruption as
+	// final file-hash mismatch when the corruption is only detectable while
+	// reconstructing chunk order from DB refs.
+	if vStage == verify.VerifyStageChunkRefs && rStage == "" && strings.Contains(restoreErr.Error(), "restored file hash mismatch") {
+		return
+	}
+
+	t.Fatalf("expected restore/verify stage compatibility, verify_stage=%q restore_stage=%q verify_err=%v restore_err=%v", vStage, rStage, verifyErr, restoreErr)
+}
+
+func TestRestoreAndVerifyCorruptionFixtureStageCompatibility(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	tests := []struct {
+		name         string
+		codec        blocks.Codec
+		compression  string
+		mutate       func(t *testing.T, dbconn *sql.DB, workDir string, blockID int64, filename string, offset int64, storedSize int64)
+		restoreProbe string
+	}{
+		{
+			name:        "physical payload mismatch",
+			codec:       blocks.CodecPlain,
+			compression: storagecompression.CompressionZstd,
+			mutate: func(t *testing.T, _ *sql.DB, workDir string, _ int64, filename string, offset int64, storedSize int64) {
+				payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
+				payload[0] ^= 0xFF
+				overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+			},
+			restoreProbe: "stage-compat-physical.restore",
+		},
+		{
+			name:        "decrypt auth failure",
+			codec:       blocks.CodecAESGCM,
+			compression: storagecompression.CompressionZstd,
+			mutate: func(t *testing.T, dbconn *sql.DB, workDir string, blockID int64, filename string, offset int64, storedSize int64) {
+				if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
+					t.Fatalf("set legacy null physical_hash: %v", err)
+				}
+				payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
+				payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
+				overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+			},
+			restoreProbe: "stage-compat-decrypt.restore",
+		},
+		{
+			name:        "compressed hash mismatch",
+			codec:       blocks.CodecAESGCM,
+			compression: storagecompression.CompressionZstd,
+			mutate: func(t *testing.T, dbconn *sql.DB, _ string, blockID int64, _ string, _ int64, _ int64) {
+				if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = $1 WHERE id = $2`, bytes.Repeat([]byte{0x00}, 32), blockID); err != nil {
+					t.Fatalf("tamper compressed_hash: %v", err)
+				}
+			},
+			restoreProbe: "stage-compat-compressed-hash.restore",
+		},
+		{
+			name:        "decompress malformed stream",
+			codec:       blocks.CodecPlain,
+			compression: storagecompression.CompressionZstd,
+			mutate: func(t *testing.T, dbconn *sql.DB, workDir string, blockID int64, filename string, offset int64, _ int64) {
+				corruptedCompressed := []byte("not-a-valid-zstd-stream")
+				overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, corruptedCompressed)
+				if _, err := dbconn.Exec(`
+					UPDATE storage_blocks
+					SET stored_size = $1,
+					    compressed_size = $2,
+					    physical_hash = $3,
+					    compressed_hash = $4
+					WHERE id = $5
+				`, int64(len(corruptedCompressed)), int64(len(corruptedCompressed)), blocks.HashPhysical(corruptedCompressed), blocks.HashCompressed(corruptedCompressed), blockID); err != nil {
+					t.Fatalf("update decompression fixture metadata: %v", err)
+				}
+			},
+			restoreProbe: "stage-compat-decompress.restore",
+		},
+		{
+			name:        "logical hash mismatch",
+			codec:       blocks.CodecAESGCM,
+			compression: storagecompression.CompressionZstd,
+			mutate: func(t *testing.T, dbconn *sql.DB, _ string, blockID int64, _ string, _ int64, _ int64) {
+				if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = $1 WHERE id = $2`, bytes.Repeat([]byte{0x00}, 32), blockID); err != nil {
+					t.Fatalf("tamper block_hash: %v", err)
+				}
+			},
+			restoreProbe: "stage-compat-logical-hash.restore",
+		},
+		{
+			name:        "block decode malformed",
+			codec:       blocks.CodecPlain,
+			compression: storagecompression.CompressionNone,
+			mutate: func(t *testing.T, dbconn *sql.DB, workDir string, blockID int64, filename string, offset int64, storedSize int64) {
+				payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
+				binary.LittleEndian.PutUint32(payload[0:4], 0)
+				overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+				if _, err := dbconn.Exec(`
+					UPDATE storage_blocks
+					SET block_hash = $1,
+					    compressed_hash = $2,
+					    physical_hash = $3,
+					    stored_size = $4,
+					    plaintext_size = $5
+					WHERE id = $6
+				`, blocks.HashLogical(payload), blocks.HashCompressed(payload), blocks.HashPhysical(payload), int64(len(payload)), int64(len(payload)), blockID); err != nil {
+					t.Fatalf("update malformed decode fixture metadata: %v", err)
+				}
+			},
+			restoreProbe: "stage-compat-decode.restore",
+		},
+		{
+			name:        "chunk refs mismatch",
+			codec:       blocks.CodecPlain,
+			compression: storagecompression.CompressionNone,
+			mutate: func(t *testing.T, dbconn *sql.DB, _ string, blockID int64, _ string, _ int64, _ int64) {
+				var chunkID int64
+				if err := dbconn.QueryRow(`SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 ORDER BY offset_in_block LIMIT 1`, blockID).Scan(&chunkID); err != nil {
+					t.Fatalf("load first chunk id: %v", err)
+				}
+				if _, err := dbconn.Exec(`UPDATE chunk_block_refs SET offset_in_block = $1 WHERE block_id = $2 AND chunk_id = $3`, int64(1), blockID, chunkID); err != nil {
+					t.Fatalf("corrupt chunk offset mapping: %v", err)
+				}
+			},
+			restoreProbe: "stage-compat-chunk-refs.restore",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, tc.codec, tc.compression)
+			tc.mutate(t, dbconn, workDir, blockID, filename, offset, storedSize)
+
+			verifyErr := verify.VerifyRepository(dbconn, workDir)
+			if verifyErr == nil {
+				t.Fatalf("expected verify failure for corruption fixture %q", tc.name)
+			}
+
+			outPath := filepath.Join(workDir, tc.restoreProbe)
+			_, restoreErr := restoreFileWithDBAndDir(dbconn, fileID, outPath, workDir, RestoreOptions{Overwrite: true})
+			if restoreErr == nil {
+				t.Fatalf("expected restore failure for corruption fixture %q", tc.name)
+			}
+			if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+				t.Fatalf("expected restore output to be absent after failure, stat err=%v", statErr)
+			}
+
+			assertRestoreVerifyStageCompatibility(t, verifyErr, restoreErr)
+		})
+	}
 }

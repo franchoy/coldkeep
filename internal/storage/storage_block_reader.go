@@ -17,6 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/iodebug"
 	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
+	"github.com/franchoy/coldkeep/internal/verify"
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
@@ -147,38 +148,116 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 		return nil, fmt.Errorf("block %d has empty block_hash; fail-closed hash verification requires non-empty block_hash", blockID)
 	}
 
-	// Stage 2: Read stored bytes from container.
-	storedBytes, err := r.readStoredPayload(metadata)
+	verified, err := verify.VerifyStoredBlock(ctx, toVerifyBlockStorageMetadata(metadata), storageVerifyContainerReader{reader: r})
 	if err != nil {
-		return nil, fmt.Errorf("read block %d from container: %w", blockID, err)
-	}
-
-	// Stage 2.5: Verify physical hash against exact persisted payload bytes
-	// before any decrypt/decode steps. Legacy rows may have NULL physical_hash;
-	// those rows intentionally skip this stage for compatibility.
-	if err := r.verifyPhysicalHash(metadata, storedBytes, metadata.Metadata.Hashes.PhysicalHash); err != nil {
-		return nil, err
-	}
-
-	// Stage 3: Reverse transforms (currently: decrypt if AES-GCM).
-	plaintextBytes, err := r.reverseTransforms(ctx, metadata, storedBytes)
-	if err != nil {
-		return nil, fmt.Errorf("reverse transforms block %d: %w", blockID, err)
-	}
-
-	// Stage 4: Verify logical hash (mandatory, fail-closed).
-	if err := r.verifyLogicalHash(metadata, plaintextBytes, metadata.Metadata.Hashes.LogicalHash); err != nil {
-		return nil, err
+		return nil, r.mapVerifyPipelineFailure(err)
 	}
 
 	iodebug.IncBlockDecode()
+	return verified.DecodedBlock, nil
+}
 
-	// Stage 5: Decode block to reconstruct EncodedBlock.
-	encodedBlock, err := r.decodeLogicalBlock(blockID, plaintextBytes)
-	if err != nil {
-		return nil, err
+type storageVerifyContainerReader struct {
+	reader *StorageBlockReader
+}
+
+func (r storageVerifyContainerReader) ReadStoredPayload(_ context.Context, meta verify.BlockStorageMetadata) ([]byte, error) {
+	converted := &blockMetadata{
+		ID:              meta.BlockID,
+		FormatVersion:   int(meta.FormatVersion),
+		Codec:           meta.Codec,
+		ContainerID:     meta.ContainerID,
+		ContainerName:   meta.ContainerName,
+		ContainerOffset: meta.ContainerOffset,
+		Metadata: storagemetadata.BlockStorageMetadata{
+			Compression: storagemetadata.CompressionMetadata{
+				Codec: meta.CompressionCodec,
+				Level: meta.CompressionLevel,
+			},
+			Sizes: storagemetadata.PayloadMetadata{
+				PlaintextSize:  meta.PlaintextSize,
+				CompressedSize: meta.CompressedSize,
+				StoredSize:     meta.StoredSize,
+			},
+			Hashes: storagemetadata.HashMetadata{
+				LogicalHash:    meta.LogicalHash,
+				CompressedHash: meta.CompressedHash,
+				PhysicalHash:   meta.PhysicalHash,
+			},
+		},
 	}
-	return encodedBlock, nil
+
+	return r.reader.readStoredPayload(converted)
+}
+
+func toVerifyBlockStorageMetadata(meta *blockMetadata) verify.BlockStorageMetadata {
+	if meta == nil {
+		return verify.BlockStorageMetadata{}
+	}
+
+	return verify.BlockStorageMetadata{
+		BlockID:          meta.ID,
+		ContainerID:      meta.ContainerID,
+		ContainerOffset:  meta.ContainerOffset,
+		ContainerName:    meta.ContainerName,
+		ContainerMaxSize: container.GetContainerMaxSize(),
+		FormatVersion:    int64(meta.FormatVersion),
+		Codec:            meta.Codec,
+		PlaintextSize:    meta.Metadata.Sizes.PlaintextSize,
+		CompressedSize:   meta.Metadata.Sizes.CompressedSize,
+		StoredSize:       meta.Metadata.Sizes.StoredSize,
+		CompressionCodec: meta.Metadata.Compression.Codec,
+		CompressionLevel: meta.Metadata.Compression.Level,
+		LogicalHash:      meta.Metadata.Hashes.LogicalHash,
+		CompressedHash:   meta.Metadata.Hashes.CompressedHash,
+		PhysicalHash:     meta.Metadata.Hashes.PhysicalHash,
+	}
+}
+
+func (r *StorageBlockReader) mapVerifyPipelineFailure(err error) error {
+	var vf *verify.VerifyFailure
+	if !errors.As(err, &vf) || vf == nil {
+		return err
+	}
+
+	if vf.BlockID == nil || vf.ContainerID == nil || vf.Offset == nil {
+		return err
+	}
+
+	switch vf.Category {
+	case "physical_hash_mismatch":
+		mapped := &HashMismatchError{
+			Layer:       hashLayerPhysical,
+			BlockID:     *vf.BlockID,
+			ContainerID: *vf.ContainerID,
+			Offset:      *vf.Offset,
+			Expected:    vf.ExpectedHash,
+			Actual:      vf.ActualHash,
+		}
+		return errors.Join(mapped, err)
+	case "compressed_hash_mismatch":
+		mapped := &HashMismatchError{
+			Layer:       hashLayerCompressed,
+			BlockID:     *vf.BlockID,
+			ContainerID: *vf.ContainerID,
+			Offset:      *vf.Offset,
+			Expected:    vf.ExpectedHash,
+			Actual:      vf.ActualHash,
+		}
+		return errors.Join(mapped, err)
+	case "block_hash_mismatch":
+		mapped := &HashMismatchError{
+			Layer:       hashLayerLogical,
+			BlockID:     *vf.BlockID,
+			ContainerID: *vf.ContainerID,
+			Offset:      *vf.Offset,
+			Expected:    vf.ExpectedHash,
+			Actual:      vf.ActualHash,
+		}
+		return errors.Join(mapped, err)
+	default:
+		return err
+	}
 }
 
 // verifyLogicalHash checks the plaintext encoded bytes against the stored block_hash.
