@@ -14,12 +14,14 @@ import (
 	"testing"
 
 	dbschema "github.com/franchoy/coldkeep/db"
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	"github.com/franchoy/coldkeep/internal/retention"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 	"github.com/franchoy/coldkeep/internal/storage"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	"github.com/franchoy/coldkeep/internal/verify"
 	"github.com/franchoy/coldkeep/tests/testdb"
 )
@@ -962,4 +964,224 @@ func writeTestContainerFileWithPayload(path string, payload []byte) error {
 
 	buf := append(hdr, payload...)
 	return os.WriteFile(path, buf, 0o644)
+}
+
+func insertPackedStorageBlockFixtureWithCompression(t *testing.T, dbconn *sql.DB, containersDir, containerFilename string, chunkIDs []int64, chunkPayloads [][]byte, compressionCodec string) (int64, int64) {
+	t.Helper()
+
+	encodedBlock, logicalHash := step11EncodePackedBlockV1(t, chunkIDs, chunkPayloads...)
+
+	storedPayload := encodedBlock
+	compressionLevel := any(nil)
+	if compressionCodec == storagecompression.CompressionZstd {
+		compressor, err := storagecompression.NewZstdCompressor(3)
+		if err != nil {
+			t.Fatalf("new zstd compressor: %v", err)
+		}
+		compressed, err := compressor.Compress(encodedBlock)
+		if err != nil {
+			t.Fatalf("compress encoded packed block: %v", err)
+		}
+		storedPayload = compressed
+		compressionLevel = 3
+	}
+
+	containerPath := filepath.Join(containersDir, containerFilename)
+	if err := writeTestContainerFileWithPayload(containerPath, storedPayload); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		VALUES ($1, $2, $3, TRUE, FALSE)
+		RETURNING id
+	`, containerFilename, int64(container.ContainerHdrLen+len(storedPayload)), container.GetContainerMaxSize()).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var storageBlockID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, stored_size, container_id, container_offset,
+			block_hash, compression_codec, compression_level, compressed_size, compressed_hash, physical_hash
+		)
+		VALUES (1, 'none', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
+	`, int64(len(encodedBlock)), int64(len(storedPayload)), containerID, int64(container.ContainerHdrLen), logicalHash,
+		compressionCodec, compressionLevel, int64(len(storedPayload)), blocks.HashCompressed(storedPayload), blocks.HashPhysical(storedPayload)).Scan(&storageBlockID); err != nil {
+		t.Fatalf("insert packed storage block fixture: %v", err)
+	}
+
+	offset := int64(0)
+	for i, payload := range chunkPayloads {
+		if _, err := dbconn.Exec(`
+			INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+			VALUES ($1, $2, $3, $4)
+		`, chunkIDs[i], storageBlockID, offset, int64(len(payload))); err != nil {
+			t.Fatalf("insert chunk_block_refs: %v", err)
+		}
+		offset += int64(len(payload))
+	}
+
+	step11InsertLegacyCompanionRows(t, dbconn, containerID, int64(container.ContainerHdrLen), len(storedPayload), chunkIDs, chunkPayloads...)
+
+	return containerID, storageBlockID
+}
+
+func TestRunGCMixedCompressionAgnosticPackedReachabilityAndRestoreStep311(t *testing.T) {
+	requireDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+
+	// Uncompressed snapshot-retained legacy container (existing behavior baseline).
+	legacyLiveContainerID, _ := setupSnapshotRetainedContainer(t, dbconn, containersDir)
+
+	// Compressed snapshot-retained packed block.
+	compressedLivePayload := []byte("step311-compressed-live")
+	compressedLiveHash := sha256.Sum256(compressedLivePayload)
+
+	var compressedLiveFileID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO logical_file (original_name, total_size, file_hash, ref_count, status, chunker_version)
+		VALUES ('step311-live-compressed.bin', $1, $2, 0, 'COMPLETED', 'v2-fastcdc')
+		RETURNING id
+	`, int64(len(compressedLivePayload)), hex.EncodeToString(compressedLiveHash[:])).Scan(&compressedLiveFileID); err != nil {
+		t.Fatalf("insert compressed live logical file: %v", err)
+	}
+
+	var compressedLiveChunkID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		RETURNING id
+	`, hex.EncodeToString(compressedLiveHash[:]), int64(len(compressedLivePayload))).Scan(&compressedLiveChunkID); err != nil {
+		t.Fatalf("insert compressed live chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order)
+		VALUES ($1, $2, 0)
+	`, compressedLiveFileID, compressedLiveChunkID); err != nil {
+		t.Fatalf("insert compressed live file_chunk: %v", err)
+	}
+
+	compressedLiveContainerID, compressedLiveBlockID := insertPackedStorageBlockFixtureWithCompression(
+		t,
+		dbconn,
+		containersDir,
+		"step311-compressed-live.bin",
+		[]int64{compressedLiveChunkID},
+		[][]byte{compressedLivePayload},
+		storagecompression.CompressionZstd,
+	)
+
+	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES ('S311-live', NOW(), 'full')`); err != nil {
+		t.Fatalf("insert snapshot S311-live: %v", err)
+	}
+	testdb.InsertSnapshotFileRef(t, dbconn, "S311-live", "snap/live-compressed.bin", compressedLiveFileID)
+	if _, err := dbconn.Exec(`DELETE FROM physical_file WHERE logical_file_id = $1`, compressedLiveFileID); err != nil {
+		t.Fatalf("delete compressed live physical_file rows: %v", err)
+	}
+
+	// Compressed orphan packed block (must be collectable).
+	orphanPayload := []byte("step311-compressed-orphan")
+	orphanHash := sha256.Sum256(orphanPayload)
+	var orphanChunkID int64
+	if err := dbconn.QueryRow(`
+		INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		RETURNING id
+	`, hex.EncodeToString(orphanHash[:]), int64(len(orphanPayload))).Scan(&orphanChunkID); err != nil {
+		t.Fatalf("insert compressed orphan chunk: %v", err)
+	}
+	orphanContainerID, orphanBlockID := insertPackedStorageBlockFixtureWithCompression(
+		t,
+		dbconn,
+		containersDir,
+		"step311-compressed-orphan.bin",
+		[]int64{orphanChunkID},
+		[][]byte{orphanPayload},
+		storagecompression.CompressionZstd,
+	)
+
+	gcResult, gcErr := RunGCWithContainersDirResult(false, containersDir)
+	if gcErr != nil {
+		t.Fatalf("GC should succeed: %v", gcErr)
+	}
+	if gcResult.AffectedContainers < 1 {
+		t.Fatalf("expected at least one affected container (compressed orphan), got %d", gcResult.AffectedContainers)
+	}
+	if gcResult.SnapshotRetainedContainers < 2 {
+		t.Fatalf("expected at least two snapshot-retained containers (compressed + uncompressed), got %d", gcResult.SnapshotRetainedContainers)
+	}
+
+	var orphanContainerCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, orphanContainerID).Scan(&orphanContainerCount); err != nil {
+		t.Fatalf("count orphan container after GC: %v", err)
+	}
+	if orphanContainerCount != 0 {
+		t.Fatalf("expected compressed orphan container to be reclaimed, still present")
+	}
+	var orphanBlockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, orphanBlockID).Scan(&orphanBlockCount); err != nil {
+		t.Fatalf("count orphan storage block after GC: %v", err)
+	}
+	if orphanBlockCount != 0 {
+		t.Fatalf("expected compressed orphan storage block to be reclaimed, still present")
+	}
+
+	var compressedLiveBlockCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks WHERE id = $1`, compressedLiveBlockID).Scan(&compressedLiveBlockCount); err != nil {
+		t.Fatalf("count compressed live block after GC: %v", err)
+	}
+	if compressedLiveBlockCount != 1 {
+		t.Fatalf("expected compressed live block to remain, got count=%d", compressedLiveBlockCount)
+	}
+	var compressedLiveContainerCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, compressedLiveContainerID).Scan(&compressedLiveContainerCount); err != nil {
+		t.Fatalf("count compressed live container after GC: %v", err)
+	}
+	if compressedLiveContainerCount != 1 {
+		t.Fatalf("expected compressed live container to remain, got count=%d", compressedLiveContainerCount)
+	}
+	var legacyLiveContainerCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, legacyLiveContainerID).Scan(&legacyLiveContainerCount); err != nil {
+		t.Fatalf("count uncompressed legacy live container after GC: %v", err)
+	}
+	if legacyLiveContainerCount != 1 {
+		t.Fatalf("expected uncompressed snapshot-retained container to remain, got count=%d", legacyLiveContainerCount)
+	}
+
+	restoreDir := t.TempDir()
+	sgctx := storage.StorageContext{DB: dbconn, ContainerDir: containersDir}
+	restoreResult, err := snapshot.RestoreSnapshot(context.Background(), dbconn, "S311-live", nil, snapshot.RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationPrefix,
+		Destination:     restoreDir,
+		Overwrite:       true,
+		NoMetadata:      true,
+		StorageContext:  &sgctx,
+	})
+	if err != nil {
+		t.Fatalf("restore compressed snapshot after GC: %v", err)
+	}
+	if restoreResult.RestoredFiles != 1 {
+		t.Fatalf("expected one restored file from compressed snapshot, got %d", restoreResult.RestoredFiles)
+	}
+
+	restored, err := os.ReadFile(filepath.Join(restoreDir, "snap", "live-compressed.bin"))
+	if err != nil {
+		t.Fatalf("read restored compressed snapshot file: %v", err)
+	}
+	if string(restored) != string(compressedLivePayload) {
+		t.Fatalf("restored compressed payload mismatch: got %q want %q", string(restored), string(compressedLivePayload))
+	}
 }
