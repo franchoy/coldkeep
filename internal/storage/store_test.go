@@ -4531,3 +4531,108 @@ func TestStoreFilePhysicalHashLayerSemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreFileHashMatrixAcrossSupportedModesAndRestoreParity(t *testing.T) {
+	tcs := []struct {
+		name                     string
+		codec                    blocks.Codec
+		setEncryptionKey         bool
+		expectPhysicalEqualsHash bool
+	}{
+		{
+			name:                     "plain-none",
+			codec:                    blocks.CodecPlain,
+			setEncryptionKey:         false,
+			expectPhysicalEqualsHash: true,
+		},
+		{
+			name:                     "aesgcm-none",
+			codec:                    blocks.CodecAESGCM,
+			setEncryptionKey:         true,
+			expectPhysicalEqualsHash: false,
+		},
+	}
+
+	payloads := [][]byte{
+		[]byte("matrix-a"),
+		[]byte("matrix-b"),
+		[]byte("matrix-c"),
+	}
+	expectedRestored := concatPayloads(payloads)
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.setEncryptionKey {
+				t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+			} else {
+				t.Setenv("COLDKEEP_KEY", "")
+			}
+
+			dbconn, err := sql.Open("sqlite3", ":memory:")
+			if err != nil {
+				t.Fatalf("open sqlite db: %v", err)
+			}
+			defer func() { _ = dbconn.Close() }()
+
+			if err := db.RunMigrations(dbconn); err != nil {
+				t.Fatalf("run migrations: %v", err)
+			}
+
+			workDir := t.TempDir()
+			inPath := filepath.Join(workDir, tc.name+"-matrix.bin")
+			if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+				t.Fatalf("write input file: %v", err)
+			}
+
+			sgctx := StorageContext{
+				DB:           dbconn,
+				Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+				ContainerDir: workDir,
+				Chunker: scriptedChunker{
+					version:  chunk.VersionV1SimpleRolling,
+					payloads: payloads,
+				},
+			}
+
+			result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, tc.codec)
+			if err != nil {
+				t.Fatalf("store file: %v", err)
+			}
+
+			restored := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, tc.name+"-restored.bin")
+			if !bytes.Equal(restored, expectedRestored) {
+				t.Fatalf("restore behavior changed for %s: got %q want %q", tc.name, restored, expectedRestored)
+			}
+
+			var blockHash []byte
+			var compressedHash []byte
+			var physicalHash []byte
+			if err := dbconn.QueryRow(`
+				SELECT block_hash, compressed_hash, physical_hash
+				FROM storage_blocks
+				ORDER BY id DESC
+				LIMIT 1
+			`).Scan(&blockHash, &compressedHash, &physicalHash); err != nil {
+				t.Fatalf("read hash matrix row: %v", err)
+			}
+
+			if len(blockHash) != 32 || len(compressedHash) != 32 || len(physicalHash) != 32 {
+				t.Fatalf("expected all hashes to be persisted as 32-byte digests; got block=%d compressed=%d physical=%d", len(blockHash), len(compressedHash), len(physicalHash))
+			}
+
+			if !bytes.Equal(blockHash, compressedHash) {
+				t.Fatalf("expected logical == compressed for compression=none; got logical=%x compressed=%x", blockHash, compressedHash)
+			}
+
+			if tc.expectPhysicalEqualsHash {
+				if !bytes.Equal(physicalHash, blockHash) {
+					t.Fatalf("expected physical == logical for non-encrypted mode")
+				}
+			} else {
+				if bytes.Equal(physicalHash, blockHash) {
+					t.Fatalf("expected physical != logical for aes-gcm mode")
+				}
+			}
+		})
+	}
+}
