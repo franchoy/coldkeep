@@ -2820,61 +2820,68 @@ type packedChunkSegment struct {
 const packedStorageBlockCodecNone = "none"
 const packedStorageBlockAESGCMNonceSize = 12
 
-// storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
-//
-// Atomic order (single transaction boundary):
-//  1. Encode plaintext block bytes
-//  2. Compute mandatory block hash on plaintext encoded bytes
-//  3. Transform/encrypt encoded block bytes
-//  4. Append transformed bytes to container
-//  5. Insert storage_blocks row
-//  6. Insert chunk_block_refs rows
-//
-// Invariant: no chunk_block_refs row is written before a successful storage_blocks
-// insert in the same transaction.
-func storePackedBlockWithWriter(
-	ctx context.Context,
-	tx *sql.Tx,
-	writer payloadStatefulWriter,
-	transformer blocks.Transformer,
-	builder *blocks.BlockBuilder,
-) (packedBlockPersistResult, error) {
-	if builder == nil || builder.Empty() {
-		return packedBlockPersistResult{}, fmt.Errorf("packed block flush requires non-empty builder")
-	}
+// packedBlockEncoded holds the result of the build + encode + hash stage.
+type packedBlockEncoded struct {
+	encodedBlock     *blocks.EncodedBlock
+	plaintextEncoded []byte
+	blockHash        []byte
+}
 
-	// 1-2) Build block and compute mandatory hash over encoded plaintext bytes.
+// packedBlockTransformed holds the result of the transform stage.
+type packedBlockTransformed struct {
+	storedPayload []byte
+	storageCodec  string
+	legacyNonce   []byte
+}
+
+// buildAndEncodePackedBlock builds the block from the builder, serializes it to
+// binary, and computes the mandatory logical hash over the plaintext bytes.
+func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded, error) {
 	encodedBlock, _, err := builder.Build()
 	if err != nil {
-		return packedBlockPersistResult{}, err
+		return packedBlockEncoded{}, err
 	}
 
 	plaintextEncoded, err := blocks.EncodeBlock(encodedBlock)
 	if err != nil {
-		return packedBlockPersistResult{}, err
+		return packedBlockEncoded{}, err
 	}
 
 	blockHash := blocks.ComputeBlockHash(plaintextEncoded)
 
-	// 3) Transform/encrypt encoded bytes for physical storage.
+	return packedBlockEncoded{
+		encodedBlock:     encodedBlock,
+		plaintextEncoded: plaintextEncoded,
+		blockHash:        blockHash,
+	}, nil
+}
+
+// applyPackedBlockTransforms runs the transformer over the plaintext encoded bytes
+// and assembles the final stored payload (including nonce prefix for AES-GCM).
+func applyPackedBlockTransforms(
+	ctx context.Context,
+	transformer blocks.Transformer,
+	enc packedBlockEncoded,
+) (packedBlockTransformed, error) {
 	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
 		ChunkID:   0,
-		ChunkHash: hex.EncodeToString(blockHash),
-		Plaintext: plaintextEncoded,
+		ChunkHash: hex.EncodeToString(enc.blockHash),
+		Plaintext: enc.plaintextEncoded,
 	})
 	if err != nil {
-		return packedBlockPersistResult{}, err
+		return packedBlockTransformed{}, err
 	}
 
 	storageCodec := packedStorageBlockCodecNone
 	legacyNonce := []byte{}
 	storedPayload := transformed.Payload
+
 	switch transformed.Descriptor.Codec {
 	case blocks.CodecPlain:
 		// Keep legacy v1.8 metadata contract for plain payloads.
 	case blocks.CodecAESGCM:
 		if len(transformed.Descriptor.Nonce) != packedStorageBlockAESGCMNonceSize {
-			return packedBlockPersistResult{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
+			return packedBlockTransformed{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
 		}
 		// storage_blocks has no nonce column, so prefix nonce into stored payload.
 		storedPayload = make([]byte, 0, len(transformed.Descriptor.Nonce)+len(transformed.Payload))
@@ -2883,16 +2890,35 @@ func storePackedBlockWithWriter(
 		storageCodec = string(blocks.CodecAESGCM)
 		legacyNonce = append(legacyNonce, transformed.Descriptor.Nonce...)
 	default:
-		return packedBlockPersistResult{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
+		return packedBlockTransformed{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
 	}
 
-	// 4) Append transformed payload to container.
-	placement, err := writer.AppendPayload(tx, storedPayload)
-	if err != nil {
-		return packedBlockPersistResult{}, err
-	}
+	return packedBlockTransformed{
+		storedPayload: storedPayload,
+		storageCodec:  storageCodec,
+		legacyNonce:   legacyNonce,
+	}, nil
+}
 
-	// 5) Insert storage_blocks metadata row.
+// persistPackedBlockPayload appends the stored payload to the container and
+// returns the placement (container ID + offset).
+func persistPackedBlockPayload(
+	tx *sql.Tx,
+	writer payloadStatefulWriter,
+	tr packedBlockTransformed,
+) (container.LocalPlacement, error) {
+	return writer.AppendPayload(tx, tr.storedPayload)
+}
+
+// persistPackedBlockMetadata inserts the storage_blocks row and all
+// chunk_block_refs rows inside the already-open transaction.
+func persistPackedBlockMetadata(
+	ctx context.Context,
+	tx *sql.Tx,
+	enc packedBlockEncoded,
+	tr packedBlockTransformed,
+	placement container.LocalPlacement,
+) (int64, map[int64]packedChunkSegment, error) {
 	var blockID int64
 	if err := tx.QueryRowContext(
 		ctx,
@@ -2902,20 +2928,19 @@ func storePackedBlockWithWriter(
 		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
 		1,
-		storageCodec,
-		int64(len(plaintextEncoded)),
-		int64(len(storedPayload)),
+		tr.storageCodec,
+		int64(len(enc.plaintextEncoded)),
+		int64(len(tr.storedPayload)),
 		placement.ContainerID,
 		placement.Offset,
-		blockHash,
+		enc.blockHash,
 	).Scan(&blockID); err != nil {
-		return packedBlockPersistResult{}, err
+		return 0, nil, err
 	}
 
-	// 6) Insert chunk -> packed-block placement rows.
-	payloadPrefixBytes := int64(len(plaintextEncoded) - len(encodedBlock.Payload))
-	segments := make(map[int64]packedChunkSegment, len(encodedBlock.Entries))
-	for _, entry := range encodedBlock.Entries {
+	payloadPrefixBytes := int64(len(enc.plaintextEncoded) - len(enc.encodedBlock.Payload))
+	segments := make(map[int64]packedChunkSegment, len(enc.encodedBlock.Entries))
+	for _, entry := range enc.encodedBlock.Entries {
 		segments[int64(entry.ChunkID)] = packedChunkSegment{
 			Offset: payloadPrefixBytes + int64(entry.Offset),
 			Size:   int64(entry.Size),
@@ -2930,17 +2955,65 @@ func storePackedBlockWithWriter(
 			int64(entry.Offset),
 			int64(entry.Size),
 		); err != nil {
-			return packedBlockPersistResult{}, err
+			return 0, nil, err
 		}
+	}
+
+	return blockID, segments, nil
+}
+
+// storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
+//
+// Atomic order (single transaction boundary):
+//  1. Build block and encode to plaintext bytes; compute logical hash
+//  2. Apply transforms (encrypt and/or future stages)
+//  3. Persist payload to container
+//  4. Persist storage_blocks + chunk_block_refs metadata
+//
+// Invariant: no chunk_block_refs row is written before a successful storage_blocks
+// insert in the same transaction.
+func storePackedBlockWithWriter(
+	ctx context.Context,
+	tx *sql.Tx,
+	writer payloadStatefulWriter,
+	transformer blocks.Transformer,
+	builder *blocks.BlockBuilder,
+) (packedBlockPersistResult, error) {
+	if builder == nil || builder.Empty() {
+		return packedBlockPersistResult{}, fmt.Errorf("packed block flush requires non-empty builder")
+	}
+
+	// Stage 1: Build block + encode + hash.
+	enc, err := buildAndEncodePackedBlock(builder)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// Stage 2: Apply transforms.
+	tr, err := applyPackedBlockTransforms(ctx, transformer, enc)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// Stage 3: Persist payload to container.
+	placement, err := persistPackedBlockPayload(tx, writer, tr)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// Stage 4: Persist metadata.
+	blockID, segments, err := persistPackedBlockMetadata(ctx, tx, enc, tr, placement)
+	if err != nil {
+		return packedBlockPersistResult{}, err
 	}
 
 	return packedBlockPersistResult{
 		BlockID:      blockID,
-		BlockHash:    blockHash,
-		StorageCodec: storageCodec,
-		LegacyNonce:  legacyNonce,
+		BlockHash:    enc.blockHash,
+		StorageCodec: tr.storageCodec,
+		LegacyNonce:  tr.legacyNonce,
 		Placement:    placement,
-		StoredSize:   int64(len(storedPayload)),
+		StoredSize:   int64(len(tr.storedPayload)),
 		Segments:     segments,
 	}, nil
 }
