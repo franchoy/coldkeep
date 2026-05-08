@@ -4368,13 +4368,25 @@ func TestStoreFilePersistsTransformMetadataColumns(t *testing.T) {
 		plaintextSize    int64
 		storedSize       int64
 		blockHash        []byte
+		compressedHash   []byte
+		physicalHash     []byte
 	)
 	if err := dbconn.QueryRow(`
-		SELECT compression_codec, compression_ratio, payload_hash, plaintext_size, stored_size, block_hash
+		SELECT compression_codec, compression_ratio, payload_hash, plaintext_size, stored_size,
+		       block_hash, compressed_hash, physical_hash
 		FROM storage_blocks
 		ORDER BY id ASC
 		LIMIT 1
-	`).Scan(&compressionCodec, &compressionRatio, &payloadHash, &plaintextSize, &storedSize, &blockHash); err != nil {
+	`).Scan(
+		&compressionCodec,
+		&compressionRatio,
+		&payloadHash,
+		&plaintextSize,
+		&storedSize,
+		&blockHash,
+		&compressedHash,
+		&physicalHash,
+	); err != nil {
 		t.Fatalf("read storage_blocks metadata row: %v", err)
 	}
 
@@ -4393,5 +4405,13 @@ func TestStoreFilePersistsTransformMetadataColumns(t *testing.T) {
 	expectedRatio := float64(storedSize) / float64(plaintextSize)
 	if math.Abs(compressionRatio-expectedRatio) > 1e-9 {
 		t.Fatalf("compression_ratio mismatch: got %.12f want %.12f", compressionRatio, expectedRatio)
+	}
+
+	if !bytes.Equal(compressedHash, blockHash) {
+		t.Fatalf("expected compressed_hash == block_hash for codec=none; got %x want %x", compressedHash, blockHash)
+	}
+
+	if len(physicalHash) != 32 {
+		t.Fatalf("expected 32-byte physical_hash, got %d bytes", len(physicalHash))
 	}
 }

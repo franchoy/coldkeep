@@ -2881,17 +2881,17 @@ type packedBlockEncoded struct {
 	encodedBlock     *blocks.EncodedBlock
 	plaintextEncoded []byte
 	blockHash        []byte
-	compressedHash   []byte // hash of the pre-encryption payload; == blockHash when compression is disabled
 	metadata         blocks.TransformMetadata
 }
 
 // packedBlockTransformed holds the result of the transform stage.
 type packedBlockTransformed struct {
-	storedPayload []byte
-	storageCodec  string
-	legacyNonce   []byte
-	physicalHash  []byte // hash of the exact persisted payload bytes
-	metadata      blocks.TransformMetadata
+	storedPayload  []byte
+	storageCodec   string
+	legacyNonce    []byte
+	compressedHash []byte // hash of post-compression, pre-encryption payload
+	physicalHash   []byte // hash of the exact persisted payload bytes
+	metadata       blocks.TransformMetadata
 }
 
 // buildAndEncodePackedBlock builds the block from the builder, serializes it to
@@ -2908,9 +2908,6 @@ func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded
 	}
 
 	blockHash := blocks.HashLogical(plaintextEncoded)
-	// Phase 2: compression is disabled, so the pre-encryption payload equals
-	// the plaintext encoded bytes and compressedHash == logicalHash.
-	compressedHash := blocks.HashCompressed(plaintextEncoded)
 	metadata := blocks.TransformMetadata{
 		PayloadHash:      hex.EncodeToString(blockHash),
 		CompressionCodec: packedStorageBlockCodecNone,
@@ -2922,7 +2919,6 @@ func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded
 		encodedBlock:     encodedBlock,
 		plaintextEncoded: plaintextEncoded,
 		blockHash:        blockHash,
-		compressedHash:   compressedHash,
 		metadata:         metadata,
 	}, nil
 }
@@ -2946,6 +2942,10 @@ func applyPackedBlockTransforms(
 		toTransform = compressed
 		compressionCodec = compression.codec
 	}
+
+	// Hash pre-encryption bytes at the transform boundary.
+	// With codec=none in Phase 2, this equals logical block hash.
+	compressedHash := blocks.HashCompressed(toTransform)
 
 	// Stage 2b: Apply encryption transformer (or identity for plain codec).
 	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
@@ -2988,11 +2988,12 @@ func applyPackedBlockTransforms(
 	physicalHash := blocks.HashPhysical(storedPayload)
 
 	return packedBlockTransformed{
-		storedPayload: storedPayload,
-		storageCodec:  storageCodec,
-		legacyNonce:   legacyNonce,
-		physicalHash:  physicalHash,
-		metadata:      metadata,
+		storedPayload:  storedPayload,
+		storageCodec:   storageCodec,
+		legacyNonce:    legacyNonce,
+		compressedHash: compressedHash,
+		physicalHash:   physicalHash,
+		metadata:       metadata,
 	}, nil
 }
 
@@ -3035,7 +3036,7 @@ func persistPackedBlockMetadata(
 		tr.metadata.CompressionCodec,
 		tr.metadata.CompressionRatio,
 		tr.metadata.PayloadHash,
-		enc.compressedHash,
+		tr.compressedHash,
 		tr.physicalHash,
 	).Scan(&blockID); err != nil {
 		return 0, nil, err
