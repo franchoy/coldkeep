@@ -23,6 +23,8 @@ const (
 	verifyErrMetadataMissing          = "metadata_missing"
 	verifyErrMetadataInvalid          = "metadata_invalid"
 	verifyErrPhysicalMissing          = "physical_missing"
+	verifyErrPhysicalHashMismatch     = "physical_hash_mismatch"
+	verifyErrCompressedHashMismatch   = "compressed_hash_mismatch"
 	verifyErrBlockHashMismatch        = "block_hash_mismatch"
 	verifyErrChunkHashMismatch        = "chunk_hash_mismatch"
 	verifyErrUnsupportedBlock         = "unsupported_block_format"
@@ -561,8 +563,10 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 		}
 
 		stagePayloads := blockStagePayloads{
-			storedBytes:      storedBytes,
-			compressedBytes:  nil, // Phase 3: populated after decompression
+			storedBytes: storedBytes,
+			// Phase 2.10: compression is still disabled, so the pre-decompression
+			// payload is the decrypted plaintext block bytes.
+			compressedBytes:  plaintextEncoded,
 			plaintextEncoded: plaintextEncoded,
 			hashes: blocks.BlockHashes{
 				LogicalHash:    b.logicalHash,

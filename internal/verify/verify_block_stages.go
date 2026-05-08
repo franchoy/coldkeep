@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -27,18 +28,38 @@ type blockStagePayloads struct {
 }
 
 // verifyPhysicalPayloadStage is Stage 1 of the block verification pipeline.
-// Current: explicit no-op. physical_hash is populated for new rows, but legacy
-// rows may still be NULL. Compatibility rule: NULL physical_hash means legacy
-// row and this stage is skipped.
-func verifyPhysicalPayloadStage(_ context.Context, _ int64, _ blockStagePayloads) error {
+// If physical_hash is present, verify SHA-256 of raw stored bytes.
+// Compatibility rule: NULL/empty physical_hash means legacy row and this stage is skipped.
+func verifyPhysicalPayloadStage(_ context.Context, blockID int64, payloads blockStagePayloads) error {
+	if len(payloads.hashes.PhysicalHash) == 0 {
+		return nil
+	}
+	computed := blocks.HashPhysical(payloads.storedBytes)
+	if !bytes.Equal(computed, payloads.hashes.PhysicalHash) {
+		return verifyCategoryError(
+			verifyErrPhysicalHashMismatch,
+			fmt.Sprintf("verifyBlockPayloads: physical payload hash mismatch for block %d expected=%x actual=%x", blockID, payloads.hashes.PhysicalHash, computed),
+			nil,
+		)
+	}
 	return nil
 }
 
 // verifyCompressedPayloadStage is Stage 2 of the block verification pipeline.
-// Current: explicit no-op. compressed_hash is populated for new rows, but
-// legacy rows may still be NULL. Compatibility rule: NULL compressed_hash means
-// legacy row and this stage is skipped.
-func verifyCompressedPayloadStage(_ context.Context, _ int64, _ blockStagePayloads) error {
+// If compressed_hash is present, verify SHA-256 of the pre-decompression payload.
+// Compatibility rule: NULL/empty compressed_hash means legacy row and this stage is skipped.
+func verifyCompressedPayloadStage(_ context.Context, blockID int64, payloads blockStagePayloads) error {
+	if len(payloads.hashes.CompressedHash) == 0 {
+		return nil
+	}
+	computed := blocks.HashCompressed(payloads.compressedBytes)
+	if !bytes.Equal(computed, payloads.hashes.CompressedHash) {
+		return verifyCategoryError(
+			verifyErrCompressedHashMismatch,
+			fmt.Sprintf("verifyBlockPayloads: compressed payload hash mismatch for block %d expected=%x actual=%x", blockID, payloads.hashes.CompressedHash, computed),
+			nil,
+		)
+	}
 	return nil
 }
 

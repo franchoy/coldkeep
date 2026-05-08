@@ -962,6 +962,94 @@ func TestVerifyBlockPayloadsDetectsCorruptedStoredBytes(t *testing.T) {
 	}
 }
 
+func TestVerifyBlockPayloadsPassesWithPhase2HashesPresent(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	logical := blocks.HashLogical(payload)
+	compressed := blocks.HashCompressed(payload)
+	physical := blocks.HashPhysical(payload)
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET block_hash = $1, compressed_hash = $2, physical_hash = $3 WHERE id = $4`,
+		logical,
+		compressed,
+		physical,
+		blockID,
+	); err != nil {
+		t.Fatalf("set phase2 hash fields: %v", err)
+	}
+
+	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
+		t.Fatalf("expected verifyBlockPayloads to pass with phase2 hashes present, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsPhysicalHashMismatchStage(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	logical := blocks.HashLogical(payload)
+	compressed := blocks.HashCompressed(payload)
+	physical := blocks.HashPhysical(payload)
+	physical[0] ^= 0xFF
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET block_hash = $1, compressed_hash = $2, physical_hash = $3 WHERE id = $4`,
+		logical,
+		compressed,
+		physical,
+		blockID,
+	); err != nil {
+		t.Fatalf("set hash fields for physical mismatch test: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), verifyErrPhysicalHashMismatch) {
+		t.Fatalf("expected physical hash mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsCompressedHashMismatchStage(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	logical := blocks.HashLogical(payload)
+	compressed := blocks.HashCompressed(payload)
+	physical := blocks.HashPhysical(payload)
+	compressed[0] ^= 0xFF
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET block_hash = $1, compressed_hash = $2, physical_hash = $3 WHERE id = $4`,
+		logical,
+		compressed,
+		physical,
+		blockID,
+	); err != nil {
+		t.Fatalf("set hash fields for compressed mismatch test: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), verifyErrCompressedHashMismatch) {
+		t.Fatalf("expected compressed hash mismatch category, got: %v", err)
+	}
+}
+
 func TestVerifyBlockPayloadsDetectsChunkSizeMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
