@@ -452,6 +452,14 @@ INSERT INTO repository_config(key, value)
 VALUES ('default_block_compression', 'none')
 ON CONFLICT (key) DO NOTHING;
 
+INSERT INTO repository_config(key, value)
+VALUES ('compression', 'none')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO repository_config(key, value)
+VALUES ('compression_level', '3')
+ON CONFLICT (key) DO NOTHING;
+
 UPDATE schema_version SET version = 11 WHERE version < 11;
 
 -- Schema version 12: v1.8 block abstraction foundation tables.

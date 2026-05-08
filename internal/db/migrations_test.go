@@ -189,8 +189,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 13 {
-		t.Fatalf("expected schema version 13 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 14 {
+		t.Fatalf("expected schema version 14 after first migration pass, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -251,8 +251,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 13 {
-		t.Fatalf("expected schema version to stay 13 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 14 {
+		t.Fatalf("expected schema version to stay 14 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -508,8 +508,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 13 {
-		t.Fatalf("expected schema version 13 after migration, got %d", schemaVersion)
+	if schemaVersion != 14 {
+		t.Fatalf("expected schema version 14 after migration, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -782,8 +782,8 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 13 {
-		t.Fatalf("expected schema version 13 after v12 migration, got %d", schemaVersion)
+	if schemaVersion != 14 {
+		t.Fatalf("expected schema version 14 after v12 migration, got %d", schemaVersion)
 	}
 
 	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash"} {
@@ -1945,5 +1945,92 @@ func TestRunMigrationsRejectsEmptyPhysicalFilePath(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatalf("expected empty path insert to fail")
+	}
+}
+
+// V14 Compression Config Migration Tests
+
+func TestRunMigrationsCreatesCompressionConfigDefaults(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Verify compression config keys exist and have expected defaults
+	var compressionCodec string
+	if err := dbconn.QueryRow(
+		`SELECT value FROM repository_config WHERE key = 'compression'`,
+	).Scan(&compressionCodec); err != nil {
+		t.Fatalf("read compression config: %v", err)
+	}
+	if compressionCodec != "none" {
+		t.Fatalf("expected compression='none', got %q", compressionCodec)
+	}
+
+	var compressionLevel string
+	if err := dbconn.QueryRow(
+		`SELECT value FROM repository_config WHERE key = 'compression_level'`,
+	).Scan(&compressionLevel); err != nil {
+		t.Fatalf("read compression_level config: %v", err)
+	}
+	if compressionLevel != "3" {
+		t.Fatalf("expected compression_level='3', got %q", compressionLevel)
+	}
+
+	// Verify schema_version is at least 14
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema_version: %v", err)
+	}
+	if schemaVersion < 14 {
+		t.Fatalf("expected schema_version >= 14, got %d", schemaVersion)
+	}
+}
+
+func TestRunMigrationsCompressionConfigIsIdempotent(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	// First migration run
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("first run migrations: %v", err)
+	}
+
+	var versionAfterFirstRun int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&versionAfterFirstRun); err != nil {
+		t.Fatalf("read schema_version after first run: %v", err)
+	}
+
+	// Second migration run (simulates re-running migrations, which should be safe)
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("second run migrations: %v", err)
+	}
+
+	var versionAfterSecondRun int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&versionAfterSecondRun); err != nil {
+		t.Fatalf("read schema_version after second run: %v", err)
+	}
+
+	if versionAfterFirstRun != versionAfterSecondRun {
+		t.Fatalf("expected schema_version unchanged after rerun, got %d then %d", versionAfterFirstRun, versionAfterSecondRun)
+	}
+
+	// Verify config values haven't changed
+	var compressionCodec string
+	if err := dbconn.QueryRow(
+		`SELECT value FROM repository_config WHERE key = 'compression'`,
+	).Scan(&compressionCodec); err != nil {
+		t.Fatalf("read compression config after rerun: %v", err)
+	}
+	if compressionCodec != "none" {
+		t.Fatalf("expected compression='none' after rerun, got %q", compressionCodec)
 	}
 }

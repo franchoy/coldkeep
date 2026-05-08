@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -142,5 +143,228 @@ func TestGetDefaultChunkerVersionRejectsUnregisteredConfiguredValue(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "not registered") {
 		t.Fatalf("expected unregistered-value error, got: %v", err)
+	}
+}
+
+// Compression config tests
+
+func TestIsRegisteredCompressionCodec(t *testing.T) {
+	tests := []struct {
+		codec    string
+		expected bool
+	}{
+		{"none", true},
+		{"aes-gcm", true},
+		{"NONE", false}, // case-sensitive
+		{"gzip", false},
+		{"xz", false},
+		{"unknown", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.codec, func(t *testing.T) {
+			got := IsRegisteredCompressionCodec(tt.codec)
+			if got != tt.expected {
+				t.Fatalf("IsRegisteredCompressionCodec(%q) = %v, want %v", tt.codec, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetDefaultCompressionFallsBackToNoneWhenUnset(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM repository_config WHERE key = $1`, repositoryDefaultCompressionKey); err != nil {
+		t.Fatalf("delete default row: %v", err)
+	}
+
+	got, err := GetDefaultCompression(tx)
+	if err != nil {
+		t.Fatalf("GetDefaultCompression: %v", err)
+	}
+	if got != defaultCompressionCodec {
+		t.Fatalf("default compression fallback mismatch: got %q want %q", got, defaultCompressionCodec)
+	}
+}
+
+func TestSetDefaultCompressionRoundTrip(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	if err := SetDefaultCompression(tx, "aes-gcm"); err != nil {
+		t.Fatalf("SetDefaultCompression(aes-gcm): %v", err)
+	}
+
+	got, err := GetDefaultCompression(tx)
+	if err != nil {
+		t.Fatalf("GetDefaultCompression: %v", err)
+	}
+	if got != "aes-gcm" {
+		t.Fatalf("round-trip default compression mismatch: got %q want %q", got, "aes-gcm")
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	var persisted string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = $1`, repositoryDefaultCompressionKey).Scan(&persisted); err != nil {
+		t.Fatalf("read persisted default compression: %v", err)
+	}
+	if persisted != "aes-gcm" {
+		t.Fatalf("persisted default compression mismatch: got %q want %q", persisted, "aes-gcm")
+	}
+}
+
+func TestSetDefaultCompressionRejectsUnregisteredCodec(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	err = SetDefaultCompression(tx, "gzip")
+	if err == nil {
+		t.Fatal("expected error for unregistered codec, got nil")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("expected unregistered-codec error, got: %v", err)
+	}
+}
+
+func TestGetDefaultCompressionLevelFallsBackTo3WhenUnset(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM repository_config WHERE key = $1`, repositoryDefaultCompressionLevelKey); err != nil {
+		t.Fatalf("delete default row: %v", err)
+	}
+
+	got, err := GetDefaultCompressionLevel(tx)
+	if err != nil {
+		t.Fatalf("GetDefaultCompressionLevel: %v", err)
+	}
+	if got != defaultCompressionLevel {
+		t.Fatalf("default compression level fallback mismatch: got %d want %d", got, defaultCompressionLevel)
+	}
+}
+
+func TestSetDefaultCompressionLevelRoundTrip(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	if err := SetDefaultCompressionLevel(tx, 5); err != nil {
+		t.Fatalf("SetDefaultCompressionLevel(5): %v", err)
+	}
+
+	got, err := GetDefaultCompressionLevel(tx)
+	if err != nil {
+		t.Fatalf("GetDefaultCompressionLevel: %v", err)
+	}
+	if got != 5 {
+		t.Fatalf("round-trip default compression level mismatch: got %d want %d", got, 5)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	var persisted string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = $1`, repositoryDefaultCompressionLevelKey).Scan(&persisted); err != nil {
+		t.Fatalf("read persisted default compression level: %v", err)
+	}
+	if persisted != "5" {
+		t.Fatalf("persisted default compression level mismatch: got %q want %q", persisted, "5")
+	}
+}
+
+func TestSetDefaultCompressionLevelRejectsOutOfRangeValues(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tests := []struct {
+		name  string
+		level int
+	}{
+		{"negative", -1},
+		{"too low", -10},
+		{"too high", 12},
+		{"way too high", 100},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx, err := dbconn.Begin()
+			if err != nil {
+				t.Fatalf("begin tx: %v", err)
+			}
+			defer func() { _ = tx.Rollback() }()
+
+			err = SetDefaultCompressionLevel(tx, tt.level)
+			if err == nil {
+				t.Fatalf("expected error for level %d, got nil", tt.level)
+			}
+			if !strings.Contains(err.Error(), "out of range") {
+				t.Fatalf("expected out-of-range error for level %d, got: %v", tt.level, err)
+			}
+		})
+	}
+}
+
+func TestCompressionConfigBoundaryValues(t *testing.T) {
+	dbconn := setupRepositoryConfigTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	tests := []struct {
+		value   int
+		success bool
+	}{
+		{0, true},   // minimum valid
+		{1, true},   // lower range
+		{5, true},   // mid range
+		{11, true},  // maximum valid
+		{-1, false}, // below minimum
+		{12, false}, // above maximum
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("level_%d", tt.value), func(t *testing.T) {
+			tx, err := dbconn.Begin()
+			if err != nil {
+				t.Fatalf("begin tx: %v", err)
+			}
+
+			err = SetDefaultCompressionLevel(tx, tt.value)
+			if (err == nil) != tt.success {
+				t.Fatalf("SetDefaultCompressionLevel(%d) success=%v, want %v (err=%v)", tt.value, err == nil, tt.success, err)
+			}
+
+			_ = tx.Rollback()
+		})
 	}
 }

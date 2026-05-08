@@ -700,6 +700,39 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 	return nil
 }
 
+func runSQLiteRepositoryCompressionConfigMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	// Add compression config keys to repository_config table
+	// This migration is idempotent: uses INSERT OR IGNORE to avoid conflicts
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO repository_config(key, value)
+		VALUES ('compression', 'none')
+	`); err != nil {
+		return fmt.Errorf("seed repository_config.compression: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO repository_config(key, value)
+		VALUES ('compression_level', '3')
+	`); err != nil {
+		return fmt.Errorf("seed repository_config.compression_level: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 14
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 14: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (14)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 14: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -892,6 +925,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteStorageTransformMetadataMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteRepositoryCompressionConfigMigration(tx, ctx); err != nil {
 		return err
 	}
 

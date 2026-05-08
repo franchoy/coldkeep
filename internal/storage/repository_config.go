@@ -83,3 +83,137 @@ func SetDefaultChunkerVersion(tx *sql.Tx, v chunk.Version) error {
 
 	return nil
 }
+
+const (
+	repositoryDefaultCompressionKey      = "compression"
+	repositoryDefaultCompressionLevelKey = "compression_level"
+	defaultCompressionCodec              = "none"
+	defaultCompressionLevel              = 3
+	minCompressionLevel                  = 0
+	maxCompressionLevel                  = 11
+)
+
+// IsRegisteredCompressionCodec returns true if the codec is valid for repository use.
+// Currently supported codecs: "none", "aes-gcm" (encryption), and future transform codecs.
+func IsRegisteredCompressionCodec(codec string) bool {
+	codec = strings.TrimSpace(codec)
+	switch codec {
+	case "none", "aes-gcm":
+		return true
+	default:
+		return false
+	}
+}
+
+// GetDefaultCompression returns the repository-level default compression codec.
+//
+// Behavior contract:
+// - if repository_config.compression is absent, it returns "none"
+// - returned values must be registered/valid
+func GetDefaultCompression(tx *sql.Tx) (string, error) {
+	if tx == nil {
+		return "", errors.New("nil transaction")
+	}
+
+	var raw string
+	err := tx.QueryRow(
+		`SELECT value FROM repository_config WHERE key = $1`,
+		repositoryDefaultCompressionKey,
+	).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return defaultCompressionCodec, nil
+		}
+		return "", fmt.Errorf("read repository default compression: %w", err)
+	}
+
+	codec := strings.TrimSpace(raw)
+	if !IsRegisteredCompressionCodec(codec) {
+		return "", fmt.Errorf("repository default compression codec %q is not registered", codec)
+	}
+
+	return codec, nil
+}
+
+// SetDefaultCompression updates repository_config.compression.
+// The provided codec must be registered/valid.
+func SetDefaultCompression(tx *sql.Tx, codec string) error {
+	if tx == nil {
+		return errors.New("nil transaction")
+	}
+
+	codec = strings.TrimSpace(codec)
+	if !IsRegisteredCompressionCodec(codec) {
+		return fmt.Errorf("compression codec %q is not registered", codec)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO repository_config(key, value)
+		 VALUES($1, $2)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		repositoryDefaultCompressionKey,
+		codec,
+	); err != nil {
+		return fmt.Errorf("persist repository default compression: %w", err)
+	}
+
+	return nil
+}
+
+// GetDefaultCompressionLevel returns the repository-level default compression level.
+//
+// Behavior contract:
+// - if repository_config.compression_level is absent, it returns 3
+// - returned values must be in range [0, 11]
+func GetDefaultCompressionLevel(tx *sql.Tx) (int, error) {
+	if tx == nil {
+		return 0, errors.New("nil transaction")
+	}
+
+	var raw string
+	err := tx.QueryRow(
+		`SELECT value FROM repository_config WHERE key = $1`,
+		repositoryDefaultCompressionLevelKey,
+	).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return defaultCompressionLevel, nil
+		}
+		return 0, fmt.Errorf("read repository default compression level: %w", err)
+	}
+
+	level := 0
+	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &level); err != nil {
+		return 0, fmt.Errorf("repository default compression level %q is not a valid integer: %w", raw, err)
+	}
+
+	if level < minCompressionLevel || level > maxCompressionLevel {
+		return 0, fmt.Errorf("repository default compression level %d is out of range [%d, %d]", level, minCompressionLevel, maxCompressionLevel)
+	}
+
+	return level, nil
+}
+
+// SetDefaultCompressionLevel updates repository_config.compression_level.
+// The provided level must be in range [0, 11].
+func SetDefaultCompressionLevel(tx *sql.Tx, level int) error {
+	if tx == nil {
+		return errors.New("nil transaction")
+	}
+
+	if level < minCompressionLevel || level > maxCompressionLevel {
+		return fmt.Errorf("compression level %d is out of range [%d, %d]", level, minCompressionLevel, maxCompressionLevel)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO repository_config(key, value)
+		 VALUES($1, $2)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		repositoryDefaultCompressionLevelKey,
+		fmt.Sprintf("%d", level),
+	); err != nil {
+		return fmt.Errorf("persist repository default compression level: %w", err)
+	}
+
+	return nil
+}
