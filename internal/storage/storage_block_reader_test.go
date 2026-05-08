@@ -695,6 +695,32 @@ func TestStorageBlockReaderLegacyNullPhysicalHashExposesAESAuthFailureOnCompress
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-auth-failure.restore", "cipher: message authentication failed")
 }
 
+func TestStorageBlockReaderLegacyNullPhysicalHashPlainCodecSkipsDecryptStage(t *testing.T) {
+	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set legacy null physical_hash: %v", err)
+	}
+
+	payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
+	payload[len(payload)-1] ^= 0xFF
+	overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "compressed payload hash mismatch") {
+		t.Fatalf("expected compressed payload hash mismatch for plain codec corruption, got: %v", err)
+	}
+	if !errors.Is(err, ErrCompressedPayloadHashMismatch) {
+		t.Fatalf("expected ErrCompressedPayloadHashMismatch category, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "cipher: message authentication failed") || strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected no decrypt/auth failure label for plain codec, got: %v", err)
+	}
+
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-plain-skip-decrypt.restore", "compressed payload hash mismatch")
+}
+
 func TestStorageBlockReaderCompressedHashMismatchForCorruptedCompressedBytes(t *testing.T) {
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
 

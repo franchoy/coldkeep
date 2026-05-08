@@ -141,6 +141,43 @@ func assertPhysicalStageVerifyFailure(t *testing.T, err error, blockID int64) {
 	}
 }
 
+func assertDecryptStageVerifyFailure(t *testing.T, err error, blockID int64) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStageDecrypt {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStageDecrypt, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") {
+		t.Fatalf("expected category prefix %q, got: %v", verifyErrMetadataInvalid+":", err)
+	}
+	if !strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected AES-GCM auth failure detail, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "stage=decompress") || strings.Contains(err.Error(), "stage=logical_hash") {
+		t.Fatalf("expected decrypt-stage failure, got mislabeled stage: %v", err)
+	}
+	if strings.HasPrefix(err.Error(), verifyErrCompressedHashMismatch+":") || strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected decrypt-stage metadata_invalid, got later-stage mismatch: %v", err)
+	}
+}
+
 func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -218,6 +255,41 @@ func TestCorruptionFixturePhysicalStageDBPhysicalHashMismatch(t *testing.T) {
 
 	err := verifyBlockPayloads(dbconn, repo.containersDir)
 	assertPhysicalStageVerifyFailure(t, err, blockID)
+}
+
+func TestCorruptionFixtureDecryptStageLegacyNullPhysicalHashDetectsAEADFailure(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-decrypt-auth-failure")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	UpdateStorageBlockField(t, repo, blockID, "physical_hash", nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, repo.containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	if len(payload) <= packedStorageBlockAESGCMNonceSize {
+		t.Fatalf("expected encrypted payload larger than nonce prefix, got=%d", len(payload))
+	}
+	payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertDecryptStageVerifyFailure(t, err, blockID)
+}
+
+func TestCorruptionFixtureDecryptStageUnencryptedBlocksSkipCleanly(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-decrypt-skip-plain")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	if err := verifyBlockPayloads(dbconn, repo.containersDir); err != nil {
+		t.Fatalf("expected plain codec block verification to skip decrypt stage cleanly, got: %v", err)
+	}
 }
 
 func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {
