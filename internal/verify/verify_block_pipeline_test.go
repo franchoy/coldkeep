@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -108,5 +109,60 @@ func TestVerifyStoredBlockCompressedZstdPasses(t *testing.T) {
 	}
 	if verified.DecodedBlock == nil {
 		t.Fatalf("decoded block should not be nil")
+	}
+}
+
+func TestVerifyStoredBlockLegacyMissingPhysicalAndCompressedHashesPasses(t *testing.T) {
+	logicalPayload := buildPipelineEncodedBytes(t, []byte("legacy-missing-hashes"))
+	meta := BlockStorageMetadata{
+		BlockID:          303,
+		ContainerID:      33,
+		ContainerOffset:  256,
+		ContainerName:    "container_legacy.ck",
+		ContainerMaxSize: 1 << 20,
+		FormatVersion:    1,
+		Codec:            "none",
+		PlaintextSize:    int64(len(logicalPayload)),
+		StoredSize:       int64(len(logicalPayload)),
+		CompressionCodec: "none",
+		LogicalHash:      blocks.HashLogical(logicalPayload),
+		// Legacy row simulation: new hash columns absent.
+		CompressedHash: nil,
+		PhysicalHash:   nil,
+	}
+
+	verified, err := VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: logicalPayload})
+	if err != nil {
+		t.Fatalf("VerifyStoredBlock(legacy missing hashes): %v", err)
+	}
+	if verified.DecodedBlock == nil {
+		t.Fatalf("decoded block should not be nil")
+	}
+}
+
+func TestVerifyStoredBlockLogicalHashRequired(t *testing.T) {
+	logicalPayload := buildPipelineEncodedBytes(t, []byte("logical-hash-required"))
+	meta := BlockStorageMetadata{
+		BlockID:          404,
+		ContainerID:      44,
+		ContainerOffset:  512,
+		ContainerName:    "container_required.ck",
+		ContainerMaxSize: 1 << 20,
+		FormatVersion:    1,
+		Codec:            "none",
+		PlaintextSize:    int64(len(logicalPayload)),
+		StoredSize:       int64(len(logicalPayload)),
+		CompressionCodec: "none",
+		LogicalHash:      nil,
+		CompressedHash:   nil,
+		PhysicalHash:     nil,
+	}
+
+	_, err := VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: logicalPayload})
+	if err == nil {
+		t.Fatalf("expected VerifyStoredBlock to fail when logical hash is missing")
+	}
+	if !strings.Contains(err.Error(), verifyErrBlockHashMismatch) {
+		t.Fatalf("expected block hash mismatch category, got: %v", err)
 	}
 }

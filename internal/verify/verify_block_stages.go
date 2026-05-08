@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"log"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 )
@@ -29,6 +30,7 @@ type blockStagePayloads struct {
 // Compatibility rule: NULL/empty physical_hash means legacy row and this stage is skipped.
 func verifyPhysicalPayloadStage(_ context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
 	if len(payloads.hashes.PhysicalHash) == 0 {
+		log.Printf("DEBUG verify stage=%s block_id=%d container_id=%d offset=%d: physical hash unavailable for legacy block", VerifyStagePhysicalPayload, loc.blockID, loc.containerID, loc.offset)
 		return nil
 	}
 	computed := blocks.HashPhysical(payloads.storedBytes)
@@ -51,6 +53,7 @@ func verifyPhysicalPayloadStage(_ context.Context, loc verifyBlockLocation, payl
 // Compatibility rule: NULL/empty compressed_hash means legacy row and this stage is skipped.
 func verifyCompressedPayloadStage(_ context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
 	if len(payloads.hashes.CompressedHash) == 0 {
+		log.Printf("DEBUG verify stage=%s block_id=%d container_id=%d offset=%d: compressed hash unavailable for legacy block", VerifyStageCompressedHash, loc.blockID, loc.containerID, loc.offset)
 		return nil
 	}
 	computed := blocks.HashCompressed(payloads.compressedBytes)
