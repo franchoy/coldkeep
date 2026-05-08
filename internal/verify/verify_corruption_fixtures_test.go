@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -280,6 +281,55 @@ func assertLogicalHashStageVerifyFailure(t *testing.T, err error, blockID int64)
 	}
 }
 
+func assertBlockDecodeStageVerifyFailure(t *testing.T, err error, blockID int64) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStageBlockDecode {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStageBlockDecode, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if !strings.HasPrefix(err.Error(), verifyErrUnsupportedBlock+":") {
+		t.Fatalf("expected category prefix %q, got: %v", verifyErrUnsupportedBlock+":", err)
+	}
+	if !strings.Contains(err.Error(), "decode logical block") {
+		t.Fatalf("expected decode logical block detail, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "stage=chunk_refs") {
+		t.Fatalf("expected malformed block to fail at decode stage first, got: %v", err)
+	}
+}
+
+func rewritePackedBlockAndHashesForDecodeFixture(t *testing.T, repo verifyCorruptionRepo, blockID int64, mutate func([]byte)) {
+	t.Helper()
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, repo.dbconn, blockID, repo.containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	mutate(payload)
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+
+	UpdateStorageBlockField(t, repo, blockID, "stored_size", int64(len(payload)))
+	UpdateStorageBlockField(t, repo, blockID, "plaintext_size", int64(len(payload)))
+	UpdateStorageBlockField(t, repo, blockID, "block_hash", blocks.HashLogical(payload))
+	UpdateStorageBlockField(t, repo, blockID, "compressed_hash", blocks.HashCompressed(payload))
+	UpdateStorageBlockField(t, repo, blockID, "physical_hash", blocks.HashPhysical(payload))
+}
+
 func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -448,6 +498,79 @@ func TestCorruptionFixtureLogicalHashStageMismatchAfterSuccessfulDecryptAndDecom
 
 	err := verifyBlockPayloads(dbconn, repo.containersDir)
 	assertLogicalHashStageVerifyFailure(t, err, blockID)
+}
+
+func TestCorruptionFixtureBlockDecodeStageMalformedLogicalPayloadShapes(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks [][]byte
+		mutate func([]byte)
+	}{
+		{
+			name:   "magic invalid",
+			chunks: [][]byte{[]byte("decode-magic")},
+			mutate: func(payload []byte) {
+				binary.LittleEndian.PutUint32(payload[0:4], 0)
+			},
+		},
+		{
+			name:   "version unsupported",
+			chunks: [][]byte{[]byte("decode-version")},
+			mutate: func(payload []byte) {
+				binary.LittleEndian.PutUint16(payload[4:6], 99)
+			},
+		},
+		{
+			name:   "chunk count mismatch",
+			chunks: [][]byte{[]byte("decode-count")},
+			mutate: func(payload []byte) {
+				binary.LittleEndian.PutUint32(payload[8:12], 2)
+			},
+		},
+		{
+			name:   "chunk offsets invalid",
+			chunks: [][]byte{[]byte("ABCD")},
+			mutate: func(payload []byte) {
+				binary.LittleEndian.PutUint64(payload[28:36], 1)
+			},
+		},
+		{
+			name:   "chunk lengths exceed plaintext size",
+			chunks: [][]byte{[]byte("ABCD")},
+			mutate: func(payload []byte) {
+				binary.LittleEndian.PutUint64(payload[36:44], 99)
+			},
+		},
+		{
+			name:   "duplicate or overlapping chunk spans",
+			chunks: [][]byte{[]byte("AA"), []byte("BB")},
+			mutate: func(payload []byte) {
+				// Second entry offset starts at 0 instead of 2, creating overlap.
+				binary.LittleEndian.PutUint64(payload[52:60], 0)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dbconn := openVerifyTestDB(t)
+			defer func() { _ = dbconn.Close() }()
+
+			repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+			blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, tc.chunks, nil)
+
+			rewritePackedBlockAndHashesForDecodeFixture(t, repo, blockID, tc.mutate)
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("verifyBlockPayloads must not panic on malformed logical block fixture: %v", r)
+				}
+			}()
+
+			err := verifyBlockPayloads(dbconn, repo.containersDir)
+			assertBlockDecodeStageVerifyFailure(t, err, blockID)
+		})
+	}
 }
 
 func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {

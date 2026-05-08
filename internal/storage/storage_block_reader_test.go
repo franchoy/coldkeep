@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -857,6 +858,43 @@ func TestStorageBlockReaderEncryptedLogicalHashMismatchBeforeDecode(t *testing.T
 	}
 
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-encrypted-logical-hash-mismatch.restore", "logical block hash mismatch")
+}
+
+func TestStorageBlockReaderMalformedLogicalBlockDecodeFailsWithoutPartialOutput(t *testing.T) {
+	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionNone)
+
+	payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
+	binary.LittleEndian.PutUint32(payload[0:4], 0)
+	overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, payload)
+
+	if _, err := dbconn.Exec(`
+		UPDATE storage_blocks
+		SET block_hash = $1,
+		    compressed_hash = $2,
+		    physical_hash = $3,
+		    stored_size = $4,
+		    plaintext_size = $5
+		WHERE id = $6
+	`, blocks.HashLogical(payload), blocks.HashCompressed(payload), blocks.HashPhysical(payload), int64(len(payload)), int64(len(payload)), blockID); err != nil {
+		t.Fatalf("update hashes/size for malformed decode fixture: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("ReadBlock must not panic on malformed logical payload: %v", rec)
+		}
+	}()
+
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected decode failure for malformed logical payload, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "logical block hash mismatch") {
+		t.Fatalf("expected decode-stage failure, not logical hash mismatch: %v", err)
+	}
+
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "malformed-logical-decode.restore", "decode block")
 }
 
 func TestStorageBlockReaderLogicalHashMismatchOnCompressedFixture(t *testing.T) {
