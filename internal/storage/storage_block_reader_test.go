@@ -483,3 +483,30 @@ func TestStorageBlockReaderLegacyNullCompressedHashStillReads(t *testing.T) {
 		t.Fatalf("expected legacy NULL compressed_hash row to read successfully, got: %v", err)
 	}
 }
+
+func TestStorageBlockReaderLogicalHashMismatchRemainsCanonical(t *testing.T) {
+	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	var blockHash []byte
+	if err := dbconn.QueryRow(`SELECT block_hash FROM storage_blocks WHERE id = $1`, blockID).Scan(&blockHash); err != nil {
+		t.Fatalf("load block_hash: %v", err)
+	}
+	if len(blockHash) == 0 {
+		t.Fatal("expected non-empty block_hash")
+	}
+
+	tampered := append([]byte(nil), blockHash...)
+	tampered[0] ^= 0x01
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = $1 WHERE id = $2`, tampered, blockID); err != nil {
+		t.Fatalf("tamper block_hash: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "verify block") || !strings.Contains(err.Error(), "hash") {
+		t.Fatalf("expected logical hash verification failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "physical payload hash mismatch") || strings.Contains(err.Error(), "compressed payload hash mismatch") {
+		t.Fatalf("expected canonical logical-hash failure, got other stage mismatch: %v", err)
+	}
+}
