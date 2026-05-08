@@ -23,6 +23,7 @@ type BlockStorageMetadata struct {
 	FormatVersion    int64
 	Codec            string
 	PlaintextSize    int64
+	CompressedSize   *int64
 	StoredSize       int64
 	CompressionCodec string
 	CompressionLevel *int
@@ -139,6 +140,11 @@ func VerifyStoredBlock(ctx context.Context, meta BlockStorageMetadata, reader Co
 	payloads.compressedBytes = preDecompressionPayload
 	if err := verifyCompressedPayloadStage(ctx, loc, payloads); err != nil {
 		return nil, err
+	}
+
+	if meta.CompressedSize != nil && *meta.CompressedSize > 0 && int64(len(preDecompressionPayload)) != *meta.CompressedSize {
+		metaErr := verifyBlockFailureMeta(VerifyStageDecompress, meta.BlockID, meta.ContainerID, meta.ContainerOffset)
+		return nil, verifyStageError(verifyErrMetadataInvalid, metaErr, fmt.Sprintf("verifyBlockPayloads: compressed size mismatch metadata=%d decoded=%d", *meta.CompressedSize, len(preDecompressionPayload)), nil)
 	}
 
 	// 5) Decompress if needed.

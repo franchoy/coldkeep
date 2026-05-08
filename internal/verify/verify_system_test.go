@@ -1016,7 +1016,7 @@ func TestVerifyBlockPayloadsDetectsBadBlockMagic(t *testing.T) {
 	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || !strings.Contains(err.Error(), "decode logical block") {
 		t.Fatalf("expected bad magic decode error, got: %v", err)
 	}
 }
@@ -1035,7 +1035,7 @@ func TestVerifyBlockPayloadsDetectsUnsupportedBlockVersion(t *testing.T) {
 	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || !strings.Contains(err.Error(), "decode logical block") {
 		t.Fatalf("expected unsupported version decode error, got: %v", err)
 	}
 }
@@ -1061,7 +1061,7 @@ func TestVerifyBlockPayloadsDetectsTruncatedEncodedBlock(t *testing.T) {
 	setPackedBlockHashForBytes(t, dbconn, blockID, truncated)
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || !strings.Contains(err.Error(), "decode logical block") {
 		t.Fatalf("expected truncated encoded block decode error, got: %v", err)
 	}
 }
@@ -1211,7 +1211,7 @@ func TestVerifyBlockPayloadsDetectsDecryptFailureWithLegacyNullPhysicalHashOnCom
 	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") {
 		t.Fatalf("expected metadata_invalid category for decrypt failure, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "transform/decrypt failed") || !strings.Contains(err.Error(), "cipher: message authentication failed") {
+	if !strings.Contains(err.Error(), "decrypt/transform decode failed") || !strings.Contains(err.Error(), "cipher: message authentication failed") {
 		t.Fatalf("expected precise decrypt/auth diagnostic, got: %v", err)
 	}
 }

@@ -1,0 +1,286 @@
+package verify
+
+import (
+	"bytes"
+	"database/sql"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/franchoy/coldkeep/internal/blocks"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
+)
+
+type verifyCorruptionRepo struct {
+	dbconn        *sql.DB
+	containersDir string
+}
+
+func CorruptContainerByte(t *testing.T, repo verifyCorruptionRepo, blockID int64, byteOffset int64) {
+	t.Helper()
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, repo.dbconn, blockID, repo.containersDir)
+	if byteOffset < 0 || byteOffset >= storedSize {
+		t.Fatalf("corrupt container byte offset out of range block_id=%d offset=%d stored_size=%d", blockID, byteOffset, storedSize)
+	}
+
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	payload[byteOffset] ^= 0xFF
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+}
+
+func TruncateContainerPayload(t *testing.T, repo verifyCorruptionRepo, blockID int64, nBytes int64) {
+	t.Helper()
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, repo.dbconn, blockID, repo.containersDir)
+	if nBytes <= 0 || nBytes >= storedSize {
+		t.Fatalf("truncate bytes out of range block_id=%d n_bytes=%d stored_size=%d", blockID, nBytes, storedSize)
+	}
+
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	truncated := payload[:len(payload)-int(nBytes)]
+	overwritePackedStoredBytesForTest(t, path, offset, truncated)
+	UpdateStorageBlockField(t, repo, blockID, "stored_size", int64(len(truncated)))
+}
+
+func UpdateStorageBlockField(t *testing.T, repo verifyCorruptionRepo, blockID int64, field string, value any) {
+	t.Helper()
+
+	allowed := map[string]struct{}{
+		"block_hash":        {},
+		"compressed_hash":   {},
+		"physical_hash":     {},
+		"codec":             {},
+		"compression_codec": {},
+		"stored_size":       {},
+		"compressed_size":   {},
+		"plaintext_size":    {},
+	}
+	if _, ok := allowed[field]; !ok {
+		t.Fatalf("unsupported storage_blocks field for corruption fixture: %q", field)
+	}
+
+	query := fmt.Sprintf("UPDATE storage_blocks SET %s = $1 WHERE id = $2", field)
+	res, err := repo.dbconn.Exec(query, value, blockID)
+	if err != nil {
+		t.Fatalf("update storage_blocks.%s for block %d: %v", field, blockID, err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("rows affected for storage_blocks.%s update: %v", field, err)
+	}
+	if rowsAffected != 1 {
+		t.Fatalf("expected exactly one updated storage_blocks row for block %d, got %d", blockID, rowsAffected)
+	}
+}
+
+func UpdateChunkBlockRefField(t *testing.T, repo verifyCorruptionRepo, blockID int64, chunkID int64, field string, value any) {
+	t.Helper()
+
+	allowed := map[string]struct{}{
+		"offset_in_block": {},
+		"size_in_block":   {},
+	}
+	if _, ok := allowed[field]; !ok {
+		t.Fatalf("unsupported chunk_block_refs field for corruption fixture: %q", field)
+	}
+
+	query := fmt.Sprintf("UPDATE chunk_block_refs SET %s = $1 WHERE block_id = $2 AND chunk_id = $3", field)
+	res, err := repo.dbconn.Exec(query, value, blockID, chunkID)
+	if err != nil {
+		t.Fatalf("update chunk_block_refs.%s for block %d chunk %d: %v", field, blockID, chunkID, err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("rows affected for chunk_block_refs.%s update: %v", field, err)
+	}
+	if rowsAffected != 1 {
+		t.Fatalf("expected exactly one updated chunk_block_refs row for block %d chunk %d, got %d", blockID, chunkID, rowsAffected)
+	}
+}
+
+func firstChunkIDForBlock(t *testing.T, dbconn *sql.DB, blockID int64) int64 {
+	t.Helper()
+
+	var chunkID int64
+	if err := dbconn.QueryRow(`SELECT chunk_id FROM chunk_block_refs WHERE block_id = $1 ORDER BY chunk_id LIMIT 1`, blockID).Scan(&chunkID); err != nil {
+		t.Fatalf("query first chunk id for block %d: %v", blockID, err)
+	}
+	return chunkID
+}
+
+func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-physical-stage")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	CorruptContainerByte(t, repo, blockID, 0)
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalHashMismatch+":") {
+		t.Fatalf("expected physical_hash_mismatch from persisted-byte corruption, got: %v", err)
+	}
+}
+
+func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {
+	tests := []struct {
+		name     string
+		field    string
+		value    []byte
+		category string
+	}{
+		{name: "physical hash", field: "physical_hash", value: bytes.Repeat([]byte{0x00}, 32), category: verifyErrPhysicalHashMismatch},
+		{name: "compressed hash", field: "compressed_hash", value: bytes.Repeat([]byte{0x00}, 32), category: verifyErrCompressedHashMismatch},
+		{name: "logical block hash", field: "block_hash", value: bytes.Repeat([]byte{0x00}, 32), category: verifyErrBlockHashMismatch},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dbconn := openVerifyTestDB(t)
+			defer func() { _ = dbconn.Close() }()
+
+			repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+			blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-db-hash-stage")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+			UpdateStorageBlockField(t, repo, blockID, tc.field, tc.value)
+
+			err := verifyBlockPayloads(dbconn, repo.containersDir)
+			if err == nil || !strings.HasPrefix(err.Error(), tc.category+":") {
+				t.Fatalf("expected %s after mutating %s, got: %v", tc.category, tc.field, err)
+			}
+		})
+	}
+}
+
+func TestCorruptionFixtureCodecMetadataFailuresArePrecise(t *testing.T) {
+	tests := []struct {
+		name     string
+		field    string
+		value    string
+		contains string
+	}{
+		{name: "compression codec metadata", field: "compression_codec", value: "broken-compressor", contains: "resolve compression codec"},
+		{name: "encryption codec metadata", field: "codec", value: "aes-gcm", contains: "load transformer"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dbconn := openVerifyTestDB(t)
+			defer func() { _ = dbconn.Close() }()
+
+			repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+			blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-codec-metadata")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+			UpdateStorageBlockField(t, repo, blockID, tc.field, tc.value)
+
+			err := verifyBlockPayloads(dbconn, repo.containersDir)
+			if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") || !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("expected metadata_invalid containing %q after mutating %s, got: %v", tc.contains, tc.field, err)
+			}
+		})
+	}
+}
+
+func TestCorruptionFixtureSizeMetadataFailuresArePrecise(t *testing.T) {
+	t.Run("stored_size", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-size-stored")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+		UpdateStorageBlockField(t, repo, blockID, "stored_size", int64(1))
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalHashMismatch+":") {
+			t.Fatalf("expected physical_hash_mismatch from stored_size corruption, got: %v", err)
+		}
+	})
+
+	t.Run("compressed_size", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-size-compressed")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+		UpdateStorageBlockField(t, repo, blockID, "compressed_size", int64(1))
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") || !strings.Contains(err.Error(), "compressed size mismatch") {
+			t.Fatalf("expected compressed size mismatch metadata_invalid, got: %v", err)
+		}
+	})
+
+	t.Run("plaintext_size", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-size-plaintext")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+		UpdateStorageBlockField(t, repo, blockID, "plaintext_size", int64(1))
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") || !strings.Contains(err.Error(), "decompression size mismatch") {
+			t.Fatalf("expected plaintext size mismatch metadata_invalid, got: %v", err)
+		}
+	})
+}
+
+func TestCorruptionFixtureTruncateContainerPayloadTargetsDecodeStage(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-truncate-decode")}, nil)
+
+	TruncateContainerPayload(t, repo, blockID, 3)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, repo.containersDir)
+	truncated := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	UpdateStorageBlockField(t, repo, blockID, "block_hash", blocks.HashLogical(truncated))
+	UpdateStorageBlockField(t, repo, blockID, "plaintext_size", int64(len(truncated)))
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrUnsupportedBlock+":") || !strings.Contains(err.Error(), "decode logical block") {
+		t.Fatalf("expected unsupported_block_format decode failure for truncated payload, got: %v", err)
+	}
+}
+
+func TestCorruptionFixtureChunkRefOffsetsAndLengths(t *testing.T) {
+	t.Run("offset overflow", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("ABCD")}, nil)
+		chunkID := firstChunkIDForBlock(t, dbconn, blockID)
+
+		UpdateChunkBlockRefField(t, repo, blockID, chunkID, "offset_in_block", int64(1))
+
+		err := verifyBlockPayloads(dbconn, repo.containersDir)
+		if err == nil || (!strings.Contains(err.Error(), "segment out of payload bounds") && !strings.Contains(err.Error(), "chunk_block_ref references chunk not in encoded block table")) {
+			t.Fatalf("expected out-of-bounds-style chunk ref error, got: %v", err)
+		}
+	})
+
+	t.Run("zero length", func(t *testing.T) {
+		dbconn := openVerifyTestDB(t)
+		defer func() { _ = dbconn.Close() }()
+
+		repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+		blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("ABCD")}, nil)
+		chunkID := firstChunkIDForBlock(t, dbconn, blockID)
+
+		if _, err := dbconn.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatalf("disable sqlite check constraints: %v", err)
+		}
+		UpdateChunkBlockRefField(t, repo, blockID, chunkID, "size_in_block", int64(0))
+
+		err := verifyChunkBlockRefs(dbconn)
+		if err == nil || !strings.Contains(err.Error(), "invalid chunk_block_refs ranges") {
+			t.Fatalf("expected invalid chunk_block_refs ranges error, got: %v", err)
+		}
+	})
+}
