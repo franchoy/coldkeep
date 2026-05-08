@@ -2820,6 +2820,26 @@ type packedChunkSegment struct {
 const packedStorageBlockCodecNone = "none"
 const packedStorageBlockAESGCMNonceSize = 12
 
+// ---------------------------------------------------------------------------
+// Write pipeline — storage layer semantics
+//
+// Layer 1 (logical block): canonical encoded plaintext block bytes.
+//   block_hash = sha256(logical block bytes) — computed in buildAndEncodePackedBlock.
+//   This hash is the dedup key and the restore integrity anchor. It is ALWAYS
+//   computed before any transform is applied and never changes.
+//
+// Layer 2 (transformed payload): output of applyPackedBlockTransforms.
+//   Currently: AES-GCM ciphertext. Future: compressed + encrypted bytes.
+//   Wire format for AES-GCM: nonce(12B) || ciphertext.
+//
+// Layer 3 (persisted payload): bytes actually appended to the container.
+//   Currently identical to Layer 2. Future physical_hash would apply here.
+//
+// Compression insertion point (Phase 3):
+//   Add a compression stage inside applyPackedBlockTransforms before encryption.
+//   No changes to block_hash, DB schema, or restore logic required.
+// ---------------------------------------------------------------------------
+
 // packedBlockEncoded holds the result of the build + encode + hash stage.
 type packedBlockEncoded struct {
 	encodedBlock     *blocks.EncodedBlock

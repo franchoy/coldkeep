@@ -2,10 +2,63 @@
 // block persistence and retrieval. Each Transform operates on raw bytes,
 // making stages independently testable and composable without side effects.
 //
-// The pipeline model:
+// # Three-layer storage model
 //
-//	Write: plaintext → [transform 1] → [transform 2] → ... → stored bytes
-//	Read:  stored bytes → [reverse 2] → [reverse 1] → ... → plaintext
+// Every persisted block passes through three conceptually distinct layers:
+//
+//	┌─────────────────────────────────────────────────────────────────┐
+//	│ Layer 1 — Logical block                                         │
+//	│   canonical encoded plaintext block bytes                       │
+//	│   → identity is block_hash = sha256(logical block bytes)        │
+//	│   → this is the dedup key and the restore integrity anchor      │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│ Layer 2 — Transformed payload                                   │
+//	│   output of the transform pipeline (e.g. compressed, encrypted) │
+//	│   → future: compressed_hash = sha256(post-compression bytes)    │
+//	│   → not a dedup key; diagnostic / repair checkpoint only        │
+//	├─────────────────────────────────────────────────────────────────┤
+//	│ Layer 3 — Persisted payload                                     │
+//	│   exact bytes written to the container file                     │
+//	│   → future: physical_hash = sha256(persisted bytes)             │
+//	│   → corruption detection, transfer validation                   │
+//	└─────────────────────────────────────────────────────────────────┘
+//
+// # Hash semantics
+//
+// block_hash (Layer 1) is computed BEFORE any transform is applied.
+// It is the canonical logical identity of a block and never changes
+// regardless of which transforms are active. Dedup, GC, and restore
+// all operate against this hash.
+//
+// Future hashes (compressed_hash, physical_hash) will be computed at
+// their respective layer boundaries and stored in separate columns.
+// They carry no dedup semantics.
+//
+// # Transform ordering invariant
+//
+// Write path applies transforms in forward order:
+//
+//	logical block → transform[0] → transform[1] → ... → persisted payload
+//
+// Read path applies transforms in reverse order:
+//
+//	persisted payload → reverse(transform[n-1]) → ... → reverse(transform[0]) → logical block
+//
+// This symmetry is enforced by TransformPipeline and must be preserved
+// by all future transform implementations.
+//
+// # Future compression insertion point
+//
+// When compression is introduced (Phase 3), it will be inserted as transform[0]
+// (before encryption), so the write path becomes:
+//
+//	logical block → compress → encrypt → persisted payload
+//
+// and the read path becomes:
+//
+//	persisted payload → decrypt → decompress → logical block
+//
+// No changes to block_hash semantics or dedup logic are required.
 package transforms
 
 import "fmt"

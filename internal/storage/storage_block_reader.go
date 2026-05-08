@@ -18,6 +18,21 @@ import (
 // The read path mirrors the write pipeline in reverse:
 //
 //	read payload → reverse transforms → verify logical hash → decode block
+//
+// Layer semantics (inverse of write path):
+//
+//	Layer 3 (persisted payload): raw bytes read from the container file.
+//	Layer 2 (transformed payload): output of reverseTransforms (e.g. decrypted).
+//	Layer 1 (logical block): plaintext encoded block bytes, verified against block_hash.
+//
+// block_hash verification (Stage 4) is fail-closed: a mismatch or missing hash
+// is always fatal. This anchors restore correctness to the logical layer regardless
+// of which transforms are active.
+//
+// Compression insertion point (Phase 3):
+//
+//	reverseTransforms will apply decompression after decryption.
+//	verifyLogicalHash and decodeLogicalBlock require no changes.
 type StorageBlockReader struct {
 	db            *sql.DB
 	containersDir string
