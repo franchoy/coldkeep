@@ -12,6 +12,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/iodebug"
+	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
@@ -86,7 +87,7 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	if err != nil {
 		return nil, fmt.Errorf("load block %d metadata: %w", blockID, err)
 	}
-	if r.verifyHash && len(metadata.BlockHash) == 0 {
+	if r.verifyHash && len(metadata.Metadata.Hashes.LogicalHash) == 0 {
 		return nil, fmt.Errorf("block %d has empty block_hash; fail-closed hash verification requires non-empty block_hash", blockID)
 	}
 
@@ -103,7 +104,7 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	}
 
 	// Stage 4: Verify logical hash (mandatory, fail-closed).
-	if err := r.verifyLogicalHash(blockID, plaintextBytes, metadata.BlockHash); err != nil {
+	if err := r.verifyLogicalHash(blockID, plaintextBytes, metadata.Metadata.Hashes.LogicalHash); err != nil {
 		return nil, err
 	}
 
@@ -146,20 +147,13 @@ func (r *StorageBlockReader) decodeLogicalBlock(blockID int64, plaintextBytes []
 
 // blockMetadata represents the persistent metadata about a block.
 type blockMetadata struct {
-	ID               int64
-	FormatVersion    int
-	Codec            string
-	PlaintextSize    int64
-	CompressionCodec string
-	CompressionLevel *int
-	CompressedSize   *int64
-	StoredSize       int64
-	ContainerName    string
-	ContainerOffset  int64
-	BlockHash        []byte
-	CompressedHash   []byte
-	PhysicalHash     []byte
-	Nonce            []byte
+	ID              int64
+	FormatVersion   int
+	Codec           string
+	Metadata        storagemetadata.BlockStorageMetadata
+	ContainerName   string
+	ContainerOffset int64
+	Nonce           []byte
 }
 
 // loadBlockMetadata queries storage_blocks and container tables to get full block metadata.
@@ -192,13 +186,13 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 		&meta.ID,
 		&meta.FormatVersion,
 		&codecStr,
-		&meta.PlaintextSize,
+		&meta.Metadata.Sizes.PlaintextSize,
 		&compressionCodec,
 		&compressionLevel,
 		&compressedSize,
-		&meta.StoredSize,
+		&meta.Metadata.Sizes.StoredSize,
 		&meta.ContainerOffset,
-		&meta.BlockHash,
+		&meta.Metadata.Hashes.LogicalHash,
 		&compressedHash,
 		&physicalHash,
 		&meta.ContainerName,
@@ -211,24 +205,24 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 	}
 
 	meta.Codec = codecStr
-	meta.CompressionCodec = compressionCodec
+	meta.Metadata.Compression.Codec = compressionCodec
 	if compressionLevel.Valid {
 		level := int(compressionLevel.Int64)
-		meta.CompressionLevel = &level
+		meta.Metadata.Compression.Level = &level
 	}
 	if compressedSize.Valid {
 		size := compressedSize.Int64
-		meta.CompressedSize = &size
+		meta.Metadata.Sizes.CompressedSize = &size
 	}
-	meta.CompressedHash = compressedHash
-	meta.PhysicalHash = physicalHash
+	meta.Metadata.Hashes.CompressedHash = compressedHash
+	meta.Metadata.Hashes.PhysicalHash = physicalHash
 
 	// Validate metadata
-	if meta.PlaintextSize <= 0 {
-		return nil, fmt.Errorf("block %d has invalid plaintext_size: %d", blockID, meta.PlaintextSize)
+	if meta.Metadata.Sizes.PlaintextSize <= 0 {
+		return nil, fmt.Errorf("block %d has invalid plaintext_size: %d", blockID, meta.Metadata.Sizes.PlaintextSize)
 	}
-	if meta.StoredSize <= 0 {
-		return nil, fmt.Errorf("block %d has invalid stored_size: %d", blockID, meta.StoredSize)
+	if meta.Metadata.Sizes.StoredSize <= 0 {
+		return nil, fmt.Errorf("block %d has invalid stored_size: %d", blockID, meta.Metadata.Sizes.StoredSize)
 	}
 	if meta.ContainerOffset < 0 {
 		return nil, fmt.Errorf("block %d has invalid container_offset: %d", blockID, meta.ContainerOffset)
@@ -251,13 +245,13 @@ func (r *StorageBlockReader) readStoredPayload(meta *blockMetadata) ([]byte, err
 	defer func() { _ = fc.Close() }()
 
 	// Read block bytes at offset using the Container interface
-	payload, err := container.ReadPayloadAt(fc, meta.ContainerOffset, meta.StoredSize)
+	payload, err := container.ReadPayloadAt(fc, meta.ContainerOffset, meta.Metadata.Sizes.StoredSize)
 	if err != nil {
 		return nil, fmt.Errorf("read from container at offset %d: %w", meta.ContainerOffset, err)
 	}
 
-	if int64(len(payload)) != meta.StoredSize {
-		return nil, fmt.Errorf("read %d bytes but expected %d", len(payload), meta.StoredSize)
+	if int64(len(payload)) != meta.Metadata.Sizes.StoredSize {
+		return nil, fmt.Errorf("read %d bytes but expected %d", len(payload), meta.Metadata.Sizes.StoredSize)
 	}
 
 	return payload, nil
@@ -306,8 +300,8 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 		ChunkID:       0, // N/A for block-level decode
 		Codec:         codec,
 		FormatVersion: meta.FormatVersion,
-		PlaintextSize: meta.PlaintextSize,
-		StoredSize:    meta.StoredSize,
+		PlaintextSize: meta.Metadata.Sizes.PlaintextSize,
+		StoredSize:    meta.Metadata.Sizes.StoredSize,
 		Nonce:         meta.Nonce,
 		ContainerID:   0, // N/A for this context
 		BlockOffset:   meta.ContainerOffset,
@@ -322,8 +316,8 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 		return nil, fmt.Errorf("decode block: %w", err)
 	}
 
-	if int64(len(plaintext)) != meta.PlaintextSize {
-		return nil, fmt.Errorf("plaintext size mismatch: expected %d got %d", meta.PlaintextSize, len(plaintext))
+	if int64(len(plaintext)) != meta.Metadata.Sizes.PlaintextSize {
+		return nil, fmt.Errorf("plaintext size mismatch: expected %d got %d", meta.Metadata.Sizes.PlaintextSize, len(plaintext))
 	}
 
 	return plaintext, nil

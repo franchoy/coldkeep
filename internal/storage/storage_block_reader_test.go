@@ -255,25 +255,25 @@ func TestStorageBlockReaderLoadBlockMetadataIncludesTransformAwareFields(t *test
 		t.Fatalf("load block metadata: %v", err)
 	}
 
-	if meta.CompressionCodec != "zstd" {
-		t.Fatalf("compression codec: got %q want %q", meta.CompressionCodec, "zstd")
+	if meta.Metadata.Compression.Codec != "zstd" {
+		t.Fatalf("compression codec: got %q want %q", meta.Metadata.Compression.Codec, "zstd")
 	}
-	if meta.CompressionLevel == nil || *meta.CompressionLevel != 7 {
-		t.Fatalf("compression level: got %v want 7", meta.CompressionLevel)
+	if meta.Metadata.Compression.Level == nil || *meta.Metadata.Compression.Level != 7 {
+		t.Fatalf("compression level: got %v want 7", meta.Metadata.Compression.Level)
 	}
-	if meta.CompressedSize == nil || *meta.CompressedSize != 80 {
-		t.Fatalf("compressed size: got %v want 80", meta.CompressedSize)
+	if meta.Metadata.Sizes.CompressedSize == nil || *meta.Metadata.Sizes.CompressedSize != 80 {
+		t.Fatalf("compressed size: got %v want 80", meta.Metadata.Sizes.CompressedSize)
 	}
-	if got := fmt.Sprintf("%x", meta.CompressedHash); got != "0304" {
+	if got := fmt.Sprintf("%x", meta.Metadata.Hashes.CompressedHash); got != "0304" {
 		t.Fatalf("compressed hash: got %s want %s", got, "0304")
 	}
-	if got := fmt.Sprintf("%x", meta.PhysicalHash); got != "0506" {
+	if got := fmt.Sprintf("%x", meta.Metadata.Hashes.PhysicalHash); got != "0506" {
 		t.Fatalf("physical hash: got %s want %s", got, "0506")
 	}
-	if meta.StoredSize != 108 {
-		t.Fatalf("stored size: got %d want %d", meta.StoredSize, 108)
+	if meta.Metadata.Sizes.StoredSize != 108 {
+		t.Fatalf("stored size: got %d want %d", meta.Metadata.Sizes.StoredSize, 108)
 	}
-	if meta.PlaintextSize != 100 {
-		t.Fatalf("plaintext size: got %d want %d", meta.PlaintextSize, 100)
+	if meta.Metadata.Sizes.PlaintextSize != 100 {
+		t.Fatalf("plaintext size: got %d want %d", meta.Metadata.Sizes.PlaintextSize, 100)
 	}
 }
