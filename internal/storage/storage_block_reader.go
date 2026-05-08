@@ -15,7 +15,9 @@ import (
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
-// It handles the full lifecycle: load metadata, read container bytes, decrypt, decode.
+// The read path mirrors the write pipeline in reverse:
+//
+//	read payload → reverse transforms → verify logical hash → decode block
 type StorageBlockReader struct {
 	db            *sql.DB
 	containersDir string
@@ -52,18 +54,19 @@ func normalizeStorageBlockCodec(raw string) (blocks.Codec, error) {
 }
 
 // ReadBlock implements blocks.BlockReader.
-// Steps:
-// 1. Load block metadata from storage_blocks table
-// 2. Read stored bytes from container
-// 3. Decrypt block (if codec is AES-GCM)
-// 4. Decode block to reconstruct EncodedBlock
-// 5. Verify hash (mandatory in production)
+//
+// Read pipeline (reverse of write):
+//  1. Load block metadata from storage_blocks
+//  2. Read stored bytes from container
+//  3. Reverse transforms (decrypt and/or future stages)
+//  4. Verify logical hash (mandatory, fail-closed)
+//  5. Decode block to reconstruct EncodedBlock
 func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blocks.EncodedBlock, error) {
 	if blockID <= 0 {
 		return nil, fmt.Errorf("invalid block ID: %d", blockID)
 	}
 
-	// Step 1: Load block metadata
+	// Stage 1: Load block metadata.
 	metadata, err := r.loadBlockMetadata(ctx, blockID)
 	if err != nil {
 		return nil, fmt.Errorf("load block %d metadata: %w", blockID, err)
@@ -72,37 +75,57 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 		return nil, fmt.Errorf("block %d has empty block_hash; fail-closed hash verification requires non-empty block_hash", blockID)
 	}
 
-	// Step 2: Read stored bytes from container
-	storedBytes, err := r.readBlockFromContainer(metadata)
+	// Stage 2: Read stored bytes from container.
+	storedBytes, err := r.readStoredPayload(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("read block %d from container: %w", blockID, err)
 	}
 
-	// Step 3: Decrypt block (if encrypted)
-	plaintextBytes, err := r.decryptBlock(ctx, metadata, storedBytes)
+	// Stage 3: Reverse transforms (currently: decrypt if AES-GCM).
+	plaintextBytes, err := r.reverseTransforms(ctx, metadata, storedBytes)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt block %d: %w", blockID, err)
+		return nil, fmt.Errorf("reverse transforms block %d: %w", blockID, err)
 	}
 
-	// Step 4: Decode block to reconstruct EncodedBlock
-	encodedBlock, err := blocks.DecodeBlock(plaintextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("decode block %d: %w", blockID, err)
-	}
-
-	if encodedBlock == nil {
-		return nil, fmt.Errorf("decode block %d returned nil", blockID)
+	// Stage 4: Verify logical hash (mandatory, fail-closed).
+	if err := r.verifyLogicalHash(blockID, plaintextBytes, metadata.BlockHash); err != nil {
+		return nil, err
 	}
 
 	iodebug.IncBlockDecode()
 
-	// Step 5: Verify hash (mandatory)
-	if r.verifyHash {
-		if err := blocks.VerifyBlockHash(plaintextBytes, metadata.BlockHash); err != nil {
-			return nil, fmt.Errorf("verify block %d hash: %w", blockID, err)
-		}
+	// Stage 5: Decode block to reconstruct EncodedBlock.
+	encodedBlock, err := r.decodeLogicalBlock(blockID, plaintextBytes)
+	if err != nil {
+		return nil, err
 	}
 
+	return encodedBlock, nil
+}
+
+// verifyLogicalHash checks the plaintext encoded bytes against the stored block_hash.
+// Verification is fail-closed: a mismatch or empty hash (when enabled) is fatal.
+// This is Stage 4 of the read pipeline.
+func (r *StorageBlockReader) verifyLogicalHash(blockID int64, plaintextBytes []byte, blockHash []byte) error {
+	if !r.verifyHash {
+		return nil
+	}
+	if err := blocks.VerifyBlockHash(plaintextBytes, blockHash); err != nil {
+		return fmt.Errorf("verify block %d hash: %w", blockID, err)
+	}
+	return nil
+}
+
+// decodeLogicalBlock deserializes plaintext encoded bytes into an EncodedBlock.
+// This is Stage 5 of the read pipeline.
+func (r *StorageBlockReader) decodeLogicalBlock(blockID int64, plaintextBytes []byte) (*blocks.EncodedBlock, error) {
+	encodedBlock, err := blocks.DecodeBlock(plaintextBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decode block %d: %w", blockID, err)
+	}
+	if encodedBlock == nil {
+		return nil, fmt.Errorf("decode block %d returned nil", blockID)
+	}
 	return encodedBlock, nil
 }
 
@@ -171,8 +194,9 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 	return &meta, nil
 }
 
-// readBlockFromContainer reads block bytes from the container file.
-func (r *StorageBlockReader) readBlockFromContainer(meta *blockMetadata) ([]byte, error) {
+// readStoredPayload reads the raw stored bytes for a block from its container file.
+// This is Stage 2 of the read pipeline.
+func (r *StorageBlockReader) readStoredPayload(meta *blockMetadata) ([]byte, error) {
 	containerPath := filepath.Join(r.containersDir, meta.ContainerName)
 
 	// Open container file for reading
@@ -196,10 +220,11 @@ func (r *StorageBlockReader) readBlockFromContainer(meta *blockMetadata) ([]byte
 	return payload, nil
 }
 
-// decryptBlock decrypts the stored bytes using the block's codec.
-// For "plain" codec, returns bytes unchanged.
-// For "aes-gcm", decrypts and returns plaintext.
-func (r *StorageBlockReader) decryptBlock(ctx context.Context, meta *blockMetadata, storedBytes []byte) ([]byte, error) {
+// reverseTransforms applies the inverse of every transform stage used during the
+// write path, in reverse order. Currently the only transform is AES-GCM encryption;
+// the structure is ready for additional stages (e.g. decompression in Phase 3).
+// This is Stage 3 of the read pipeline.
+func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockMetadata, storedBytes []byte) ([]byte, error) {
 	codec, err := normalizeStorageBlockCodec(meta.Codec)
 	if err != nil {
 		return nil, err
