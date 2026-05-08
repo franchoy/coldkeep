@@ -26,6 +26,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/execution"
 	gcpkg "github.com/franchoy/coldkeep/internal/gc"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	verifypkg "github.com/franchoy/coldkeep/internal/verify"
 
 	"github.com/franchoy/coldkeep/internal/db"
@@ -5137,6 +5138,326 @@ func TestStoreFilePopulatesCompressionMetadataMatrix(t *testing.T) {
 				if bytes.Equal(row.physicalHash, row.compressedHash) {
 					t.Fatalf("expected physical_hash != compressed_hash")
 				}
+			}
+		})
+	}
+}
+
+func TestStoreFileCompressionRoundTripIntegrationMatrixStep38(t *testing.T) {
+	deterministicBytes := func(seed int64, size int) []byte {
+		rng := rand.New(rand.NewSource(seed))
+		buf := make([]byte, size)
+		if _, err := rng.Read(buf); err != nil {
+			t.Fatalf("generate deterministic bytes: %v", err)
+		}
+		return buf
+	}
+
+	type payloadCase struct {
+		name              string
+		payloads          [][]byte
+		expectChunkCount  int
+		compatSingleChunk bool
+	}
+
+	type modeCase struct {
+		name             string
+		codec            blocks.Codec
+		compressionCodec string
+		compressionLevel string
+		enableEncryption bool
+	}
+
+	payloadCases := []payloadCase{
+		{
+			name:              "small-file-single-chunk-compat",
+			payloads:          [][]byte{[]byte("step38-small-file")},
+			expectChunkCount:  1,
+			compatSingleChunk: true,
+		},
+		{
+			name:             "repeated-text-single-chunk",
+			payloads:         [][]byte{bytes.Repeat([]byte("step38-repeated-text-"), 2048)},
+			expectChunkCount: 1,
+		},
+		{
+			name:             "random-bytes-single-chunk",
+			payloads:         [][]byte{deterministicBytes(38, 64*1024)},
+			expectChunkCount: 1,
+		},
+		{
+			name: "large-file-multi-chunk",
+			payloads: [][]byte{
+				bytes.Repeat([]byte("step38-large-a-"), 4096),
+				bytes.Repeat([]byte("step38-large-b-"), 4096),
+				bytes.Repeat([]byte("step38-large-c-"), 4096),
+				bytes.Repeat([]byte("step38-large-d-"), 4096),
+			},
+			expectChunkCount: 4,
+		},
+		{
+			name: "repeated-text-multi-chunk",
+			payloads: [][]byte{
+				bytes.Repeat([]byte("step38-multi-repeat-a-"), 768),
+				bytes.Repeat([]byte("step38-multi-repeat-b-"), 768),
+				bytes.Repeat([]byte("step38-multi-repeat-c-"), 768),
+			},
+			expectChunkCount: 3,
+		},
+		{
+			name: "random-bytes-multi-chunk",
+			payloads: [][]byte{
+				deterministicBytes(381, 24*1024),
+				deterministicBytes(382, 24*1024),
+				deterministicBytes(383, 24*1024),
+			},
+			expectChunkCount: 3,
+		},
+	}
+
+	modes := []modeCase{
+		{name: "compression-none-encryption-none", codec: blocks.CodecPlain, compressionCodec: "none", compressionLevel: "3", enableEncryption: false},
+		{name: "compression-none-encryption-aes-gcm", codec: blocks.CodecAESGCM, compressionCodec: "none", compressionLevel: "3", enableEncryption: true},
+		{name: "compression-zstd-encryption-none", codec: blocks.CodecPlain, compressionCodec: "zstd", compressionLevel: "3", enableEncryption: false},
+		{name: "compression-zstd-encryption-aes-gcm", codec: blocks.CodecAESGCM, compressionCodec: "zstd", compressionLevel: "3", enableEncryption: true},
+	}
+
+	for _, payloadCase := range payloadCases {
+		payloadCase := payloadCase
+		t.Run(payloadCase.name, func(t *testing.T) {
+			expectedRestored := concatPayloads(payloadCase.payloads)
+
+			for _, mode := range modes {
+				mode := mode
+				t.Run(mode.name, func(t *testing.T) {
+					t.Setenv("COLDKEEP_COMPRESSION", mode.compressionCodec)
+					t.Setenv("COLDKEEP_COMPRESSION_LEVEL", mode.compressionLevel)
+					if mode.enableEncryption {
+						t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+					} else {
+						t.Setenv("COLDKEEP_KEY", "")
+					}
+
+					dbconn, err := sql.Open("sqlite3", ":memory:")
+					if err != nil {
+						t.Fatalf("open sqlite db: %v", err)
+					}
+					defer func() { _ = dbconn.Close() }()
+
+					if err := db.RunMigrations(dbconn); err != nil {
+						t.Fatalf("run migrations: %v", err)
+					}
+
+					workDir := t.TempDir()
+					inPath := filepath.Join(workDir, payloadCase.name+"-"+mode.name+".bin")
+					if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+						t.Fatalf("write input file: %v", err)
+					}
+
+					sgctx := StorageContext{
+						DB:           dbconn,
+						Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+						ContainerDir: workDir,
+						Chunker: scriptedChunker{
+							version:  chunk.VersionV1SimpleRolling,
+							payloads: payloadCase.payloads,
+						},
+					}
+
+					result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, mode.codec)
+					if err != nil {
+						t.Fatalf("store file: %v", err)
+					}
+
+					restored := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, payloadCase.name+"-"+mode.name+"-restored.bin")
+					if !bytes.Equal(restored, expectedRestored) {
+						t.Fatalf("restored bytes mismatch")
+					}
+
+					if err := verifypkg.VerifyFileStandardWithContainersDir(dbconn, int(result.FileID), workDir); err != nil {
+						t.Fatalf("verify file standard: %v", err)
+					}
+					if err := verifypkg.VerifySystemStandardWithContainersDir(dbconn, workDir); err != nil {
+						t.Fatalf("verify system standard: %v", err)
+					}
+
+					var chunkCount int
+					if err := dbconn.QueryRow(`SELECT COUNT(*) FROM file_chunk WHERE logical_file_id = $1`, result.FileID).Scan(&chunkCount); err != nil {
+						t.Fatalf("count file_chunk rows: %v", err)
+					}
+					if chunkCount != payloadCase.expectChunkCount {
+						t.Fatalf("chunk count mismatch: got %d want %d", chunkCount, payloadCase.expectChunkCount)
+					}
+					if payloadCase.compatSingleChunk && chunkCount != 1 {
+						t.Fatalf("single-chunk compatibility mode expected exactly one chunk, got %d", chunkCount)
+					}
+
+					transformer, err := blocks.GetBlockTransformer(mode.codec)
+					if err != nil {
+						t.Fatalf("get block transformer: %v", err)
+					}
+
+					rows, err := dbconn.Query(`
+						SELECT b.id, b.plaintext_size, b.compression_codec, b.compression_level,
+						       b.compressed_size, b.stored_size,
+						       b.block_hash, b.compressed_hash, b.physical_hash,
+						       b.container_offset, c.filename
+						FROM storage_blocks b
+						JOIN container c ON c.id = b.container_id
+						ORDER BY b.id
+					`)
+					if err != nil {
+						t.Fatalf("query storage blocks: %v", err)
+					}
+
+					blockRows := 0
+					for rows.Next() {
+						var (
+							blockID           int64
+							plaintextSize     int64
+							compressionCodec  string
+							compressionLevel  sql.NullInt64
+							compressedSize    sql.NullInt64
+							storedSize        int64
+							blockHash         []byte
+							compressedHash    []byte
+							physicalHash      []byte
+							containerOffset   int64
+							containerFilename string
+						)
+						if err := rows.Scan(
+							&blockID,
+							&plaintextSize,
+							&compressionCodec,
+							&compressionLevel,
+							&compressedSize,
+							&storedSize,
+							&blockHash,
+							&compressedHash,
+							&physicalHash,
+							&containerOffset,
+							&containerFilename,
+						); err != nil {
+							t.Fatalf("scan storage block row: %v", err)
+						}
+						blockRows++
+
+						if !compressedSize.Valid {
+							t.Fatalf("block %d: expected non-NULL compressed_size", blockID)
+						}
+						if plaintextSize <= 0 || compressedSize.Int64 <= 0 || storedSize <= 0 {
+							t.Fatalf("block %d: expected positive sizes, got plaintext=%d compressed=%d stored=%d", blockID, plaintextSize, compressedSize.Int64, storedSize)
+						}
+						if len(blockHash) != 32 || len(compressedHash) != 32 || len(physicalHash) != 32 {
+							t.Fatalf("block %d: expected 32-byte hashes, got logical=%d compressed=%d physical=%d", blockID, len(blockHash), len(compressedHash), len(physicalHash))
+						}
+						if compressionCodec != mode.compressionCodec {
+							t.Fatalf("block %d: compression codec mismatch: got %q want %q", blockID, compressionCodec, mode.compressionCodec)
+						}
+						if mode.compressionCodec == storagecompression.CompressionNone {
+							if compressionLevel.Valid {
+								t.Fatalf("block %d: expected NULL compression_level for none codec, got %d", blockID, compressionLevel.Int64)
+							}
+						} else {
+							if !compressionLevel.Valid || compressionLevel.Int64 != 3 {
+								t.Fatalf("block %d: expected compression_level=3, got %+v", blockID, compressionLevel)
+							}
+						}
+
+						containerPath := filepath.Join(workDir, containerFilename)
+						fh, err := os.Open(containerPath)
+						if err != nil {
+							t.Fatalf("block %d: open container file: %v", blockID, err)
+						}
+
+						storedPayload := make([]byte, storedSize)
+						if _, err := fh.ReadAt(storedPayload, containerOffset); err != nil {
+							_ = fh.Close()
+							t.Fatalf("block %d: read stored payload: %v", blockID, err)
+						}
+						if err := fh.Close(); err != nil {
+							t.Fatalf("block %d: close container file: %v", blockID, err)
+						}
+
+						if got := blocks.HashPhysical(storedPayload); !bytes.Equal(got, physicalHash) {
+							t.Fatalf("block %d: physical_hash mismatch", blockID)
+						}
+
+						decodePayload := storedPayload
+						descriptor := blocks.Descriptor{Codec: mode.codec}
+						if mode.codec == blocks.CodecAESGCM {
+							if len(storedPayload) <= packedStorageBlockAESGCMNonceSize {
+								t.Fatalf("block %d: stored payload too small for aes-gcm", blockID)
+							}
+							descriptor.Nonce = append([]byte(nil), storedPayload[:packedStorageBlockAESGCMNonceSize]...)
+							decodePayload = storedPayload[packedStorageBlockAESGCMNonceSize:]
+						}
+
+						preDecompression, err := transformer.Decode(context.Background(), blocks.DecodeInput{
+							Descriptor: descriptor,
+							Payload:    decodePayload,
+						})
+						if err != nil {
+							t.Fatalf("block %d: decode stored payload: %v", blockID, err)
+						}
+
+						if int64(len(preDecompression)) != compressedSize.Int64 {
+							t.Fatalf("block %d: compressed_size mismatch: got %d want %d", blockID, compressedSize.Int64, len(preDecompression))
+						}
+						if got := blocks.HashCompressed(preDecompression); !bytes.Equal(got, compressedHash) {
+							t.Fatalf("block %d: compressed_hash mismatch", blockID)
+						}
+
+						compressor, err := storagecompression.Lookup(compressionCodec)
+						if err != nil {
+							t.Fatalf("block %d: lookup compression codec %q: %v", blockID, compressionCodec, err)
+						}
+						encodedPlaintext, err := compressor.Decompress(preDecompression, plaintextSize)
+						if err != nil {
+							t.Fatalf("block %d: decompress payload: %v", blockID, err)
+						}
+						if int64(len(encodedPlaintext)) != plaintextSize {
+							t.Fatalf("block %d: plaintext_size mismatch: got %d want %d", blockID, plaintextSize, len(encodedPlaintext))
+						}
+						if got := blocks.HashLogical(encodedPlaintext); !bytes.Equal(got, blockHash) {
+							t.Fatalf("block %d: logical block_hash mismatch", blockID)
+						}
+
+						if compressionCodec == storagecompression.CompressionNone {
+							if compressedSize.Int64 != plaintextSize {
+								t.Fatalf("block %d: none codec size invariant violated: compressed=%d plaintext=%d", blockID, compressedSize.Int64, plaintextSize)
+							}
+							if !bytes.Equal(compressedHash, blockHash) {
+								t.Fatalf("block %d: none codec hash invariant violated", blockID)
+							}
+						}
+
+						if mode.codec == blocks.CodecPlain {
+							if storedSize != compressedSize.Int64 {
+								t.Fatalf("block %d: expected stored_size == compressed_size for plain mode, got stored=%d compressed=%d", blockID, storedSize, compressedSize.Int64)
+							}
+							if !bytes.Equal(physicalHash, compressedHash) {
+								t.Fatalf("block %d: expected physical_hash == compressed_hash for plain mode", blockID)
+							}
+						} else {
+							if storedSize <= compressedSize.Int64 {
+								t.Fatalf("block %d: expected stored_size > compressed_size for aes-gcm mode, got stored=%d compressed=%d", blockID, storedSize, compressedSize.Int64)
+							}
+							if bytes.Equal(physicalHash, compressedHash) {
+								t.Fatalf("block %d: expected physical_hash != compressed_hash for aes-gcm mode", blockID)
+							}
+						}
+					}
+					if err := rows.Err(); err != nil {
+						t.Fatalf("iterate storage block rows: %v", err)
+					}
+					if err := rows.Close(); err != nil {
+						t.Fatalf("close storage block rows: %v", err)
+					}
+					if blockRows == 0 {
+						t.Fatal("expected at least one storage block row")
+					}
+				})
 			}
 		})
 	}
