@@ -513,7 +513,7 @@ func TestVerifyChunkBlockRefsDetectsDuplicateChunkBlockRefs(t *testing.T) {
 	}
 }
 
-func packedFixtureBlockStorageMeta(t *testing.T, dbconn *sql.DB, blockID int64, containersDir string) (string, int64, int64, int64) {
+func packedFixtureBlockStorageMeta(t testing.TB, dbconn *sql.DB, blockID int64, containersDir string) (string, int64, int64, int64) {
 	t.Helper()
 
 	var filename string
@@ -533,7 +533,7 @@ func packedFixtureBlockStorageMeta(t *testing.T, dbconn *sql.DB, blockID int64, 
 	return path, containerOffset, storedSize, plaintextSize
 }
 
-func readPackedStoredBytesForTest(t *testing.T, path string, offset int64, size int64) []byte {
+func readPackedStoredBytesForTest(t testing.TB, path string, offset int64, size int64) []byte {
 	t.Helper()
 
 	f, err := os.Open(path)
@@ -553,7 +553,7 @@ func readPackedStoredBytesForTest(t *testing.T, path string, offset int64, size 
 	return buf
 }
 
-func overwritePackedStoredBytesForTest(t *testing.T, path string, offset int64, payload []byte) {
+func overwritePackedStoredBytesForTest(t testing.TB, path string, offset int64, payload []byte) {
 	t.Helper()
 
 	f, err := os.OpenFile(path, os.O_RDWR, 0644)
@@ -571,7 +571,7 @@ func overwritePackedStoredBytesForTest(t *testing.T, path string, offset int64, 
 	}
 }
 
-func setPackedBlockHashForBytes(t *testing.T, dbconn *sql.DB, blockID int64, payload []byte) {
+func setPackedBlockHashForBytes(t testing.TB, dbconn *sql.DB, blockID int64, payload []byte) {
 	t.Helper()
 
 	h := blocks.ComputeBlockHash(payload)
@@ -586,7 +586,7 @@ type verifyPackedRefSeed struct {
 	size    int64
 }
 
-func seedVerifyCompressedPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, codec blocks.Codec, compressionCodec string) (int64, []int64) {
+func seedVerifyCompressedPackedBlockFixture(t testing.TB, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, codec blocks.Codec, compressionCodec string) (int64, []int64) {
 	t.Helper()
 
 	storageCodec := "none"
@@ -707,7 +707,7 @@ func seedVerifyCompressedPackedBlockFixture(t *testing.T, dbconn *sql.DB, contai
 	return blockID, chunkIDs
 }
 
-func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, refs []verifyPackedRefSeed) (int64, []int64) {
+func seedVerifyPackedBlockFixture(t testing.TB, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, refs []verifyPackedRefSeed) (int64, []int64) {
 	t.Helper()
 
 	chunkIDs := make([]int64, 0, len(chunkPayloads))
@@ -794,7 +794,7 @@ func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir st
 	return blockID, chunkIDs
 }
 
-func seedVerifyLegacyBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, payload []byte) int64 {
+func seedVerifyLegacyBlockFixture(t testing.TB, dbconn *sql.DB, containersDir string, payload []byte) int64 {
 	t.Helper()
 
 	sum := sha256.Sum256(payload)
