@@ -189,8 +189,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after first pass: %v", err)
 	}
-	if schemaVersion != 12 {
-		t.Fatalf("expected schema version 12 after first migration pass, got %d", schemaVersion)
+	if schemaVersion != 13 {
+		t.Fatalf("expected schema version 13 after first migration pass, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -199,6 +199,20 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	}
 	if configuredDefaultChunker != "v2-fastcdc" {
 		t.Fatalf("expected repository default chunker=v2-fastcdc on fresh install, got %q", configuredDefaultChunker)
+	}
+
+	var configuredDefaultCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
+		t.Fatalf("read repository default block compression: %v", err)
+	}
+	if configuredDefaultCompression != "none" {
+		t.Fatalf("expected repository default block compression=none on fresh install, got %q", configuredDefaultCompression)
+	}
+
+	for _, columnName := range []string{"compressed_size", "compressed_hash", "physical_hash", "transform_chain"} {
+		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
+			t.Fatalf("expected storage_blocks.%s after migration", columnName)
+		}
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -232,8 +246,8 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersionAfterSecondRun); err != nil {
 		t.Fatalf("read schema version after second pass: %v", err)
 	}
-	if schemaVersionAfterSecondRun != 12 {
-		t.Fatalf("expected schema version to stay 12 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
+	if schemaVersionAfterSecondRun != 13 {
+		t.Fatalf("expected schema version to stay 13 after idempotent rerun, got %d", schemaVersionAfterSecondRun)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -271,8 +285,10 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"UPDATE schema_version SET version = 10 WHERE version < 10",
 		"UPDATE schema_version SET version = 11 WHERE version < 11",
 		"UPDATE schema_version SET version = 12 WHERE version < 12",
+		"UPDATE schema_version SET version = 13 WHERE version < 13",
 		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
 		"CREATE TABLE IF NOT EXISTS repository_config",
+		"VALUES ('default_block_compression', 'none')",
 		"ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id",
 		"ON DELETE SET NULL",
 		"CREATE TABLE IF NOT EXISTS snapshot_path",
@@ -280,6 +296,10 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"DROP INDEX IF EXISTS idx_snapshot_file_path",
 		"CREATE INDEX IF NOT EXISTS idx_snapshot_file_path_id ON snapshot_file(path_id)",
 		"CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshot_file_unique ON snapshot_file(snapshot_id, path_id)",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA",
+		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS transform_chain TEXT",
 	}
 
 	for _, check := range checks {
@@ -313,8 +333,8 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema_version: %v", err)
 	}
-	if schemaVersion != 12 {
-		t.Fatalf("expected direct sqlite bootstrap schema version 12, got %d", schemaVersion)
+	if schemaVersion != 13 {
+		t.Fatalf("expected direct sqlite bootstrap schema version 13, got %d", schemaVersion)
 	}
 
 	if !sqliteTableExists(t, dbconn, "snapshot") {
@@ -346,6 +366,20 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	}
 	if configuredDefaultChunker != "v2-fastcdc" {
 		t.Fatalf("expected direct sqlite bootstrap default_chunker=v2-fastcdc, got %q", configuredDefaultChunker)
+	}
+
+	var configuredDefaultCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
+		t.Fatalf("read repository default block compression in direct sqlite bootstrap: %v", err)
+	}
+	if configuredDefaultCompression != "none" {
+		t.Fatalf("expected direct sqlite bootstrap default_block_compression=none, got %q", configuredDefaultCompression)
+	}
+
+	for _, columnName := range []string{"compressed_size", "compressed_hash", "physical_hash", "transform_chain"} {
+		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
+			t.Fatalf("expected storage_blocks.%s in direct sqlite bootstrap", columnName)
+		}
 	}
 }
 
@@ -458,8 +492,8 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
 		t.Fatalf("read schema version after migration: %v", err)
 	}
-	if schemaVersion != 12 {
-		t.Fatalf("expected schema version 12 after migration, got %d", schemaVersion)
+	if schemaVersion != 13 {
+		t.Fatalf("expected schema version 13 after migration, got %d", schemaVersion)
 	}
 
 	var configuredDefaultChunker string
@@ -468,6 +502,14 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 	}
 	if configuredDefaultChunker != "v1-simple-rolling" {
 		t.Fatalf("expected repository default chunker=v1-simple-rolling after migration, got %q", configuredDefaultChunker)
+	}
+
+	var configuredDefaultCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
+		t.Fatalf("read repository default block compression after migration: %v", err)
+	}
+	if configuredDefaultCompression != "none" {
+		t.Fatalf("expected repository default block compression=none after migration, got %q", configuredDefaultCompression)
 	}
 
 	if !sqliteTestTableHasColumn(t, dbconn, "snapshot", "parent_id") {
@@ -648,6 +690,151 @@ func TestRunMigrationsPreservesExistingRepositoryDefaultChunker(t *testing.T) {
 	}
 	if configuredDefaultChunker != "v1-simple-rolling" {
 		t.Fatalf("expected existing repository default chunker to remain unchanged, got %q", configuredDefaultChunker)
+	}
+}
+
+func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	legacySchema := `
+		PRAGMA foreign_keys = ON;
+		CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+		INSERT INTO schema_version(version) VALUES (12);
+
+		CREATE TABLE repository_config (
+			key TEXT PRIMARY KEY CHECK (key != ''),
+			value TEXT NOT NULL CHECK (value != '')
+		);
+		INSERT INTO repository_config(key, value) VALUES ('default_chunker', 'v1-simple-rolling');
+
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			filename TEXT NOT NULL UNIQUE,
+			sealed INTEGER NOT NULL DEFAULT 0,
+			sealing INTEGER NOT NULL DEFAULT 0,
+			container_hash TEXT DEFAULT NULL,
+			quarantine INTEGER NOT NULL DEFAULT 0,
+			current_size INTEGER NOT NULL DEFAULT 0 CHECK (current_size >= 0),
+			max_size INTEGER NOT NULL CHECK (max_size > 0),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE storage_blocks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			format_version INTEGER NOT NULL CHECK (format_version > 0),
+			codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
+			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
+			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+			container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
+			block_hash BLOB NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`
+	if _, err := dbconn.Exec(legacySchema); err != nil {
+		t.Fatalf("create v12 schema: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, sealed, current_size, max_size) VALUES (?, 1, ?, ?) RETURNING id`,
+		"transform-aware-metadata.bin",
+		256,
+		1048576,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash)
+		 VALUES (1, 'none', 64, 64, ?, 0, x'01020304')`,
+		containerID,
+	); err != nil {
+		t.Fatalf("insert v12 storage block: %v", err)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations v12->current: %v", err)
+	}
+
+	var schemaVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
+		t.Fatalf("read schema version after migration: %v", err)
+	}
+	if schemaVersion != 13 {
+		t.Fatalf("expected schema version 13 after v12 migration, got %d", schemaVersion)
+	}
+
+	for _, columnName := range []string{"compressed_size", "compressed_hash", "physical_hash", "transform_chain"} {
+		if !sqliteTestTableHasColumn(t, dbconn, "storage_blocks", columnName) {
+			t.Fatalf("expected storage_blocks.%s after v12 migration", columnName)
+		}
+	}
+
+	var configuredDefaultCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
+		t.Fatalf("read repository default block compression after v12 migration: %v", err)
+	}
+	if configuredDefaultCompression != "none" {
+		t.Fatalf("expected repository default block compression=none after v12 migration, got %q", configuredDefaultCompression)
+	}
+
+	var migrated struct {
+		plaintextSize  int64
+		storedSize     int64
+		compressedSize sql.NullInt64
+		compressedHash []byte
+		physicalHash   []byte
+		transformChain sql.NullString
+	}
+	if err := dbconn.QueryRow(`
+		SELECT plaintext_size, stored_size, compressed_size, compressed_hash, physical_hash, transform_chain
+		FROM storage_blocks
+		LIMIT 1
+	`).Scan(
+		&migrated.plaintextSize,
+		&migrated.storedSize,
+		&migrated.compressedSize,
+		&migrated.compressedHash,
+		&migrated.physicalHash,
+		&migrated.transformChain,
+	); err != nil {
+		t.Fatalf("read migrated storage block row: %v", err)
+	}
+	if migrated.plaintextSize != 64 || migrated.storedSize != 64 {
+		t.Fatalf("unexpected migrated storage block sizes: plaintext=%d stored=%d", migrated.plaintextSize, migrated.storedSize)
+	}
+	if migrated.compressedSize.Valid {
+		t.Fatalf("expected migrated compressed_size to remain NULL, got %d", migrated.compressedSize.Int64)
+	}
+	if migrated.compressedHash != nil {
+		t.Fatalf("expected migrated compressed_hash to remain NULL, got %x", migrated.compressedHash)
+	}
+	if migrated.physicalHash != nil {
+		t.Fatalf("expected migrated physical_hash to remain NULL, got %x", migrated.physicalHash)
+	}
+	if migrated.transformChain.Valid {
+		t.Fatalf("expected migrated transform_chain to remain NULL, got %q", migrated.transformChain.String)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = 'zstd' WHERE key = 'default_block_compression'`); err != nil {
+		t.Fatalf("update repository default block compression before rerun: %v", err)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("rerun migrations for idempotency: %v", err)
+	}
+
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
+		t.Fatalf("read repository default block compression after rerun: %v", err)
+	}
+	if configuredDefaultCompression != "zstd" {
+		t.Fatalf("expected existing repository default block compression to remain unchanged, got %q", configuredDefaultCompression)
 	}
 }
 

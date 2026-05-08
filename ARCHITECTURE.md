@@ -15,6 +15,7 @@ Companion documents:
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
 - [docs/BLOCK_ABSTRACTION_V18.md](docs/BLOCK_ABSTRACTION_V18.md) for v1.8 packed-block design lock constants and invariants
+- [docs/storage_transform_semantics.md](docs/storage_transform_semantics.md) for the canonical logical/compressed/physical payload and hash semantics used by the v1.9 transform-aware metadata model
 
 ## System Overview
 
@@ -142,6 +143,10 @@ Storage pipeline:
 ```text
 logical_file -> file_chunk -> chunk -> blocks / storage_blocks+chunk_block_refs -> container
 ```
+
+For transform-aware packed-block metadata semantics, including the canonical
+definitions of logical payload, compressed payload, physical payload, and their
+associated hashes and sizes, see [docs/storage_transform_semantics.md](docs/storage_transform_semantics.md).
 
 ## Chunking Model
 

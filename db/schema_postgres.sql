@@ -448,6 +448,10 @@ VALUES (
 )
 ON CONFLICT (key) DO NOTHING;
 
+INSERT INTO repository_config(key, value)
+VALUES ('default_block_compression', 'none')
+ON CONFLICT (key) DO NOTHING;
+
 UPDATE schema_version SET version = 11 WHERE version < 11;
 
 -- Schema version 12: v1.8 block abstraction foundation tables.
@@ -456,10 +460,14 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   format_version INTEGER NOT NULL CHECK (format_version > 0),
   codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
   plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+  compressed_size BIGINT CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size BIGINT NOT NULL CHECK (stored_size > 0),
   container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset BIGINT NOT NULL CHECK (container_offset >= 0),
   block_hash BYTEA NOT NULL,
+  compressed_hash BYTEA,
+  physical_hash BYTEA,
+  transform_chain TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -475,5 +483,17 @@ CREATE TABLE IF NOT EXISTS chunk_block_refs (
 CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(block_id);
 
 UPDATE schema_version SET version = 12 WHERE version < 12;
+
+-- Schema version 13: transform-aware packed-block metadata.
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS transform_chain TEXT;
+
+INSERT INTO repository_config(key, value)
+VALUES ('default_block_compression', 'none')
+ON CONFLICT (key) DO NOTHING;
+
+UPDATE schema_version SET version = 13 WHERE version < 13;
 
 COMMIT;

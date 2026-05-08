@@ -255,6 +255,11 @@ Rules:
 - Hash must be computed from encoded plaintext block bytes.
 - Hash must not be computed from encrypted/transformed stored bytes.
 
+Forward-compatibility note:
+
+- v1.9 transform-aware metadata semantics are locked in `docs/storage_transform_semantics.md`.
+- That document preserves `block_hash` as the logical payload hash and defines future additive semantics for compressed and physical layer metadata.
+
 ## Phase 2 Step 9 Isolation Rule (Locked)
 
 Phase 2 block format work remains isolated until explicitly unlocked by later steps.

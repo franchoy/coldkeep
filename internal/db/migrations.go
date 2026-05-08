@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 12
+const requiredPostgresSchemaVersion = 13
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -588,10 +588,14 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 			format_version INTEGER NOT NULL CHECK (format_version > 0),
 			codec TEXT NOT NULL,
 			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0),
 			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
 			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
 			container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
 			block_hash BLOB NOT NULL,
+			compressed_hash BLOB,
+			physical_hash BLOB,
+			transform_chain TEXT,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`); err != nil {
@@ -631,6 +635,64 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 		INSERT OR IGNORE INTO schema_version(version) VALUES (12)
 	`); err != nil {
 		return fmt.Errorf("insert sqlite schema_version 12: %w", err)
+	}
+
+	return nil
+}
+
+func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	hasStorageBlocks, err := sqliteHasTable(dbconn, ctx, "storage_blocks")
+	if err != nil {
+		return fmt.Errorf("inspect storage_blocks table existence: %w", err)
+	}
+	if hasStorageBlocks {
+		for _, columnSpec := range []struct {
+			name string
+			sql  string
+		}{
+			{name: "compressed_size", sql: `ALTER TABLE storage_blocks ADD COLUMN compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0)`},
+			{name: "compressed_hash", sql: `ALTER TABLE storage_blocks ADD COLUMN compressed_hash BLOB`},
+			{name: "physical_hash", sql: `ALTER TABLE storage_blocks ADD COLUMN physical_hash BLOB`},
+			{name: "transform_chain", sql: `ALTER TABLE storage_blocks ADD COLUMN transform_chain TEXT`},
+		} {
+			hasColumn, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", columnSpec.name)
+			if err != nil {
+				return fmt.Errorf("inspect storage_blocks.%s: %w", columnSpec.name, err)
+			}
+			if !hasColumn {
+				if _, err := dbconn.ExecContext(ctx, columnSpec.sql); err != nil {
+					return fmt.Errorf("add storage_blocks.%s: %w", columnSpec.name, err)
+				}
+			}
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS repository_config (
+			key TEXT PRIMARY KEY CHECK (key != ''),
+			value TEXT NOT NULL CHECK (value != '')
+		)
+	`); err != nil {
+		return fmt.Errorf("create repository_config table for transform metadata defaults: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO repository_config(key, value)
+		VALUES ('default_block_compression', 'none')
+	`); err != nil {
+		return fmt.Errorf("seed repository_config.default_block_compression: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 13
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 13: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (13)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 13: %w", err)
 	}
 
 	return nil
@@ -824,6 +886,10 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteBlockAbstractionFoundationMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteStorageTransformMetadataMigration(tx, ctx); err != nil {
 		return err
 	}
 
