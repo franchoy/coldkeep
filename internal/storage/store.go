@@ -23,8 +23,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
-	"github.com/franchoy/coldkeep/internal/storage/transforms"
-	gziptransform "github.com/franchoy/coldkeep/internal/storage/transforms/gzip"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
@@ -752,8 +751,9 @@ type storeFileRuntime struct {
 
 // storeRuntimeCompression groups the optional compression transform and its codec name.
 type storeRuntimeCompression struct {
-	transform transforms.Transform // nil = no compression
-	codec     string               // "none", "gzip", etc.
+	compressor storagecompression.Compressor
+	codec      string
+	level      *int
 }
 
 func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFileRuntime, error) {
@@ -770,35 +770,43 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		validationContainerDir = ""
 	}
 
-	// Phase 1: compression is prepared but not activated. The COLDKEEP_COMPRESSION
-	// env var is reserved for Phase 2 activation; it is intentionally ignored here.
-	// Activation will be wired in once the full transform pipeline is validated.
-	if envCodec := utils_env.GetenvOrDefault("COLDKEEP_COMPRESSION", "none"); envCodec != "none" && envCodec != "" {
-		// Log that the env var is set but will not take effect in Phase 1.
-		// This is intentional: the variable is reserved for future activation.
-		_ = envCodec // suppressed until Phase 2 activation
+	compressionCodec := strings.TrimSpace(strings.ToLower(utils_env.GetenvOrDefault("COLDKEEP_COMPRESSION", storagecompression.CompressionNone)))
+	compressionLevel := int(utils_env.GetenvOrDefaultInt64("COLDKEEP_COMPRESSION_LEVEL", int64(storagecompression.DefaultCompressionLevel)))
+
+	compressionRuntime, err := loadCompressionRuntime(compressionCodec, compressionLevel)
+	if err != nil {
+		return nil, fmt.Errorf("initialize compression runtime codec=%q level=%d: %w", compressionCodec, compressionLevel, err)
 	}
 
 	return &storeFileRuntime{
 		transformer:            transformer,
-		compression:            storeRuntimeCompression{transform: nil, codec: "none"},
+		compression:            compressionRuntime,
 		blockRepo:              &blocks.Repository{DB: sgctx.DB},
 		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
 		validationContainerDir: validationContainerDir,
 	}, nil
 }
 
-// loadCompressionTransform returns the compression Transform for the given codec
-// name, or nil for "none". Returns an error if the codec name is unknown.
-func loadCompressionTransform(codec string) (transforms.Transform, error) {
-	switch strings.TrimSpace(strings.ToLower(codec)) {
-	case "none", "":
-		return nil, nil
-	case gziptransform.Name:
-		return gziptransform.NewDefault(), nil
-	default:
-		return nil, fmt.Errorf("unknown compression codec %q", codec)
+func loadCompressionRuntime(codec string, level int) (storeRuntimeCompression, error) {
+	normalized := strings.TrimSpace(strings.ToLower(codec))
+	if normalized == "" {
+		normalized = storagecompression.CompressionNone
 	}
+
+	if normalized == storagecompression.CompressionZstd {
+		compressor, err := storagecompression.NewZstdCompressor(level)
+		if err != nil {
+			return storeRuntimeCompression{}, err
+		}
+		levelCopy := level
+		return storeRuntimeCompression{compressor: compressor, codec: normalized, level: &levelCopy}, nil
+	}
+
+	compressor, err := storagecompression.Lookup(normalized)
+	if err != nil {
+		return storeRuntimeCompression{}, err
+	}
+	return storeRuntimeCompression{compressor: compressor, codec: normalized, level: nil}, nil
 }
 
 func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, containerID int64, filename string, containersDir string) error {
@@ -2889,6 +2897,8 @@ type packedBlockTransformed struct {
 	storedPayload  []byte
 	storageCodec   string
 	legacyNonce    []byte
+	compressedSize int64
+	compressionLvl *int
 	compressedHash []byte // hash of post-compression, pre-encryption payload
 	physicalHash   []byte // hash of the exact persisted payload bytes
 	metadata       blocks.TransformMetadata
@@ -2932,26 +2942,30 @@ func applyPackedBlockTransforms(
 	enc packedBlockEncoded,
 ) (packedBlockTransformed, error) {
 	// Stage 2a: Compress before encryption (if compression is active).
-	toTransform := enc.plaintextEncoded
+	compressedPayload := enc.plaintextEncoded
 	compressionCodec := packedStorageBlockCodecNone
-	if compression.transform != nil {
-		compressed, err := compression.transform.Encode(enc.plaintextEncoded)
+	compressionLevel := compression.level
+	if compression.compressor != nil {
+		compressed, err := compression.compressor.Compress(enc.plaintextEncoded)
 		if err != nil {
 			return packedBlockTransformed{}, fmt.Errorf("compress block: %w", err)
 		}
-		toTransform = compressed
+		compressedPayload = compressed
 		compressionCodec = compression.codec
+		if compressionCodec == storagecompression.CompressionNone {
+			compressionLevel = nil
+		}
 	}
 
 	// Hash pre-encryption bytes at the transform boundary.
 	// With codec=none in Phase 2, this equals logical block hash.
-	compressedHash := blocks.HashCompressed(toTransform)
+	compressedHash := blocks.HashCompressed(compressedPayload)
 
 	// Stage 2b: Apply encryption transformer (or identity for plain codec).
 	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
 		ChunkID:   0,
 		ChunkHash: hex.EncodeToString(enc.blockHash),
-		Plaintext: toTransform,
+		Plaintext: compressedPayload,
 	})
 	if err != nil {
 		return packedBlockTransformed{}, err
@@ -2981,7 +2995,7 @@ func applyPackedBlockTransforms(
 	metadata := enc.metadata
 	metadata.CompressionCodec = compressionCodec
 	if len(enc.plaintextEncoded) > 0 {
-		metadata.CompressionRatio = float64(len(storedPayload)) / float64(len(enc.plaintextEncoded))
+		metadata.CompressionRatio = float64(len(compressedPayload)) / float64(len(enc.plaintextEncoded))
 	}
 
 	// Compute physical hash over the exact persisted payload bytes (post-encryption).
@@ -2991,6 +3005,8 @@ func applyPackedBlockTransforms(
 		storedPayload:  storedPayload,
 		storageCodec:   storageCodec,
 		legacyNonce:    legacyNonce,
+		compressedSize: int64(len(compressedPayload)),
+		compressionLvl: compressionLevel,
 		compressedHash: compressedHash,
 		physicalHash:   physicalHash,
 		metadata:       metadata,
@@ -3016,15 +3032,20 @@ func persistPackedBlockMetadata(
 	tr packedBlockTransformed,
 	placement container.LocalPlacement,
 ) (int64, map[int64]packedChunkSegment, error) {
+	var compressionLevelValue any
+	if tr.compressionLvl != nil {
+		compressionLevelValue = int64(*tr.compressionLvl)
+	}
+
 	var blockID int64
 	if err := tx.QueryRowContext(
 		ctx,
 		`INSERT INTO storage_blocks (
 			format_version, codec, plaintext_size, stored_size,
 			container_id, container_offset, block_hash,
-			compression_codec, compression_ratio, payload_hash,
+			compression_codec, compression_level, compressed_size, compression_ratio, payload_hash,
 			compressed_hash, physical_hash
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		 RETURNING id`,
 		1,
 		tr.storageCodec,
@@ -3034,6 +3055,8 @@ func persistPackedBlockMetadata(
 		placement.Offset,
 		enc.blockHash,
 		tr.metadata.CompressionCodec,
+		compressionLevelValue,
+		tr.compressedSize,
 		tr.metadata.CompressionRatio,
 		tr.metadata.PayloadHash,
 		tr.compressedHash,

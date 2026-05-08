@@ -17,6 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 )
 
 const (
@@ -446,7 +447,7 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	log.Printf("Checking packed block payload and segment integrity...")
 
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT sb.id, sb.format_version, sb.codec, sb.plaintext_size, sb.container_offset, sb.stored_size,
+		SELECT sb.id, sb.format_version, sb.codec, sb.plaintext_size, sb.compression_codec, sb.compression_level, sb.container_offset, sb.stored_size,
 		       sb.block_hash, sb.compressed_hash, sb.physical_hash, c.filename, c.max_size
 		FROM storage_blocks sb
 		JOIN container c ON c.id = sb.container_id
@@ -459,17 +460,19 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	defer func() { _ = rows.Close() }()
 
 	type blockRow struct {
-		id              int64
-		formatVersion   int64
-		codec           string
-		plaintextSize   int64
-		containerOffset int64
-		storedSize      int64
-		logicalHash     []byte
-		compressedHash  []byte
-		physicalHash    []byte
-		filename        string
-		maxSize         int64
+		id               int64
+		formatVersion    int64
+		codec            string
+		plaintextSize    int64
+		compressionCodec string
+		compressionLevel sql.NullInt64
+		containerOffset  int64
+		storedSize       int64
+		logicalHash      []byte
+		compressedHash   []byte
+		physicalHash     []byte
+		filename         string
+		maxSize          int64
 	}
 
 	blocksToVerify := make([]blockRow, 0)
@@ -480,6 +483,8 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			&b.formatVersion,
 			&b.codec,
 			&b.plaintextSize,
+			&b.compressionCodec,
+			&b.compressionLevel,
 			&b.containerOffset,
 			&b.storedSize,
 			&b.logicalHash,
@@ -542,7 +547,7 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			decodePayload = storedBytes[packedStorageBlockAESGCMNonceSize:]
 		}
 
-		plaintextEncoded, err := transformer.Decode(ctx, blocks.DecodeInput{
+		preDecompressionPayload, err := transformer.Decode(ctx, blocks.DecodeInput{
 			Descriptor: blocks.Descriptor{
 				ChunkID:       0,
 				Codec:         codec,
@@ -558,15 +563,41 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 		if err != nil {
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d transform/decrypt failed", b.id), err)
 		}
+
+		compressionCodec := strings.TrimSpace(strings.ToLower(b.compressionCodec))
+		if compressionCodec == "" {
+			compressionCodec = storagecompression.CompressionNone
+		}
+		var compressor storagecompression.Compressor
+		if compressionCodec == storagecompression.CompressionZstd {
+			level := storagecompression.DefaultCompressionLevel
+			if b.compressionLevel.Valid {
+				level = int(b.compressionLevel.Int64)
+			}
+			comp, err := storagecompression.NewZstdCompressor(level)
+			if err != nil {
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d initialize compression codec=%s level=%d", b.id, compressionCodec, level), err)
+			}
+			compressor = comp
+		} else {
+			comp, err := storagecompression.Lookup(compressionCodec)
+			if err != nil {
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d resolve compression codec=%s", b.id, compressionCodec), err)
+			}
+			compressor = comp
+		}
+
+		plaintextEncoded, err := compressor.Decompress(preDecompressionPayload, b.plaintextSize)
+		if err != nil {
+			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d decompress codec=%s", b.id, compressionCodec), err)
+		}
 		if int64(len(plaintextEncoded)) != b.plaintextSize {
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d plaintext size mismatch metadata=%d decoded=%d", b.id, b.plaintextSize, len(plaintextEncoded)), nil)
 		}
 
 		stagePayloads := blockStagePayloads{
-			storedBytes: storedBytes,
-			// Phase 2.10: compression is still disabled, so the pre-decompression
-			// payload is the decrypted plaintext block bytes.
-			compressedBytes:  plaintextEncoded,
+			storedBytes:      storedBytes,
+			compressedBytes:  preDecompressionPayload,
 			plaintextEncoded: plaintextEncoded,
 			hashes: blocks.BlockHashes{
 				LogicalHash:    b.logicalHash,

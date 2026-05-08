@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/chunk"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 )
 
 const repositoryDefaultChunkerKey = "default_chunker"
@@ -87,20 +88,18 @@ func SetDefaultChunkerVersion(tx *sql.Tx, v chunk.Version) error {
 const (
 	repositoryDefaultCompressionKey      = "compression"
 	repositoryDefaultCompressionLevelKey = "compression_level"
-	defaultCompressionCodec              = "none"
+	defaultCompressionCodec              = storagecompression.CompressionNone
 	defaultCompressionLevel              = 3
 	minCompressionLevel                  = 0
-	maxCompressionLevel                  = 11
+	maxCompressionLevel                  = 22
 )
 
 // IsRegisteredCompressionCodec returns true if the codec is valid for repository use.
-// Supported compression codecs: "none" (passthrough), "gzip".
-// Note: "aes-gcm" is an encryption codec and is not a compression codec; it is
-// accepted here for legacy compatibility where the field was previously conflated.
+// Supported compression codecs: "none" (passthrough), "zstd".
 func IsRegisteredCompressionCodec(codec string) bool {
 	codec = strings.TrimSpace(codec)
 	switch codec {
-	case "none", "gzip", "aes-gcm":
+	case storagecompression.CompressionNone, storagecompression.CompressionZstd:
 		return true
 	default:
 		return false

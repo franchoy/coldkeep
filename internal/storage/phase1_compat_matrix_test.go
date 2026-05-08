@@ -673,11 +673,11 @@ func TestPhase1CompatMetadataWrittenOnce(t *testing.T) {
 	}
 }
 
-// TestPhase1CompressionEnvVarIgnored verifies that setting COLDKEEP_COMPRESSION=gzip
-// has no effect in Phase 1: all blocks must still be written with codec "none".
-// The env var is reserved for Phase 2 activation and must be silently ignored here.
-func TestPhase1CompressionEnvVarIgnored(t *testing.T) {
-	t.Setenv("COLDKEEP_COMPRESSION", "gzip")
+// TestPhase3CompressionEnvVarActivatesZstd verifies that compression can be
+// explicitly activated in Phase 3 while still remaining opt-in.
+func TestPhase3CompressionEnvVarActivatesZstd(t *testing.T) {
+	t.Setenv("COLDKEEP_COMPRESSION", "zstd")
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "3")
 
 	repo := newPhase1Repo(t)
 
@@ -697,8 +697,8 @@ func TestPhase1CompressionEnvVarIgnored(t *testing.T) {
 		if err := rows.Scan(&id, &codec); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if codec != "none" {
-			t.Fatalf("block %d: COLDKEEP_COMPRESSION=gzip must be ignored in Phase 1; got codec %q", id, codec)
+		if codec != "zstd" {
+			t.Fatalf("block %d: expected compression codec zstd when COLDKEEP_COMPRESSION=zstd, got %q", id, codec)
 		}
 	}
 	if err := rows.Err(); err != nil {

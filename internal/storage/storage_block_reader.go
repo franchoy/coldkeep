@@ -15,6 +15,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/iodebug"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
 )
 
@@ -442,21 +443,38 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 	}
 
 	// Stage 3a: Verify compressed hash at the pre-decompression boundary.
-	// With compression disabled (codec=none), plaintext is still the encoded
-	// logical block bytes. Legacy rows may have NULL compressed_hash and skip.
 	if err := r.verifyCompressedHash(meta, plaintext, meta.Metadata.Hashes.CompressedHash); err != nil {
 		return nil, err
 	}
 
-	// Stage 3b: Decompress if a compression codec was applied during the write path.
-	// Write order: compress → encrypt; Read order: decrypt → decompress.
-	// Phase 1 boundary: compression is not activated; all stored blocks must have
-	// codec "none". If a block with a non-none codec is encountered it means the
-	// database was written by a future version — return a clear error.
-	// Phase 2 will wire in gzip (and other codec) decompression here.
-	logicalBytes := plaintext
-	if meta.Metadata.Compression.Codec != "" && meta.Metadata.Compression.Codec != "none" {
-		return nil, fmt.Errorf("block %d: unsupported compression codec %q (Phase 1: compression not yet activated)", meta.ID, meta.Metadata.Compression.Codec)
+	// Stage 3b: Decompress after decrypt to restore logical block bytes.
+	compressionCodec := strings.TrimSpace(strings.ToLower(meta.Metadata.Compression.Codec))
+	if compressionCodec == "" {
+		compressionCodec = storagecompression.CompressionNone
+	}
+
+	var compressor storagecompression.Compressor
+	if compressionCodec == storagecompression.CompressionZstd {
+		level := storagecompression.DefaultCompressionLevel
+		if meta.Metadata.Compression.Level != nil {
+			level = *meta.Metadata.Compression.Level
+		}
+		comp, err := storagecompression.NewZstdCompressor(level)
+		if err != nil {
+			return nil, fmt.Errorf("block %d: initialize compression codec=%q level=%d: %w", meta.ID, compressionCodec, level, err)
+		}
+		compressor = comp
+	} else {
+		comp, err := storagecompression.Lookup(compressionCodec)
+		if err != nil {
+			return nil, fmt.Errorf("block %d: resolve compression codec=%q: %w", meta.ID, compressionCodec, err)
+		}
+		compressor = comp
+	}
+
+	logicalBytes, err := compressor.Decompress(plaintext, meta.Metadata.Sizes.PlaintextSize)
+	if err != nil {
+		return nil, fmt.Errorf("block %d: decompress codec=%q: %w", meta.ID, compressionCodec, err)
 	}
 
 	if int64(len(logicalBytes)) != meta.Metadata.Sizes.PlaintextSize {

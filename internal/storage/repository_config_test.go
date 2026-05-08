@@ -154,9 +154,10 @@ func TestIsRegisteredCompressionCodec(t *testing.T) {
 		expected bool
 	}{
 		{"none", true},
-		{"aes-gcm", true},
+		{"zstd", true},
 		{"NONE", false}, // case-sensitive
-		{"gzip", true},  // gzip is now a registered compression codec (v1.9)
+		{"gzip", false},
+		{"aes-gcm", false},
 		{"xz", false},
 		{"unknown", false},
 	}
@@ -202,16 +203,16 @@ func TestSetDefaultCompressionRoundTrip(t *testing.T) {
 		t.Fatalf("begin tx: %v", err)
 	}
 
-	if err := SetDefaultCompression(tx, "aes-gcm"); err != nil {
-		t.Fatalf("SetDefaultCompression(aes-gcm): %v", err)
+	if err := SetDefaultCompression(tx, "zstd"); err != nil {
+		t.Fatalf("SetDefaultCompression(zstd): %v", err)
 	}
 
 	got, err := GetDefaultCompression(tx)
 	if err != nil {
 		t.Fatalf("GetDefaultCompression: %v", err)
 	}
-	if got != "aes-gcm" {
-		t.Fatalf("round-trip default compression mismatch: got %q want %q", got, "aes-gcm")
+	if got != "zstd" {
+		t.Fatalf("round-trip default compression mismatch: got %q want %q", got, "zstd")
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -222,8 +223,8 @@ func TestSetDefaultCompressionRoundTrip(t *testing.T) {
 	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = $1`, repositoryDefaultCompressionKey).Scan(&persisted); err != nil {
 		t.Fatalf("read persisted default compression: %v", err)
 	}
-	if persisted != "aes-gcm" {
-		t.Fatalf("persisted default compression mismatch: got %q want %q", persisted, "aes-gcm")
+	if persisted != "zstd" {
+		t.Fatalf("persisted default compression mismatch: got %q want %q", persisted, "zstd")
 	}
 }
 
@@ -313,7 +314,7 @@ func TestSetDefaultCompressionLevelRejectsOutOfRangeValues(t *testing.T) {
 	}{
 		{"negative", -1},
 		{"too low", -10},
-		{"too high", 12},
+		{"too high", 23},
 		{"way too high", 100},
 	}
 
@@ -347,9 +348,9 @@ func TestCompressionConfigBoundaryValues(t *testing.T) {
 		{0, true},   // minimum valid
 		{1, true},   // lower range
 		{5, true},   // mid range
-		{11, true},  // maximum valid
+		{22, true},  // maximum valid
 		{-1, false}, // below minimum
-		{12, false}, // above maximum
+		{23, false}, // above maximum
 	}
 
 	for _, tt := range tests {
