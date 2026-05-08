@@ -26,13 +26,17 @@ type blockStagePayloads struct {
 }
 
 // verifyPhysicalPayloadStage is Stage 1 of the block verification pipeline.
-// Current: explicit no-op. physical_hash exists in schema but is NULL for all rows.
+// Current: explicit no-op. physical_hash is populated for new rows, but legacy
+// rows may still be NULL. Compatibility rule: NULL physical_hash means legacy
+// row and this stage is skipped.
 func verifyPhysicalPayloadStage(_ context.Context, _ int64, _ blockStagePayloads) error {
 	return nil
 }
 
 // verifyCompressedPayloadStage is Stage 2 of the block verification pipeline.
-// Current: explicit no-op. compression_codec=none; compressed_hash is NULL.
+// Current: explicit no-op. compressed_hash is populated for new rows, but
+// legacy rows may still be NULL. Compatibility rule: NULL compressed_hash means
+// legacy row and this stage is skipped.
 func verifyCompressedPayloadStage(_ context.Context, _ int64, _ blockStagePayloads) error {
 	return nil
 }
