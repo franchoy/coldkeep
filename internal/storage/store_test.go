@@ -5462,3 +5462,213 @@ func TestStoreFileCompressionRoundTripIntegrationMatrixStep38(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreCompressionDoesNotChangeChunkGraphOrDedupIdentityStep310(t *testing.T) {
+	type graphRef struct {
+		ChunkHash string
+		Offset    int64
+		Size      int64
+	}
+	type graphSnapshot struct {
+		ChunkHashes       []string
+		Refs              []graphRef
+		ChunkCount        int
+		StorageBlockCount int
+		StoredSize        int64
+		CompressionCodec  string
+	}
+
+	loadSnapshot := func(t *testing.T, dbconn *sql.DB, fileID int64) graphSnapshot {
+		t.Helper()
+
+		var snapshot graphSnapshot
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&snapshot.ChunkCount); err != nil {
+			t.Fatalf("count chunk rows: %v", err)
+		}
+		if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&snapshot.StorageBlockCount); err != nil {
+			t.Fatalf("count storage_blocks rows: %v", err)
+		}
+		if err := dbconn.QueryRow(`SELECT stored_size, compression_codec FROM storage_blocks ORDER BY id DESC LIMIT 1`).Scan(&snapshot.StoredSize, &snapshot.CompressionCodec); err != nil {
+			t.Fatalf("read latest storage block metadata: %v", err)
+		}
+
+		rows, err := dbconn.Query(`
+			SELECT c.chunk_hash, r.offset_in_block, r.size_in_block
+			FROM file_chunk fc
+			JOIN chunk c ON c.id = fc.chunk_id
+			JOIN chunk_block_refs r ON r.chunk_id = c.id
+			WHERE fc.logical_file_id = $1
+			ORDER BY fc.chunk_order
+		`, fileID)
+		if err != nil {
+			t.Fatalf("query file chunk graph: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var ref graphRef
+			if err := rows.Scan(&ref.ChunkHash, &ref.Offset, &ref.Size); err != nil {
+				t.Fatalf("scan file chunk graph: %v", err)
+			}
+			snapshot.ChunkHashes = append(snapshot.ChunkHashes, ref.ChunkHash)
+			snapshot.Refs = append(snapshot.Refs, ref)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate file chunk graph: %v", err)
+		}
+		return snapshot
+	}
+
+	payloads := [][]byte{
+		bytes.Repeat([]byte("step310-dedup-graph-a-"), 2048),
+		bytes.Repeat([]byte("step310-dedup-graph-b-"), 2048),
+		bytes.Repeat([]byte("step310-dedup-graph-c-"), 2048),
+	}
+	expected := concatPayloads(payloads)
+
+	storeWithCompression := func(t *testing.T, compressionCodec string) (*sql.DB, string, StoreFileResult, graphSnapshot) {
+		t.Helper()
+		t.Setenv("COLDKEEP_COMPRESSION", compressionCodec)
+		t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "3")
+		t.Setenv("COLDKEEP_KEY", "")
+
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			t.Fatalf("open sqlite db: %v", err)
+		}
+		if err := db.RunMigrations(dbconn); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("run migrations: %v", err)
+		}
+
+		workDir := t.TempDir()
+		inPath := filepath.Join(workDir, compressionCodec+"-step310.bin")
+		if err := os.WriteFile(inPath, []byte("placeholder"), 0o600); err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("write input file: %v", err)
+		}
+
+		sgctx := StorageContext{
+			DB:           dbconn,
+			Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+			ContainerDir: workDir,
+			Chunker: scriptedChunker{
+				version:  chunk.VersionV1SimpleRolling,
+				payloads: payloads,
+			},
+		}
+
+		result, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, blocks.CodecPlain)
+		if err != nil {
+			_ = dbconn.Close()
+			t.Fatalf("store file with compression=%s: %v", compressionCodec, err)
+		}
+		return dbconn, workDir, result, loadSnapshot(t, dbconn, result.FileID)
+	}
+
+	dbNone, dirNone, resultNone, noneSnapshot := storeWithCompression(t, storagecompression.CompressionNone)
+	defer func() { _ = dbNone.Close() }()
+	dbZstd, dirZstd, resultZstd, zstdSnapshot := storeWithCompression(t, storagecompression.CompressionZstd)
+	defer func() { _ = dbZstd.Close() }()
+
+	if !reflect.DeepEqual(noneSnapshot.ChunkHashes, zstdSnapshot.ChunkHashes) {
+		t.Fatalf("expected identical chunk hashes before block compression; none=%v zstd=%v", noneSnapshot.ChunkHashes, zstdSnapshot.ChunkHashes)
+	}
+	if !reflect.DeepEqual(noneSnapshot.Refs, zstdSnapshot.Refs) {
+		t.Fatalf("expected identical logical chunk graph across compression modes; none=%v zstd=%v", noneSnapshot.Refs, zstdSnapshot.Refs)
+	}
+	if noneSnapshot.ChunkCount != zstdSnapshot.ChunkCount {
+		t.Fatalf("expected same chunk row count across compression modes; none=%d zstd=%d", noneSnapshot.ChunkCount, zstdSnapshot.ChunkCount)
+	}
+	if noneSnapshot.StorageBlockCount != zstdSnapshot.StorageBlockCount {
+		t.Fatalf("expected same storage block count across compression modes; none=%d zstd=%d", noneSnapshot.StorageBlockCount, zstdSnapshot.StorageBlockCount)
+	}
+	if noneSnapshot.CompressionCodec != storagecompression.CompressionNone {
+		t.Fatalf("expected uncompressed snapshot codec=none, got %q", noneSnapshot.CompressionCodec)
+	}
+	if zstdSnapshot.CompressionCodec != storagecompression.CompressionZstd {
+		t.Fatalf("expected compressed snapshot codec=zstd, got %q", zstdSnapshot.CompressionCodec)
+	}
+	if zstdSnapshot.StoredSize >= noneSnapshot.StoredSize {
+		t.Fatalf("expected compression to reduce physical block payload size only; none=%d zstd=%d", noneSnapshot.StoredSize, zstdSnapshot.StoredSize)
+	}
+
+	if got := restoreFileBytesForTest(t, dbNone, resultNone.FileID, dirNone, "step310-none.restore"); !bytes.Equal(got, expected) {
+		t.Fatalf("restore mismatch for compression=none")
+	}
+	if got := restoreFileBytesForTest(t, dbZstd, resultZstd.FileID, dirZstd, "step310-zstd.restore"); !bytes.Equal(got, expected) {
+		t.Fatalf("restore mismatch for compression=zstd")
+	}
+}
+
+func TestDuplicateStoresDoNotCreateNewChunkStorageAcrossCompressionModesStep310(t *testing.T) {
+	payloads := [][]byte{
+		bytes.Repeat([]byte("step310-dup-a-"), 1024),
+		bytes.Repeat([]byte("step310-dup-b-"), 1024),
+		bytes.Repeat([]byte("step310-dup-c-"), 1024),
+	}
+	expected := concatPayloads(payloads)
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	t.Setenv("COLDKEEP_COMPRESSION", storagecompression.CompressionNone)
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "3")
+	first := storeScriptedFile(t, dbconn, workDir, "step310-first.bin", payloads)
+
+	var chunkRowsBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRowsBefore); err != nil {
+		t.Fatalf("count chunk rows before: %v", err)
+	}
+	var blockRowsBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockRowsBefore); err != nil {
+		t.Fatalf("count storage_blocks before: %v", err)
+	}
+	var refRowsBefore int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRowsBefore); err != nil {
+		t.Fatalf("count chunk_block_refs before: %v", err)
+	}
+
+	t.Setenv("COLDKEEP_COMPRESSION", storagecompression.CompressionZstd)
+	second := storeScriptedFile(t, dbconn, workDir, "step310-second.bin", payloads)
+
+	if !second.AlreadyStored {
+		t.Fatalf("expected duplicate store under changed compression mode to deduplicate at logical identity boundary")
+	}
+	if first.FileID != second.FileID {
+		t.Fatalf("expected duplicate stores to share logical file id despite compression change, got %d vs %d", first.FileID, second.FileID)
+	}
+
+	var chunkRowsAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRowsAfter); err != nil {
+		t.Fatalf("count chunk rows after: %v", err)
+	}
+	if chunkRowsAfter != chunkRowsBefore {
+		t.Fatalf("expected no duplicate chunk storage due to compression change; before=%d after=%d", chunkRowsBefore, chunkRowsAfter)
+	}
+	var blockRowsAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockRowsAfter); err != nil {
+		t.Fatalf("count storage_blocks after: %v", err)
+	}
+	if blockRowsAfter != blockRowsBefore {
+		t.Fatalf("expected no new packed block storage for duplicate content after compression change; before=%d after=%d", blockRowsBefore, blockRowsAfter)
+	}
+	var refRowsAfter int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refRowsAfter); err != nil {
+		t.Fatalf("count chunk_block_refs after: %v", err)
+	}
+	if refRowsAfter != refRowsBefore {
+		t.Fatalf("expected no new chunk_block_refs for duplicate content after compression change; before=%d after=%d", refRowsBefore, refRowsAfter)
+	}
+
+	if got := restoreFileBytesForTest(t, dbconn, second.FileID, workDir, "step310-duplicate.restore"); !bytes.Equal(got, expected) {
+		t.Fatalf("restore mismatch after duplicate store across compression modes")
+	}
+}
