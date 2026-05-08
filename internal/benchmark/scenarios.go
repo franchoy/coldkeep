@@ -65,6 +65,7 @@ func CoreScenarios(cfg ScenarioConfig) []BenchmarkCase {
 		{Name: "snapshot-creation", Run: scenarioSnapshotCreation(cfg), Execution: cfg.Execution},
 		{Name: "gc-after-churn", Run: scenarioGCAfterChurn(cfg), Execution: cfg.Execution},
 		{Name: "stats-inspect", Run: scenarioStatsInspect(cfg), Execution: cfg.Execution},
+		{Name: "verify-system-deep", Run: scenarioVerifySystemDeep(cfg), Execution: cfg.Execution},
 	}
 }
 
@@ -280,6 +281,25 @@ func scenarioStatsInspect(cfg ScenarioConfig) func(ctx BenchmarkContext) error {
 			return err
 		}
 		if err := runColdkeep(ctx, cfg, "inspect", "repository"); err != nil {
+			return err
+		}
+
+		RecordProcessed(len(paths), bytesTotal)
+		return nil
+	}
+}
+
+func scenarioVerifySystemDeep(cfg ScenarioConfig) func(ctx BenchmarkContext) error {
+	return func(ctx BenchmarkContext) error {
+		datasetDir := filepath.Join(ctx.DataPath, "verify")
+		paths, bytesTotal, err := createMixedSizeDataset(datasetDir, cfg.MixedFileCount, cfg.MixedMinFileSizeBytes, cfg.MixedMaxFileSizeBytes, cfg.Seed+91)
+		if err != nil {
+			return err
+		}
+		if err := runColdkeep(ctx, cfg, "store-folder", "--codec", cfg.Codec, datasetDir); err != nil {
+			return err
+		}
+		if err := runColdkeep(ctx, cfg, "verify", "system", "--deep"); err != nil {
 			return err
 		}
 

@@ -8,8 +8,8 @@ import (
 
 func TestCoreScenariosReturnsExpectedNames(t *testing.T) {
 	scenarios := CoreScenarios(ScenarioConfig{})
-	if len(scenarios) != 8 {
-		t.Fatalf("expected 8 scenarios, got %d", len(scenarios))
+	if len(scenarios) != 9 {
+		t.Fatalf("expected 9 scenarios, got %d", len(scenarios))
 	}
 
 	want := []string{
@@ -21,6 +21,7 @@ func TestCoreScenariosReturnsExpectedNames(t *testing.T) {
 		"snapshot-creation",
 		"gc-after-churn",
 		"stats-inspect",
+		"verify-system-deep",
 	}
 	for i, name := range want {
 		if scenarios[i].Name != name {
@@ -117,6 +118,30 @@ func TestScenarioStatsInspectRunsBothCommands(t *testing.T) {
 		if !strings.HasPrefix(call.WorkingDir, filepath.Clean(call.WorkingDir)) {
 			t.Fatalf("unexpected working dir %q", call.WorkingDir)
 		}
+	}
+}
+
+func TestScenarioVerifySystemDeepRunsVerifyCommand(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:                runner.run,
+		ColdkeepExecutable:    "coldkeep",
+		MixedFileCount:        4,
+		MixedMinFileSizeBytes: 64,
+		MixedMaxFileSizeBytes: 128,
+	}
+	scenario := scenarioByName(t, CoreScenarios(cfg), "verify-system-deep")
+
+	if err := scenario.Run(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}); err != nil {
+		t.Fatalf("scenario run failed: %v", err)
+	}
+
+	joined := runner.joinedCommands()
+	if !containsCommand(joined, "store-folder") {
+		t.Fatalf("expected store-folder command, got=%v", joined)
+	}
+	if !containsCommand(joined, "verify system --deep") {
+		t.Fatalf("expected verify system --deep command, got=%v", joined)
 	}
 }
 
