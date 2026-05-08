@@ -2625,7 +2625,7 @@ func TestParseDoctorVerifyLevelUsesExplicitFlag(t *testing.T) {
 }
 
 func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
-	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version"}
+	selfEmittingJSONCommands := []string{"store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version", "verify"}
 
 	for _, command := range selfEmittingJSONCommands {
 		output := captureStdout(t, func() {
@@ -2636,7 +2636,7 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		}
 	}
 
-	genericSuccessCommands := []string{"verify", "help", "init"}
+	genericSuccessCommands := []string{"help", "init"}
 
 	for _, command := range genericSuccessCommands {
 		output := captureStdout(t, func() {
@@ -2653,6 +2653,41 @@ func TestPrintCLISuccessJSONCommandPolicy(t *testing.T) {
 		if got, ok := payload["command"].(string); !ok || got != command {
 			t.Fatalf("command mismatch for command %q: got=%v", command, payload["command"])
 		}
+	}
+}
+
+func TestExtractVerifyFailureDetails(t *testing.T) {
+	blockID := int64(7)
+	containerID := int64(11)
+	offset := int64(128)
+
+	err := verifyError(&verify.VerifyFailure{
+		Category:    "physical_hash_mismatch",
+		Stage:       verify.VerifyStagePhysicalPayload,
+		BlockID:     &blockID,
+		ContainerID: &containerID,
+		Offset:      &offset,
+		Detail:      "verifyBlockPayloads: physical payload hash mismatch",
+	})
+
+	details, ok := extractVerifyFailureDetails(err)
+	if !ok {
+		t.Fatal("expected verify failure details extraction to succeed")
+	}
+	if details.Stage != "physical_payload" {
+		t.Fatalf("unexpected stage: got=%q", details.Stage)
+	}
+	if details.Block == nil || *details.Block != blockID {
+		t.Fatalf("unexpected block id in details: %+v", details)
+	}
+	if details.Container == nil || *details.Container != containerID {
+		t.Fatalf("unexpected container id in details: %+v", details)
+	}
+	if details.Offset == nil || *details.Offset != offset {
+		t.Fatalf("unexpected offset in details: %+v", details)
+	}
+	if details.Reason != "physical hash mismatch" {
+		t.Fatalf("unexpected reason: got=%q", details.Reason)
 	}
 }
 
