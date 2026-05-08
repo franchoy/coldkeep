@@ -94,11 +94,13 @@ const (
 )
 
 // IsRegisteredCompressionCodec returns true if the codec is valid for repository use.
-// Currently supported codecs: "none", "aes-gcm" (encryption), and future transform codecs.
+// Supported compression codecs: "none" (passthrough), "gzip".
+// Note: "aes-gcm" is an encryption codec and is not a compression codec; it is
+// accepted here for legacy compatibility where the field was previously conflated.
 func IsRegisteredCompressionCodec(codec string) bool {
 	codec = strings.TrimSpace(codec)
 	switch codec {
-	case "none", "aes-gcm":
+	case "none", "gzip", "aes-gcm":
 		return true
 	default:
 		return false

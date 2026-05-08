@@ -562,7 +562,7 @@ func TestStoreMixedExistingAndNewChunksPacksOnlyNewAndPreservesRecipeOrder(t *te
 	if err != nil {
 		t.Fatalf("begin txC: %v", err)
 	}
-	persistedC, err := storePackedBlockWithWriter(context.Background(), txC, writer, transformer, builderC)
+	persistedC, err := storePackedBlockWithWriter(context.Background(), txC, writer, transformer, storeRuntimeCompression{}, builderC)
 	if err != nil {
 		_ = txC.Rollback()
 		t.Fatalf("seed packed chunk C: %v", err)
@@ -1139,7 +1139,7 @@ func TestStorePackedBlockWithWriterCommitWritesBlockAndRefsAtomically(t *testing
 		t.Fatalf("begin tx: %v", err)
 	}
 
-	result, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder)
+	result, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, storeRuntimeCompression{}, builder)
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("store packed block: %v", err)
@@ -1299,7 +1299,7 @@ func TestStorePackedBlockWithWriterRollbackLeavesNoRefsOrBlockRows(t *testing.T)
 		t.Fatalf("begin tx: %v", err)
 	}
 
-	if _, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder); err != nil {
+	if _, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, storeRuntimeCompression{}, builder); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("store packed block before rollback: %v", err)
 	}

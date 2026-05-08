@@ -156,7 +156,7 @@ func TestIsRegisteredCompressionCodec(t *testing.T) {
 		{"none", true},
 		{"aes-gcm", true},
 		{"NONE", false}, // case-sensitive
-		{"gzip", false},
+		{"gzip", true},  // gzip is now a registered compression codec (v1.9)
 		{"xz", false},
 		{"unknown", false},
 	}
@@ -237,7 +237,7 @@ func TestSetDefaultCompressionRejectsUnregisteredCodec(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	err = SetDefaultCompression(tx, "gzip")
+	err = SetDefaultCompression(tx, "xz")
 	if err == nil {
 		t.Fatal("expected error for unregistered codec, got nil")
 	}

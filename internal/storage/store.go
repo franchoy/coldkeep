@@ -23,6 +23,8 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	"github.com/franchoy/coldkeep/internal/storage/transforms"
+	gziptransform "github.com/franchoy/coldkeep/internal/storage/transforms/gzip"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
@@ -183,6 +185,7 @@ func commitPreparedChunksWithContext(
 	writer payloadStatefulWriter,
 	_ *blocks.Repository,
 	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
 	sgctx StorageContext,
 	commitInfo commitInfoForChunks,
 	preparedChunks []preparedChunk,
@@ -249,7 +252,7 @@ func commitPreparedChunksWithContext(
 				return err
 			}
 
-			persisted, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder)
+			persisted, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, compression, builder)
 			if err != nil {
 				_ = tx.Rollback()
 				var brokenOpenErr *container.BrokenOpenContainerError
@@ -560,6 +563,7 @@ func commitPreparedFileWithContext(
 	writer payloadStatefulWriter,
 	blockRepo *blocks.Repository,
 	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
 	sgctx StorageContext,
 	prepared preparedFile,
 	fileID int64,
@@ -583,6 +587,7 @@ func commitPreparedFileWithContext(
 		writer,
 		blockRepo,
 		transformer,
+		compression,
 		sgctx,
 		commitInfo,
 		prepared.Chunks,
@@ -739,9 +744,16 @@ type StoreFileResult struct {
 // many file stores (for example StoreFolder with many small files).
 type storeFileRuntime struct {
 	transformer            blocks.Transformer
+	compression            storeRuntimeCompression
 	blockRepo              *blocks.Repository
 	storeService           *StoreService
 	validationContainerDir string
+}
+
+// storeRuntimeCompression groups the optional compression transform and its codec name.
+type storeRuntimeCompression struct {
+	transform transforms.Transform // nil = no compression
+	codec     string               // "none", "gzip", etc.
 }
 
 func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFileRuntime, error) {
@@ -758,12 +770,32 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		validationContainerDir = ""
 	}
 
+	compressionCodecName := utils_env.GetenvOrDefault("COLDKEEP_COMPRESSION", "none")
+	ct, err := loadCompressionTransform(compressionCodecName)
+	if err != nil {
+		return nil, fmt.Errorf("initialize compression codec %q: %w", compressionCodecName, err)
+	}
+
 	return &storeFileRuntime{
 		transformer:            transformer,
+		compression:            storeRuntimeCompression{transform: ct, codec: compressionCodecName},
 		blockRepo:              &blocks.Repository{DB: sgctx.DB},
 		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
 		validationContainerDir: validationContainerDir,
 	}, nil
+}
+
+// loadCompressionTransform returns the compression Transform for the given codec
+// name, or nil for "none". Returns an error if the codec name is unknown.
+func loadCompressionTransform(codec string) (transforms.Transform, error) {
+	switch strings.TrimSpace(strings.ToLower(codec)) {
+	case "none", "":
+		return nil, nil
+	case gziptransform.Name:
+		return gziptransform.NewDefault(), nil
+	default:
+		return nil, fmt.Errorf("unknown compression codec %q", codec)
+	}
 }
 
 func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, containerID int64, filename string, containersDir string) error {
@@ -2375,6 +2407,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		writer,
 		runtime.blockRepo,
 		runtime.transformer,
+		runtime.compression,
 		sgctx,
 		prepared,
 		fileID,
@@ -2890,12 +2923,26 @@ func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded
 func applyPackedBlockTransforms(
 	ctx context.Context,
 	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
 	enc packedBlockEncoded,
 ) (packedBlockTransformed, error) {
+	// Stage 2a: Compress before encryption (if compression is active).
+	toTransform := enc.plaintextEncoded
+	compressionCodec := packedStorageBlockCodecNone
+	if compression.transform != nil {
+		compressed, err := compression.transform.Encode(enc.plaintextEncoded)
+		if err != nil {
+			return packedBlockTransformed{}, fmt.Errorf("compress block: %w", err)
+		}
+		toTransform = compressed
+		compressionCodec = compression.codec
+	}
+
+	// Stage 2b: Apply encryption transformer (or identity for plain codec).
 	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
 		ChunkID:   0,
 		ChunkHash: hex.EncodeToString(enc.blockHash),
-		Plaintext: enc.plaintextEncoded,
+		Plaintext: toTransform,
 	})
 	if err != nil {
 		return packedBlockTransformed{}, err
@@ -2923,6 +2970,7 @@ func applyPackedBlockTransforms(
 	}
 
 	metadata := enc.metadata
+	metadata.CompressionCodec = compressionCodec
 	if len(enc.plaintextEncoded) > 0 {
 		metadata.CompressionRatio = float64(len(storedPayload)) / float64(len(enc.plaintextEncoded))
 	}
@@ -3016,6 +3064,7 @@ func storePackedBlockWithWriter(
 	tx *sql.Tx,
 	writer payloadStatefulWriter,
 	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
 	builder *blocks.BlockBuilder,
 ) (packedBlockPersistResult, error) {
 	if builder == nil || builder.Empty() {
@@ -3029,7 +3078,7 @@ func storePackedBlockWithWriter(
 	}
 
 	// Stage 2: Apply transforms.
-	tr, err := applyPackedBlockTransforms(ctx, transformer, enc)
+	tr, err := applyPackedBlockTransforms(ctx, transformer, compression, enc)
 	if err != nil {
 		return packedBlockPersistResult{}, err
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/iodebug"
 	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
+	gziptransform "github.com/franchoy/coldkeep/internal/storage/transforms/gzip"
 )
 
 // StorageBlockReader implements blocks.BlockReader for reading blocks from storage.
@@ -316,11 +317,25 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 		return nil, fmt.Errorf("decode block: %w", err)
 	}
 
-	if int64(len(plaintext)) != meta.Metadata.Sizes.PlaintextSize {
-		return nil, fmt.Errorf("plaintext size mismatch: expected %d got %d", meta.Metadata.Sizes.PlaintextSize, len(plaintext))
+	// Stage 3b: Decompress if a compression codec was applied during the write path.
+	// Write order: compress → encrypt; Read order: decrypt → decompress.
+	// The logical block bytes (before any transform) are recovered here.
+	logicalBytes := plaintext
+	if meta.Metadata.Compression.Codec == gziptransform.Name {
+		decompressed, err := gziptransform.NewDefault().Decode(plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("decompress block %d (gzip): %w", meta.ID, err)
+		}
+		logicalBytes = decompressed
+	} else if meta.Metadata.Compression.Codec != "" && meta.Metadata.Compression.Codec != "none" {
+		return nil, fmt.Errorf("block %d: unsupported compression codec %q", meta.ID, meta.Metadata.Compression.Codec)
 	}
 
-	return plaintext, nil
+	if int64(len(logicalBytes)) != meta.Metadata.Sizes.PlaintextSize {
+		return nil, fmt.Errorf("plaintext size mismatch: expected %d got %d", meta.Metadata.Sizes.PlaintextSize, len(logicalBytes))
+	}
+
+	return logicalBytes, nil
 }
 
 // DisableHashVerification turns off mandatory hash verification (only for testing).
