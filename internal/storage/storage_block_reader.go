@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -43,6 +45,58 @@ type StorageBlockReader struct {
 	// StorageBlockReader may be reused across goroutines.
 	transformerMu    sync.RWMutex
 	transformerCache map[blocks.Codec]blocks.Transformer
+}
+
+type hashLayer string
+
+const (
+	hashLayerPhysical   hashLayer = "physical"
+	hashLayerCompressed hashLayer = "compressed"
+	hashLayerLogical    hashLayer = "logical"
+)
+
+var (
+	ErrPhysicalPayloadHashMismatch   = errors.New("physical payload hash mismatch")
+	ErrCompressedPayloadHashMismatch = errors.New("compressed payload hash mismatch")
+	ErrLogicalBlockHashMismatch      = errors.New("logical block hash mismatch")
+)
+
+// HashMismatchError is a typed, layer-specific hash mismatch with safe context.
+// It includes identifiers and digests only (never raw payload bytes or key material).
+type HashMismatchError struct {
+	Layer       hashLayer
+	BlockID     int64
+	ContainerID int64
+	Offset      int64
+	Expected    string
+	Actual      string
+}
+
+func (e *HashMismatchError) Error() string {
+	prefix := "hash mismatch"
+	switch e.Layer {
+	case hashLayerPhysical:
+		prefix = "physical payload hash mismatch"
+	case hashLayerCompressed:
+		prefix = "compressed payload hash mismatch"
+	case hashLayerLogical:
+		prefix = "logical block hash mismatch"
+	}
+	return fmt.Sprintf("%s: block_id=%d container_id=%d offset=%d expected=%s actual=%s",
+		prefix, e.BlockID, e.ContainerID, e.Offset, e.Expected, e.Actual)
+}
+
+func (e *HashMismatchError) Unwrap() error {
+	switch e.Layer {
+	case hashLayerPhysical:
+		return ErrPhysicalPayloadHashMismatch
+	case hashLayerCompressed:
+		return ErrCompressedPayloadHashMismatch
+	case hashLayerLogical:
+		return ErrLogicalBlockHashMismatch
+	default:
+		return nil
+	}
 }
 
 // NewStorageBlockReader creates a BlockReader for v1.8 block-based storage.
@@ -101,7 +155,7 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	// Stage 2.5: Verify physical hash against exact persisted payload bytes
 	// before any decrypt/decode steps. Legacy rows may have NULL physical_hash;
 	// those rows intentionally skip this stage for compatibility.
-	if err := r.verifyPhysicalHash(blockID, storedBytes, metadata.Metadata.Hashes.PhysicalHash); err != nil {
+	if err := r.verifyPhysicalHash(metadata, storedBytes, metadata.Metadata.Hashes.PhysicalHash); err != nil {
 		return nil, err
 	}
 
@@ -112,7 +166,7 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	}
 
 	// Stage 4: Verify logical hash (mandatory, fail-closed).
-	if err := r.verifyLogicalHash(blockID, plaintextBytes, metadata.Metadata.Hashes.LogicalHash); err != nil {
+	if err := r.verifyLogicalHash(metadata, plaintextBytes, metadata.Metadata.Hashes.LogicalHash); err != nil {
 		return nil, err
 	}
 
@@ -129,12 +183,20 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 // verifyLogicalHash checks the plaintext encoded bytes against the stored block_hash.
 // Verification is fail-closed: a mismatch or empty hash (when enabled) is fatal.
 // This is Stage 4 of the read pipeline.
-func (r *StorageBlockReader) verifyLogicalHash(blockID int64, plaintextBytes []byte, blockHash []byte) error {
+func (r *StorageBlockReader) verifyLogicalHash(meta *blockMetadata, plaintextBytes []byte, blockHash []byte) error {
 	if !r.verifyHash {
 		return nil
 	}
-	if err := blocks.VerifyBlockHash(plaintextBytes, blockHash); err != nil {
-		return fmt.Errorf("verify block %d hash: %w", blockID, err)
+	computed := blocks.HashLogical(plaintextBytes)
+	if !bytes.Equal(computed, blockHash) {
+		return &HashMismatchError{
+			Layer:       hashLayerLogical,
+			BlockID:     meta.ID,
+			ContainerID: meta.ContainerID,
+			Offset:      meta.ContainerOffset,
+			Expected:    hex.EncodeToString(blockHash),
+			Actual:      hex.EncodeToString(computed),
+		}
 	}
 	return nil
 }
@@ -144,7 +206,7 @@ func (r *StorageBlockReader) verifyLogicalHash(blockID int64, plaintextBytes []b
 //
 // Compatibility rule: legacy rows may have NULL/empty physical_hash and must
 // not fail this stage.
-func (r *StorageBlockReader) verifyPhysicalHash(blockID int64, storedBytes []byte, physicalHash []byte) error {
+func (r *StorageBlockReader) verifyPhysicalHash(meta *blockMetadata, storedBytes []byte, physicalHash []byte) error {
 	if !r.verifyHash {
 		return nil
 	}
@@ -154,7 +216,14 @@ func (r *StorageBlockReader) verifyPhysicalHash(blockID int64, storedBytes []byt
 
 	computed := blocks.HashPhysical(storedBytes)
 	if !bytes.Equal(computed, physicalHash) {
-		return fmt.Errorf("physical payload hash mismatch for block %d", blockID)
+		return &HashMismatchError{
+			Layer:       hashLayerPhysical,
+			BlockID:     meta.ID,
+			ContainerID: meta.ContainerID,
+			Offset:      meta.ContainerOffset,
+			Expected:    hex.EncodeToString(physicalHash),
+			Actual:      hex.EncodeToString(computed),
+		}
 	}
 	return nil
 }
@@ -164,7 +233,7 @@ func (r *StorageBlockReader) verifyPhysicalHash(blockID int64, storedBytes []byt
 //
 // Compatibility rule: legacy rows may have NULL/empty compressed_hash and must
 // not fail this stage.
-func (r *StorageBlockReader) verifyCompressedHash(blockID int64, preDecompressionPayload []byte, compressedHash []byte) error {
+func (r *StorageBlockReader) verifyCompressedHash(meta *blockMetadata, preDecompressionPayload []byte, compressedHash []byte) error {
 	if !r.verifyHash {
 		return nil
 	}
@@ -174,7 +243,14 @@ func (r *StorageBlockReader) verifyCompressedHash(blockID int64, preDecompressio
 
 	computed := blocks.HashCompressed(preDecompressionPayload)
 	if !bytes.Equal(computed, compressedHash) {
-		return fmt.Errorf("compressed payload hash mismatch for block %d", blockID)
+		return &HashMismatchError{
+			Layer:       hashLayerCompressed,
+			BlockID:     meta.ID,
+			ContainerID: meta.ContainerID,
+			Offset:      meta.ContainerOffset,
+			Expected:    hex.EncodeToString(compressedHash),
+			Actual:      hex.EncodeToString(computed),
+		}
 	}
 	return nil
 }
@@ -198,6 +274,7 @@ type blockMetadata struct {
 	FormatVersion   int
 	Codec           string
 	Metadata        storagemetadata.BlockStorageMetadata
+	ContainerID     int64
 	ContainerName   string
 	ContainerOffset int64
 	Nonce           []byte
@@ -213,7 +290,7 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 		SELECT 
 			b.id, b.format_version, b.codec, b.plaintext_size,
 			b.compression_codec, b.compression_level, b.compressed_size,
-			b.stored_size, b.container_offset, b.block_hash,
+			b.stored_size, b.container_id, b.container_offset, b.block_hash,
 			b.compressed_hash, b.physical_hash, c.filename
 		FROM storage_blocks b
 		JOIN container c ON b.container_id = c.id
@@ -238,6 +315,7 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 		&compressionLevel,
 		&compressedSize,
 		&meta.Metadata.Sizes.StoredSize,
+		&meta.ContainerID,
 		&meta.ContainerOffset,
 		&meta.Metadata.Hashes.LogicalHash,
 		&compressedHash,
@@ -366,7 +444,7 @@ func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockM
 	// Stage 3a: Verify compressed hash at the pre-decompression boundary.
 	// With compression disabled (codec=none), plaintext is still the encoded
 	// logical block bytes. Legacy rows may have NULL compressed_hash and skip.
-	if err := r.verifyCompressedHash(meta.ID, plaintext, meta.Metadata.Hashes.CompressedHash); err != nil {
+	if err := r.verifyCompressedHash(meta, plaintext, meta.Metadata.Hashes.CompressedHash); err != nil {
 		return nil, err
 	}
 

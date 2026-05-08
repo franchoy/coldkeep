@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -352,6 +353,12 @@ func TestStorageBlockReaderPhysicalHashMismatchOnFlippedByte(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
 		t.Fatalf("expected physical hash mismatch, got: %v", err)
 	}
+	if !errors.Is(err, ErrPhysicalPayloadHashMismatch) {
+		t.Fatalf("expected ErrPhysicalPayloadHashMismatch category, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "block_id=") || !strings.Contains(err.Error(), "offset=") || !strings.Contains(err.Error(), "expected=") || !strings.Contains(err.Error(), "actual=") {
+		t.Fatalf("expected diagnostic context fields in error, got: %v", err)
+	}
 }
 
 func TestStorageBlockReaderPhysicalHashMismatchOnTruncatedPayload(t *testing.T) {
@@ -380,6 +387,9 @@ func TestStorageBlockReaderPhysicalHashMismatchOnTruncatedPayload(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
 		t.Fatalf("expected physical hash mismatch for truncated payload, got: %v", err)
 	}
+	if !errors.Is(err, ErrPhysicalPayloadHashMismatch) {
+		t.Fatalf("expected ErrPhysicalPayloadHashMismatch category, got: %v", err)
+	}
 }
 
 func TestStorageBlockReaderPhysicalHashMismatchOnWrongOffset(t *testing.T) {
@@ -397,6 +407,9 @@ func TestStorageBlockReaderPhysicalHashMismatchOnWrongOffset(t *testing.T) {
 	_, err := r.ReadBlock(context.Background(), blockID)
 	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
 		t.Fatalf("expected physical hash mismatch for wrong offset metadata, got: %v", err)
+	}
+	if !errors.Is(err, ErrPhysicalPayloadHashMismatch) {
+		t.Fatalf("expected ErrPhysicalPayloadHashMismatch category, got: %v", err)
 	}
 }
 
@@ -424,6 +437,9 @@ func TestStorageBlockReaderPhysicalHashMismatchBeforeAESGCMDecode(t *testing.T) 
 	_, err = r.ReadBlock(context.Background(), blockID)
 	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
 		t.Fatalf("expected physical hash mismatch before decode/auth failure, got: %v", err)
+	}
+	if !errors.Is(err, ErrPhysicalPayloadHashMismatch) {
+		t.Fatalf("expected ErrPhysicalPayloadHashMismatch category, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "decode block") {
 		t.Fatalf("expected failure before decode stage, got decode error: %v", err)
@@ -466,6 +482,9 @@ func TestStorageBlockReaderCompressedHashMismatchAfterDecrypt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "compressed payload hash mismatch") {
 		t.Fatalf("expected compressed payload hash mismatch, got: %v", err)
 	}
+	if !errors.Is(err, ErrCompressedPayloadHashMismatch) {
+		t.Fatalf("expected ErrCompressedPayloadHashMismatch category, got: %v", err)
+	}
 	if strings.Contains(err.Error(), "physical payload hash mismatch") {
 		t.Fatalf("expected compressed-hash stage failure after physical stage, got: %v", err)
 	}
@@ -503,8 +522,11 @@ func TestStorageBlockReaderLogicalHashMismatchRemainsCanonical(t *testing.T) {
 
 	r := NewStorageBlockReader(dbconn, workDir)
 	_, err := r.ReadBlock(context.Background(), blockID)
-	if err == nil || !strings.Contains(err.Error(), "verify block") || !strings.Contains(err.Error(), "hash") {
+	if err == nil || !strings.Contains(err.Error(), "logical block hash mismatch") {
 		t.Fatalf("expected logical hash verification failure, got: %v", err)
+	}
+	if !errors.Is(err, ErrLogicalBlockHashMismatch) {
+		t.Fatalf("expected ErrLogicalBlockHashMismatch category, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "physical payload hash mismatch") || strings.Contains(err.Error(), "compressed payload hash mismatch") {
 		t.Fatalf("expected canonical logical-hash failure, got other stage mismatch: %v", err)

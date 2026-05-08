@@ -47,7 +47,7 @@ func verifyCompressedPayloadStage(_ context.Context, _ int64, _ blockStagePayloa
 func verifyLogicalPayloadStage(_ context.Context, blockID int64, expectedHash []byte, payloads blockStagePayloads) error {
 	if err := blocks.VerifyBlockHash(payloads.plaintextEncoded, expectedHash); err != nil {
 		return verifyCategoryError(verifyErrBlockHashMismatch,
-			fmt.Sprintf("verifyBlockPayloads: block %d hash mismatch", blockID), err)
+			fmt.Sprintf("verifyBlockPayloads: logical block hash mismatch for block %d", blockID), err)
 	}
 	return nil
 }
