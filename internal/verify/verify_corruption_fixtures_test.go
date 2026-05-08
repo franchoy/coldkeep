@@ -246,6 +246,40 @@ func assertDecompressStageVerifyFailure(t *testing.T, err error, blockID int64, 
 	}
 }
 
+func assertLogicalHashStageVerifyFailure(t *testing.T, err error, blockID int64) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStageLogicalHash {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStageLogicalHash, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if !strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected category prefix %q, got: %v", verifyErrBlockHashMismatch+":", err)
+	}
+	if !strings.Contains(err.Error(), "logical block hash mismatch") {
+		t.Fatalf("expected logical hash mismatch detail, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "stage=block_decode") || strings.Contains(err.Error(), "decode logical block") {
+		t.Fatalf("expected logical_hash-stage failure before decode stage, got: %v", err)
+	}
+}
+
 func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -399,6 +433,21 @@ func TestCorruptionFixtureDecompressStageMalformedCompressedPayloadAfterHashFixt
 
 	err := verifyBlockPayloads(dbconn, repo.containersDir)
 	assertDecompressStageVerifyFailure(t, err, blockID, "decompress codec=zstd")
+}
+
+func TestCorruptionFixtureLogicalHashStageMismatchAfterSuccessfulDecryptAndDecompress(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-logical-hash-stage")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	UpdateStorageBlockField(t, repo, blockID, "block_hash", bytes.Repeat([]byte{0x00}, 32))
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertLogicalHashStageVerifyFailure(t, err, blockID)
 }
 
 func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {

@@ -836,6 +836,29 @@ func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialO
 	}
 }
 
+func TestStorageBlockReaderEncryptedLogicalHashMismatchBeforeDecode(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = $1 WHERE id = $2`, bytes.Repeat([]byte{0x00}, 32), blockID); err != nil {
+		t.Fatalf("tamper block_hash: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "logical block hash mismatch") {
+		t.Fatalf("expected logical block hash mismatch, got: %v", err)
+	}
+	if !errors.Is(err, ErrLogicalBlockHashMismatch) {
+		t.Fatalf("expected ErrLogicalBlockHashMismatch category, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected logical mismatch to fail before decode, got: %v", err)
+	}
+
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-encrypted-logical-hash-mismatch.restore", "logical block hash mismatch")
+}
+
 func TestStorageBlockReaderLogicalHashMismatchOnCompressedFixture(t *testing.T) {
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
 
