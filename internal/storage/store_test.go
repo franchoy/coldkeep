@@ -41,6 +41,108 @@ type syncFailWriter struct {
 	db              *sql.DB
 }
 
+func TestStoreFileReadsMixedCompressionBlocksAfterRepositoryDefaultChangesStep36(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	setDefaults := func(codec string, level int) {
+		t.Helper()
+		tx, err := dbconn.Begin()
+		if err != nil {
+			t.Fatalf("begin tx for repository defaults: %v", err)
+		}
+		if err := SetDefaultCompression(tx, codec); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("set default compression codec=%q: %v", codec, err)
+		}
+		if err := SetDefaultCompressionLevel(tx, level); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("set default compression level=%d: %v", level, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit repository defaults update: %v", err)
+		}
+	}
+
+	workDir := t.TempDir()
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+	}
+
+	setDefaults("none", 0)
+	aPayload := bytes.Repeat([]byte("step36-none-"), 48)
+	aPath := filepath.Join(workDir, "step36-none.txt")
+	if err := os.WriteFile(aPath, aPayload, 0o600); err != nil {
+		t.Fatalf("write first input file: %v", err)
+	}
+
+	resultA, err := StoreFileWithStorageContextAndCodecResult(sgctx, aPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store first file with repository compression=none: %v", err)
+	}
+
+	setDefaults("zstd", 3)
+	bPayload := bytes.Repeat([]byte("step36-zstd-compressible-payload-"), 96)
+	bPath := filepath.Join(workDir, "step36-zstd.txt")
+	if err := os.WriteFile(bPath, bPayload, 0o600); err != nil {
+		t.Fatalf("write second input file: %v", err)
+	}
+
+	resultB, err := StoreFileWithStorageContextAndCodecResult(sgctx, bPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store second file with repository compression=zstd: %v", err)
+	}
+
+	var codecA string
+	if err := dbconn.QueryRow(`
+		SELECT b.compression_codec
+		FROM storage_blocks b
+		JOIN chunk_block_refs r ON r.block_id = b.id
+		JOIN file_chunk fc ON fc.chunk_id = r.chunk_id
+		WHERE fc.logical_file_id = $1
+		LIMIT 1
+	`, resultA.FileID).Scan(&codecA); err != nil {
+		t.Fatalf("read compression codec for first file: %v", err)
+	}
+	if codecA != "none" {
+		t.Fatalf("expected first file block compression_codec=none, got %q", codecA)
+	}
+
+	var codecB string
+	if err := dbconn.QueryRow(`
+		SELECT b.compression_codec
+		FROM storage_blocks b
+		JOIN chunk_block_refs r ON r.block_id = b.id
+		JOIN file_chunk fc ON fc.chunk_id = r.chunk_id
+		WHERE fc.logical_file_id = $1
+		LIMIT 1
+	`, resultB.FileID).Scan(&codecB); err != nil {
+		t.Fatalf("read compression codec for second file: %v", err)
+	}
+	if codecB != "zstd" {
+		t.Fatalf("expected second file block compression_codec=zstd, got %q", codecB)
+	}
+
+	// Flip defaults again to ensure restore does not depend on current repository setting.
+	setDefaults("none", 0)
+
+	if got := restoreFileBytesForTest(t, dbconn, resultA.FileID, workDir, "step36-none.restore"); !bytes.Equal(got, aPayload) {
+		t.Fatalf("restored first file mismatch")
+	}
+	if got := restoreFileBytesForTest(t, dbconn, resultB.FileID, workDir, "step36-zstd.restore"); !bytes.Equal(got, bPayload) {
+		t.Fatalf("restored second file mismatch")
+	}
+}
+
 func (w *syncFailWriter) FinalizeContainer() error {
 	return nil
 }

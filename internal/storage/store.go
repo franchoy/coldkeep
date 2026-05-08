@@ -770,8 +770,38 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		validationContainerDir = ""
 	}
 
-	compressionCodec := strings.TrimSpace(strings.ToLower(utils_env.GetenvOrDefault("COLDKEEP_COMPRESSION", storagecompression.CompressionNone)))
-	compressionLevel := int(utils_env.GetenvOrDefaultInt64("COLDKEEP_COMPRESSION_LEVEL", int64(storagecompression.DefaultCompressionLevel)))
+	compressionCodec := storagecompression.CompressionNone
+	compressionLevel := storagecompression.DefaultCompressionLevel
+
+	tx, err := sgctx.DB.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx for compression defaults: %w", err)
+	}
+	repoCodec, repoCodecErr := GetDefaultCompression(tx)
+	repoLevel, repoLevelErr := GetDefaultCompressionLevel(tx)
+	if rbErr := tx.Rollback(); rbErr != nil {
+		return nil, fmt.Errorf("rollback tx for compression defaults: %w", rbErr)
+	}
+	if repoCodecErr != nil {
+		return nil, fmt.Errorf("load repository default compression codec: %w", repoCodecErr)
+	}
+	if repoLevelErr != nil {
+		return nil, fmt.Errorf("load repository default compression level: %w", repoLevelErr)
+	}
+	compressionCodec = strings.TrimSpace(strings.ToLower(repoCodec))
+	compressionLevel = repoLevel
+
+	// Optional environment overrides remain available for tests/operators.
+	if rawCodec, ok := os.LookupEnv("COLDKEEP_COMPRESSION"); ok {
+		if trimmedCodec := strings.TrimSpace(strings.ToLower(rawCodec)); trimmedCodec != "" {
+			compressionCodec = trimmedCodec
+		}
+	}
+	if rawLevel, ok := os.LookupEnv("COLDKEEP_COMPRESSION_LEVEL"); ok {
+		if strings.TrimSpace(rawLevel) != "" {
+			compressionLevel = int(utils_env.GetenvOrDefaultInt64("COLDKEEP_COMPRESSION_LEVEL", int64(storagecompression.DefaultCompressionLevel)))
+		}
+	}
 
 	compressionRuntime, err := loadCompressionRuntime(compressionCodec, compressionLevel)
 	if err != nil {
