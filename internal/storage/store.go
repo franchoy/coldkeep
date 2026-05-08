@@ -2881,6 +2881,7 @@ type packedBlockEncoded struct {
 	encodedBlock     *blocks.EncodedBlock
 	plaintextEncoded []byte
 	blockHash        []byte
+	compressedHash   []byte // hash of the pre-encryption payload; == blockHash when compression is disabled
 	metadata         blocks.TransformMetadata
 }
 
@@ -2889,6 +2890,7 @@ type packedBlockTransformed struct {
 	storedPayload []byte
 	storageCodec  string
 	legacyNonce   []byte
+	physicalHash  []byte // hash of the exact persisted payload bytes
 	metadata      blocks.TransformMetadata
 }
 
@@ -2905,7 +2907,10 @@ func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded
 		return packedBlockEncoded{}, err
 	}
 
-	blockHash := blocks.ComputeBlockHash(plaintextEncoded)
+	blockHash := blocks.HashLogical(plaintextEncoded)
+	// Phase 2: compression is disabled, so the pre-encryption payload equals
+	// the plaintext encoded bytes and compressedHash == logicalHash.
+	compressedHash := blocks.HashCompressed(plaintextEncoded)
 	metadata := blocks.TransformMetadata{
 		PayloadHash:      hex.EncodeToString(blockHash),
 		CompressionCodec: packedStorageBlockCodecNone,
@@ -2917,6 +2922,7 @@ func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded
 		encodedBlock:     encodedBlock,
 		plaintextEncoded: plaintextEncoded,
 		blockHash:        blockHash,
+		compressedHash:   compressedHash,
 		metadata:         metadata,
 	}, nil
 }
@@ -2978,10 +2984,14 @@ func applyPackedBlockTransforms(
 		metadata.CompressionRatio = float64(len(storedPayload)) / float64(len(enc.plaintextEncoded))
 	}
 
+	// Compute physical hash over the exact persisted payload bytes (post-encryption).
+	physicalHash := blocks.HashPhysical(storedPayload)
+
 	return packedBlockTransformed{
 		storedPayload: storedPayload,
 		storageCodec:  storageCodec,
 		legacyNonce:   legacyNonce,
+		physicalHash:  physicalHash,
 		metadata:      metadata,
 	}, nil
 }
@@ -3011,8 +3021,9 @@ func persistPackedBlockMetadata(
 		`INSERT INTO storage_blocks (
 			format_version, codec, plaintext_size, stored_size,
 			container_id, container_offset, block_hash,
-			compression_codec, compression_ratio, payload_hash
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			compression_codec, compression_ratio, payload_hash,
+			compressed_hash, physical_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id`,
 		1,
 		tr.storageCodec,
@@ -3024,6 +3035,8 @@ func persistPackedBlockMetadata(
 		tr.metadata.CompressionCodec,
 		tr.metadata.CompressionRatio,
 		tr.metadata.PayloadHash,
+		enc.compressedHash,
+		tr.physicalHash,
 	).Scan(&blockID); err != nil {
 		return 0, nil, err
 	}

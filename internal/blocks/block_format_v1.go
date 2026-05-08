@@ -2,7 +2,6 @@ package blocks
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -160,9 +159,9 @@ func VerifyBlockHash(encoded []byte, expected []byte) error {
 // ComputeBlockHash returns block hash over plaintext encoded block bytes.
 //
 // IMPORTANT: hash target is encoded plaintext block bytes, before encryption.
+// Delegates to HashLogical — the canonical hash helper for the logical layer.
 func ComputeBlockHash(encoded []byte) []byte {
-	sum := sha256.Sum256(encoded)
-	return sum[:]
+	return HashLogical(encoded)
 }
 
 // HashPlaintextEncodedBlock remains as compatibility alias.

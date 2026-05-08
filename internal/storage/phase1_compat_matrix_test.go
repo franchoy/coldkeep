@@ -672,3 +672,94 @@ func TestPhase1CompatMetadataWrittenOnce(t *testing.T) {
 		t.Fatalf("iterate storage_blocks: %v", err)
 	}
 }
+
+// TestPhase1CompressionEnvVarIgnored verifies that setting COLDKEEP_COMPRESSION=gzip
+// has no effect in Phase 1: all blocks must still be written with codec "none".
+// The env var is reserved for Phase 2 activation and must be silently ignored here.
+func TestPhase1CompressionEnvVarIgnored(t *testing.T) {
+	t.Setenv("COLDKEEP_COMPRESSION", "gzip")
+
+	repo := newPhase1Repo(t)
+
+	inputPath := filepath.Join(repo.workDir, "env-var-gate.bin")
+	_ = phase1WriteFile(t, inputPath, 64*1024, 0xFF)
+	_ = repo.storeFile(t, inputPath)
+
+	rows, err := repo.dbconn.Query(`SELECT id, compression_codec FROM storage_blocks`)
+	if err != nil {
+		t.Fatalf("query storage_blocks: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		var codec string
+		if err := rows.Scan(&id, &codec); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if codec != "none" {
+			t.Fatalf("block %d: COLDKEEP_COMPRESSION=gzip must be ignored in Phase 1; got codec %q", id, codec)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+}
+
+// TestPhase2HashLayerParity verifies the three-layer hash model introduced in Phase 2
+// Step 2.1. With compression disabled (codec = "none"):
+//   - compressed_hash must equal block_hash (Phase 2 invariant: CompressedHash == LogicalHash)
+//   - physical_hash must be non-NULL and 32 bytes
+//   - payload_hash must equal hex(block_hash) (legacy v1.8 contract preserved)
+func TestPhase2HashLayerParity(t *testing.T) {
+	repo := newPhase1Repo(t)
+
+	inputPath := filepath.Join(repo.workDir, "hash-parity.bin")
+	_ = phase1WriteFile(t, inputPath, 128*1024, 0xAB)
+	_ = repo.storeFile(t, inputPath)
+
+	rows, err := repo.dbconn.Query(`
+		SELECT id, block_hash, payload_hash, compressed_hash, physical_hash
+		FROM storage_blocks
+	`)
+	if err != nil {
+		t.Fatalf("query storage_blocks: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	count := 0
+	for rows.Next() {
+		count++
+		var id int64
+		var blockHash []byte
+		var payloadHash string
+		var compressedHash []byte
+		var physicalHash []byte
+
+		if err := rows.Scan(&id, &blockHash, &payloadHash, &compressedHash, &physicalHash); err != nil {
+			t.Fatalf("scan row: %v", err)
+		}
+
+		// payload_hash must equal hex(block_hash) — legacy v1.8 contract.
+		if payloadHash != hex.EncodeToString(blockHash) {
+			t.Fatalf("block %d: payload_hash mismatch: got %q want %q",
+				id, payloadHash, hex.EncodeToString(blockHash))
+		}
+
+		// Phase 2 invariant: codec=none ⟹ CompressedHash == LogicalHash.
+		if !bytes.Equal(compressedHash, blockHash) {
+			t.Fatalf("block %d: Phase 2 invariant violated: compressed_hash != block_hash", id)
+		}
+
+		// physical_hash must be 32 bytes.
+		if len(physicalHash) != 32 {
+			t.Fatalf("block %d: expected 32-byte physical_hash, got %d bytes", id, len(physicalHash))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("no storage_blocks rows found — store may have failed silently")
+	}
+}
