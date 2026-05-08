@@ -212,6 +212,40 @@ func assertCompressedHashStageVerifyFailure(t *testing.T, err error, blockID int
 	}
 }
 
+func assertDecompressStageVerifyFailure(t *testing.T, err error, blockID int64, detailSubstring string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStageDecompress {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStageDecompress, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") {
+		t.Fatalf("expected category prefix %q, got: %v", verifyErrMetadataInvalid+":", err)
+	}
+	if detailSubstring != "" && !strings.Contains(err.Error(), detailSubstring) {
+		t.Fatalf("expected error containing %q, got: %v", detailSubstring, err)
+	}
+	if strings.Contains(err.Error(), "stage=logical_hash") || strings.Contains(err.Error(), "stage=block_decode") {
+		t.Fatalf("expected decompression-stage failure before logical/decode stages, got: %v", err)
+	}
+}
+
 func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -341,6 +375,32 @@ func TestCorruptionFixtureCompressedHashStageEncryptedBlockMismatchBeforeDecompr
 	assertCompressedHashStageVerifyFailure(t, err, blockID)
 }
 
+func TestCorruptionFixtureDecompressStageMalformedCompressedPayloadAfterHashFixtureUpdate(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-decompress-malformed")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, repo.containersDir)
+	corruptedCompressed := []byte("not-a-valid-zstd-stream")
+	overwritePackedStoredBytesForTest(t, path, offset, corruptedCompressed)
+
+	UpdateStorageBlockField(t, repo, blockID, "stored_size", int64(len(corruptedCompressed)))
+	UpdateStorageBlockField(t, repo, blockID, "compressed_size", int64(len(corruptedCompressed)))
+	UpdateStorageBlockField(t, repo, blockID, "physical_hash", blocks.HashPhysical(corruptedCompressed))
+	UpdateStorageBlockField(t, repo, blockID, "compressed_hash", blocks.HashCompressed(corruptedCompressed))
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("verifyBlockPayloads must not panic on malformed compressed payload: %v", r)
+		}
+	}()
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertDecompressStageVerifyFailure(t, err, blockID, "decompress codec=zstd")
+}
+
 func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -439,9 +499,7 @@ func TestCorruptionFixtureSizeMetadataFailuresArePrecise(t *testing.T) {
 		UpdateStorageBlockField(t, repo, blockID, "plaintext_size", int64(1))
 
 		err := verifyBlockPayloads(dbconn, repo.containersDir)
-		if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") || !strings.Contains(err.Error(), "decompression size mismatch") {
-			t.Fatalf("expected plaintext size mismatch metadata_invalid, got: %v", err)
-		}
+		assertDecompressStageVerifyFailure(t, err, blockID, "decompression size mismatch")
 	})
 }
 

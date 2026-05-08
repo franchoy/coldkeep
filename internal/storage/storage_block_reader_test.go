@@ -806,6 +806,36 @@ func TestStorageBlockReaderDecompressionFailureAfterCompressedHashFixtureUpdate(
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-decompression-failure.restore", "decompress codec=\"zstd\"")
 }
 
+func TestStorageBlockReaderEncryptedPlaintextSizeMismatchDetectedWithoutPartialOutput(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET plaintext_size = $1 WHERE id = $2`, int64(1), blockID); err != nil {
+		t.Fatalf("update plaintext_size for mismatch fixture: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil {
+		t.Fatalf("expected decompression/plaintext size mismatch failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "plaintext size mismatch") && !strings.Contains(err.Error(), "decompress codec=\"zstd\"") {
+		t.Fatalf("expected decompression-stage plaintext mismatch error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "logical block hash mismatch") {
+		t.Fatalf("expected failure before logical hash stage, got: %v", err)
+	}
+
+	outPath := filepath.Join(workDir, "encrypted-plaintext-size-mismatch.restore")
+	_, restoreErr := restoreFileWithDBAndDir(dbconn, fileID, outPath, workDir, RestoreOptions{Overwrite: true})
+	if restoreErr == nil {
+		t.Fatalf("expected restore failure for encrypted plaintext-size mismatch fixture")
+	}
+	if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected restore output to be absent after failure, stat err=%v", statErr)
+	}
+}
+
 func TestStorageBlockReaderLogicalHashMismatchOnCompressedFixture(t *testing.T) {
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
 
