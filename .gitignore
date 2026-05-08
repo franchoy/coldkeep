@@ -119,3 +119,7 @@ __pycache__/
 # manual CI storage files
 # =========================
 .manual-ci-storage/
+# =========================
+# github agents
+# =========================
+.github/agents/
