@@ -557,6 +557,42 @@ func TestStorageBlockReaderCompressedHashMismatchAfterDecrypt(t *testing.T) {
 	}
 }
 
+func TestStorageBlockReaderCompressedHashMismatchEncryptedBeforeDecompress(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	var compressedHash []byte
+	if err := dbconn.QueryRow(`SELECT compressed_hash FROM storage_blocks WHERE id = $1`, blockID).Scan(&compressedHash); err != nil {
+		t.Fatalf("load compressed_hash: %v", err)
+	}
+	if len(compressedHash) == 0 {
+		t.Fatal("expected non-empty compressed_hash for encrypted compressed fixture")
+	}
+
+	tampered := append([]byte(nil), compressedHash...)
+	tampered[0] ^= 0x01
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = $1 WHERE id = $2`, tampered, blockID); err != nil {
+		t.Fatalf("tamper compressed_hash: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "compressed payload hash mismatch") {
+		t.Fatalf("expected compressed payload hash mismatch, got: %v", err)
+	}
+	if !errors.Is(err, ErrCompressedPayloadHashMismatch) {
+		t.Fatalf("expected ErrCompressedPayloadHashMismatch category, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "decompress codec=") || strings.Contains(err.Error(), "logical block hash mismatch") {
+		t.Fatalf("expected failure before decompression/logical verification, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected decrypt to succeed before compressed-hash mismatch, got: %v", err)
+	}
+
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-encrypted-hash-mismatch.restore", "compressed payload hash mismatch")
+}
+
 func TestStorageBlockReaderLegacyNullCompressedHashStillReads(t *testing.T) {
 	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
 

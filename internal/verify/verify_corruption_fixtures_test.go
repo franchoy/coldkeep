@@ -178,6 +178,40 @@ func assertDecryptStageVerifyFailure(t *testing.T, err error, blockID int64) {
 	}
 }
 
+func assertCompressedHashStageVerifyFailure(t *testing.T, err error, blockID int64) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStageCompressedHash {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStageCompressedHash, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if !strings.HasPrefix(err.Error(), verifyErrCompressedHashMismatch+":") {
+		t.Fatalf("expected category prefix %q, got: %v", verifyErrCompressedHashMismatch+":", err)
+	}
+	if strings.Contains(err.Error(), "stage=decompress") || strings.Contains(err.Error(), "stage=logical_hash") {
+		t.Fatalf("expected compressed_hash-stage failure before decompression/logical hash, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected decrypt to succeed and fail at compressed_hash stage, got: %v", err)
+	}
+}
+
 func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -290,6 +324,21 @@ func TestCorruptionFixtureDecryptStageUnencryptedBlocksSkipCleanly(t *testing.T)
 	if err := verifyBlockPayloads(dbconn, repo.containersDir); err != nil {
 		t.Fatalf("expected plain codec block verification to skip decrypt stage cleanly, got: %v", err)
 	}
+}
+
+func TestCorruptionFixtureCompressedHashStageEncryptedBlockMismatchBeforeDecompress(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-compressed-hash-stage-encrypted")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	UpdateStorageBlockField(t, repo, blockID, "compressed_hash", bytes.Repeat([]byte{0x00}, 32))
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertCompressedHashStageVerifyFailure(t, err, blockID)
 }
 
 func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {
