@@ -4,9 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -275,5 +279,166 @@ func TestStorageBlockReaderLoadBlockMetadataIncludesTransformAwareFields(t *test
 	}
 	if meta.Metadata.Sizes.PlaintextSize != 100 {
 		t.Fatalf("plaintext size: got %d want %d", meta.Metadata.Sizes.PlaintextSize, 100)
+	}
+}
+
+func setupStoredBlockForReaderCorruption(t *testing.T, codec blocks.Codec) (*sql.DB, string, int64, string, int64, int64) {
+	t.Helper()
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	t.Cleanup(func() { _ = dbconn.Close() })
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "reader-corruption.bin")
+	if err := os.WriteFile(inPath, []byte("reader-corruption-payload"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+	}
+
+	if _, err := StoreFileWithStorageContextAndCodecResult(sgctx, inPath, codec); err != nil {
+		t.Fatalf("store file with codec %s: %v", codec, err)
+	}
+
+	var blockID int64
+	var containerFilename string
+	var offset int64
+	var storedSize int64
+	if err := dbconn.QueryRow(`
+		SELECT sb.id, c.filename, sb.container_offset, sb.stored_size
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		ORDER BY sb.id DESC
+		LIMIT 1
+	`).Scan(&blockID, &containerFilename, &offset, &storedSize); err != nil {
+		t.Fatalf("load stored block placement: %v", err)
+	}
+
+	return dbconn, workDir, blockID, containerFilename, offset, storedSize
+}
+
+func TestStorageBlockReaderPhysicalHashMismatchOnFlippedByte(t *testing.T) {
+	dbconn, workDir, blockID, filename, offset, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	path := filepath.Join(workDir, filename)
+	fh, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file: %v", err)
+	}
+	defer func() { _ = fh.Close() }()
+
+	b := make([]byte, 1)
+	if _, err := fh.ReadAt(b, offset); err != nil {
+		t.Fatalf("read byte at offset: %v", err)
+	}
+	b[0] ^= 0xFF
+	if _, err := fh.WriteAt(b, offset); err != nil {
+		t.Fatalf("write flipped byte: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err = r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected physical hash mismatch, got: %v", err)
+	}
+}
+
+func TestStorageBlockReaderPhysicalHashMismatchOnTruncatedPayload(t *testing.T) {
+	dbconn, workDir, blockID, filename, _, storedSize := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	if storedSize <= 1 {
+		t.Fatalf("stored payload too small for truncate test: %d", storedSize)
+	}
+	newStoredSize := storedSize - 1
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET stored_size = $1 WHERE id = $2`, newStoredSize, blockID); err != nil {
+		t.Fatalf("update stored_size: %v", err)
+	}
+
+	path := filepath.Join(workDir, filename)
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat container file: %v", err)
+	}
+	if err := os.Truncate(path, st.Size()-1); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err = r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected physical hash mismatch for truncated payload, got: %v", err)
+	}
+}
+
+func TestStorageBlockReaderPhysicalHashMismatchOnWrongOffset(t *testing.T) {
+	dbconn, workDir, blockID, _, offset, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	if offset <= 0 {
+		t.Fatalf("unexpected non-positive offset for wrong-offset test: %d", offset)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET container_offset = $1 WHERE id = $2`, offset-1, blockID); err != nil {
+		t.Fatalf("update container_offset: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected physical hash mismatch for wrong offset metadata, got: %v", err)
+	}
+}
+
+func TestStorageBlockReaderPhysicalHashMismatchBeforeAESGCMDecode(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	dbconn, workDir, blockID, filename, offset, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecAESGCM)
+
+	path := filepath.Join(workDir, filename)
+	fh, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open container file: %v", err)
+	}
+	defer func() { _ = fh.Close() }()
+
+	b := make([]byte, 1)
+	if _, err := fh.ReadAt(b, offset+packedStorageBlockAESGCMNonceSize); err != nil {
+		t.Fatalf("read encrypted byte: %v", err)
+	}
+	b[0] ^= 0xFF
+	if _, err := fh.WriteAt(b, offset+packedStorageBlockAESGCMNonceSize); err != nil {
+		t.Fatalf("write flipped encrypted byte: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err = r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected physical hash mismatch before decode/auth failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "decode block") {
+		t.Fatalf("expected failure before decode stage, got decode error: %v", err)
+	}
+}
+
+func TestStorageBlockReaderLegacyNullPhysicalHashStillReads(t *testing.T) {
+	dbconn, workDir, blockID, _, _, _ := setupStoredBlockForReaderCorruption(t, blocks.CodecPlain)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set physical_hash null: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	if _, err := r.ReadBlock(context.Background(), blockID); err != nil {
+		t.Fatalf("expected legacy NULL physical_hash row to read successfully, got: %v", err)
 	}
 }

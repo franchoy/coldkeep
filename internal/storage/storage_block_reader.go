@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -97,6 +98,13 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 		return nil, fmt.Errorf("read block %d from container: %w", blockID, err)
 	}
 
+	// Stage 2.5: Verify physical hash against exact persisted payload bytes
+	// before any decrypt/decode steps. Legacy rows may have NULL physical_hash;
+	// those rows intentionally skip this stage for compatibility.
+	if err := r.verifyPhysicalHash(blockID, storedBytes, metadata.Metadata.Hashes.PhysicalHash); err != nil {
+		return nil, err
+	}
+
 	// Stage 3: Reverse transforms (currently: decrypt if AES-GCM).
 	plaintextBytes, err := r.reverseTransforms(ctx, metadata, storedBytes)
 	if err != nil {
@@ -128,6 +136,26 @@ func (r *StorageBlockReader) verifyLogicalHash(blockID int64, plaintextBytes []b
 	}
 	if err := blocks.VerifyBlockHash(plaintextBytes, blockHash); err != nil {
 		return fmt.Errorf("verify block %d hash: %w", blockID, err)
+	}
+	return nil
+}
+
+// verifyPhysicalHash checks the raw persisted payload bytes against
+// storage_blocks.physical_hash when present.
+//
+// Compatibility rule: legacy rows may have NULL/empty physical_hash and must
+// not fail this stage.
+func (r *StorageBlockReader) verifyPhysicalHash(blockID int64, storedBytes []byte, physicalHash []byte) error {
+	if !r.verifyHash {
+		return nil
+	}
+	if len(physicalHash) == 0 {
+		return nil
+	}
+
+	computed := blocks.HashPhysical(storedBytes)
+	if !bytes.Equal(computed, physicalHash) {
+		return fmt.Errorf("physical payload hash mismatch for block %d", blockID)
 	}
 	return nil
 }
