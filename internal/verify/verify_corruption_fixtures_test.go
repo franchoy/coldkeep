@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -109,6 +110,37 @@ func firstChunkIDForBlock(t *testing.T, dbconn *sql.DB, blockID int64) int64 {
 	return chunkID
 }
 
+func assertPhysicalStageVerifyFailure(t *testing.T, err error, blockID int64) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected verification failure, got nil")
+	}
+
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %T %v", err, err)
+	}
+	if vf.Stage != VerifyStagePhysicalPayload {
+		t.Fatalf("expected stage %q, got %q (err=%v)", VerifyStagePhysicalPayload, vf.Stage, err)
+	}
+	if vf.BlockID == nil || *vf.BlockID != blockID {
+		t.Fatalf("expected block_id=%d in failure, got: %+v", blockID, vf)
+	}
+	if vf.ContainerID == nil {
+		t.Fatalf("expected container_id in failure, got: %+v", vf)
+	}
+	if vf.Offset == nil {
+		t.Fatalf("expected offset in failure, got: %+v", vf)
+	}
+	if !strings.HasPrefix(err.Error(), verifyErrPhysicalHashMismatch+":") {
+		t.Fatalf("expected category prefix %q, got: %v", verifyErrPhysicalHashMismatch+":", err)
+	}
+	if strings.Contains(err.Error(), "stage=decrypt") || strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected failure before decrypt stage, got: %v", err)
+	}
+}
+
 func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -122,6 +154,70 @@ func TestCorruptionFixtureCorruptContainerByteDetectsPhysicalHashMismatch(t *tes
 	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalHashMismatch+":") {
 		t.Fatalf("expected physical_hash_mismatch from persisted-byte corruption, got: %v", err)
 	}
+}
+
+func TestCorruptionFixturePhysicalStageFlipPersistedByteFailsBeforeDecrypt(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-physical-flip-before-decrypt")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, repo.containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	if len(payload) < packedStorageBlockAESGCMNonceSize+1 {
+		t.Fatalf("expected encrypted payload length > nonce prefix, got=%d", len(payload))
+	}
+	payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertPhysicalStageVerifyFailure(t, err, blockID)
+}
+
+func TestCorruptionFixturePhysicalStageTruncatePersistedPayload(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-physical-truncate")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	TruncateContainerPayload(t, repo, blockID, 1)
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertPhysicalStageVerifyFailure(t, err, blockID)
+}
+
+func TestCorruptionFixturePhysicalStageWrongBytesAtBlockOffset(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-physical-overwrite")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, repo.containersDir)
+	wrong := bytes.Repeat([]byte{0xAC}, int(storedSize))
+	overwritePackedStoredBytesForTest(t, path, offset, wrong)
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertPhysicalStageVerifyFailure(t, err, blockID)
+}
+
+func TestCorruptionFixturePhysicalStageDBPhysicalHashMismatch(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-physical-db-mismatch")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	UpdateStorageBlockField(t, repo, blockID, "physical_hash", bytes.Repeat([]byte{0x00}, 32))
+
+	err := verifyBlockPayloads(dbconn, repo.containersDir)
+	assertPhysicalStageVerifyFailure(t, err, blockID)
 }
 
 func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {

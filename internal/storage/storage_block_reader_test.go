@@ -619,6 +619,58 @@ func TestStorageBlockReaderPhysicalHashMismatchOnCompressedBlock(t *testing.T) {
 	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-physical-mismatch.restore", "physical payload hash mismatch")
 }
 
+func TestStorageBlockReaderPhysicalHashMismatchOnTruncatedStoredPayload(t *testing.T) {
+	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	payload := readReaderCorruptionStoredBytes(t, workDir, filename, offset, storedSize)
+	if len(payload) < 2 {
+		t.Fatalf("expected payload length >= 2, got=%d", len(payload))
+	}
+	truncated := payload[:len(payload)-1]
+	overwriteReaderCorruptionStoredBytes(t, workDir, filename, offset, truncated)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET stored_size = $1 WHERE id = $2`, int64(len(truncated)), blockID); err != nil {
+		t.Fatalf("update stored_size after truncate: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected physical hash mismatch after truncate, got: %v", err)
+	}
+	if !errors.Is(err, ErrPhysicalPayloadHashMismatch) {
+		t.Fatalf("expected ErrPhysicalPayloadHashMismatch category, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "decompress codec=") || strings.Contains(err.Error(), "decode logical block") {
+		t.Fatalf("expected physical-stage failure before decompress/decode, got: %v", err)
+	}
+
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-physical-truncated.restore", "physical payload hash mismatch")
+}
+
+func TestStorageBlockReaderPhysicalHashDBMismatchFailsBeforeDecrypt(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	fileID, dbconn, workDir, blockID, _, _, _ := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = $1 WHERE id = $2`, bytes.Repeat([]byte{0x00}, 32), blockID); err != nil {
+		t.Fatalf("tamper physical_hash: %v", err)
+	}
+
+	r := NewStorageBlockReader(dbconn, workDir)
+	_, err := r.ReadBlock(context.Background(), blockID)
+	if err == nil || !strings.Contains(err.Error(), "physical payload hash mismatch") {
+		t.Fatalf("expected physical payload hash mismatch, got: %v", err)
+	}
+	if !errors.Is(err, ErrPhysicalPayloadHashMismatch) {
+		t.Fatalf("expected ErrPhysicalPayloadHashMismatch category, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected failure before decrypt/auth stage, got: %v", err)
+	}
+
+	assertReaderCorruptionRestoreFailsWithoutOutput(t, dbconn, fileID, workDir, "compressed-physical-db-mismatch.restore", "physical payload hash mismatch")
+}
+
 func TestStorageBlockReaderLegacyNullPhysicalHashExposesAESAuthFailureOnCompressedBlock(t *testing.T) {
 	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
 	fileID, dbconn, workDir, blockID, filename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, blocks.CodecAESGCM, storagecompression.CompressionZstd)
