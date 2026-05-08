@@ -10,11 +10,14 @@ import (
 )
 
 func TestBlockVerifyStageConstants(t *testing.T) {
-	if StagePhysicalPayload >= StageCompressedPayload {
-		t.Errorf("expected StagePhysicalPayload < StageCompressedPayload")
+	if VerifyStagePhysicalPayload != "physical_payload" {
+		t.Fatalf("unexpected VerifyStagePhysicalPayload=%q", VerifyStagePhysicalPayload)
 	}
-	if StageCompressedPayload >= StageLogicalPayload {
-		t.Errorf("expected StageCompressedPayload < StageLogicalPayload")
+	if VerifyStageCompressedHash != "compressed_hash" {
+		t.Fatalf("unexpected VerifyStageCompressedHash=%q", VerifyStageCompressedHash)
+	}
+	if VerifyStageLogicalHash != "logical_hash" {
+		t.Fatalf("unexpected VerifyStageLogicalHash=%q", VerifyStageLogicalHash)
 	}
 }
 
@@ -24,7 +27,8 @@ func TestVerifyPhysicalPayloadStageIsNoOp(t *testing.T) {
 		compressedBytes:  nil,
 		plaintextEncoded: []byte("plaintext"),
 	}
-	if err := verifyPhysicalPayloadStage(context.Background(), 42, p); err != nil {
+	loc := verifyBlockLocation{blockID: 42, containerID: 7, offset: 11}
+	if err := verifyPhysicalPayloadStage(context.Background(), loc, p); err != nil {
 		t.Fatalf("expected nil from physical stage legacy skip, got: %v", err)
 	}
 }
@@ -38,7 +42,8 @@ func TestVerifyPhysicalPayloadStageDetectsMismatch(t *testing.T) {
 			PhysicalHash: blocks.HashPhysical([]byte("different-bytes")),
 		},
 	}
-	err := verifyPhysicalPayloadStage(context.Background(), 42, p)
+	loc := verifyBlockLocation{blockID: 42, containerID: 7, offset: 11}
+	err := verifyPhysicalPayloadStage(context.Background(), loc, p)
 	if err == nil {
 		t.Fatal("expected physical stage mismatch error, got nil")
 	}
@@ -53,7 +58,8 @@ func TestVerifyCompressedPayloadStageSkipsLegacyNull(t *testing.T) {
 		compressedBytes:  nil,
 		plaintextEncoded: []byte("plaintext"),
 	}
-	if err := verifyCompressedPayloadStage(context.Background(), 42, p); err != nil {
+	loc := verifyBlockLocation{blockID: 42, containerID: 7, offset: 11}
+	if err := verifyCompressedPayloadStage(context.Background(), loc, p); err != nil {
 		t.Fatalf("expected nil from compressed stage legacy skip, got: %v", err)
 	}
 }
@@ -67,7 +73,8 @@ func TestVerifyCompressedPayloadStageDetectsMismatch(t *testing.T) {
 			CompressedHash: blocks.HashCompressed([]byte("different-bytes")),
 		},
 	}
-	err := verifyCompressedPayloadStage(context.Background(), 42, p)
+	loc := verifyBlockLocation{blockID: 42, containerID: 7, offset: 11}
+	err := verifyCompressedPayloadStage(context.Background(), loc, p)
 	if err == nil {
 		t.Fatal("expected compressed stage mismatch error, got nil")
 	}
@@ -99,7 +106,8 @@ func TestVerifyLogicalPayloadStagePassesOnCorrectHash(t *testing.T) {
 	encoded := buildTestEncodedBytes(t, []byte("test-block-payload"))
 	sum := sha256.Sum256(encoded)
 	p := blockStagePayloads{storedBytes: encoded, plaintextEncoded: encoded}
-	if err := verifyLogicalPayloadStage(context.Background(), 1, sum[:], p); err != nil {
+	loc := verifyBlockLocation{blockID: 1, containerID: 1, offset: 0}
+	if err := verifyLogicalPayloadStage(context.Background(), loc, sum[:], p); err != nil {
 		t.Fatalf("expected logical stage to pass on correct hash, got: %v", err)
 	}
 }
@@ -108,7 +116,8 @@ func TestVerifyLogicalPayloadStageFailsOnHashMismatch(t *testing.T) {
 	encoded := buildTestEncodedBytes(t, []byte("test-block-payload"))
 	wrongHash := make([]byte, 32)
 	p := blockStagePayloads{storedBytes: encoded, plaintextEncoded: encoded}
-	if err := verifyLogicalPayloadStage(context.Background(), 1, wrongHash, p); err == nil {
+	loc := verifyBlockLocation{blockID: 1, containerID: 1, offset: 0}
+	if err := verifyLogicalPayloadStage(context.Background(), loc, wrongHash, p); err == nil {
 		t.Fatal("expected logical stage to fail on hash mismatch, got nil")
 	}
 }
@@ -126,7 +135,8 @@ func TestRunBlockVerifyStagesPassesEndToEnd(t *testing.T) {
 			PhysicalHash:   blocks.HashPhysical(encoded),
 		},
 	}
-	if err := runBlockVerifyStages(context.Background(), nil, 1, sum[:], p); err != nil {
+	loc := verifyBlockLocation{blockID: 1, containerID: 1, offset: 0}
+	if err := runBlockVerifyStages(context.Background(), nil, loc, sum[:], p); err != nil {
 		t.Fatalf("expected runBlockVerifyStages to pass, got: %v", err)
 	}
 }
@@ -135,7 +145,8 @@ func TestRunBlockVerifyStagesFailsWhenLogicalHashMismatches(t *testing.T) {
 	encoded := buildTestEncodedBytes(t, []byte("mismatch-test"))
 	wrongHash := make([]byte, 32)
 	p := blockStagePayloads{storedBytes: encoded, plaintextEncoded: encoded}
-	if err := runBlockVerifyStages(context.Background(), nil, 1, wrongHash, p); err == nil {
+	loc := verifyBlockLocation{blockID: 1, containerID: 1, offset: 0}
+	if err := runBlockVerifyStages(context.Background(), nil, loc, wrongHash, p); err == nil {
 		t.Fatal("expected runBlockVerifyStages to fail on logical hash mismatch, got nil")
 	}
 }

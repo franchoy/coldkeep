@@ -4,19 +4,16 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"fmt"
+	"encoding/hex"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 )
 
-// verify_block_stages.go introduces the three-stage block payload verification
-// pipeline (Step 1.6). External verify behavior is UNCHANGED.
-//
-// Stage order (outermost to innermost):
-//
-//	StagePhysicalPayload   -- raw stored bytes on disk           (no-op today)
-//	StageCompressedPayload -- compressed-but-encrypted payload   (no-op today)
-//	StageLogicalPayload    -- decrypted plaintext block hash      (ACTIVE)
+type verifyBlockLocation struct {
+	blockID     int64
+	containerID int64
+	offset      int64
+}
 
 // blockStagePayloads carries the accumulated payload bytes as they flow through
 // the three verification stages.
@@ -30,15 +27,19 @@ type blockStagePayloads struct {
 // verifyPhysicalPayloadStage is Stage 1 of the block verification pipeline.
 // If physical_hash is present, verify SHA-256 of raw stored bytes.
 // Compatibility rule: NULL/empty physical_hash means legacy row and this stage is skipped.
-func verifyPhysicalPayloadStage(_ context.Context, blockID int64, payloads blockStagePayloads) error {
+func verifyPhysicalPayloadStage(_ context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
 	if len(payloads.hashes.PhysicalHash) == 0 {
 		return nil
 	}
 	computed := blocks.HashPhysical(payloads.storedBytes)
 	if !bytes.Equal(computed, payloads.hashes.PhysicalHash) {
-		return verifyCategoryError(
+		meta := verifyBlockFailureMeta(VerifyStagePhysicalPayload, loc.blockID, loc.containerID, loc.offset)
+		meta.expectedHash = hex.EncodeToString(payloads.hashes.PhysicalHash)
+		meta.actualHash = hex.EncodeToString(computed)
+		return verifyStageError(
 			verifyErrPhysicalHashMismatch,
-			fmt.Sprintf("verifyBlockPayloads: physical payload hash mismatch for block %d expected=%x actual=%x", blockID, payloads.hashes.PhysicalHash, computed),
+			meta,
+			"verifyBlockPayloads: physical payload hash mismatch",
 			nil,
 		)
 	}
@@ -48,15 +49,19 @@ func verifyPhysicalPayloadStage(_ context.Context, blockID int64, payloads block
 // verifyCompressedPayloadStage is Stage 2 of the block verification pipeline.
 // If compressed_hash is present, verify SHA-256 of the pre-decompression payload.
 // Compatibility rule: NULL/empty compressed_hash means legacy row and this stage is skipped.
-func verifyCompressedPayloadStage(_ context.Context, blockID int64, payloads blockStagePayloads) error {
+func verifyCompressedPayloadStage(_ context.Context, loc verifyBlockLocation, payloads blockStagePayloads) error {
 	if len(payloads.hashes.CompressedHash) == 0 {
 		return nil
 	}
 	computed := blocks.HashCompressed(payloads.compressedBytes)
 	if !bytes.Equal(computed, payloads.hashes.CompressedHash) {
-		return verifyCategoryError(
+		meta := verifyBlockFailureMeta(VerifyStageCompressedHash, loc.blockID, loc.containerID, loc.offset)
+		meta.expectedHash = hex.EncodeToString(payloads.hashes.CompressedHash)
+		meta.actualHash = hex.EncodeToString(computed)
+		return verifyStageError(
 			verifyErrCompressedHashMismatch,
-			fmt.Sprintf("verifyBlockPayloads: compressed payload hash mismatch for block %d expected=%x actual=%x", blockID, payloads.hashes.CompressedHash, computed),
+			meta,
+			"verifyBlockPayloads: compressed payload hash mismatch",
 			nil,
 		)
 	}
@@ -65,24 +70,27 @@ func verifyCompressedPayloadStage(_ context.Context, blockID int64, payloads blo
 
 // verifyLogicalPayloadStage is Stage 3 of the block verification pipeline.
 // This is the currently active hash check: sha256(plaintextEncoded) == block_hash.
-func verifyLogicalPayloadStage(_ context.Context, blockID int64, expectedHash []byte, payloads blockStagePayloads) error {
+func verifyLogicalPayloadStage(_ context.Context, loc verifyBlockLocation, expectedHash []byte, payloads blockStagePayloads) error {
 	if err := blocks.VerifyBlockHash(payloads.plaintextEncoded, expectedHash); err != nil {
-		return verifyCategoryError(verifyErrBlockHashMismatch,
-			fmt.Sprintf("verifyBlockPayloads: logical block hash mismatch for block %d", blockID), err)
+		meta := verifyBlockFailureMeta(VerifyStageLogicalHash, loc.blockID, loc.containerID, loc.offset)
+		meta.expectedHash = hex.EncodeToString(expectedHash)
+		meta.actualHash = hex.EncodeToString(blocks.HashLogical(payloads.plaintextEncoded))
+		return verifyStageError(verifyErrBlockHashMismatch, meta,
+			"verifyBlockPayloads: logical block hash mismatch", err)
 	}
 	return nil
 }
 
 // runBlockVerifyStages executes all three verification stages in order.
 // Stages 1 and 2 are no-ops today. Only Stage 3 (logical) is active.
-func runBlockVerifyStages(ctx context.Context, dbconn *sql.DB, blockID int64, expectedHash []byte, payloads blockStagePayloads) error {
-	if err := verifyPhysicalPayloadStage(ctx, blockID, payloads); err != nil {
+func runBlockVerifyStages(ctx context.Context, dbconn *sql.DB, loc verifyBlockLocation, expectedHash []byte, payloads blockStagePayloads) error {
+	if err := verifyPhysicalPayloadStage(ctx, loc, payloads); err != nil {
 		return err
 	}
-	if err := verifyCompressedPayloadStage(ctx, blockID, payloads); err != nil {
+	if err := verifyCompressedPayloadStage(ctx, loc, payloads); err != nil {
 		return err
 	}
-	if err := verifyLogicalPayloadStage(ctx, blockID, expectedHash, payloads); err != nil {
+	if err := verifyLogicalPayloadStage(ctx, loc, expectedHash, payloads); err != nil {
 		return err
 	}
 	_ = dbconn

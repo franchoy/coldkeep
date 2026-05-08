@@ -447,7 +447,7 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 	log.Printf("Checking packed block payload and segment integrity...")
 
 	rows, err := dbconn.QueryContext(ctx, `
-		SELECT sb.id, sb.format_version, sb.codec, sb.plaintext_size, sb.compression_codec, sb.compression_level, sb.container_offset, sb.stored_size,
+		SELECT sb.id, sb.container_id, sb.format_version, sb.codec, sb.plaintext_size, sb.compression_codec, sb.compression_level, sb.container_offset, sb.stored_size,
 		       sb.block_hash, sb.compressed_hash, sb.physical_hash, c.filename, c.max_size
 		FROM storage_blocks sb
 		JOIN container c ON c.id = sb.container_id
@@ -461,6 +461,7 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 
 	type blockRow struct {
 		id               int64
+		containerID      int64
 		formatVersion    int64
 		codec            string
 		plaintextSize    int64
@@ -480,6 +481,7 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 		var b blockRow
 		if err := rows.Scan(
 			&b.id,
+			&b.containerID,
 			&b.formatVersion,
 			&b.codec,
 			&b.plaintextSize,
@@ -605,7 +607,8 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 				PhysicalHash:   b.physicalHash,
 			},
 		}
-		if err := runBlockVerifyStages(ctx, dbconn, b.id, b.logicalHash, stagePayloads); err != nil {
+		loc := verifyBlockLocation{blockID: b.id, containerID: b.containerID, offset: b.containerOffset}
+		if err := runBlockVerifyStages(ctx, dbconn, loc, b.logicalHash, stagePayloads); err != nil {
 			return err
 		}
 
