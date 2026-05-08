@@ -15,10 +15,6 @@ const (
 	DefaultCompressionLevel = 3
 )
 
-// ErrUnsupportedCompression is returned when codec lookup receives
-// an unknown compression codec name.
-var ErrUnsupportedCompression = fmt.Errorf("unsupported compression codec")
-
 // ErrInvalidCompressionLevel is returned when a compression level is outside
 // the supported range for the selected codec.
 var ErrInvalidCompressionLevel = fmt.Errorf("invalid compression level")
@@ -44,6 +40,6 @@ func Lookup(codec string) (Compressor, error) {
 	case CompressionZstd:
 		return NewZstdCompressor(DefaultCompressionLevel)
 	default:
-		return nil, fmt.Errorf("%w: %q", ErrUnsupportedCompression, codec)
+		return nil, newCompressionError(ErrUnsupportedCompressionCodec, 0, normalized, -1, -1, nil)
 	}
 }

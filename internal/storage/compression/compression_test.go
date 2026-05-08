@@ -44,11 +44,15 @@ func TestLookupUnknownCodecReturnsClearError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unsupported codec error")
 	}
-	if !errors.Is(err, ErrUnsupportedCompression) {
-		t.Fatalf("expected ErrUnsupportedCompression, got: %v", err)
+	if !errors.Is(err, ErrUnsupportedCompressionCodec) {
+		t.Fatalf("expected ErrUnsupportedCompressionCodec, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "brotli") {
-		t.Fatalf("expected codec name in error, got: %v", err)
+	msg := err.Error()
+	if !strings.Contains(msg, `compression_codec="brotli"`) {
+		t.Fatalf("expected codec context in error, got: %v", err)
+	}
+	if !strings.Contains(msg, "block_id=0") {
+		t.Fatalf("expected block id context in error, got: %v", err)
 	}
 }
 

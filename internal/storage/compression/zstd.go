@@ -31,7 +31,7 @@ func (c zstdCompressor) Codec() string {
 func (c zstdCompressor) Compress(input []byte) ([]byte, error) {
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(c.level)))
 	if err != nil {
-		return nil, fmt.Errorf("zstd: create writer: %w", err)
+		return nil, newCompressionError(ErrCompressionFailed, 0, CompressionZstd, -1, -1, err)
 	}
 	defer encoder.Close()
 
@@ -41,17 +41,17 @@ func (c zstdCompressor) Compress(input []byte) ([]byte, error) {
 func (zstdCompressor) Decompress(input []byte, expectedSize int64) ([]byte, error) {
 	decoder, err := zstd.NewReader(nil)
 	if err != nil {
-		return nil, fmt.Errorf("zstd: create reader: %w", err)
+		return nil, newCompressionError(ErrDecompressionFailed, 0, CompressionZstd, expectedSize, -1, err)
 	}
 	defer decoder.Close()
 
 	output, err := decoder.DecodeAll(input, nil)
 	if err != nil {
-		return nil, fmt.Errorf("zstd: decode: invalid compressed input: %w", err)
+		return nil, newCompressionError(ErrDecompressionFailed, 0, CompressionZstd, expectedSize, -1, fmt.Errorf("invalid compressed input: %w", err))
 	}
 
 	if expectedSize >= 0 && int64(len(output)) != expectedSize {
-		return nil, fmt.Errorf("zstd: decoded size mismatch: got=%d want=%d", len(output), expectedSize)
+		return nil, newCompressionError(ErrCompressionSizeMismatch, 0, CompressionZstd, expectedSize, int64(len(output)), nil)
 	}
 
 	return output, nil

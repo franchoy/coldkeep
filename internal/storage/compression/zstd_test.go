@@ -63,8 +63,46 @@ func TestZstdInvalidCompressedInputReturnsCleanError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid zstd payload")
 	}
-	if !strings.Contains(err.Error(), "zstd: decode: invalid compressed input") {
-		t.Fatalf("expected clean zstd decode error, got: %v", err)
+	if !errors.Is(err, ErrDecompressionFailed) {
+		t.Fatalf("expected ErrDecompressionFailed, got: %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `compression_codec="zstd"`) {
+		t.Fatalf("expected codec context in error, got: %v", err)
+	}
+	if !strings.Contains(msg, "block_id=0") {
+		t.Fatalf("expected block id context in error, got: %v", err)
+	}
+	if !strings.Contains(msg, "invalid compressed input") {
+		t.Fatalf("expected clean invalid-input marker, got: %v", err)
+	}
+}
+
+func TestZstdDecompressSizeMismatchReturnsTypedError(t *testing.T) {
+	compressor, err := NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+
+	payload := []byte("size-mismatch-case")
+	compressed, err := compressor.Compress(payload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	_, err = compressor.Decompress(compressed, int64(len(payload)+5))
+	if err == nil {
+		t.Fatal("expected size mismatch error")
+	}
+	if !errors.Is(err, ErrCompressionSizeMismatch) {
+		t.Fatalf("expected ErrCompressionSizeMismatch, got: %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `compression_codec="zstd"`) {
+		t.Fatalf("expected codec context in error, got: %v", err)
+	}
+	if !strings.Contains(msg, "expected_size=") || !strings.Contains(msg, "actual_size=") {
+		t.Fatalf("expected size context in error, got: %v", err)
 	}
 }
 
