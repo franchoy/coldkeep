@@ -190,6 +190,15 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with impossible container ranges=%d", impossibleLocationRows), nil)
 	}
 
+	// Step 1.6 metadata awareness: record how many rows have transform metadata columns populated.
+	// This is informational only; missing values are not errors until Phase 3 activates compression
+	// (compressed_hash) or Phase 4 activates physical integrity (physical_hash).
+	var payloadHashPresentRows int64
+	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM storage_blocks WHERE payload_hash IS NOT NULL AND payload_hash != ''`).Scan(&payloadHashPresentRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query payload_hash presence", err)
+	}
+	log.Printf("  storage_blocks transform metadata: payload_hash present in %d rows", payloadHashPresentRows)
+
 	log.Println(" SUCCESS ")
 	return nil
 }
@@ -536,8 +545,13 @@ func verifyBlockPayloadsMode(dbconn *sql.DB, containersDir string, includeDeepCo
 			return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyBlockPayloads: block %d plaintext size mismatch metadata=%d decoded=%d", b.id, b.plaintextSize, len(plaintextEncoded)), nil)
 		}
 
-		if err := blocks.VerifyBlockHash(plaintextEncoded, b.blockHash); err != nil {
-			return verifyCategoryError(verifyErrBlockHashMismatch, fmt.Sprintf("verifyBlockPayloads: block %d hash mismatch", b.id), err)
+		stagePayloads := blockStagePayloads{
+			storedBytes:      storedBytes,
+			compressedBytes:  nil, // Phase 3: populated after decompression
+			plaintextEncoded: plaintextEncoded,
+		}
+		if err := runBlockVerifyStages(ctx, dbconn, b.id, b.blockHash, stagePayloads); err != nil {
+			return err
 		}
 
 		if !includeDeepContentChecks {
