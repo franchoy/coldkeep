@@ -113,6 +113,7 @@ import sys
 base_a = pathlib.Path(sys.argv[1])
 base_b = pathlib.Path(sys.argv[2])
 manifest_path = pathlib.Path(sys.argv[3])
+repo_root = manifest_path.parents[3]
 
 def load_envelope(path: pathlib.Path):
     for line in path.read_text().splitlines():
@@ -166,11 +167,13 @@ for case in common_cases:
 
 manifest = {
     'version': 'v1.9',
+  'status': 'frozen',
     'generated_at_utc': datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+  'reference_for_releases': ['v1.10', 'v1.11', 'v1.12'],
     'baseline_modes': {
         'baseline_a_uncompressed': {
             'label': 'packed + aes-gcm + none',
-            'file': str(base_a),
+      'file': str(base_a.relative_to(repo_root)),
             'sha256': sha256(base_a),
             'dataset': data_a.get('dataset'),
             'repeat': data_a.get('repeat'),
@@ -180,7 +183,7 @@ manifest = {
         },
         'baseline_b_compressed': {
             'label': 'packed + aes-gcm + zstd',
-            'file': str(base_b),
+          'file': str(base_b.relative_to(repo_root)),
             'sha256': sha256(base_b),
             'dataset': data_b.get('dataset'),
             'repeat': data_b.get('repeat'),

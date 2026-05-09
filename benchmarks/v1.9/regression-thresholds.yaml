@@ -9,8 +9,13 @@
 # - Memory is monitored where available but not currently enforced via --compare
 
 version: "1.0"
+status: "frozen"
 generated_at_utc: "2026-05-09T10:00:00Z"
 effective_from_release: "v1.9"
+reference_for_releases:
+  - "v1.10"
+  - "v1.11"
+  - "v1.12"
 
 # Global defaults (applied if no per-case override exists)
 defaults:
@@ -165,6 +170,7 @@ ci_policy:
 # Notes for release engineering
 release_notes:
   v1_9:
+    - "This threshold file is the frozen v1.9 benchmark baseline policy."
     - "Initial threshold set based on v1.9 baseline pair."
     - "Uncompressed mode enforces strict 5% thresholds."
     - "Compressed mode warnings only in v1.9; hard fails deferred to v1.11."

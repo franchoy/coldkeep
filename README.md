@@ -858,6 +858,7 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Security reporting and threat guidance: [SECURITY.md](SECURITY.md)
 - Current-state path identity policy: [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
 - Benchmark infrastructure and baseline policy: [docs/benchmarking.md](docs/benchmarking.md)
+- Frozen v1.9 benchmark baseline contract: [docs/internal/benchmark_baselines_v1_9.md](docs/internal/benchmark_baselines_v1_9.md)
 - Milestone history: [CHANGELOG.md](CHANGELOG.md)
 
 ## Roadmap note (post-v1.7)

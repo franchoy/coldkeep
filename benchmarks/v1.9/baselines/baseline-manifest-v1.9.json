@@ -1,10 +1,16 @@
 {
   "version": "v1.9",
+  "status": "frozen",
   "generated_at_utc": "2026-05-09T09:41:59Z",
+  "reference_for_releases": [
+    "v1.10",
+    "v1.11",
+    "v1.12"
+  ],
   "baseline_modes": {
     "baseline_a_uncompressed": {
       "label": "packed + aes-gcm + none",
-      "file": "/home/franchoy/vscode/coldkeep/coldkeep/benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json",
+      "file": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json",
       "sha256": "be30ddc3e4a119350317e68713866f56836e32dda74461af591a6d6622f677f6",
       "dataset": "small",
       "repeat": 1,
@@ -18,7 +24,7 @@
     },
     "baseline_b_compressed": {
       "label": "packed + aes-gcm + zstd",
-      "file": "/home/franchoy/vscode/coldkeep/coldkeep/benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json",
+      "file": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json",
       "sha256": "0e465730eff5e4ffe10048e7903f813cd2e0c52b856c497850e6c0ecf29e403c",
       "dataset": "small",
       "repeat": 1,

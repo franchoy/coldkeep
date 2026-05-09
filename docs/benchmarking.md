@@ -140,6 +140,11 @@ JSON output exposes both per-case worker usage and an aggregate
 The repository now maintains two official v1.9 baseline artifacts for the
 recommended packed production family (`aes-gcm` encryption):
 
+These artifacts are now the frozen performance reference point for v1.10+
+architectural work. Future releases may reorganize benchmark runners or CI
+gates, but they must compare against this baseline pair unless an explicit
+baseline-refresh decision is documented.
+
 - `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
   - Baseline A (uncompressed): `packed + aes-gcm + none`
   - Purpose: protect v1.8 behavior and detect non-compression regressions.
@@ -160,7 +165,12 @@ The machine-readable manifest is stored at:
 - `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json`
 
 It records file checksums, comparability validation, and per-case compressed vs
-uncompressed deltas.
+uncompressed deltas. Manifest file references are repository-relative so the
+artifact remains portable and version-stable across machines.
+
+The formal internal freeze document is:
+
+- `docs/internal/benchmark_baselines_v1_9.md`
 
 To regenerate v1.9 baseline artifacts after intentional benchmark changes:
 
@@ -231,6 +241,10 @@ sensitivity with normal run-to-run variance.
 
 **Official policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
 for the authoritative threshold definition.
+
+These thresholds are frozen for the v1.9 baseline pair and are the reference
+policy for v1.10+ regression detection until an explicit threshold-refresh
+decision is approved.
 
 ### Uncompressed mode (packed + aes-gcm + none)
 
