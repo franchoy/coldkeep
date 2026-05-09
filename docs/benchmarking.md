@@ -564,6 +564,56 @@ Key assertions include:
 - Verify and GC continue to pass in mixed repository states.
 - Stats report both legacy and packed block populations.
 
+## Step 6.11 — Add Long-Run / Adversarial Compression Tests (v1.9)
+
+Core roadmap focus: **Compression paths must remain stable under stress and fault injection.**
+
+### Validation scope
+
+Step 6.11 targets compression-specific adversarial risks:
+
+- **Memory leaks / growth drift:** repeated compression + decompression loops
+- **Decompressor edge cases:** sustained restore/verify cycles under zstd defaults
+- **Fragmentation/lifecycle stress:** large mixed-compressibility repositories with periodic GC
+- **Corruption handling bugs:** random byte corruption in completed chunk payloads
+- **Partial container truncation:** truncated payload tails in active repository state
+
+### Implementation
+
+Compression adversarial suite runs in tests/adversarial/:
+
+```bash
+# Run Step 6.11 core adversarial suite (requires COLDKEEP_TEST_DB=1)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep611" -v
+
+# Run long-run memory soak variant
+COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests/adversarial -run "TestStep611CompressionLongRunMemoryGrowthBounded" -v
+```
+
+Test set:
+
+- `TestStep611CompressionStressStoreRestoreVerifyCycles`
+   - large repository seed (compressible + incompressible payload mix)
+   - repeated store/restore loops
+   - repeated verify cycles (`verify --full` equivalent)
+   - periodic GC runs during stress
+- `TestStep611CompressionCorruptionAndTruncationAlwaysDetectedSafely`
+   - random corruption injection on completed chunk bytes
+   - partial container truncation injection
+   - verify failure is required after each corruption mode
+   - no panic contract enforced around verify/restore entrypoints
+- `TestStep611CompressionLongRunMemoryGrowthBounded`
+   - long-run loop under compression default
+   - heap trend checks after repeated GC boundaries
+   - bounded peak/final heap assertions to detect unbounded memory growth
+
+### Validation checklist
+
+- ✓ **No memory leaks (bounded trend):** long-run heap peak/final allocations are constrained by explicit bounds
+- ✓ **No decompressor panics:** restore/verify loops are panic-guarded under stress and fault injection
+- ✓ **No unbounded memory growth:** repeated compression cycles + GC converge within bounded memory envelope
+- ✓ **Corruption always detected safely:** random byte corruption and truncation both force safe verify failure paths
+
 ## CI policy
 
 CI now separates correctness checks from benchmark measurement:
