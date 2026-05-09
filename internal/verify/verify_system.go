@@ -2,14 +2,10 @@ package verify
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
-	"path/filepath"
 
-	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/utils_print"
@@ -232,7 +228,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 		errorCount++
 		errorList = utils_print.AppendToErrorList(errorList, err)
 	}
-	transformerCache := make(map[blocks.Codec]blocks.Transformer)
+	reader := FilesystemContainerReader{ContainersDir: containersDir}
 
 	// Count all non-quarantined containers that currently hold packed storage blocks.
 	ctx, cancel := db.NewOperationContext(context.Background())
@@ -286,22 +282,23 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 		}
 		log.Printf("Verifying container %d/%d: %s", processedContainers, containerCount, filename)
 
-		//construct full path
-		fullPath := filepath.Join(containersDir, filename)
-
 		fileSize := currentSize
 
 		processContainerErr := func() (retErr error) {
 			//fetch chunks ordered by offset
 			chunks, err := dbconn.QueryContext(ctx, `SELECT 
+									sb.id,
 									sb.container_offset,
 									sb.stored_size,
 									sb.plaintext_size,
-									encode(sb.block_hash, 'hex') AS block_hash_hex,
-									encode(sb.compressed_hash, 'hex') AS compressed_hash_hex,
-									encode(sb.physical_hash, 'hex') AS physical_hash_hex,
+									sb.compressed_size,
+									sb.block_hash,
+									sb.compressed_hash,
+									sb.physical_hash,
 									sb.codec,
-									sb.format_version
+									sb.format_version,
+									sb.compression_codec,
+									sb.compression_level
 								FROM storage_blocks sb
 								WHERE sb.container_id = $1
 								ORDER BY sb.container_offset`, containerID)
@@ -310,37 +307,41 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 			}
 			defer func() { _ = chunks.Close() }()
 
-			// Open in read-only mode for verification safety.
-			filecontainer, err := container.OpenReadOnlyContainer(fullPath, maxSize)
-			if err != nil {
-				return fmt.Errorf("failed to open container %s: %w", fullPath, err)
-			}
-			defer func() {
-				if closeErr := filecontainer.Close(); closeErr != nil && retErr == nil {
-					retErr = fmt.Errorf("close container %q: %w", filename, closeErr)
-				}
-			}()
-
 			hasChunks := false
 			expectedOffset := int64(container.ContainerHdrLen)
 
 			for chunks.Next() {
 				hasChunks = true
+				var blockID int64
 				var blockOffset int64
 				var storedSize int64
 				var plaintextSize int64
-				var blockHash string
-				var compressedHash sql.NullString
-				var physicalHash sql.NullString
+				var compressedSize sql.NullInt64
+				var blockHash []byte
+				var compressedHash []byte
+				var physicalHash []byte
 				var codec string
 				var formatVersion int
-				if err := chunks.Scan(&blockOffset, &storedSize, &plaintextSize, &blockHash, &compressedHash, &physicalHash, &codec, &formatVersion); err != nil {
+				var compressionCodec sql.NullString
+				var compressionLevel sql.NullInt64
+				if err := chunks.Scan(
+					&blockID,
+					&blockOffset,
+					&storedSize,
+					&plaintextSize,
+					&compressedSize,
+					&blockHash,
+					&compressedHash,
+					&physicalHash,
+					&codec,
+					&formatVersion,
+					&compressionCodec,
+					&compressionLevel,
+				); err != nil {
 					log.Printf("Failed to scan chunk info for container %d: %v", containerID, err)
 					appendDeepError(fmt.Errorf("failed to scan chunk info for container %d: %w", containerID, err))
 					continue
 				}
-				_ = compressedHash
-				_ = physicalHash
 
 				if blockOffset < 0 || storedSize <= 0 {
 					log.Printf("Invalid block offset or size for container %d at offset %d: block size %d", containerID, blockOffset, storedSize)
@@ -361,78 +362,42 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 					continue
 				}
 
-				payload, err := container.ReadPayloadAt(filecontainer, blockOffset, storedSize)
+				var compressedSizePtr *int64
+				if compressedSize.Valid {
+					value := compressedSize.Int64
+					compressedSizePtr = &value
+				}
+
+				var compressionLevelPtr *int
+				if compressionLevel.Valid {
+					value := int(compressionLevel.Int64)
+					compressionLevelPtr = &value
+				}
+
+				compressionCodecValue := ""
+				if compressionCodec.Valid {
+					compressionCodecValue = compressionCodec.String
+				}
+
+				_, err = VerifyStoredBlock(ctx, BlockStorageMetadata{
+					BlockID:          blockID,
+					ContainerID:      int64(containerID),
+					ContainerOffset:  blockOffset,
+					ContainerName:    filename,
+					ContainerMaxSize: maxSize,
+					FormatVersion:    int64(formatVersion),
+					Codec:            codec,
+					PlaintextSize:    plaintextSize,
+					CompressedSize:   compressedSizePtr,
+					StoredSize:       storedSize,
+					CompressionCodec: compressionCodecValue,
+					CompressionLevel: compressionLevelPtr,
+					LogicalHash:      blockHash,
+					CompressedHash:   compressedHash,
+					PhysicalHash:     physicalHash,
+				}, reader)
 				if err != nil {
-					appendDeepError(fmt.Errorf("read block payload for container %q at offset %d: %w", filename, blockOffset, err))
-					expectedOffset = nextExpectedOffset
-					continue
-				}
-				codecType, err := resolveVerifyStorageBlockCodec(codec)
-				if err != nil {
-					appendDeepError(fmt.Errorf("invalid storage block codec %q in container %q: %w", codec, filename, err))
-					expectedOffset = nextExpectedOffset
-					continue
-				}
-				transformer, ok := transformerCache[codecType]
-				if !ok {
-					transformer, err = blocks.GetBlockTransformer(codecType)
-					if err != nil {
-						appendDeepError(fmt.Errorf("get transformer for codec %q in container %q: %w", codec, filename, err))
-						expectedOffset = nextExpectedOffset
-						continue
-					}
-					transformerCache[codecType] = transformer
-				}
-
-				decodePayload := payload
-				descriptorNonce := []byte(nil)
-				if codecType == blocks.CodecAESGCM {
-					if len(payload) <= packedStorageBlockAESGCMNonceSize {
-						appendDeepError(fmt.Errorf("decode block payload for container %q at offset %d: aes-gcm payload too small for nonce prefix", filename, blockOffset))
-						expectedOffset = nextExpectedOffset
-						continue
-					}
-					descriptorNonce = append([]byte(nil), payload[:packedStorageBlockAESGCMNonceSize]...)
-					decodePayload = payload[packedStorageBlockAESGCMNonceSize:]
-				}
-
-				plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-					ChunkHash: blockHash,
-					Descriptor: blocks.Descriptor{
-						Codec:         codecType,
-						FormatVersion: formatVersion,
-						PlaintextSize: plaintextSize,
-						StoredSize:    storedSize,
-						Nonce:         descriptorNonce,
-						ContainerID:   int64(containerID),
-						BlockOffset:   blockOffset,
-					},
-					Payload: decodePayload,
-				})
-				if err != nil {
-					appendDeepError(fmt.Errorf("decode block payload for container %q at offset %d: %w", filename, blockOffset, err))
-					expectedOffset = nextExpectedOffset
-					continue
-				}
-
-				if int64(len(plaintext)) != plaintextSize {
-					appendDeepError(fmt.Errorf(
-						"plaintext size mismatch in container %q at offset %d: expected %d got %d",
-						filename,
-						blockOffset,
-						plaintextSize,
-						len(plaintext),
-					))
-					expectedOffset = nextExpectedOffset
-					continue
-				}
-
-				// Validate hashes (DB hash and on-disk record hash)
-				sum := sha256.Sum256(plaintext)
-				sumHex := hex.EncodeToString(sum[:])
-
-				if sumHex != blockHash {
-					appendDeepError(fmt.Errorf("block hash mismatch at offset %d (db=%s computed=%s) for container %q", blockOffset, blockHash, sumHex, filename))
+					appendDeepError(fmt.Errorf("verify block payload for container %q at offset %d: %w", filename, blockOffset, err))
 					expectedOffset = nextExpectedOffset
 					continue
 				}
