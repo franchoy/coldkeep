@@ -342,6 +342,56 @@ When to update thresholds:
    thresholds requires analysis of compression impact trends and explicit approval
    from the release engineering team.
 
+## Step 6.7 — Deterministic Restore Across Matrix (v1.9)
+
+Core roadmap guarantee: **Compression must not affect deterministic restore.**
+
+### Validation scope
+
+Step 6.7 validates that the same file produces byte-identical restores regardless of:
+
+- **Compression modes:** uncompressed (`none`) vs. compressed (`zstd`)
+- **Encryption codecs:** unencrypted (`plain`) vs. encrypted (`aes-gcm`)
+- **Repository state:** baseline, after GC, after snapshot operations
+- **Repeated operations:** multiple runs, different execution paths
+
+### Test matrix
+
+| Compression | Encryption | Baseline | After GC | After Snapshots | Repeated Runs |
+| --- | --- | --- | --- | --- | --- |
+| none | plain | ✓ | ✓ | ✓ | ✓ |
+| none | aes-gcm | ✓ | ✓ | ✓ | ✓ |
+| zstd | plain | ✓ | ✓ | ✓ | ✓ |
+| zstd | aes-gcm | ✓ | ✓ | ✓ | ✓ |
+
+### Validation checklist
+
+- ✓ **Byte-identical restore everywhere:** All modes produce exact byte-for-byte identical output
+- ✓ **Repeated restores identical:** Multiple restores of the same file produce identical hashes
+- ✓ **Restore after GC identical:** Restores after garbage collection produce identical output
+- ✓ **Restore after snapshots identical:** Restores after snapshot creation/deletion produce identical output
+- ✓ **Same input → same logical output independent of compression/encryption:** Compression is metadata-only; it never affects restored bytes
+
+### Implementation
+
+Deterministic restore matrix validation runs in tests/adversarial/:
+
+```bash
+# Run matrix tests (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep67" -v
+
+# Test names:
+# - TestStep67DeterministicRestoreCompressionMatrix: Core matrix (4 modes × 8 scenarios)  
+# - TestStep67CrossModeDeterminism: Cross-mode consistency (identical restores across all 4 modes)
+```
+
+### Guarantees for operators
+
+1. **Compression is metadata-only:** Choosing `COLDKEEP_COMPRESSION=zstd` does not affect restored file content; it only affects storage efficiency.
+2. **Repository config changes don't affect existing files:** Changing the repository-level compression setting does not re-compress or alter existing stored files.
+3. **Read-only operations are always safe:** Snapshots, GC, and other maintenance never modify file content during restore.
+4. **Deterministic output is cryptographically validated:** Each restore operation verifies content hashes and encryption state; silent corruption is not possible.
+
 ## CI policy
 
 CI now separates correctness checks from benchmark measurement:
