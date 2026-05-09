@@ -1,17 +1,19 @@
 # Storage Transform Semantics
 
-This document locks the canonical metadata semantics for the v1.9 storage
-transform model.
+This document locks canonical metadata semantics for the compression-aware
+storage transform model ahead of the v1.10 behavior freeze.
 
-Phase 1 is preparation only:
+Current runtime contract:
 
-- compression remains disabled
-- repositories remain behaviorally equivalent to v1.8
-- write path payload bytes remain identical to v1.8
-- restore and verify semantics remain unchanged
-
-These definitions are intended to remain stable after v1.9 so future schema and
-verification changes are additive instead of reinterpretive.
+- Compression is block-level.
+- Compression happens before encryption.
+- Compression settings affect newly written blocks only.
+- Existing blocks are never recompressed automatically.
+- Reads and verify paths resolve behavior from per-block metadata.
+- Mixed repositories are valid steady-state: legacy and compression-era blocks
+   can coexist.
+- Dedup identity remains anchored to logical payload (`block_hash`) and does not
+   change with compression/encryption settings.
 
 ## Payload Layers
 
@@ -29,8 +31,8 @@ Properties:
 - input to logical integrity verification
 - dedup and restore correctness anchor
 
-In current v1.8 and Phase 1 behavior, this is the output of block encoding and
-the input to the transform pipeline.
+In current behavior, this is the output of block encoding and the input to the
+transform pipeline.
 
 ### 2. Compressed Payload
 
@@ -43,8 +45,14 @@ Properties:
 - decompression integrity checkpoint
 - diagnostic and verification boundary for future transform-aware audits
 
-Compressed payload is not active in Phase 1. It is defined now so future
-compression can be added without changing metadata meanings.
+Compression is active for new writes when configured.
+
+Store-if-smaller contract:
+
+- Compression is opportunistic at block write time.
+- If compression would expand the payload, the block is stored uncompressed.
+- As a result, repositories configured for zstd can still contain
+   uncompressed blocks.
 
 Compressed payload is not:
 
@@ -63,9 +71,9 @@ Properties:
 - corruption detection boundary
 - exact byte range addressed by container offset plus stored size
 
-In v1.8 and Phase 1, physical payload is equal to the output of the current
-transform pipeline. With AES-GCM enabled, this includes the nonce prefix and the
-ciphertext written to the container.
+In current behavior, physical payload is the output of the active transform
+pipeline. With AES-GCM enabled, this includes the nonce prefix and ciphertext
+written to the container.
 
 ## Hash Semantics
 
@@ -92,7 +100,7 @@ Definition:
 
 - hash input: compressed bytes before encryption
 - meaning: transform-stage integrity checkpoint
-- role: future decompression integrity and transform-aware diagnostics
+- role: decompression integrity and transform-aware diagnostics
 
 `compressed_hash` does not carry dedup semantics and must not be treated as a
 replacement for `block_hash`.
@@ -130,10 +138,10 @@ Meaning:
 Meaning:
 
 - size after compression, before encryption
-- future transform-stage observability value
+- transform-stage observability value
 - useful for compression ratio and decompression integrity reporting
 
-`compressed_size` is not active in Phase 1 but its meaning is locked now.
+`compressed_size` is nullable for blocks that are stored uncompressed.
 
 ### `stored_size`
 
@@ -145,8 +153,7 @@ Meaning:
 - exact span used for container placement validation
 - includes any transform framing required by the persisted representation
 
-In v1.8 and Phase 1, `stored_size` remains the persisted payload size already in
-use by `storage_blocks`.
+`stored_size` is the persisted payload size used by `storage_blocks`.
 
 ## Transform Ordering Contract
 
@@ -158,18 +165,19 @@ The reverse read path is defined as:
 
 physical payload -> decrypt -> decompress -> logical payload
 
-Phase 1 does not enable compression. The active runtime still behaves as v1.8:
+Current runtime behavior:
 
-- if codec is `none`, logical payload is persisted directly
-- if codec is `aes-gcm`, logical payload is encrypted and the resulting physical
-  payload is `nonce || ciphertext`
+- If compression codec is `none`, logical payload is forwarded unchanged to the
+   encryption stage.
+- If compression codec is `zstd`, logical payload is compressed first, and the
+   compressed payload may be retained only when it is beneficial (store-if-smaller).
+- If encryption codec is `none`, the selected pre-encryption payload is persisted
+   directly.
+- If encryption codec is `aes-gcm`, physical payload is `nonce || ciphertext`
+   over the selected pre-encryption payload.
 
-No Phase 1 change is allowed to alter:
-
-- `block_hash` computation target
-- current stored payload bytes
-- restore determinism
-- verify behavior
+This transform ordering does not change dedup identity. Dedup identity remains
+`block_hash` of logical payload.
 
 ## Metadata Invariants
 
@@ -181,19 +189,12 @@ The following semantic invariants are locked for v1.9 and later:
 3. Physical integrity metadata, when introduced, is additive and never redefines
    dedup identity.
 4. Transform ordering must remain reversible in strict inverse order on reads.
-5. Future verify stages may check logical, compressed, and physical layers
+5. Verify checks may evaluate logical, compressed, and physical layers
    separately, but failure at one layer must not reinterpret the meaning of the
    others.
 
-## Phase 1 Scope Boundary
+## Integrity Checkpoints (Operator View)
 
-This document defines semantics only. It does not itself require:
-
-- repository rewrites
-- compression enablement
-- runtime behavior changes
-- immediate schema backfill
-
-Planned follow-up schema work may add nullable metadata columns such as
-`compressed_hash`, `physical_hash`, and `compressed_size`, but those later
-additions must conform to the definitions in this document.
+- `logical_hash` (`block_hash`) verifies decoded logical block content.
+- `compressed_hash` verifies the pre-encryption compressed payload.
+- `physical_hash` verifies exact persisted bytes in container storage.

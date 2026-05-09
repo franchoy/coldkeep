@@ -88,7 +88,24 @@ If you are new to the project, start here, then continue to [ARCHITECTURE.md](AR
 - Mixed repositories containing legacy v1.7 data and new v1.8 packed blocks are valid steady-state.
 - v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
 - Both `plain` and `aes-gcm` codec settings work end-to-end with v1.8 packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, the full encoded block is AES-GCM encrypted and `storage_blocks.codec` is set to `"aes-gcm"`; stored bytes are a 12-byte nonce prefix followed by the ciphertext. When `COLDKEEP_CODEC=plain`, `storage_blocks.codec` is `"none"` and stored bytes are the plaintext encoded block. The read path (`StorageBlockReader`) handles both layouts transparently using per-block metadata.
-- Full block-level encryption is fully shipped in v1.8. Block-level compression is planned for v1.9.
+
+## Compression and Integrity Contract (Pre-v1.10 Freeze)
+
+Compression behavior:
+
+- Compression is block-level.
+- Compression happens before encryption.
+- Compression configuration affects only newly written blocks.
+- Existing blocks are never recompressed automatically.
+- Reads and verify use per-block metadata, so mixed repositories (legacy + new transform metadata) are valid steady-state.
+- Compression is store-if-smaller: some zstd-configured blocks are intentionally stored uncompressed when compression would expand payload size.
+- Compression does not change dedup identity; dedup remains anchored to logical block content.
+
+Integrity checkpoints:
+
+- `logical_hash` (`block_hash`) verifies decoded logical block content.
+- `compressed_hash` verifies pre-encryption compressed payload.
+- `physical_hash` verifies exact persisted bytes in container storage.
 
 ## Core Guarantees
 
