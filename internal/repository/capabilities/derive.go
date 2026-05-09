@@ -25,13 +25,7 @@ func Derive(ctx context.Context, dbconn *sql.DB) (RepositoryCapabilities, error)
 		ctx = context.Background()
 	}
 
-	caps := RepositoryCapabilities{
-		DefaultCompression:      CompressionNone,
-		DefaultCompressionLevel: 3,
-		DefaultEncryption:       EncryptionNone,
-		DefaultPacking:          PackingPackedMulti,
-		ReadPathMetadataDriven:  true,
-	}
+	caps := DefaultRepositoryCapabilities()
 
 	supportedCompression := make(map[string]struct{})
 	supportedEncryption := make(map[string]struct{})
