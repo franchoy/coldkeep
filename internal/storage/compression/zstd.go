@@ -33,7 +33,7 @@ func (c zstdCompressor) Compress(input []byte) ([]byte, error) {
 	if err != nil {
 		return nil, newCompressionError(ErrCompressionFailed, 0, CompressionZstd, -1, -1, err)
 	}
-	defer encoder.Close()
+	defer func() { _ = encoder.Close() }()
 
 	return encoder.EncodeAll(input, make([]byte, 0, len(input))), nil
 }

@@ -444,7 +444,7 @@ func TestStep613StatsAccumulation(t *testing.T) {
 	if stats3.LogicalBytes != expectedLogical3 {
 		t.Errorf("After store 3: expected %d, got %d", expectedLogical3, stats3.LogicalBytes)
 	}
-	if !(stats1.LogicalBytes < stats2.LogicalBytes && stats2.LogicalBytes < stats3.LogicalBytes) {
+	if stats1.LogicalBytes >= stats2.LogicalBytes || stats2.LogicalBytes >= stats3.LogicalBytes {
 		t.Errorf("LogicalBytes should accumulate monotonically: got %d, %d, %d", stats1.LogicalBytes, stats2.LogicalBytes, stats3.LogicalBytes)
 	}
 

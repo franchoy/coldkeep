@@ -170,7 +170,6 @@ func TestStep611CompressionLongRunMemoryGrowthBounded(t *testing.T) {
 	baseline := step611CurrentHeapAlloc()
 	peak := baseline
 
-	kept := make([]step611Stored, 0, 64)
 	for round := 0; round < 60; round++ {
 		var payload []byte
 		size := 180*1024 + (round%11)*33*1024
@@ -181,7 +180,6 @@ func TestStep611CompressionLongRunMemoryGrowthBounded(t *testing.T) {
 		}
 
 		stored := storeStep611(t, dbconn, writer, tmp, fmt.Sprintf("long-%03d.bin", round), payload, blocks.CodecPlain)
-		kept = append(kept, stored)
 
 		assertRestoreNoPanicStep611(t, dbconn, tmp, stored, fmt.Sprintf("long-restore-%03d.bin", round))
 

@@ -341,7 +341,7 @@ func (cb *CorpusBuilder) generateManifest(def CorpusDefinition, corpusDir string
 		totalSize += file.Size
 	}
 
-	buf.WriteString(fmt.Sprintf("\n# Summary\n"))
+	buf.WriteString("\n# Summary\n")
 	buf.WriteString(fmt.Sprintf("Total Files: %d\n", len(def.Files)))
 	buf.WriteString(fmt.Sprintf("Total Size: %d bytes (%.2f MB)\n", totalSize, float64(totalSize)/(1024*1024)))
 
@@ -371,7 +371,7 @@ func (cb *CorpusBuilder) ValidateCorpus(def CorpusDefinition) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("open file %s: %w", file.Name, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		hasher := sha256.New()
 		if _, err := io.Copy(hasher, f); err != nil {

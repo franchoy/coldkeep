@@ -28,7 +28,7 @@ type CompressionError struct {
 }
 
 func (e *CompressionError) Error() string {
-	parts := []string{fmt.Sprintf("%s", e.kindLabel())}
+	parts := []string{e.kindLabel()}
 	parts = append(parts, fmt.Sprintf("block_id=%d", e.BlockID))
 	parts = append(parts, fmt.Sprintf("compression_codec=%q", e.Codec))
 	if e.ExpectedSize >= 0 {

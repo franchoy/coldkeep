@@ -770,9 +770,6 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		validationContainerDir = ""
 	}
 
-	compressionCodec := storagecompression.CompressionNone
-	compressionLevel := storagecompression.DefaultCompressionLevel
-
 	tx, err := sgctx.DB.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin tx for compression defaults: %w", err)
@@ -788,8 +785,8 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 	if repoLevelErr != nil {
 		return nil, fmt.Errorf("load repository default compression level: %w", repoLevelErr)
 	}
-	compressionCodec = strings.TrimSpace(strings.ToLower(repoCodec))
-	compressionLevel = repoLevel
+	compressionCodec := strings.TrimSpace(strings.ToLower(repoCodec))
+	compressionLevel := repoLevel
 
 	// Optional environment overrides remain available for tests/operators.
 	if rawCodec, ok := os.LookupEnv("COLDKEEP_COMPRESSION"); ok {

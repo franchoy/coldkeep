@@ -5255,7 +5255,8 @@ func TestStoreFileCompressionRoundTripIntegrationMatrixStep38(t *testing.T) {
 						}
 						// With store-if-smaller policy, actual codec may differ from configured codec.
 						// Verify that the actual codec matches the size relationship.
-						if compressionCodec == storagecompression.CompressionNone {
+						switch compressionCodec {
+						case storagecompression.CompressionNone:
 							// Uncompressed: compressed_size should equal plaintext_size
 							if compressedSize.Int64 != plaintextSize {
 								t.Fatalf("block %d: codec=none but compressed_size(%d) != plaintext_size(%d)", blockID, compressedSize.Int64, plaintextSize)
@@ -5263,7 +5264,7 @@ func TestStoreFileCompressionRoundTripIntegrationMatrixStep38(t *testing.T) {
 							if compressionLevel.Valid {
 								t.Fatalf("block %d: expected NULL compression_level for none codec, got %d", blockID, compressionLevel.Int64)
 							}
-						} else if compressionCodec == storagecompression.CompressionZstd {
+						case storagecompression.CompressionZstd:
 							// Compressed: compressed_size must be smaller than plaintext_size
 							if compressedSize.Int64 >= plaintextSize {
 								t.Fatalf("block %d: codec=zstd but compressed_size(%d) >= plaintext_size(%d)", blockID, compressedSize.Int64, plaintextSize)
@@ -5271,7 +5272,7 @@ func TestStoreFileCompressionRoundTripIntegrationMatrixStep38(t *testing.T) {
 							if !compressionLevel.Valid || compressionLevel.Int64 != 3 {
 								t.Fatalf("block %d: expected compression_level=3, got %+v", blockID, compressionLevel)
 							}
-						} else {
+						default:
 							t.Fatalf("block %d: unexpected compression codec: %q", blockID, compressionCodec)
 						}
 

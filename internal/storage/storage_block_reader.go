@@ -1,21 +1,16 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
-	"strings"
-	"sync"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/iodebug"
-	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -43,10 +38,6 @@ type StorageBlockReader struct {
 	db            *sql.DB
 	containersDir string
 	verifyHash    bool
-	// transformerCache is shared by reads and guarded by transformerMu.
-	// StorageBlockReader may be reused across goroutines.
-	transformerMu    sync.RWMutex
-	transformerCache map[blocks.Codec]blocks.Transformer
 }
 
 type hashLayer string
@@ -104,25 +95,9 @@ func (e *HashMismatchError) Unwrap() error {
 // NewStorageBlockReader creates a BlockReader for v1.8 block-based storage.
 func NewStorageBlockReader(db *sql.DB, containersDir string) *StorageBlockReader {
 	return &StorageBlockReader{
-		db:               db,
-		containersDir:    containersDir,
-		verifyHash:       true, // mandatory verification in Phase 3+
-		transformerCache: make(map[blocks.Codec]blocks.Transformer),
-	}
-}
-
-// normalizeStorageBlockCodec maps persisted storage_blocks.codec values to runtime codecs.
-// Canonical persisted values are "none" and "aes-gcm".
-// "plain" is accepted as a legacy/test synonym for "none".
-func normalizeStorageBlockCodec(raw string) (blocks.Codec, error) {
-	codecText := strings.TrimSpace(strings.ToLower(raw))
-	switch codecText {
-	case packedStorageBlockCodecNone, "plain":
-		return blocks.CodecPlain, nil
-	case string(blocks.CodecAESGCM):
-		return blocks.CodecAESGCM, nil
-	default:
-		return "", fmt.Errorf("unsupported storage_blocks codec %q (expected %q or %q)", raw, packedStorageBlockCodecNone, blocks.CodecAESGCM)
+		db:            db,
+		containersDir: containersDir,
+		verifyHash:    true, // mandatory verification in Phase 3+
 	}
 }
 
@@ -260,94 +235,6 @@ func (r *StorageBlockReader) mapVerifyPipelineFailure(err error) error {
 	}
 }
 
-// verifyLogicalHash checks the plaintext encoded bytes against the stored block_hash.
-// Verification is fail-closed: a mismatch or empty hash (when enabled) is fatal.
-// This is Stage 4 of the read pipeline.
-func (r *StorageBlockReader) verifyLogicalHash(meta *blockMetadata, plaintextBytes []byte, blockHash []byte) error {
-	if !r.verifyHash {
-		return nil
-	}
-	computed := blocks.HashLogical(plaintextBytes)
-	if !bytes.Equal(computed, blockHash) {
-		return &HashMismatchError{
-			Layer:       hashLayerLogical,
-			BlockID:     meta.ID,
-			ContainerID: meta.ContainerID,
-			Offset:      meta.ContainerOffset,
-			Expected:    hex.EncodeToString(blockHash),
-			Actual:      hex.EncodeToString(computed),
-		}
-	}
-	return nil
-}
-
-// verifyPhysicalHash checks the raw persisted payload bytes against
-// storage_blocks.physical_hash when present.
-//
-// Compatibility rule: legacy rows may have NULL/empty physical_hash and must
-// not fail this stage.
-func (r *StorageBlockReader) verifyPhysicalHash(meta *blockMetadata, storedBytes []byte, physicalHash []byte) error {
-	if !r.verifyHash {
-		return nil
-	}
-	if len(physicalHash) == 0 {
-		return nil
-	}
-
-	computed := blocks.HashPhysical(storedBytes)
-	if !bytes.Equal(computed, physicalHash) {
-		return &HashMismatchError{
-			Layer:       hashLayerPhysical,
-			BlockID:     meta.ID,
-			ContainerID: meta.ContainerID,
-			Offset:      meta.ContainerOffset,
-			Expected:    hex.EncodeToString(physicalHash),
-			Actual:      hex.EncodeToString(computed),
-		}
-	}
-	return nil
-}
-
-// verifyCompressedHash checks decrypted pre-decompression payload bytes against
-// storage_blocks.compressed_hash when present.
-//
-// Compatibility rule: legacy rows may have NULL/empty compressed_hash and must
-// not fail this stage.
-func (r *StorageBlockReader) verifyCompressedHash(meta *blockMetadata, preDecompressionPayload []byte, compressedHash []byte) error {
-	if !r.verifyHash {
-		return nil
-	}
-	if len(compressedHash) == 0 {
-		return nil
-	}
-
-	computed := blocks.HashCompressed(preDecompressionPayload)
-	if !bytes.Equal(computed, compressedHash) {
-		return &HashMismatchError{
-			Layer:       hashLayerCompressed,
-			BlockID:     meta.ID,
-			ContainerID: meta.ContainerID,
-			Offset:      meta.ContainerOffset,
-			Expected:    hex.EncodeToString(compressedHash),
-			Actual:      hex.EncodeToString(computed),
-		}
-	}
-	return nil
-}
-
-// decodeLogicalBlock deserializes plaintext encoded bytes into an EncodedBlock.
-// This is Stage 5 of the read pipeline.
-func (r *StorageBlockReader) decodeLogicalBlock(blockID int64, plaintextBytes []byte) (*blocks.EncodedBlock, error) {
-	encodedBlock, err := blocks.DecodeBlock(plaintextBytes)
-	if err != nil {
-		return nil, fmt.Errorf("decode block %d: %w", blockID, err)
-	}
-	if encodedBlock == nil {
-		return nil, fmt.Errorf("decode block %d returned nil", blockID)
-	}
-	return encodedBlock, nil
-}
-
 // blockMetadata represents the persistent metadata about a block.
 type blockMetadata struct {
 	ID              int64
@@ -460,107 +347,6 @@ func (r *StorageBlockReader) readStoredPayload(meta *blockMetadata) ([]byte, err
 	}
 
 	return payload, nil
-}
-
-// reverseTransforms applies the inverse of every transform stage used during the
-// write path, in reverse order. Currently the only transform is AES-GCM encryption;
-// the structure is ready for additional stages (e.g. decompression in Phase 3).
-// This is Stage 3 of the read pipeline.
-func (r *StorageBlockReader) reverseTransforms(ctx context.Context, meta *blockMetadata, storedBytes []byte) ([]byte, error) {
-	codec, err := normalizeStorageBlockCodec(meta.Codec)
-	if err != nil {
-		return nil, err
-	}
-
-	decodePayload := storedBytes
-	if codec == blocks.CodecAESGCM {
-		if len(storedBytes) <= packedStorageBlockAESGCMNonceSize {
-			return nil, fmt.Errorf("stored payload too small for aes-gcm nonce prefix: size=%d", len(storedBytes))
-		}
-		meta.Nonce = append([]byte(nil), storedBytes[:packedStorageBlockAESGCMNonceSize]...)
-		decodePayload = storedBytes[packedStorageBlockAESGCMNonceSize:]
-	}
-
-	// Get or create transformer for this codec
-	r.transformerMu.RLock()
-	transformer, ok := r.transformerCache[codec]
-	r.transformerMu.RUnlock()
-	if !ok {
-		r.transformerMu.Lock()
-		// Re-check after taking write lock to avoid duplicate initialization.
-		transformer, ok = r.transformerCache[codec]
-		if !ok {
-			transformer, err = blocks.GetBlockTransformer(codec)
-			if err != nil {
-				r.transformerMu.Unlock()
-				return nil, fmt.Errorf("get transformer for codec %s: %w", meta.Codec, err)
-			}
-			r.transformerCache[codec] = transformer
-		}
-		r.transformerMu.Unlock()
-	}
-
-	// Create descriptor for decode
-	descriptor := blocks.Descriptor{
-		ChunkID:       0, // N/A for block-level decode
-		Codec:         codec,
-		FormatVersion: meta.FormatVersion,
-		PlaintextSize: meta.Metadata.Sizes.PlaintextSize,
-		StoredSize:    meta.Metadata.Sizes.StoredSize,
-		Nonce:         meta.Nonce,
-		ContainerID:   0, // N/A for this context
-		BlockOffset:   meta.ContainerOffset,
-	}
-
-	// Decode (decrypt if needed)
-	plaintext, err := transformer.Decode(ctx, blocks.DecodeInput{
-		Descriptor: descriptor,
-		Payload:    decodePayload,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("decode block: %w", err)
-	}
-
-	// Stage 3a: Verify compressed hash at the pre-decompression boundary.
-	if err := r.verifyCompressedHash(meta, plaintext, meta.Metadata.Hashes.CompressedHash); err != nil {
-		return nil, err
-	}
-
-	// Stage 3b: Decompress after decrypt to restore logical block bytes.
-	compressionCodec := strings.TrimSpace(strings.ToLower(meta.Metadata.Compression.Codec))
-	if compressionCodec == "" {
-		compressionCodec = storagecompression.CompressionNone
-	}
-
-	var compressor storagecompression.Compressor
-	if compressionCodec == storagecompression.CompressionZstd {
-		level := storagecompression.DefaultCompressionLevel
-		if meta.Metadata.Compression.Level != nil {
-			level = *meta.Metadata.Compression.Level
-		}
-		comp, err := storagecompression.NewZstdCompressor(level)
-		if err != nil {
-			return nil, fmt.Errorf("block %d: initialize compression codec=%q level=%d: %w", meta.ID, compressionCodec, level, err)
-		}
-		compressor = comp
-	} else {
-		comp, err := storagecompression.Lookup(compressionCodec)
-		if err != nil {
-			return nil, fmt.Errorf("block %d: resolve compression codec=%q: %w", meta.ID, compressionCodec, err)
-		}
-		compressor = comp
-	}
-
-	logicalBytes, err := compressor.Decompress(plaintext, meta.Metadata.Sizes.PlaintextSize)
-	if err != nil {
-		return nil, fmt.Errorf("block %d: decompress codec=%q: %w", meta.ID, compressionCodec, err)
-	}
-
-	if int64(len(logicalBytes)) != meta.Metadata.Sizes.PlaintextSize {
-		return nil, fmt.Errorf("plaintext size mismatch: expected %d got %d", meta.Metadata.Sizes.PlaintextSize, len(logicalBytes))
-	}
-
-	return logicalBytes, nil
 }
 
 // DisableHashVerification turns off mandatory hash verification (only for testing).
