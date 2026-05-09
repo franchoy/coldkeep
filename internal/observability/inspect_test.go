@@ -333,6 +333,199 @@ func TestInspectContainerIncludesReverseRelations(t *testing.T) {
 	}
 }
 
+func TestInspectChunkRelationsIncludeLegacyBlockMetadata(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	chunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-legacy-meta", 99, "COMPLETED", 1, "v1-simple-rolling")
+	if err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+	chunkID, err := chunkRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("chunk last insert id: %v", err)
+	}
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_legacy_meta.bin", 512, 1024, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := ctrRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunkID, "plain", 1, 99, 99, containerID, 12,
+	); err != nil {
+		t.Fatalf("insert legacy block: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityChunk, strconv.FormatInt(chunkID, 10), InspectOptions{Relations: true})
+	if err != nil {
+		t.Fatalf("Inspect chunk with relations: %v", err)
+	}
+
+	rawBlocks, ok := result.Summary["blocks"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected blocks summary to be []map[string]any, got %T", result.Summary["blocks"])
+	}
+	if len(rawBlocks) != 1 {
+		t.Fatalf("expected one legacy block metadata row, got %d", len(rawBlocks))
+	}
+	block := rawBlocks[0]
+
+	if got := block["block_source"]; got != "legacy" {
+		t.Fatalf("expected legacy block source, got %v", got)
+	}
+	if got := block["format_version"]; got != int64(1) {
+		t.Fatalf("expected format_version=1, got %v", got)
+	}
+	if got := block["compression_codec"]; got != "none" {
+		t.Fatalf("expected compression_codec=none, got %v", got)
+	}
+	if got := block["plaintext_size"]; got != int64(99) {
+		t.Fatalf("expected plaintext_size=99, got %v", got)
+	}
+	if got := block["stored_size"]; got != int64(99) {
+		t.Fatalf("expected stored_size=99, got %v", got)
+	}
+	if got := block["has_logical_hash"]; got != false {
+		t.Fatalf("expected has_logical_hash=false, got %v", got)
+	}
+	if got := block["has_compressed_hash"]; got != false {
+		t.Fatalf("expected has_compressed_hash=false, got %v", got)
+	}
+	if got := block["has_physical_hash"]; got != false {
+		t.Fatalf("expected has_physical_hash=false, got %v", got)
+	}
+	if got := block["encryption_codec"]; got != "plain" {
+		t.Fatalf("expected encryption_codec=plain, got %v", got)
+	}
+	if got := block["container_id"]; got != containerID {
+		t.Fatalf("expected container_id=%d, got %v", containerID, got)
+	}
+	if got := block["container_offset"]; got != int64(12) {
+		t.Fatalf("expected container_offset=12, got %v", got)
+	}
+}
+
+func TestInspectContainerRelationsIncludeMixedBlockMetadata(t *testing.T) {
+	dbconn := openInspectTestDB(t)
+
+	ctrRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_mixed_meta.bin", 2048, 4096, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := ctrRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+
+	legacyChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-mixed-legacy", 64, "COMPLETED", 1, "v1-simple-rolling")
+	if err != nil {
+		t.Fatalf("insert legacy chunk: %v", err)
+	}
+	legacyChunkID, _ := legacyChunkRes.LastInsertId()
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		legacyChunkID, "plain", 1, 64, 64, containerID, 0,
+	); err != nil {
+		t.Fatalf("insert legacy block: %v", err)
+	}
+
+	packedChunkRes, err := dbconn.Exec(`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version) VALUES (?, ?, ?, ?, ?)`, "chunk-mixed-packed", 80, "COMPLETED", 1, "v2-fastcdc")
+	if err != nil {
+		t.Fatalf("insert packed chunk: %v", err)
+	}
+	packedChunkID, _ := packedChunkRes.LastInsertId()
+
+	storageBlockRes, err := dbconn.Exec(`
+		INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, compression_codec, compression_level,
+			compressed_size, stored_size, container_id, container_offset, block_hash, compressed_hash, physical_hash
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, x'0102', x'0304', x'0506')
+	`, 1, "aes-gcm", 80, "zstd", 3, 48, 56, containerID, 128)
+	if err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+	storageBlockID, err := storageBlockRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("storage block last insert id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block) VALUES (?, ?, ?, ?)`,
+		packedChunkID, storageBlockID, 0, 80,
+	); err != nil {
+		t.Fatalf("insert chunk_block_refs: %v", err)
+	}
+
+	svc := newServiceForTest(dbconn, nil)
+	result, err := svc.Inspect(context.Background(), EntityContainer, strconv.FormatInt(containerID, 10), InspectOptions{Relations: true})
+	if err != nil {
+		t.Fatalf("Inspect container with relations: %v", err)
+	}
+
+	rawBlocks, ok := result.Summary["blocks"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected blocks summary to be []map[string]any, got %T", result.Summary["blocks"])
+	}
+	if len(rawBlocks) != 2 {
+		t.Fatalf("expected two block metadata rows (legacy+packed), got %d", len(rawBlocks))
+	}
+
+	var legacy map[string]any
+	var packed map[string]any
+	for _, block := range rawBlocks {
+		source, _ := block["block_source"].(string)
+		switch source {
+		case "legacy":
+			legacy = block
+		case "packed":
+			packed = block
+		}
+	}
+	if legacy == nil || packed == nil {
+		t.Fatalf("expected both legacy and packed blocks, got %+v", rawBlocks)
+	}
+
+	if got := packed["compression_codec"]; got != "zstd" {
+		t.Fatalf("expected packed compression_codec=zstd, got %v", got)
+	}
+	if got := packed["compression_level"]; got != int64(3) {
+		t.Fatalf("expected packed compression_level=3, got %v", got)
+	}
+	if got := packed["plaintext_size"]; got != int64(80) {
+		t.Fatalf("expected packed plaintext_size=80, got %v", got)
+	}
+	if got := packed["compressed_size"]; got != int64(48) {
+		t.Fatalf("expected packed compressed_size=48, got %v", got)
+	}
+	if got := packed["stored_size"]; got != int64(56) {
+		t.Fatalf("expected packed stored_size=56, got %v", got)
+	}
+	if got := packed["has_logical_hash"]; got != true {
+		t.Fatalf("expected packed has_logical_hash=true, got %v", got)
+	}
+	if got := packed["has_compressed_hash"]; got != true {
+		t.Fatalf("expected packed has_compressed_hash=true, got %v", got)
+	}
+	if got := packed["has_physical_hash"]; got != true {
+		t.Fatalf("expected packed has_physical_hash=true, got %v", got)
+	}
+	if got := packed["encryption_codec"]; got != "aes-gcm" {
+		t.Fatalf("expected packed encryption_codec=aes-gcm, got %v", got)
+	}
+	if got := packed["container_offset"]; got != int64(128) {
+		t.Fatalf("expected packed container_offset=128, got %v", got)
+	}
+}
+
 func TestInspectRepositoryIncludesAggregateAndSnapshotRelations(t *testing.T) {
 	dbconn := openInspectTestDB(t)
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "snap-a", time.Now().UTC(), "full"); err != nil {
