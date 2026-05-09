@@ -150,6 +150,7 @@ Documentation is split into:
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, local CI guidance, and stats benchmark commands for observability-sensitive changes
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
+- [docs/internal/storage_compatibility_matrix.md](docs/internal/storage_compatibility_matrix.md) for the formal storage compatibility matrix and benchmark scope split
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
 - [CHANGELOG.md](CHANGELOG.md) for milestone history
 
