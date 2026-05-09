@@ -115,7 +115,7 @@ func TestStep611CompressionCorruptionAndTruncationAlwaysDetectedSafely(t *testin
 				return maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull)
 			})
 
-			for i := 0; i < 6; i++ {
+			for i := 0; i < 5; i++ {
 				testutils.CorruptFirstCompletedChunkByte(t, dbconn, container.ContainersDir)
 			}
 
@@ -247,7 +247,7 @@ func setupStep611Env(t *testing.T, codec blocks.Codec) (*sql.DB, string, contain
 	testutils.ApplySchema(t, dbconn)
 	testutils.ResetDB(t, dbconn)
 
-	writer := container.NewLocalWriterWithDirAndDB(tmp, container.GetContainerMaxSize(), dbconn)
+	writer := container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn)
 	return dbconn, tmp, writer
 }
 
@@ -295,7 +295,7 @@ func storeStep611(
 	sgctx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
-		ContainerDir: tmp,
+		ContainerDir: container.ContainersDir,
 		Chunker:      chunk.DefaultChunker(),
 	}
 

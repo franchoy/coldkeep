@@ -220,7 +220,7 @@ func setupStep610Env(t *testing.T) (*sql.DB, string, container.ContainerWriter) 
 	testutils.ApplySchema(t, dbconn)
 	testutils.ResetDB(t, dbconn)
 
-	writer := container.NewLocalWriterWithDirAndDB(tmp, container.GetContainerMaxSize(), dbconn)
+	writer := container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn)
 	return dbconn, tmp, writer
 }
 
@@ -268,7 +268,7 @@ func storeStep610(
 	sgctx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
-		ContainerDir: tmp,
+		ContainerDir: container.ContainersDir,
 		Chunker:      chunk.DefaultChunker(),
 	}
 

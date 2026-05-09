@@ -74,6 +74,9 @@ func setupStep613StatsContext(t *testing.T) (*sql.DB, storage.StorageContext, st
 	if err := os.MkdirAll(containersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers dir: %v", err)
 	}
+	// Ensure storage internals and env resolve to the test-local container root.
+	t.Setenv("COLDKEEP_STORAGE_DIR", containersDir)
+	testutils.ResetStorage(t)
 
 	dbconn, err := db.ConnectDB()
 	if err != nil {
@@ -85,7 +88,7 @@ func setupStep613StatsContext(t *testing.T) (*sql.DB, storage.StorageContext, st
 
 	scx := storage.StorageContext{
 		DB:           dbconn,
-		Writer:       container.NewLocalWriterWithDir(containersDir, container.GetContainerMaxSize()),
+		Writer:       container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn),
 		ContainerDir: containersDir,
 	}
 

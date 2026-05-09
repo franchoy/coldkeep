@@ -167,7 +167,7 @@ func testStep68RunDedupScenario(t *testing.T, encryptionCodec, compressionCodec 
 
 	// Store files
 	codec := blocks.Codec(encryptionCodec)
-	writer := container.NewLocalWriterWithDirAndDB(tmp, container.GetContainerMaxSize(), dbconn)
+	writer := container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn)
 
 	file1ID := storeStep68File(t, dbconn, writer, tmp, "file1.bin", payload1, codec)
 	_ = storeStep68File(t, dbconn, writer, tmp, "file2.bin", payload2, codec) // Duplicate of file1
@@ -184,7 +184,7 @@ func testStep68RunDedupScenario(t *testing.T, encryptionCodec, compressionCodec 
 		t.Fatalf("count file_chunk: %v", err)
 	}
 
-	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM logical_file_refs`).Scan(&fileReferenceCount); err != nil {
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM physical_file`).Scan(&fileReferenceCount); err != nil {
 		t.Fatalf("count file refs: %v", err)
 	}
 
@@ -252,7 +252,7 @@ func storeStep68File(
 	sgctx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
-		ContainerDir: workDir,
+		ContainerDir: container.ContainersDir,
 		Chunker:      chunk.DefaultChunker(),
 	}
 

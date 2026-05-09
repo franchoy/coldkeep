@@ -248,11 +248,11 @@ func sha256Hex(data []byte) string {
 func storeStep67File(t *testing.T, dbconn *sql.DB, workDir string, path string, codec blocks.Codec) int64 {
 	t.Helper()
 
-	writer := container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn)
+	writer := container.NewLocalWriterWithDirAndDB(container.ContainersDir, container.GetContainerMaxSize(), dbconn)
 	sgctx := storage.StorageContext{
 		DB:           dbconn,
 		Writer:       writer,
-		ContainerDir: workDir,
+		ContainerDir: container.ContainersDir,
 		Chunker:      chunk.DefaultChunker(),
 	}
 
