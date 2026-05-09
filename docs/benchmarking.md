@@ -1489,3 +1489,174 @@ Beyond v1.9, changes require major version bump:
 - Multi-version codec support requires careful registry migration
 
 All changes must be reviewed against engine extraction implications and validated with end-to-end tests.
+
+---
+
+## Phase 6 Completion Checklist (v1.9)
+
+This checklist is the release-readiness closeout for Phase 6.
+
+### Compatibility
+
+- [x] Official compatibility matrix documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md`
+- [x] Supported modes documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md` (Fully Supported + Supported Compatibility Modes)
+- [x] Legacy-readable modes documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md` (Legacy Readability Guarantee)
+- [x] Recommended production modes documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md` (packed-multi + aes-gcm + none/zstd)
+
+### CI Structure
+
+- [x] Correctness matrix separated from benchmark matrix.
+   - Evidence: `.github/workflows/ci.yml` (`correctness-matrix` job separate from `benchmark-matrix`)
+- [x] Legacy compatibility tests separated.
+   - Evidence: `.github/workflows/ci.yml` (`legacy-compatibility` dedicated job)
+- [x] CI runtime acceptable.
+   - Evidence: `.github/workflows/ci.yml` staged flow (`quality` -> correctness/stress/long-run/adversarial/smoke/benchmark) and required gate.
+- [x] Compression-specific tests isolated properly.
+   - Evidence: `.github/workflows/ci.yml` compression axis in `benchmark-matrix` and codec matrix in correctness/stress/adversarial.
+
+### Benchmarking
+
+- [x] Stable benchmark corpora exist.
+   - Evidence: `internal/benchmark/corpus.go`, `internal/benchmark/corpus_registry.go`
+- [x] Compressible corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeHighlyCompressible`)
+- [x] Mixed realistic corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeMixedRealistic`)
+- [x] Already-compressed corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeAlreadyCompressed`)
+- [x] Adversarial/random corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeAdversarial`)
+
+### Metrics
+
+- [x] Logical/compressed/stored sizes tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`LogicalBytes`, `CompressedBytes`, `StoredBytes`)
+- [x] Compression ratio tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`CompressionRatio`)
+- [x] Physical ratio tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`PhysicalRatio`)
+- [x] Store throughput tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`StoreMBps`)
+- [x] Restore throughput tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`RestoreMBps`)
+- [x] Verify throughput tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`VerifyMBps`)
+- [x] Memory metrics tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`PeakMemoryBytes`, `AllocationCount`)
+- [x] Store-if-smaller metrics tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`StoreIfSmallerFallback`)
+
+### Baselines
+
+- [x] Uncompressed baseline established.
+   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
+- [x] Compressed baseline established.
+   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
+- [x] Same corpora used across baselines.
+   - Evidence: `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json` (`same_dataset=true`, same totals)
+- [x] Regression thresholds documented.
+   - Evidence: `benchmarks/v1.9/regression-thresholds.yaml`
+
+### Determinism
+
+- [x] Restore deterministic across all supported modes.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (`TestStep67DeterministicRestoreCompressionMatrix`)
+- [x] Restore deterministic after GC.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (`post-gc` validation)
+- [x] Restore deterministic after snapshots.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (`with-snapshot` validation)
+- [x] Restore deterministic across repeated runs.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (repeated restore checks)
+
+### Deduplication
+
+- [x] Chunk identities unchanged by compression.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go`
+- [x] Dedup graph unchanged.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go`
+- [x] Compression only affects physical storage layer.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go` (logical structure unchanged; physical differs)
+- [x] Dedup effectiveness preserved.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go` (ratio and unique chunk checks)
+
+### GC Safety
+
+- [x] GC safe for compressed repositories.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go`
+- [x] GC safe for mixed repositories.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go` (`mode: mixed`)
+- [x] GC safe for legacy repositories.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go` (`legacyOnly` path)
+- [x] Restore after GC verified.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go`
+
+### Mixed Repository Validation
+
+- [x] Mixed compression repositories stable.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go`
+- [x] Mixed encryption repositories stable.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go`
+- [x] Store-if-smaller fallback coexistence stable.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go` (fallback assertions)
+- [x] Per-block metadata sufficient for reads.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go` (defaults changed before reads; restores still pass)
+
+### Adversarial Stability
+
+- [x] Corruption tests stable.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go`
+- [x] No decompressor panics.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (`assertRestoreNoPanicStep611`, `assertVerifyNoPanicStep611`)
+- [x] No memory leaks.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (`TestStep611CompressionLongRunMemoryGrowthBounded`)
+- [x] No unbounded memory growth.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (bounded peak/final memory assertions)
+- [x] Partial container corruption detected safely.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (`TestStep611CompressionCorruptionAndTruncationAlwaysDetectedSafely`)
+
+### Upgrade Compatibility
+
+- [x] v1.8 -> v1.9 upgrade tested.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go`
+- [x] No automatic recompression occurs.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go` (legacy chunks stay on legacy path)
+- [x] No legacy block rewriting occurs.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go`
+- [x] Old blocks coexist with new blocks safely.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go`
+
+### Observability
+
+- [x] Stats mathematically correct.
+   - Evidence: `tests/integration/v19_stats_semantics_integration_test.go` (`TestStep613StatsRatiosMathematicallyCorrect`)
+- [x] Inspect accurate for mixed repositories.
+   - Evidence: Step 6.10 mixed repository validation plus `stats-inspect` benchmark case in `internal/benchmark/scenarios.go`.
+- [x] Compression ratios accurate.
+   - Evidence: `tests/integration/v19_stats_semantics_integration_test.go` (`TestStep613StatsCompressedBytesRatio`, `TestStep613StatsRatioBoundaries`)
+- [x] Legacy metadata handled safely.
+   - Evidence: `tests/integration/v19_stats_semantics_integration_test.go` (`TestStep613StatsLegacyNullHashesSafe`)
+
+### Semantic Stabilization
+
+- [x] Transform ordering documented.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 1)
+- [x] Hash semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 2)
+- [x] Compression semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 4)
+- [x] Metadata semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 3)
+- [x] Read/write guarantees frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Sections 1 and 6)
+- [x] Repository-default-vs-block-reality semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 7)
+
+### Phase 6 Closeout
+
+Phase 6 checklist status: **COMPLETE**.
+
+All listed requirements are documented with concrete evidence in tests, benchmark infrastructure, CI layout, and frozen semantics contracts.
