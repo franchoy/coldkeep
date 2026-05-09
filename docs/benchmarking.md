@@ -457,6 +457,65 @@ Test payloads include:
 3. **Only physical storage representation changes:** Compressed chunks occupy less disk space but represent the same logical dedup structure.
 4. **Cross-compression queries are safe:** Repositories with mixed compression modes (if supported by migration) maintain consistent dedup semantics.
 
+## Step 6.9 — Revalidate GC Safety Across Matrix (v1.9)
+
+Core roadmap guarantee: **GC must remain transform-agnostic and safe.**
+
+### Validation scope
+
+Step 6.9 validates garbage collection safety across repository classes where block
+transforms and metadata paths vary:
+
+- **Compressed repositories:** `zstd` storage path
+- **Uncompressed repositories:** `none` storage path
+- **Mixed repositories:** both `none` and `zstd` data in one repository
+- **Encrypted repositories:** `aes-gcm` with compression path coverage
+- **Legacy repositories:** legacy metadata shape (no packed block metadata rows)
+
+Each class validates:
+
+- **Live block preservation:** GC must not delete reachable data
+- **Orphan deletion:** unreachable chunks/blocks must be reclaimable
+- **Restore after GC:** live files restore with original hashes
+- **Verify after GC:** repository verification remains healthy
+
+### Test matrix
+
+| Repository Class | Compression Path | Encryption | Legacy Shape | Live Preserve | Orphan Remove | Restore After GC | Verify After GC |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| compressed | zstd | plain | no | ✓ | ✓ | ✓ | ✓ |
+| uncompressed | none | plain | no | ✓ | ✓ | ✓ | ✓ |
+| mixed | none + zstd | plain | no | ✓ | ✓ | ✓ | ✓ |
+| encrypted | zstd | aes-gcm | no | ✓ | ✓ | ✓ | ✓ |
+| legacy | none | plain | yes | ✓ | ✓ | ✓ | ✓ |
+
+### Validation checklist
+
+- ✓ **Live compressed blocks preserved:** compressed live data remains reachable after GC
+- ✓ **Orphaned compressed blocks removable:** unreachable compressed blocks are reclaimed
+- ✓ **Restore after GC correct:** restored live files match pre-GC SHA-256
+- ✓ **Verify after GC correct:** `verify system` passes after GC in all matrix classes
+
+### Implementation
+
+GC safety matrix validation runs in tests/adversarial/:
+
+```bash
+# Run GC safety matrix tests (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep69" -v
+
+# Test names:
+# - TestStep69GCSafetyAcrossMatrix: compressed/uncompressed/mixed/encrypted/legacy classes
+```
+
+Implementation details:
+
+- Performs GC dry-run and real-run in each repository class.
+- Asserts orphan chunk IDs are removed post-GC.
+- Asserts live chunk IDs remain present post-GC.
+- Restores live files and validates SHA-256 hashes.
+- Runs `verify system` post-GC (`VerifyStandard`) as final safety gate.
+
 ## CI policy
 
 CI now separates correctness checks from benchmark measurement:
