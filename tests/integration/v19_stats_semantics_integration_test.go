@@ -74,6 +74,9 @@ func setupStep613StatsContext(t *testing.T) (*sql.DB, storage.StorageContext, st
 	if err := os.MkdirAll(containersDir, 0o755); err != nil {
 		t.Fatalf("mkdir containers dir: %v", err)
 	}
+	origContainers := container.ContainersDir
+	container.ContainersDir = containersDir
+	t.Cleanup(func() { container.ContainersDir = origContainers })
 	// Ensure storage internals and env resolve to the test-local container root.
 	t.Setenv("COLDKEEP_STORAGE_DIR", containersDir)
 	testutils.ResetStorage(t)
