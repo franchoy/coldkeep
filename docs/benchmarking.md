@@ -190,6 +190,12 @@ COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
   --threshold 20
 ```
 
+For one-command capture + validation, use:
+
+```bash
+scripts/run_v19_baseline_pair.sh
+```
+
 Legacy reference baselines at repository root (`benchmark-baseline*.json`) are
 retained for historical v1.6/v1.7 context.
 
