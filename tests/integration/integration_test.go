@@ -239,6 +239,300 @@ func TestCLIJSONOutputContracts(t *testing.T) {
 	}
 }
 
+func TestCompressionInitCommandIntegration(t *testing.T) {
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	baseEnv := testutils.DefaultCLIEnv(filepath.Join(t.TempDir(), "containers"))
+
+	initDirNone := t.TempDir()
+	resNone := testutils.RunColdkeepCommand(t, initDirNone, binPath, baseEnv, "init", "--compression", "none")
+	if resNone.ExitCode != 0 {
+		t.Fatalf("init --compression none failed: exit=%d stdout=%s stderr=%s", resNone.ExitCode, resNone.Stdout, resNone.Stderr)
+	}
+	envNone, err := os.ReadFile(filepath.Join(initDirNone, ".env"))
+	if err != nil {
+		t.Fatalf("read .env for compression none: %v", err)
+	}
+	envNoneText := string(envNone)
+	if !strings.Contains(envNoneText, "COLDKEEP_COMPRESSION=none") {
+		t.Fatalf("expected .env to include compression none, got:\n%s", envNoneText)
+	}
+	if strings.Contains(envNoneText, "COLDKEEP_COMPRESSION_LEVEL=") {
+		t.Fatalf("did not expect compression level for compression none, got:\n%s", envNoneText)
+	}
+
+	initDirZstd := t.TempDir()
+	resZstd := testutils.RunColdkeepCommand(t, initDirZstd, binPath, baseEnv, "init", "--compression", "zstd", "--compression-level", "3")
+	if resZstd.ExitCode != 0 {
+		t.Fatalf("init --compression zstd --compression-level 3 failed: exit=%d stdout=%s stderr=%s", resZstd.ExitCode, resZstd.Stdout, resZstd.Stderr)
+	}
+	envZstd, err := os.ReadFile(filepath.Join(initDirZstd, ".env"))
+	if err != nil {
+		t.Fatalf("read .env for compression zstd: %v", err)
+	}
+	envZstdText := string(envZstd)
+	if !strings.Contains(envZstdText, "COLDKEEP_COMPRESSION=zstd") {
+		t.Fatalf("expected .env to include compression zstd, got:\n%s", envZstdText)
+	}
+	if !strings.Contains(envZstdText, "COLDKEEP_COMPRESSION_LEVEL=3") {
+		t.Fatalf("expected .env to include compression level 3, got:\n%s", envZstdText)
+	}
+}
+
+func TestCompressionActivationSwitchingIntegration(t *testing.T) {
+	testgate.RequireDB(t)
+
+	tmp := t.TempDir()
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	origContainersDir := container.ContainersDir
+	container.ContainersDir = filepath.Join(tmp, "containers")
+	t.Cleanup(func() { container.ContainersDir = origContainersDir })
+	t.Setenv("COLDKEEP_STORAGE_DIR", container.ContainersDir)
+	testutils.ResetStorage(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB: %v", err)
+	}
+	testutils.ApplySchema(t, dbconn)
+	if _, err := dbconn.Exec(`
+		TRUNCATE TABLE
+			snapshot_file,
+			snapshot,
+			snapshot_path,
+			physical_file,
+			file_chunk,
+			chunk_block_refs,
+			storage_blocks,
+			blocks,
+			chunk,
+			logical_file,
+			container
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate fixtures: %v", err)
+	}
+	if _, err := dbconn.Exec(`DELETE FROM repository_config WHERE key IN ($1, $2)`, "compression", "compression_level"); err != nil {
+		t.Fatalf("reset repository compression config: %v", err)
+	}
+	_ = dbconn.Close()
+
+	repoRoot := testutils.FindRepoRoot(t)
+	binPath := testutils.BuildColdkeepBinary(t, repoRoot)
+	env := testutils.DefaultCLIEnv(container.ContainersDir)
+
+	inputDir := filepath.Join(tmp, "input")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatalf("mkdir input: %v", err)
+	}
+
+	pathNone1 := filepath.Join(inputDir, "none_1.bin")
+	dataNone1 := bytes.Repeat([]byte("N"), 256*1024)
+	if err := os.WriteFile(pathNone1, dataNone1, 0o644); err != nil {
+		t.Fatalf("write none_1 input: %v", err)
+	}
+
+	pathZstd := filepath.Join(inputDir, "zstd_1.bin")
+	dataZstd := bytes.Repeat([]byte("COMPRESSIBLE-DATA-"), 512*1024)
+	if err := os.WriteFile(pathZstd, dataZstd, 0o644); err != nil {
+		t.Fatalf("write zstd input: %v", err)
+	}
+
+	pathNone2 := filepath.Join(inputDir, "none_2.bin")
+	dataNone2 := bytes.Repeat([]byte("M"), 320*1024)
+	if err := os.WriteFile(pathNone2, dataNone2, 0o644); err != nil {
+		t.Fatalf("write none_2 input: %v", err)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"config", "set", "compression", "none", "--output", "json"), "config set")
+
+	storeNone1 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathNone1, "--output", "json"), "store")
+	storeNone1Data := testutils.JSONMap(t, storeNone1, "data")
+	fileNone1ID := testutils.JSONInt64(t, storeNone1Data, "file_id")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"config", "set", "compression", "zstd", "--output", "json"), "config set")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"config", "set", "compression-level", "3", "--output", "json"), "config set")
+
+	storeZstd := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathZstd, "--output", "json"), "store")
+	storeZstdData := testutils.JSONMap(t, storeZstd, "data")
+	fileZstdID := testutils.JSONInt64(t, storeZstdData, "file_id")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"config", "set", "compression", "none", "--output", "json"), "config set")
+
+	storeNone2 := testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"store", pathNone2, "--output", "json"), "store")
+	storeNone2Data := testutils.JSONMap(t, storeNone2, "data")
+	fileNone2ID := testutils.JSONInt64(t, storeNone2Data, "file_id")
+
+	dbconn, err = db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connectDB (assertion phase): %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	compressionCodecsForFile := func(fileID int64) []string {
+		t.Helper()
+		rows, err := dbconn.Query(`
+			SELECT DISTINCT lower(trim(COALESCE(sb.compression_codec, 'none')))
+			FROM file_chunk fc
+			JOIN chunk_block_refs cbr ON cbr.chunk_id = fc.chunk_id
+			JOIN storage_blocks sb ON sb.id = cbr.block_id
+			WHERE fc.logical_file_id = $1
+			ORDER BY 1
+		`, fileID)
+		if err != nil {
+			t.Fatalf("query compression codecs for file %d: %v", fileID, err)
+		}
+		defer func() { _ = rows.Close() }()
+
+		codecs := make([]string, 0)
+		for rows.Next() {
+			var codec string
+			if err := rows.Scan(&codec); err != nil {
+				t.Fatalf("scan compression codec for file %d: %v", fileID, err)
+			}
+			codecs = append(codecs, codec)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate compression codecs for file %d: %v", fileID, err)
+		}
+		return codecs
+	}
+
+	codecsNone1 := compressionCodecsForFile(fileNone1ID)
+	if len(codecsNone1) != 1 || codecsNone1[0] != "none" {
+		t.Fatalf("expected file stored under compression=none to have only none blocks, got %v", codecsNone1)
+	}
+
+	codecsZstd := compressionCodecsForFile(fileZstdID)
+	if len(codecsZstd) == 0 {
+		t.Fatalf("expected zstd-era file to have packed block metadata, got empty codec list")
+	}
+	hasZstd := false
+	for _, codec := range codecsZstd {
+		if codec == "zstd" {
+			hasZstd = true
+			break
+		}
+	}
+	if !hasZstd {
+		t.Fatalf("expected zstd-era file to include at least one zstd-compressed block, got %v", codecsZstd)
+	}
+
+	codecsNone2 := compressionCodecsForFile(fileNone2ID)
+	if len(codecsNone2) != 1 || codecsNone2[0] != "none" {
+		t.Fatalf("expected file stored after switch back to none to have only none blocks, got %v", codecsNone2)
+	}
+
+	restoreDir := filepath.Join(tmp, "restore")
+	if err := os.MkdirAll(restoreDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore dir: %v", err)
+	}
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileNone1ID), restoreDir, "--output", "json"), "restore")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileZstdID), restoreDir, "--output", "json"), "restore")
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"restore", fmt.Sprintf("%d", fileNone2ID), restoreDir, "--output", "json"), "restore")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"verify", "system", "--full", "--output", "json"), "verify")
+
+	testutils.AssertCLIJSONOK(t, testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"gc", "--dry-run", "--output", "json"), "gc")
+
+	statsRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env, "stats", "--output", "json")
+	if statsRes.ExitCode != 0 {
+		t.Fatalf("stats failed: exit=%d stderr=%s", statsRes.ExitCode, statsRes.Stderr)
+	}
+	statsPayload, ok := testutils.TryParseLastJSONLine(statsRes.Stdout)
+	if !ok {
+		statsPayload, ok = testutils.TryParseLastJSONLine(statsRes.Stdout + "\n" + statsRes.Stderr)
+	}
+	if !ok {
+		t.Fatalf("stats produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", statsRes.Stdout, statsRes.Stderr)
+	}
+	if gotType, _ := statsPayload["type"].(string); gotType != "stats" {
+		t.Fatalf("expected stats envelope type=stats, got %q payload=%v", gotType, statsPayload)
+	}
+	statsData := testutils.JSONMap(t, statsPayload, "data")
+	blockLayout := testutils.JSONMap(t, statsData, "block_layout")
+	if got := testutils.JSONInt64(t, blockLayout, "compressed_blocks"); got <= 0 {
+		t.Fatalf("expected compressed_blocks > 0 after zstd writes, got %d", got)
+	}
+	if got := testutils.JSONInt64(t, blockLayout, "uncompressed_blocks"); got <= 0 {
+		t.Fatalf("expected uncompressed_blocks > 0 in mixed repository, got %d", got)
+	}
+	compressionBreakdownRaw, ok := blockLayout["compression_codec_breakdown"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected compression_codec_breakdown object, got %T (%v)", blockLayout["compression_codec_breakdown"], blockLayout["compression_codec_breakdown"])
+	}
+	if _, ok := compressionBreakdownRaw["none"]; !ok {
+		t.Fatalf("expected compression codec breakdown to include none, got %v", compressionBreakdownRaw)
+	}
+	if _, ok := compressionBreakdownRaw["zstd"]; !ok {
+		t.Fatalf("expected compression codec breakdown to include zstd, got %v", compressionBreakdownRaw)
+	}
+
+	var inspectChunkID int64
+	if err := dbconn.QueryRow(`SELECT chunk_id FROM file_chunk WHERE logical_file_id = $1 ORDER BY chunk_order ASC LIMIT 1`, fileZstdID).Scan(&inspectChunkID); err != nil {
+		t.Fatalf("select zstd-era chunk id for inspect: %v", err)
+	}
+
+	inspectRes := testutils.RunColdkeepCommand(t, repoRoot, binPath, env,
+		"inspect", "chunk", fmt.Sprintf("%d", inspectChunkID), "--relations", "--output", "json")
+	if inspectRes.ExitCode != 0 {
+		t.Fatalf("inspect chunk failed: exit=%d stdout=%s stderr=%s", inspectRes.ExitCode, inspectRes.Stdout, inspectRes.Stderr)
+	}
+	inspectPayload, ok := testutils.TryParseLastJSONLine(inspectRes.Stdout)
+	if !ok {
+		inspectPayload, ok = testutils.TryParseLastJSONLine(inspectRes.Stdout + "\n" + inspectRes.Stderr)
+	}
+	if !ok {
+		t.Fatalf("inspect produced no parseable JSON\nstdout:\n%s\nstderr:\n%s", inspectRes.Stdout, inspectRes.Stderr)
+	}
+	if gotType, _ := inspectPayload["type"].(string); gotType != "inspect" {
+		t.Fatalf("expected inspect envelope type=inspect, got %q payload=%v", gotType, inspectPayload)
+	}
+	inspectData := testutils.JSONMap(t, inspectPayload, "data")
+	summary := testutils.JSONMap(t, inspectData, "summary")
+	blocksAny, ok := summary["blocks"].([]any)
+	if !ok || len(blocksAny) == 0 {
+		t.Fatalf("expected inspect summary.blocks to contain metadata rows, got %T (%v)", summary["blocks"], summary["blocks"])
+	}
+
+	firstBlock, ok := blocksAny[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first inspect block row to be object, got %T", blocksAny[0])
+	}
+	for _, key := range []string{
+		"block_id",
+		"format_version",
+		"compression_codec",
+		"compression_level",
+		"plaintext_size",
+		"compressed_size",
+		"stored_size",
+		"has_logical_hash",
+		"has_compressed_hash",
+		"has_physical_hash",
+		"encryption_codec",
+		"container_id",
+		"container_offset",
+	} {
+		if _, ok := firstBlock[key]; !ok {
+			t.Fatalf("inspect block metadata is missing key %q in row %v", key, firstBlock)
+		}
+	}
+}
+
 func TestBenchmarkRunJSONIncludesExecutionStatsIntegration(t *testing.T) {
 	testgate.RequireDB(t)
 
