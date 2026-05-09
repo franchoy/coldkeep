@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -298,5 +299,105 @@ func TestVerifyStoredBlockOrderingPrefersCompressedBeforeLogical(t *testing.T) {
 	}
 	if vf.Category != verifyErrCompressedHashMismatch {
 		t.Fatalf("expected first failing category %q, got %q", verifyErrCompressedHashMismatch, vf.Category)
+	}
+}
+
+func TestVerifyStoredBlockMixedRepositoryMetadataNegotiationStep78(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	type mixedCase struct {
+		name    string
+		meta    BlockStorageMetadata
+		payload []byte
+	}
+
+	buildCase := func(t *testing.T, blockID int64, payload []byte, codec string, compressionCodec string, legacyHashes bool) mixedCase {
+		t.Helper()
+
+		logicalPayload := buildPipelineEncodedBytes(t, payload)
+		preDecompressionPayload := logicalPayload
+		if compressionCodec == storagecompression.CompressionZstd {
+			zstd, err := storagecompression.NewZstdCompressor(3)
+			if err != nil {
+				t.Fatalf("NewZstdCompressor: %v", err)
+			}
+			compressed, err := zstd.Compress(logicalPayload)
+			if err != nil {
+				t.Fatalf("Compress: %v", err)
+			}
+			preDecompressionPayload = compressed
+		}
+
+		storedPayload := preDecompressionPayload
+		if codec == "aes-gcm" {
+			transformer, err := blocks.GetBlockTransformer(blocks.CodecAESGCM)
+			if err != nil {
+				t.Fatalf("GetBlockTransformer(aes-gcm): %v", err)
+			}
+			transformed, err := transformer.Encode(context.Background(), blocks.EncodeInput{
+				ChunkID:   0,
+				ChunkHash: "",
+				Plaintext: preDecompressionPayload,
+			})
+			if err != nil {
+				t.Fatalf("transformer.Encode(aes-gcm): %v", err)
+			}
+			storedPayload = append([]byte(nil), transformed.Descriptor.Nonce...)
+			storedPayload = append(storedPayload, transformed.Payload...)
+		}
+
+		meta := BlockStorageMetadata{
+			BlockID:          blockID,
+			ContainerID:      100 + blockID,
+			ContainerOffset:  4096 + blockID,
+			ContainerName:    fmt.Sprintf("mixed-block-%d.ck", blockID),
+			ContainerMaxSize: 1 << 20,
+			FormatVersion:    1,
+			Codec:            codec,
+			PlaintextSize:    int64(len(logicalPayload)),
+			StoredSize:       int64(len(storedPayload)),
+			CompressionCodec: compressionCodec,
+			LogicalHash:      blocks.HashLogical(logicalPayload),
+			CompressedHash:   blocks.HashCompressed(preDecompressionPayload),
+			PhysicalHash:     blocks.HashPhysical(storedPayload),
+		}
+		if compressionCodec == storagecompression.CompressionZstd {
+			level := 3
+			meta.CompressionLevel = &level
+			sz := int64(len(preDecompressionPayload))
+			meta.CompressedSize = &sz
+		}
+		if legacyHashes {
+			meta.CompressedHash = nil
+			meta.PhysicalHash = nil
+		}
+
+		return mixedCase{
+			name:    fmt.Sprintf("block-%d-%s-%s", blockID, compressionCodec, codec),
+			meta:    meta,
+			payload: append([]byte(nil), storedPayload...),
+		}
+	}
+
+	cases := []mixedCase{
+		// A: none compression, none encryption, legacy-style hashes omitted.
+		buildCase(t, 1, []byte("mixed-a-legacy"), "none", "none", true),
+		// B: none compression, aes-gcm encryption, packed-style hashes present.
+		buildCase(t, 2, []byte("mixed-b-packed-encrypted"), "aes-gcm", "none", false),
+		// C: zstd compression, aes-gcm encryption, packed-style hashes present.
+		buildCase(t, 3, []byte("mixed-c-packed-compressed-encrypted-payload"), "aes-gcm", "zstd", false),
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			verified, err := VerifyStoredBlock(context.Background(), tc.meta, staticContainerReader{payload: tc.payload})
+			if err != nil {
+				t.Fatalf("VerifyStoredBlock mixed metadata case failed: %v", err)
+			}
+			if verified == nil || verified.DecodedBlock == nil {
+				t.Fatalf("expected decoded block for mixed metadata case")
+			}
+		})
 	}
 }

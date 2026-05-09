@@ -117,6 +117,8 @@ Benchmark guidance:
 - Existing blocks keep their stored metadata and are never rewritten
   automatically.
 - Reads and verify use per-block metadata, not the current repository default.
+- Read-path negotiation resolves transforms from per-block metadata and runtime
+  capability registries only.
 - Restore must remain deterministic across supported and legacy-readable modes.
 
 ## Summary

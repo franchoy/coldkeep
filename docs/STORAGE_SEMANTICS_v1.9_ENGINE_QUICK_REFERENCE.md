@@ -192,6 +192,14 @@ Standard Verify:
 
 **Engine Implication:** All stages are required. Missing hashes are skipped gracefully (legacy). No stages can be reordered.
 
+**Negotiation Freeze (Step 7.8):**
+
+- Resolve transforms per block from persisted metadata (`codec`,
+  `compression_codec`, hash fields).
+- Use runtime codec/compression registries for capability resolution only.
+- Never consult repository defaults during read/verify negotiation.
+- Unknown/unsupported per-block modes must fail explicitly; no default fallback.
+
 ---
 
 ### H. Restore Atomicity & Crash Safety

@@ -500,6 +500,35 @@ Deep Verify: Slow (full payload read + hash recomputation)
 Verify skips containers that are quarantined (corrupt/missing)
 ```
 
+### 6.3 Read-Path Negotiation Semantics (Step 7.8, FROZEN)
+
+Read/verify negotiation is capability-aware and per-block metadata-driven.
+
+Negotiation algorithm:
+
+```
+FOR each block:
+   1. Read persisted block metadata fields (codec, compression_codec, hash columns).
+   2. Resolve transform handlers from registered capability sets (codec registry,
+      compression registry).
+   3. Execute strict inverse transform pipeline for that block only.
+   4. Validate integrity at each stage using that block's metadata.
+
+Repository defaults are never consulted for this negotiation.
+```
+
+Contract boundaries:
+
+- `repository_config` values are write-policy only for future blocks.
+- `storage_blocks` metadata is authoritative for historical and current reads.
+- Mixed repositories are expected steady-state and must verify/restore safely.
+- Unsupported or unknown per-block codec/compression values fail explicitly at
+  the relevant stage; they do not trigger default-based fallback.
+
+**FROZEN INVARIANT:** Negotiation is resolved block-by-block from persisted
+metadata plus runtime transform capability registration, never from repository
+defaults or homogeneous repository assumptions.
+
 ---
 
 ## 7. Repository Defaults vs Block Reality
@@ -586,6 +615,7 @@ Future v2.0: Repository config immutability, versioned schema, etc.
 - ✅ Metadata field meanings stated (Section 3)
 - ✅ Mixed codec/compression behavior explicit (Sections 5.1, 5.2)
 - ✅ Read-path atomicity/determinism frozen (Section 6.1, 6.2)
+- ✅ Read-path negotiation semantics frozen (Section 6.3)
 - ✅ Config vs metadata separation locked (Section 7.1)
 
 ### 8.2 Engine Extraction Ready
