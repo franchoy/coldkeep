@@ -139,8 +139,8 @@ JSON output exposes both per-case worker usage and an aggregate
 
 The baseline file `benchmark-baseline.json` at the repository root was recorded
 from the v1.6 codebase before v1.7 performance optimizations were applied.
-It covers all eight scenarios on the **small** dataset and serves as the
-regression reference for CI.
+It covers all eight scenarios on the **small** dataset and remains available as
+a local comparison reference.
 
 To regenerate the baseline after an intentional performance change:
 
@@ -188,14 +188,11 @@ regressions.
 
 ## CI policy
 
-CI runs the **small** benchmark dataset on every push:
+CI now separates correctness checks from benchmark measurement:
 
-1. **Always runs the benchmark** and captures a `benchmark-baseline.json` artifact.
-2. **Runs a second pass with `--compare ... --threshold 100`** to catch disasters
-   (any scenario becoming >2× slower fails the job). If the first compare run
-   fails, CI retries once to reduce false failures from transient DB/filesystem
-   contention spikes.
-3. Does **not** enforce tight micro-performance numbers — normal timing variance is expected.
+1. The correctness matrix runs independently from benchmarks and covers the supported codec combinations.
+2. The benchmark matrix runs the small dataset only for the recommended packed `aes-gcm` production modes with `COLDKEEP_COMPRESSION=none` and `COLDKEEP_COMPRESSION=zstd`.
+3. Benchmark outputs are captured as artifacts for inspection. Tight regression comparison is still available locally with `--compare`, but it is no longer coupled to the correctness path.
 
 Run the `--compare` flag with the default `--threshold 20` locally to investigate
 potential regressions before opening a PR.

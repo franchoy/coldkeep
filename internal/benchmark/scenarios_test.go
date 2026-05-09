@@ -194,6 +194,44 @@ func TestRunColdkeepAllowsCompressionOverrideStep37(t *testing.T) {
 	}
 }
 
+func TestRunColdkeepUsesConfiguredCompressionStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+		Compression:        "zstd",
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_COMPRESSION"); got != "zstd" {
+		t.Fatalf("expected configured COLDKEEP_COMPRESSION=zstd, got %q", got)
+	}
+}
+
+func TestRunColdkeepUsesConfiguredCodecStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+		Codec:              "aes-gcm",
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_CODEC"); got != "aes-gcm" {
+		t.Fatalf("expected configured COLDKEEP_CODEC=aes-gcm, got %q", got)
+	}
+}
+
 type captureRunner struct {
 	calls []CommandSpec
 }

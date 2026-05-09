@@ -3501,6 +3501,8 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 
 	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
 		ColdkeepExecutable: resolveSelfExecutable(),
+		Codec:              strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")),
+		Compression:        strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION")),
 		Execution:          opts,
 		ExtraEnv: map[string]string{
 			"DB_NAME":                       dbName,

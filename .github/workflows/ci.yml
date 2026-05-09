@@ -101,7 +101,7 @@ jobs:
       - name: Build CLI
         run: go build -o coldkeep ./cmd/coldkeep
 
-  integration-correctness:
+  correctness-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -152,13 +152,13 @@ jobs:
           set +e
           diag_dir="${RUNNER_TEMP}/integration-diag"
           mkdir -p "$diag_dir"
-          json_file="$diag_dir/integration-correctness-${{ matrix.codec }}.json"
+          json_file="$diag_dir/correctness-matrix-${{ matrix.codec }}.json"
 
           go test -race -count=1 -short -json ./tests/integration/... | tee "$json_file"
           status=${PIPESTATUS[0]}
 
           if [ "$status" -ne 0 ]; then
-            echo "integration-correctness failed for codec=${{ matrix.codec }}"
+            echo "correctness-matrix failed for codec=${{ matrix.codec }}"
             first_test_fail=$(grep '"Action":"fail"' "$json_file" | grep '"Test":' | head -n 1 || true)
             first_package_fail=$(grep '"Action":"fail"' "$json_file" | head -n 1 || true)
 
@@ -187,11 +187,11 @@ jobs:
 
           exit "$status"
 
-      - name: Upload integration-correctness diagnostic JSON
+      - name: Upload correctness-matrix diagnostic JSON
         if: failure()
         uses: actions/upload-artifact@v5
         with:
-          name: integration-correctness-diag-${{ matrix.codec }}
+          name: correctness-matrix-diag-${{ matrix.codec }}
           path: ${{ runner.temp }}/integration-diag/*.json
           if-no-files-found: ignore
 
@@ -209,9 +209,55 @@ jobs:
           DB_SSLMODE: disable
         run: go test -race -count=1 ./tests/integration/... -run 'TestPhase7SnapshotRetentionLifecycleCLIIntegration'
 
+  legacy-compatibility:
+    runs-on: ubuntu-latest
+    needs: quality
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: coldkeep
+          POSTGRES_PASSWORD: coldkeep
+          POSTGRES_DB: coldkeep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coldkeep -d coldkeep"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Clean test storage
+        run: bash scripts/clean_test_storage.sh
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run legacy compatibility regression tests
+        env:
+          COLDKEEP_TEST_DB: 1
+          COLDKEEP_DB_AUTO_BOOTSTRAP: true
+          COLDKEEP_CODEC: plain
+          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: coldkeep
+          DB_PASSWORD: coldkeep
+          DB_NAME: coldkeep
+          DB_SSLMODE: disable
+        run: go test -race -count=1 ./tests/integration/... -run 'TestPhase2PostMigrationStoreRestoreSnapshotRegressionIntegration'
+
   integration-stress:
     runs-on: ubuntu-latest
-    needs: integration-correctness
+    needs: correctness-matrix
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -379,7 +425,7 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    needs: [quality, integration-correctness]
+    needs: [quality, correctness-matrix]
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -437,7 +483,7 @@ jobs:
           path: ${{ github.workspace }}/.ci-storage/${{ matrix.codec }}
           if-no-files-found: ignore
 
-  benchmark:
+  benchmark-matrix:
     runs-on: ubuntu-latest
     needs: quality
     timeout-minutes: 30
@@ -456,6 +502,11 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+    strategy:
+      fail-fast: false
+      matrix:
+        compression: [none, zstd]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -469,16 +520,11 @@ jobs:
       - name: Build CLI
         run: go build -o coldkeep ./cmd/coldkeep
 
-      - name: Preserve committed benchmark baseline for comparison
-        run: |
-          if [ -f benchmark-baseline.json ]; then
-            cp benchmark-baseline.json benchmark-baseline-committed.json
-          fi
-
-      - name: Run benchmark (small dataset, workers=1) and capture baseline
+      - name: Run benchmark (small dataset, workers=1) and capture output
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
-          COLDKEEP_CODEC: plain
+          COLDKEEP_CODEC: aes-gcm
+          COLDKEEP_COMPRESSION: ${{ matrix.compression }}
           COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
           COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
@@ -489,12 +535,13 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: ./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-baseline.json
+        run: ./coldkeep benchmark run --dataset small --workers 1 --output json | tee benchmark-${{ matrix.compression }}-w1.json
 
-      - name: Run benchmark (small dataset, workers=4) and capture profile
+      - name: Run benchmark (small dataset, workers=4) and capture output
         env:
           COLDKEEP_DB_AUTO_BOOTSTRAP: true
-          COLDKEEP_CODEC: plain
+          COLDKEEP_CODEC: aes-gcm
+          COLDKEEP_COMPRESSION: ${{ matrix.compression }}
           COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
           COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
@@ -505,162 +552,52 @@ jobs:
           DB_PASSWORD: coldkeep
           DB_NAME: coldkeep
           DB_SSLMODE: disable
-        run: ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-baseline-w4.json
+        run: ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-${{ matrix.compression }}-w4.json
 
-      - name: Compare workers=1 against committed baseline (100% threshold — disaster check only)
-        env:
-          COLDKEEP_DB_AUTO_BOOTSTRAP: true
-          COLDKEEP_CODEC: plain
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
-          COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
-          COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_USER: coldkeep
-          DB_PASSWORD: coldkeep
-          DB_NAME: coldkeep
-          DB_SSLMODE: disable
-        run: |
-          if [ -f benchmark-baseline-committed.json ]; then
-            set +e
-            diag_dir="${RUNNER_TEMP}/benchmark-diag"
-            mkdir -p "$diag_dir"
-            max_attempts=2
-            attempt=1
-            status=1
-
-            while [ "$attempt" -le "$max_attempts" ]; do
-              json_file="$diag_dir/benchmark-compare-w1-attempt-${attempt}.json"
-
-              ./coldkeep benchmark run --dataset small --workers 1 --output json \
-                --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
-              status=${PIPESTATUS[0]}
-
-              if [ "$status" -eq 0 ]; then
-                if [ "$attempt" -gt 1 ]; then
-                  echo "benchmark compare recovered for workers=1 on attempt ${attempt}/${max_attempts}"
-                fi
-                break
-              fi
-
-              echo "benchmark compare failed for workers=1 on attempt ${attempt}/${max_attempts}"
-              echo "regression markers (first 20):"
-              grep -E 'Benchmark regressions detected|DEGRADATION|\"status\":\"error\"|\"message\":\"benchmark regression' "$json_file" | head -n 20 || true
-              echo "execution stats markers (first 20):"
-              grep -E '\"execution_stats\"|\"workers_used\"|\"container_open_count\"|\"fsync_count\"' "$json_file" | head -n 20 || true
-              echo "last 80 lines:"
-              tail -n 80 "$json_file" || true
-
-              attempt=$((attempt + 1))
-            done
-
-            exit "$status"
-          fi
-
-      - name: Compare workers=4 against committed baseline (100% threshold — disaster check only)
-        env:
-          COLDKEEP_DB_AUTO_BOOTSTRAP: true
-          COLDKEEP_CODEC: plain
-          COLDKEEP_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-          COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS: 12
-          COLDKEEP_CONTAINER_LOCK_RETRY_BASE_WAIT_MS: 15
-          COLDKEEP_CONTAINER_LOCK_RETRY_MAX_WAIT_MS: 900
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_USER: coldkeep
-          DB_PASSWORD: coldkeep
-          DB_NAME: coldkeep
-          DB_SSLMODE: disable
-        run: |
-          if [ -f benchmark-baseline-committed.json ]; then
-            set +e
-            diag_dir="${RUNNER_TEMP}/benchmark-diag"
-            mkdir -p "$diag_dir"
-            max_attempts=2
-            attempt=1
-            status=1
-
-            while [ "$attempt" -le "$max_attempts" ]; do
-              json_file="$diag_dir/benchmark-compare-w4-attempt-${attempt}.json"
-
-              ./coldkeep benchmark run --dataset small --workers 4 --output json \
-                --compare benchmark-baseline-committed.json --threshold 100 | tee "$json_file"
-              status=${PIPESTATUS[0]}
-
-              if [ "$status" -eq 0 ]; then
-                if [ "$attempt" -gt 1 ]; then
-                  echo "benchmark compare recovered for workers=4 on attempt ${attempt}/${max_attempts}"
-                fi
-                break
-              fi
-
-              echo "benchmark compare failed for workers=4 on attempt ${attempt}/${max_attempts}"
-              echo "regression markers (first 20):"
-              grep -E 'Benchmark regressions detected|DEGRADATION|\"status\":\"error\"|\"message\":\"benchmark regression' "$json_file" | head -n 20 || true
-              echo "execution stats markers (first 20):"
-              grep -E '\"execution_stats\"|\"workers_used\"|\"container_open_count\"|\"fsync_count\"' "$json_file" | head -n 20 || true
-              echo "last 80 lines:"
-              tail -n 80 "$json_file" || true
-
-              attempt=$((attempt + 1))
-            done
-
-            exit "$status"
-          fi
-
-      - name: Upload benchmark diagnostics on failure
-        if: failure()
+      - name: Upload benchmark outputs
+        if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: benchmark-diag
+          name: benchmark-matrix-${{ matrix.compression }}
           path: |
-            benchmark-baseline.json
-            benchmark-baseline-w4.json
-            benchmark-baseline-committed.json
-            ${{ runner.temp }}/benchmark-diag/*.json
+            benchmark-${{ matrix.compression }}-w1.json
+            benchmark-${{ matrix.compression }}-w4.json
           if-no-files-found: ignore
-
-      - name: Upload benchmark baselines
-        uses: actions/upload-artifact@v5
-        with:
-          name: benchmark-baselines
-          path: |
-            benchmark-baseline.json
-            benchmark-baseline-w4.json
-          if-no-files-found: error
 
   ci-required:
     name: CI Required Gate
     runs-on: ubuntu-latest
-    needs: [quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke, benchmark]
+    needs: [quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix]
     if: ${{ always() }}
     timeout-minutes: 5
     steps:
       - name: Evaluate upstream jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
-          INTEGRATION_CORRECTNESS_RESULT: ${{ needs.integration-correctness.result }}
-          INTEGRATION_STRESS_RESULT: ${{ needs.integration-stress.result }}
-          INTEGRATION_LONG_RUN_RESULT: ${{ needs.integration-long-run.result }}
+          CORRECTNESS_MATRIX_RESULT: ${{ needs['correctness-matrix'].result }}
+          INTEGRATION_STRESS_RESULT: ${{ needs['integration-stress'].result }}
+          INTEGRATION_LONG_RUN_RESULT: ${{ needs['integration-long-run'].result }}
           ADVERSARIAL_RESULT: ${{ needs.adversarial.result }}
           SMOKE_RESULT: ${{ needs.smoke.result }}
-          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
+          LEGACY_COMPATIBILITY_RESULT: ${{ needs['legacy-compatibility'].result }}
+          BENCHMARK_RESULT: ${{ needs['benchmark-matrix'].result }}
         run: |
           echo "quality=${QUALITY_RESULT}"
-          echo "integration-correctness=${INTEGRATION_CORRECTNESS_RESULT}"
+          echo "correctness-matrix=${CORRECTNESS_MATRIX_RESULT}"
           echo "integration-stress=${INTEGRATION_STRESS_RESULT}"
           echo "integration-long-run=${INTEGRATION_LONG_RUN_RESULT}"
           echo "adversarial=${ADVERSARIAL_RESULT}"
           echo "smoke=${SMOKE_RESULT}"
+          echo "legacy-compatibility=${LEGACY_COMPATIBILITY_RESULT}"
           echo "benchmark=${BENCHMARK_RESULT}"
 
           if [ "${QUALITY_RESULT}" != "success" ] || \
-             [ "${INTEGRATION_CORRECTNESS_RESULT}" != "success" ] || \
+             [ "${CORRECTNESS_MATRIX_RESULT}" != "success" ] || \
              [ "${INTEGRATION_STRESS_RESULT}" != "success" ] || \
              [ "${INTEGRATION_LONG_RUN_RESULT}" != "success" ] || \
              [ "${ADVERSARIAL_RESULT}" != "success" ] || \
              [ "${SMOKE_RESULT}" != "success" ] || \
+             [ "${LEGACY_COMPATIBILITY_RESULT}" != "success" ] || \
              [ "${BENCHMARK_RESULT}" != "success" ]; then
             echo "One or more required jobs failed or were skipped."
             exit 1

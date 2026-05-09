@@ -103,5 +103,5 @@ Use this section for branch-specific additions that are not yet fully covered.
 ## Exit Criteria
 
 1. Every guarantee row remains mapped to at least one automated test and/or verify check.
-2. Quality, integration-correctness, integration-stress, integration-long-run, and smoke all pass.
+2. Quality, correctness-matrix, integration-stress, integration-long-run, legacy-compatibility, benchmark-matrix, and smoke all pass.
 3. Contract-sensitive checks (doctor and verify JSON shape, exit codes, failure typing) stay stable.
