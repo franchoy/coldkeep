@@ -2765,3 +2765,73 @@ func TestBuildRestoreRecipeCarriesBlockHashMetadata(t *testing.T) {
 		t.Fatalf("physical hash mismatch: got %x want %x", h.PhysicalHash, physical)
 	}
 }
+
+func TestBuildRestoreRecipeGraphSemanticsIgnoreTransformLayerHashesStep74(t *testing.T) {
+	rows := []restoreChunkRow{
+		{
+			chunkOrder:          0,
+			blockOffset:         0,
+			plaintextSize:       16,
+			storedSize:          16,
+			expectedChunkHash:   "chunk-a",
+			blockHash:           []byte{0x01},
+			compressedHash:      []byte{0x02},
+			physicalHash:        []byte{0x03},
+			chunkerVersion:      "v2-fastcdc",
+			chunkSize:           16,
+			blocksCodec:         "none",
+			blocksFormatVersion: 1,
+			blocksContainerID:   7,
+			filename:            "a.bin",
+			chunkStatus:         filestate.ChunkCompleted,
+			maxSize:             container.GetContainerMaxSize(),
+			chunkID:             100,
+		},
+		{
+			chunkOrder:          1,
+			blockOffset:         16,
+			plaintextSize:       8,
+			storedSize:          8,
+			expectedChunkHash:   "chunk-b",
+			blockHash:           []byte{0x04},
+			compressedHash:      []byte{0x05},
+			physicalHash:        []byte{0x06},
+			chunkerVersion:      "v2-fastcdc",
+			chunkSize:           8,
+			blocksCodec:         "none",
+			blocksFormatVersion: 1,
+			blocksContainerID:   7,
+			filename:            "a.bin",
+			chunkStatus:         filestate.ChunkCompleted,
+			maxSize:             container.GetContainerMaxSize(),
+			chunkID:             101,
+		},
+	}
+
+	mutated := append([]restoreChunkRow(nil), rows...)
+	mutated[0].compressedHash = []byte{0xAA, 0xAA}
+	mutated[0].physicalHash = []byte{0xBB, 0xBB}
+	mutated[1].compressedHash = []byte{0xCC, 0xCC}
+	mutated[1].physicalHash = []byte{0xDD, 0xDD}
+
+	base := buildRestoreRecipe(99, "file.bin", "file-hash", 24, rows, []int64{100, 101})
+	tampered := buildRestoreRecipe(99, "file.bin", "file-hash", 24, mutated, []int64{100, 101})
+
+	if len(base.Chunks) != len(tampered.Chunks) {
+		t.Fatalf("chunk count mismatch after transform-hash mutation: base=%d tampered=%d", len(base.Chunks), len(tampered.Chunks))
+	}
+	for i := range base.Chunks {
+		if base.Chunks[i].Index != tampered.Chunks[i].Index {
+			t.Fatalf("chunk index changed at pos %d: base=%d tampered=%d", i, base.Chunks[i].Index, tampered.Chunks[i].Index)
+		}
+		if base.Chunks[i].ID != tampered.Chunks[i].ID {
+			t.Fatalf("chunk id changed at pos %d: base=%d tampered=%d", i, base.Chunks[i].ID, tampered.Chunks[i].ID)
+		}
+		if base.Chunks[i].Offset != tampered.Chunks[i].Offset {
+			t.Fatalf("chunk offset changed at pos %d: base=%d tampered=%d", i, base.Chunks[i].Offset, tampered.Chunks[i].Offset)
+		}
+		if base.Chunks[i].ContainerID != tampered.Chunks[i].ContainerID {
+			t.Fatalf("container id changed at pos %d: base=%d tampered=%d", i, base.Chunks[i].ContainerID, tampered.Chunks[i].ContainerID)
+		}
+	}
+}

@@ -48,6 +48,19 @@ container_bytes
 
 **Engine Rule:** Trust per-block metadata. Verify skips missing hashes (legacy support).
 
+### B1. Canonical Hash Role Authority (FROZEN)
+
+- `block_hash`: canonical logical block identity.
+- `compressed_hash`: integrity checkpoint for compressed/pre-encryption payload.
+- `physical_hash`: integrity checkpoint for persisted payload bytes.
+
+Never use `compressed_hash` or `physical_hash` as identity keys for:
+
+- dedup
+- GC identity/liveness
+- snapshot identity
+- restore graph construction
+
 ---
 
 ### C. Block Metadata (SOURCE OF TRUTH AT READ TIME)

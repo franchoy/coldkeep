@@ -111,6 +111,17 @@ func TestSnapshotSourceQueryIncludesDeterministicOrderBy(t *testing.T) {
 	}
 }
 
+func TestSnapshotSourceQueryDoesNotUseTransformLayerHashesStep74(t *testing.T) {
+	dbconn := openTestDB(t)
+	query := strings.ToLower(snapshotSourceQuery(dbconn))
+
+	for _, forbidden := range []string{"compressed_hash", "physical_hash", "block_hash", "storage_blocks", "chunk_block_refs"} {
+		if strings.Contains(query, forbidden) {
+			t.Fatalf("expected snapshot identity source query to avoid %q, got %q", forbidden, query)
+		}
+	}
+}
+
 // ---- NormalizeSnapshotPath tests ----
 
 func TestNormalizeSnapshotPathValid(t *testing.T) {

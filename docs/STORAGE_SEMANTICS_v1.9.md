@@ -165,6 +165,25 @@ For compressed+aes-gcm blocks:
 Restore: Verify inProgressively in reverse; stop on first mismatch.
 ```
 
+### 2.4 Hash Role Authority (FROZEN)
+
+The three-hash model is canonical and role-locked:
+
+- `block_hash`: canonical logical block identity
+- `compressed_hash`: transform-stage integrity checkpoint
+- `physical_hash`: persisted payload integrity checkpoint
+
+Identity authority constraints:
+
+- Only `block_hash` may drive logical correctness and restore identity semantics.
+- `compressed_hash` and `physical_hash` MUST NOT drive dedup identity.
+- `compressed_hash` and `physical_hash` MUST NOT drive GC identity/liveness semantics.
+- `compressed_hash` and `physical_hash` MUST NOT drive snapshot identity.
+- `compressed_hash` and `physical_hash` MUST NOT drive restore graph semantics.
+
+**FROZEN INVARIANT:** Integrity-layer hashes validate bytes at their stage but do
+not redefine logical identity.
+
 ---
 
 ## 3. Metadata Meanings

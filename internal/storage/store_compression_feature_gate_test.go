@@ -641,6 +641,91 @@ func TestFeatureGatedCompressionDuplicateStorePreservesDedupAndCompressionStep51
 	}
 }
 
+func TestFeatureGatedCompressionDedupIgnoresCompressedAndPhysicalHashesStep74(t *testing.T) {
+	RequireTestCompression(t, "zstd")
+
+	repo := NewTestRepository(t, WithCompression("zstd"), WithCompressionLevel(3))
+	payload := bytes.Repeat([]byte("step74-dedup-logical-identity-only-"), 4096)
+
+	pathA := writeFeatureGateInputFile(t, payload)
+	resultA, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, pathA, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store baseline payload: %v", err)
+	}
+
+	blockIDs := readDistinctBlockIDsForFile(t, repo.DB, resultA.FileID)
+	if len(blockIDs) == 0 {
+		t.Fatal("expected at least one block id for baseline payload")
+	}
+
+	graphBefore := readFileChunkGraph(t, repo.DB, resultA.FileID)
+	if len(graphBefore) == 0 {
+		t.Fatal("expected non-empty chunk graph for baseline payload")
+	}
+
+	var chunkRowsBefore int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRowsBefore); err != nil {
+		t.Fatalf("count chunk rows before tamper: %v", err)
+	}
+	var blockRowsBefore int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockRowsBefore); err != nil {
+		t.Fatalf("count storage_blocks rows before tamper: %v", err)
+	}
+	var refsRowsBefore int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsRowsBefore); err != nil {
+		t.Fatalf("count chunk_block_refs rows before tamper: %v", err)
+	}
+
+	for _, blockID := range blockIDs {
+		tamperedCompressed := bytes.Repeat([]byte{byte((blockID % 251) + 1)}, 32)
+		tamperedPhysical := bytes.Repeat([]byte{byte((blockID % 239) + 1)}, 32)
+		if _, err := repo.DB.Exec(
+			`UPDATE storage_blocks SET compressed_hash = $1, physical_hash = $2 WHERE id = $3`,
+			tamperedCompressed,
+			tamperedPhysical,
+			blockID,
+		); err != nil {
+			t.Fatalf("tamper transform-layer hashes for block %d: %v", blockID, err)
+		}
+	}
+
+	pathB := writeFeatureGateInputFile(t, payload)
+	resultB, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, pathB, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store duplicate payload after hash tamper: %v", err)
+	}
+	if !resultB.AlreadyStored {
+		t.Fatalf("expected duplicate payload to remain deduplicated after transform-hash tamper")
+	}
+
+	graphAfter := readFileChunkGraph(t, repo.DB, resultB.FileID)
+	if !reflect.DeepEqual(graphBefore, graphAfter) {
+		t.Fatalf("expected duplicate store graph to remain identical after transform-hash tamper; before=%v after=%v", graphBefore, graphAfter)
+	}
+
+	var chunkRowsAfter int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRowsAfter); err != nil {
+		t.Fatalf("count chunk rows after duplicate store: %v", err)
+	}
+	if chunkRowsAfter != chunkRowsBefore {
+		t.Fatalf("expected chunk identity to remain unchanged; before=%d after=%d", chunkRowsBefore, chunkRowsAfter)
+	}
+	var blockRowsAfter int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockRowsAfter); err != nil {
+		t.Fatalf("count storage_blocks rows after duplicate store: %v", err)
+	}
+	if blockRowsAfter != blockRowsBefore {
+		t.Fatalf("expected no new storage blocks on duplicate store; before=%d after=%d", blockRowsBefore, blockRowsAfter)
+	}
+	var refsRowsAfter int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsRowsAfter); err != nil {
+		t.Fatalf("count chunk_block_refs rows after duplicate store: %v", err)
+	}
+	if refsRowsAfter != refsRowsBefore {
+		t.Fatalf("expected no new chunk-block refs on duplicate store; before=%d after=%d", refsRowsBefore, refsRowsAfter)
+	}
+}
+
 func TestFeatureGatedCompressionSwitchDoesNotMigrateExistingBlocksStep513(t *testing.T) {
 	RequireTestCompression(t, "zstd")
 
