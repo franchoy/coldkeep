@@ -23,6 +23,15 @@
 // This ordering is stable repository semantics. Repository defaults govern
 // future writes only; reads are driven by persisted per-block metadata.
 //
+// Frozen compression semantics (v1.9):
+//   - Scope: block-level only.
+//   - Timing: compression always runs before encryption.
+//   - Policy: store-if-smaller is canonical.
+//   - Reads: per-block metadata controls decompression behavior.
+//
+// Compression semantics are part of repository compatibility and future
+// engine contracts.
+//
 // Frozen hash layer semantics (v1.9):
 //   - block_hash: canonical logical block identity.
 //   - compressed_hash: transform-stage integrity checkpoint.

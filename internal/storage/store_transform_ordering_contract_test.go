@@ -115,3 +115,48 @@ func TestApplyPackedBlockTransformsWriteOrderCompressionThenEncryptionThenPhysic
 		t.Fatalf("expected metadata compression codec zstd, got %q", tr.metadata.CompressionCodec)
 	}
 }
+
+func TestApplyPackedBlockTransformsStoreIfSmallerFallbackCanonical(t *testing.T) {
+	logical := []byte("logical-block-bytes")
+	logicalHash := blocks.HashLogical(logical)
+	enc := packedBlockEncoded{
+		plaintextEncoded: logical,
+		blockHash:        logicalHash,
+		metadata: blocks.TransformMetadata{
+			PayloadHash:      hex.EncodeToString(logicalHash),
+			CompressionCodec: packedStorageBlockCodecNone,
+			CompressionRatio: 1.0,
+		},
+	}
+
+	compressor := &orderingSpyCompressor{compressOut: append([]byte(nil), logical...)}
+	compressor.compressOut = append(compressor.compressOut, 0xFF) // force expansion
+	transformer := &orderingSpyTransformer{codec: blocks.CodecPlain, encodeOut: logical}
+	level := 3
+
+	tr, err := applyPackedBlockTransforms(
+		context.Background(),
+		transformer,
+		storeRuntimeCompression{compressor: compressor, codec: storagecompression.CompressionZstd, level: &level},
+		enc,
+	)
+	if err != nil {
+		t.Fatalf("applyPackedBlockTransforms: %v", err)
+	}
+
+	if !bytes.Equal(transformer.encodeInput, logical) {
+		t.Fatalf("expected store-if-smaller fallback to pass logical bytes to encryption stage, got=%x want=%x", transformer.encodeInput, logical)
+	}
+	if tr.metadata.CompressionCodec != storagecompression.CompressionNone {
+		t.Fatalf("expected fallback metadata codec=none, got %q", tr.metadata.CompressionCodec)
+	}
+	if tr.compressionLvl != nil {
+		t.Fatalf("expected fallback compression level to be nil, got %+v", tr.compressionLvl)
+	}
+	if tr.compressedSize != int64(len(logical)) {
+		t.Fatalf("expected fallback compressed_size to equal plaintext size, got compressed=%d plaintext=%d", tr.compressedSize, len(logical))
+	}
+	if !bytes.Equal(tr.compressedHash, blocks.HashCompressed(logical)) {
+		t.Fatalf("expected compressed_hash to be computed from uncompressed logical bytes after fallback")
+	}
+}

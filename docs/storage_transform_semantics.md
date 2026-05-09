@@ -6,6 +6,7 @@ storage transform model ahead of the v1.10 behavior freeze.
 Current runtime contract:
 
 - Compression is block-level.
+- Compression is never chunk-level or file-level policy authority.
 - Compression happens before encryption.
 - Compression settings affect newly written blocks only.
 - Existing blocks are never recompressed automatically.
@@ -193,6 +194,8 @@ Current runtime behavior:
 
 This transform ordering does not change dedup identity. Dedup identity remains
 `block_hash` of logical payload.
+
+Compression canonical rule: `store-if-smaller` is frozen behavior for v1.9.
 
 ## Metadata Invariants
 

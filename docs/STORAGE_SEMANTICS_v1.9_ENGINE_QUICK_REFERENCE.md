@@ -116,6 +116,15 @@ Read: Load block → Check block.codec (not config)
 
 **Engine Implication:** Defaults govern future writes only. Block metadata is source-of-truth forever.
 
+### D1. Compression Contract (FROZEN)
+
+- Scope: block-level only.
+- Timing: compression before encryption.
+- Policy: store-if-smaller.
+- Reads: decompress strictly from each block's `compression_codec` metadata.
+
+Never interpret compression as chunk-level or file-level identity semantics.
+
 ---
 
 ### E. Determinism Guarantee

@@ -113,6 +113,49 @@ func TestVerifyStoredBlockCompressedZstdPasses(t *testing.T) {
 	}
 }
 
+func TestVerifyStoredBlockDecompressionControlledByPerBlockMetadata(t *testing.T) {
+	logicalPayload := buildPipelineEncodedBytes(t, []byte("verify-metadata-controls-decompression"))
+	zstd, err := storagecompression.NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	compressedPayload, err := zstd.Compress(logicalPayload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	meta := BlockStorageMetadata{
+		BlockID:          707,
+		ContainerID:      77,
+		ContainerOffset:  4096,
+		ContainerName:    "container_metadata_control.ck",
+		ContainerMaxSize: 1 << 20,
+		FormatVersion:    1,
+		Codec:            "none",
+		PlaintextSize:    int64(len(logicalPayload)),
+		StoredSize:       int64(len(compressedPayload)),
+		CompressionCodec: "none", // intentional mismatch: payload is compressed
+		LogicalHash:      blocks.HashLogical(logicalPayload),
+		CompressedHash:   blocks.HashCompressed(compressedPayload),
+		PhysicalHash:     blocks.HashPhysical(compressedPayload),
+	}
+
+	_, err = VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: compressedPayload})
+	if err == nil {
+		t.Fatal("expected verify failure when metadata disables decompression for compressed payload")
+	}
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %v", err)
+	}
+	if vf.Stage != VerifyStageDecompress {
+		t.Fatalf("expected decompress stage failure when metadata disables decompression for compressed payload, got stage=%q err=%v", vf.Stage, err)
+	}
+	if vf.Category != verifyErrMetadataInvalid {
+		t.Fatalf("expected metadata_invalid category when decompression is skipped by metadata, got category=%q err=%v", vf.Category, err)
+	}
+}
+
 func TestVerifyStoredBlockLegacyMissingPhysicalAndCompressedHashesPasses(t *testing.T) {
 	logicalPayload := buildPipelineEncodedBytes(t, []byte("legacy-missing-hashes"))
 	meta := BlockStorageMetadata{

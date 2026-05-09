@@ -279,6 +279,17 @@ not redefine logical identity.
 
 ## 4. Compression Semantics
 
+### 4.0 Canonical Compression Contract (FROZEN)
+
+- **Scope:** Compression is block-level only.
+- **Never:** Chunk-level or file-level compression authority.
+- **Timing:** Compression always occurs before encryption.
+- **Policy:** Store-if-smaller is canonical.
+- **Read control:** Per-block metadata controls decompression behavior.
+
+**FROZEN INVARIANT:** These rules are part of repository compatibility and
+future engine semantics.
+
 ### 4.1 Compression Configuration Model
 
 **Storage (repository_config table):**
@@ -299,8 +310,13 @@ not redefine logical identity.
 ```
 IF repository default compression = "zstd", level = 3:
    - New blocks written with compression_codec = "zstd"
-   - compressed_size ≤ plaintext_size (due to zstd encoding overhead)
+   - compressed_size < plaintext_size when stored as zstd
    - compressed_hash computed and stored
+
+IF compression attempt would expand or not improve payload size:
+   - Block is stored with compression_codec = "none"
+   - compressed_size = plaintext_size
+   - Store-if-smaller fallback is required behavior
    
 IF compression config changes from "zstd" to "none":
    - Existing blocks keep their compression_codec (immutable)
