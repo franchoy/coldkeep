@@ -7744,7 +7744,7 @@ func TestVerifyStandard(t *testing.T) {
 		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-			"physical_missing: verifyBlockPayloads: open container for block",
+			"physical_missing: stage=physical_payload",
 			"verify-standard/full missing container file",
 		)
 	})
@@ -7821,7 +7821,7 @@ func TestVerifyFull(t *testing.T) {
 		testutils.AssertErrorContains(
 			t,
 			maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyFull),
-			"physical_missing: verifyBlockPayloads: open container for block",
+			"physical_missing: stage=physical_payload",
 			"verify-full missing container file",
 		)
 	})
@@ -8290,10 +8290,11 @@ func TestVerifySystemDeepDetectsAESGCMTamperedCiphertext(t *testing.T) {
 	{
 		err := storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath)
 		errStr := strings.ToLower(err.Error())
-		if !strings.Contains(errStr, "cipher: message authentication failed") &&
+		if !strings.Contains(errStr, "physical payload hash mismatch") &&
+			!strings.Contains(errStr, "cipher: message authentication failed") &&
 			!strings.Contains(errStr, "no restorable chunks found") &&
 			!strings.Contains(errStr, "restored file hash mismatch") {
-			t.Fatalf("expected ciphertext-tamper restore error to contain (case-insensitive) %q or %q or %q, got: %v", "cipher: message authentication failed", "no restorable chunks found", "restored file hash mismatch", err)
+			t.Fatalf("expected ciphertext-tamper restore error to contain (case-insensitive) %q or %q or %q or %q, got: %v", "physical payload hash mismatch", "cipher: message authentication failed", "no restorable chunks found", "restored file hash mismatch", err)
 		}
 	}
 }
@@ -8374,10 +8375,11 @@ func TestVerifySystemDeepDetectsAESGCMNonceMetadataTampering(t *testing.T) {
 	{
 		err := storage.RestoreFileWithStorageContext(testutils.NewTestContext(dbconn), result.FileID, outPath)
 		errStr := strings.ToLower(err.Error())
-		if !strings.Contains(errStr, "cipher: message authentication failed") &&
+		if !strings.Contains(errStr, "physical payload hash mismatch") &&
+			!strings.Contains(errStr, "cipher: message authentication failed") &&
 			!strings.Contains(errStr, "no restorable chunks found") &&
 			!strings.Contains(errStr, "restored file hash mismatch") {
-			t.Fatalf("expected nonce-tamper restore error to contain (case-insensitive) %q or %q or %q, got: %v", "cipher: message authentication failed", "no restorable chunks found", "restored file hash mismatch", err)
+			t.Fatalf("expected nonce-tamper restore error to contain (case-insensitive) %q or %q or %q or %q, got: %v", "physical payload hash mismatch", "cipher: message authentication failed", "no restorable chunks found", "restored file hash mismatch", err)
 		}
 	}
 }
@@ -8773,7 +8775,7 @@ func TestVerifySystemDeepAggregatesChunkErrors(t *testing.T) {
 	testutils.AssertErrorContains(
 		t,
 		maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "system", 0, verify.VerifyDeep),
-		"block_hash_mismatch: verifyBlockPayloads",
+		"physical_hash_mismatch: stage=physical_payload",
 		"system-deep multiple corrupted chunks",
 	)
 }

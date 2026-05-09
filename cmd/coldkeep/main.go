@@ -761,7 +761,7 @@ func countVerifySummaryForFile(dbconn *sql.DB, fileID int64) (verifyOutputSummar
 			JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
 			JOIN storage_blocks sb ON sb.id = r.block_id
 			JOIN container c ON c.id = sb.container_id
-			WHERE fc.file_id = $1
+			WHERE fc.logical_file_id = $1
 			  AND c.quarantine = FALSE
 		)
 		SELECT
@@ -780,7 +780,7 @@ func countVerifySummaryForFile(dbconn *sql.DB, fileID int64) (verifyOutputSummar
 		SELECT COUNT(*)
 		FROM file_chunk fc
 		JOIN blocks b ON b.chunk_id = fc.chunk_id
-		WHERE fc.file_id = $1
+		WHERE fc.logical_file_id = $1
 		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id)
 	`, fileID).Scan(&legacyBlocks); err != nil {
 		return verifyOutputSummary{}, err

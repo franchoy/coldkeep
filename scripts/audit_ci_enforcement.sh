@@ -84,8 +84,8 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'tags:\s*\[\s*"v\*"\s*\]' 'release tag trigger (v*)' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'merge_group:' 'merge queue trigger' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*CI Required Gate' 'aggregate required gate job' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness\]' 'smoke job depends on quality and integration-correctness' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, integration-correctness, integration-stress, integration-long-run, adversarial, smoke, benchmark\]' 'required gate depends on all upstream jobs including long-run, adversarial, and benchmark' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix\]' 'smoke job depends on quality and correctness-matrix' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'needs:\s*\[quality, correctness-matrix, integration-stress, integration-long-run, adversarial, smoke, legacy-compatibility, benchmark-matrix\]' 'required gate depends on all upstream jobs including long-run, adversarial, legacy compatibility, and benchmark matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'if:\s*\$\{\{ always\(\) \}\}' 'required gate always evaluates upstream results' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'name:\s*Check smart quotes in Go files' 'smart-quote guard step' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'run:\s*bash scripts/check_smart_quotes\.sh' 'smart-quote guard command' || check_status=1
@@ -113,7 +113,7 @@ check_local_workflow() {
   require_pattern "$WORKFLOW_FILE" 'COLDKEEP_LONG_RUN:\s*1' 'long-run env gate in CI' || check_status=1
   require_pattern "$WORKFLOW_FILE" "go test -race -count=1 ./tests/integration/... -run 'TestStoreGCVerifyRestoreDeleteLoopStability\\|TestRandomizedLongRunLifecycleSoak\\|TestSnapshotRetentionChurnLongRun'" 'dedicated long-run test command' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'QUALITY_RESULT.*!= "success"' 'required gate rejects skipped quality job' || check_status=1
-  require_pattern "$WORKFLOW_FILE" 'INTEGRATION_CORRECTNESS_RESULT.*!= "success"' 'required gate rejects skipped integration correctness' || check_status=1
+  require_pattern "$WORKFLOW_FILE" 'CORRECTNESS_MATRIX_RESULT.*!= "success"' 'required gate rejects skipped correctness matrix' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_STRESS_RESULT.*!= "success"' 'required gate rejects skipped integration stress' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'INTEGRATION_LONG_RUN_RESULT.*!= "success"' 'required gate rejects skipped integration long-run job' || check_status=1
   require_pattern "$WORKFLOW_FILE" 'ADVERSARIAL_RESULT.*!= "success"' 'required gate rejects skipped adversarial job' || check_status=1

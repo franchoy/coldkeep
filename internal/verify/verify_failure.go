@@ -6,15 +6,15 @@ import (
 )
 
 type VerifyFailure struct {
-	Category    string
-	Stage       VerifyStage
-	BlockID     *int64
-	ContainerID *int64
-	Offset      *int64
+	Category     string
+	Stage        VerifyStage
+	BlockID      *int64
+	ContainerID  *int64
+	Offset       *int64
 	ExpectedHash string
 	ActualHash   string
-	Detail      string
-	Cause       error
+	Detail       string
+	Cause        error
 }
 
 func (v *VerifyFailure) Error() string {

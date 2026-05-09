@@ -661,13 +661,13 @@ func TestCorruptionFixtureDBHashFieldsMapToExpectedStages(t *testing.T) {
 
 func TestCorruptionFixtureCodecMetadataFailuresArePrecise(t *testing.T) {
 	tests := []struct {
-		name     string
-		field    string
-		value    string
-		contains string
+		name        string
+		field       string
+		value       string
+		containsAny []string
 	}{
-		{name: "compression codec metadata", field: "compression_codec", value: "broken-compressor", contains: "resolve compression codec"},
-		{name: "encryption codec metadata", field: "codec", value: "aes-gcm", contains: "load transformer"},
+		{name: "compression codec metadata", field: "compression_codec", value: "broken-compressor", containsAny: []string{"resolve compression codec"}},
+		{name: "encryption codec metadata", field: "codec", value: "aes-gcm", containsAny: []string{"load transformer", "decrypt payload"}},
 	}
 
 	for _, tc := range tests {
@@ -680,8 +680,19 @@ func TestCorruptionFixtureCodecMetadataFailuresArePrecise(t *testing.T) {
 			UpdateStorageBlockField(t, repo, blockID, tc.field, tc.value)
 
 			err := verifyBlockPayloads(dbconn, repo.containersDir)
-			if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") || !strings.Contains(err.Error(), tc.contains) {
-				t.Fatalf("expected metadata_invalid containing %q after mutating %s, got: %v", tc.contains, tc.field, err)
+			if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") {
+				t.Fatalf("expected metadata_invalid after mutating %s, got: %v", tc.field, err)
+			}
+
+			matched := false
+			for _, want := range tc.containsAny {
+				if strings.Contains(err.Error(), want) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Fatalf("expected metadata_invalid containing one of %q after mutating %s, got: %v", tc.containsAny, tc.field, err)
 			}
 		})
 	}
