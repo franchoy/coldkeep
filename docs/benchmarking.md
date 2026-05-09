@@ -1251,3 +1251,85 @@ Rationale: `container_id` is stored on `blocks`, not on `chunk`, so a
 `chunk(container_id)` index is invalid for this schema.
 
 GC behavior remains unchanged unless query-plan evidence shows a real hotspot.
+
+## Step 6.13 — Validate Observability & Stats Semantics
+
+Step 6.13 validates that observability formulas correctly reflect storage reality
+and handle edge cases (mixed repositories, legacy nulls, encryption).
+
+### Validation scope
+
+**Stats formulas must be mathematically correct:**
+- `logical_bytes = SUM(plaintext_size)` across all blocks
+- `compressed_bytes = SUM(compressed_size or plaintext_size if codec=none)`
+- `stored_bytes = SUM(stored_size)` (includes all overhead)
+- `compression_ratio = logical_bytes / compressed_bytes`
+- `physical_ratio = logical_bytes / stored_bytes`
+
+**Repository types tested:**
+- Pure uncompressed (v1.8 legacy state)
+- Pure compressed (v1.9 new blocks)
+- Mixed (legacy uncompressed + new compressed coexisting)
+- AES-GCM encrypted blocks (with and without compression)
+- Multi-chunk files (verify no double-counting of logical bytes)
+
+**Edge cases validated:**
+- Legacy blocks with null hash fields do not crash collection
+- Fallback byte counting for uncompressed blocks is applied correctly
+- Ratios remain valid across accumulation of multiple stores
+- Empty repository returns zero bytes and zero blocks
+- Block counts distinguish compressed vs. uncompressed
+- Byte accounting is consistent between direct query and stats API
+
+### Implementation
+
+**Test file:** `tests/integration/v19_stats_semantics_integration_test.go` (10 comprehensive tests)
+
+**Helper functions:**
+- `storeTestFileVia613` — Store file with direct storage API
+- `setCompressionVia613` — Set repository compression via transaction
+
+**Tests:**
+1. `TestStep613StatsRatiosMathematicallyCorrect` — 3 uncompressed files verify 1.0 compression ratio
+2. `TestStep613StatsCompressedBytesRatio` — Highly compressible data validates ratio > 1.0
+3. `TestStep613StatsMixedRepository` — Legacy uncompressed + new compressed verify mixed coefficients
+4. `TestStep613StatsMultiChunkFile` — 5MB file validates no double-counting across chunks
+5. `TestStep613StatsLegacyNullHashesSafe` — Collection works with sparse/null hash fields
+6. `TestStep613StatsAESGCMEncryption` — Stats work correctly with AES-GCM blocks
+7. `TestStep613StatsRatioBoundaries` — 5 files verify ratio invariants (compression ≥ 1.0, physical ≤ 1.0)
+8. `TestStep613StatsByteAccountingConsistency` — Direct DB query matches stats API
+9. `TestStep613StatsEmptyRepository` — Empty repo returns zero for all metrics
+10. `TestStep613StatsAccumulation` — Multi-store sequence verifies accumulation logic
+
+### Validation checklist
+
+✔ **Ratios mathematically correct:**
+- CompressionRatio = LogicalBytes / CompressedBytes (always ≥ 1.0)
+- PhysicalRatio = LogicalBytes / StoredBytes (always ≤ 1.0, < CompressionRatio)
+- Uncompressed files → CompressionRatio ≈ 1.0
+- Highly compressible files → CompressionRatio > 1.0
+- All formulas verified across accumulation and multi-chunk scenarios
+
+✔ **Mixed repos handled correctly:**
+- Old blocks (v1.8 uncompressed) counted separately from new blocks
+- CompressedBytes includes fallback (plaintext_size for 'none' codec)
+- CompressionRatio accurately reflects mixed state (weighted by compression efficacy)
+- No double-counting of logical bytes across codec transitions
+
+✔ **Fallback blocks counted correctly:**
+- For codec='none' blocks: compressed_size = plaintext_size
+- StorageBlocks query returns aggregated count with correct fallback
+- Byte sums match direct SQL query pattern
+- Stats API output matches source-of-truth query
+
+### Execution
+
+```bash
+# Targeted test run (requires COLDKEEP_TEST_DB=1 for real DB)
+COLDKEEP_TEST_DB=1 go test ./tests/integration -run TestStep613 -v
+
+# Include in full suite
+COLDKEEP_TEST_DB=1 go test ./tests/integration -v
+```
+
+**Expected output:** All 10 TestStep613* tests pass with correct byte accounting, ratio validation, and edge-case handling.
