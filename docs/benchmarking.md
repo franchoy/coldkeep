@@ -1333,3 +1333,159 @@ COLDKEEP_TEST_DB=1 go test ./tests/integration -v
 ```
 
 **Expected output:** All 10 TestStep613* tests pass with correct byte accounting, ratio validation, and edge-case handling.
+
+---
+
+## Step 6.14 — Freeze v1.9 Storage Semantics
+
+Step 6.14 documents and locks down all storage semantics required for v1.9 release and foundation for engine extraction.
+
+### Scope
+
+Before v1.10, storage semantics must stabilize to enable engine extraction and prevent breaking changes.
+
+**Critical areas frozen:**
+1. **Transform ordering** — Block encoding → hashing → compression → encryption → persistence
+2. **Hash semantics** — Four hash types (logical, compressed, physical, chunk) and nullable rules
+3. **Metadata meanings** — Block fields, chunk fields, container fields, and their invariants
+4. **Compression semantics** — Per-block compression, mixed-codec state, stats accuracy
+5. **Mixed repository guarantees** — Multi-codec/compression support within one repository
+6. **Read-path guarantees** — Verify pipeline stages, determinism, atomicity, crash safety
+7. **Repository defaults vs block reality** — Config read-only at write time; block metadata source-of-truth at read time
+
+### Documentation
+
+**Main reference:** `docs/STORAGE_SEMANTICS_v1.9.md` (Comprehensive contract, 500+ lines)
+
+Sections:
+- **Section 1:** Transform ordering — Write and read pipelines (immutable sequence)
+- **Section 2:** Hash semantics — Four hash types, computation rules, equality invariants
+- **Section 3:** Metadata meanings — Block, chunk, container fields and their guarantees
+- **Section 4:** Compression semantics — Per-block compression, mixed state, performance impact
+- **Section 5:** Mixed repository guarantees — Multi-codec/compression together in one repo
+- **Section 6:** Read-path guarantees — Verify stages, restore determinism, atomicity
+- **Section 7:** Repository defaults vs block reality — Configuration separation lock
+- **Section 8:** Validation checklist — All ambiguity eliminated
+- **Section 9:** References — Implementation pointers and test evidence
+- **Section 10:** Frozen lock statement — v2.0 planning requirements
+
+### Validation checklist
+
+✔ **No ambiguous semantics remain:**
+- Transform order defined point-by-point with no alternatives
+- Hash types listed with nullable semantics and computation rules
+- Mixed-repo behavior explicit (per-block metadata independent of config)
+- Read path verified in stages with clear failure contracts
+- Config/metadata separation locked (config read-only; metadata read-from-DB)
+
+✔ **Future engine APIs can rely on definitions:**
+- Storage format immutable post-write (no re-encoding required)
+- Per-block metadata determines interpretation (config-independent)
+- Verify and restore are deterministic (same input → same output always)
+- No container rewrites or block migrations needed for engine extraction
+- Statistics computation uses per-block fields (not config defaults)
+
+✔ **Repository behavior fully documented:**
+- Creation: Default compression=none, codec derived from COLDKEEP_KEY environment
+- Write: Config read at write time; block metadata set and immutable
+- Read: Block metadata trusted; configuration ignored
+- Migration: Per-block state preserved; new blocks use current config
+- Mixed: Multiple codecs/compressions supported in single repository
+- Config changes: Only affect new blocks; old blocks immutable
+
+### Key Contracts Locked (v1.9 release)
+
+**Transform Pipeline (IMMUTABLE):**
+```
+plaintext → encode → logical_hash → compress (if config) → compressed_hash (if compression)
+    → encrypt (if AES-GCM) → physical_hash → persist
+```
+
+**Verify Pipeline (FIXED):**
+```
+persisted_bytes → physical_hash (if present) → decrypt (if AES-GCM) → 
+    compressed_hash (if compression) → decompress → logical_hash → 
+    decode block structure → verify chunk references
+```
+
+**Four Hash Types (FROZEN):**
+- `logical_hash` (block_hash): Encoded block content (required, never null)
+- `compressed_hash`: After compression (nullable if codec=none)
+- `physical_hash`: After encryption (nullable only for legacy plain blocks)
+- `chunk_hash`: Plaintext chunk for dedup (required, never null)
+
+**Mixed Repository Invariants (LOCKED):**
+- Codec per block; one repo can have plain + aes-gcm coexisting
+- Compression per block; one repo can have none + zstd coexisting
+- Config determines defaults at write time; doesn't affect reads
+- Stats reflect actual block metadata; configuration-independent
+
+**Read-Path Guarantees (IMMUTABLE):**
+- Restore deterministic: same file → identical output always
+- Verify stages fixed: can't reorder or skip (except missing hashes)
+- Atomicity: Restore succeeds completely or fails cleanly (no partial files)
+- Crash safety: Process exit cleans pins; no leaked resources
+
+**Config/Metadata Separation (CONTRACT LOCKED):**
+- Repository config is guidance; block metadata is authority
+- Read path ignores config; uses per-block codec and compression_codec fields
+- Config changes don't retroactively alter existing blocks
+- Future codecs/compression algorithms must register in CodecRegistry before use
+
+### Implementation evidence
+
+**Documentation:** `docs/STORAGE_SEMANTICS_v1.9.md` provides frozen contract with:
+- 10 sections covering all areas
+- Multiple examples and equivalence proofs
+- Engine extraction implications (Section 8.2)
+- v2.0 planning guardrails
+
+**Test coverage (existing):**
+- Step 6.7: `TestStep67DeterministicRestoreCompressionMatrix` validates restore across 4 codec/compression modes
+- Step 6.13: `TestStep613Stats*` validates stats formulas and mixed-repo accounting
+- Phase 4: Deep verify corruption matrix validates all verification stages
+- Integration suite: Mixed codec/encryption tests pass across all operations
+
+**Code evidence:**
+- `internal/storage/store.go`: Transform pipeline implementation matches documented order
+- `internal/verify/verify_block_pipeline.go`: Verify stages match documented sequence
+- `internal/storage/restore.go`: Restore determinism guaranteed by chunk order + stored hashes
+- `internal/storage/repository_config.go`: Config separation enforced (metadata trusted at read time)
+
+### Execution and validation
+
+**To validate Step 6.14 is complete:**
+
+1. Read `docs/STORAGE_SEMANTICS_v1.9.md` and verify no remaining ambiguity
+2. Review Section 8 checklist — all three validations must show ✓
+3. Cross-reference existing tests against locked contracts (they should all comply)
+4. Confirm with engine extraction team that definitions enable clean separation
+
+**Command to inspect existing test coverage across frozen guarantees:**
+
+```bash
+# Verify frozen transform order
+grep -n "buildAndEncodePackedBlock\|applyPackedBlockTransforms\|persistPackedBlockPayload" \
+    internal/storage/store.go
+
+# Verify frozen verify stages
+grep -n "VerifyStoredBlock\|verify.Verify" internal/verify/verify_block_pipeline.go
+
+# Verify config/metadata separation
+grep -n "GetDefaultCompression\|compression_codec" internal/storage/store.go internal/storage/restore.go
+
+# Verify deterministic restore
+grep -n "chunk_order\|chunk_hash" tests/adversarial/g67_deterministic_restore_matrix_test.go
+```
+
+**Expected outcome:** All frozen semantics are implemented, tests validate, and engine extraction can proceed safely.
+
+### Future (v2.0 planning)
+
+Beyond v1.9, changes require major version bump:
+- New block format version or encoding stage requires format migration
+- Additional hash type requires backwards-compatible schema extension
+- Config immutability changes enforcement model
+- Multi-version codec support requires careful registry migration
+
+All changes must be reviewed against engine extraction implications and validated with end-to-end tests.
