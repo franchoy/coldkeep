@@ -137,18 +137,61 @@ JSON output exposes both per-case worker usage and an aggregate
 
 ## Current baseline
 
-The baseline file `benchmark-baseline.json` at the repository root was recorded
-from the v1.6 codebase before v1.7 performance optimizations were applied.
-It covers all eight scenarios on the **small** dataset and remains available as
-a local comparison reference.
+The repository now maintains two official v1.9 baseline artifacts for the
+recommended packed production family (`aes-gcm` encryption):
 
-To regenerate the baseline after an intentional performance change:
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
+  - Baseline A (uncompressed): `packed + aes-gcm + none`
+  - Purpose: protect v1.8 behavior and detect non-compression regressions.
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
+  - Baseline B (compressed): `packed + aes-gcm + zstd`
+  - Purpose: measure compression tradeoffs and detect compression regressions.
+
+Comparability contract for these baselines:
+
+- same dataset preset (`small`)
+- same repeat count (`1`)
+- same execution profile (`workers=1`, deterministic mode)
+- same benchmark case set
+- same logical totals (`total_files`, `total_bytes`)
+
+The machine-readable manifest is stored at:
+
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json`
+
+It records file checksums, comparability validation, and per-case compressed vs
+uncompressed deltas.
+
+To regenerate v1.9 baseline artifacts after intentional benchmark changes:
 
 ```bash
-coldkeep benchmark run --dataset small --workers 1 --output json > benchmark-baseline.json
-# Optional CI-parity workers=4 profile capture:
-coldkeep benchmark run --dataset small --workers 4 --output json > benchmark-baseline-w4.json
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 --output json \
+  > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 --output json \
+  > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
 ```
+
+To detect regressions against each baseline:
+
+```bash
+# Uncompressed production path regression check
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
+  --threshold 20
+
+# Compressed production path regression check
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
+  --threshold 20
+```
+
+Legacy reference baselines at repository root (`benchmark-baseline*.json`) are
+retained for historical v1.6/v1.7 context.
 
 ## Scenarios
 

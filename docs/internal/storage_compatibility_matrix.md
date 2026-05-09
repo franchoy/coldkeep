@@ -95,6 +95,11 @@ Benchmark guidance:
 - compare compression impact against the relevant baseline for the same packing
   and encryption family
 - do not treat benchmark omission as a correctness gap
+- official v1.9 baseline pair for packed production is:
+  - Baseline A: `packed-multi + aes-gcm + none`
+  - Baseline B: `packed-multi + aes-gcm + zstd`
+  - both must run against the same dataset preset and execution profile for
+    valid comparison
 
 ## Operator Expectations
 
