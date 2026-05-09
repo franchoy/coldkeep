@@ -392,6 +392,71 @@ COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep67" -v
 3. **Read-only operations are always safe:** Snapshots, GC, and other maintenance never modify file content during restore.
 4. **Deterministic output is cryptographically validated:** Each restore operation verifies content hashes and encryption state; silent corruption is not possible.
 
+## Step 6.8 — Revalidate Dedup Semantics (v1.9)
+
+Core roadmap guarantee: **Compression must not reduce dedup effectiveness.**
+
+### Validation scope
+
+Step 6.8 validates that deduplication behavior remains identical regardless of compression mode.
+The logical dedup graph (chunk identities, file-chunk relationships, reuse patterns) must be
+identical between uncompressed and compressed modes. Only physical storage representation changes.
+
+Step 6.8 validates:
+
+- **Chunk identities unchanged:** The same file content produces the same chunk hash
+- **Dedup graph unchanged:** File-chunk relationships are identical across compression modes
+- **No duplicate chunk storage introduced:** Identical data is deduplicated identically regardless of compression
+- **Restore unchanged:** Files restored from either mode produce identical content
+
+### Test matrix
+
+| Compression | Encryption | Duplicate Files | Partial Overlap | Modified Versions |
+| --- | --- | --- | --- | --- |
+| none | plain | ✓ | ✓ | ✓ |
+| none | aes-gcm | ✓ | ✓ | ✓ |
+| zstd | plain | ✓ | ✓ | ✓ |
+| zstd | aes-gcm | ✓ | ✓ | ✓ |
+
+### Validation checklist
+
+- ✓ **Chunk count identical:** Exact same number of unique chunks across compression modes
+- ✓ **Chunk hashes identical:** All chunk identifiers match byte-for-byte
+- ✓ **File-chunk relationships identical:** Mapping of files to chunks is the same
+- ✓ **Dedup ratio identical:** Total stored size / unique chunk size yields identical ratio
+- ✓ **File references identical:** Number of logical file references is the same
+- ✓ **Restores identical:** Files restored from either mode produce byte-identical content
+
+### Implementation
+
+Dedup semantics matrix validation runs in tests/adversarial/:
+
+```bash
+# Run dedup semantics tests (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep68" -v
+
+# Test names:
+# - TestStep68DedupSemanticCompressionIndependence: Core matrix (2 encryptions × 2 compressions)
+# - TestStep68CrossCompressionDedupConsistency: Full 4-mode consistency (all mode combinations)
+
+# Example with extended output
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep68DedupSemanticCompressionIndependence" -v -race
+```
+
+Test payloads include:
+
+- **Duplicate files:** Identical content stored multiple times (should deduplicate completely)
+- **Partially overlapping:** Files with common prefix/suffix (should chunk-deduplicate section boundaries)
+- **Modified versions:** Content with incremental changes (should deduplicate unchanged sections)
+- **Different content:** Unique files (baseline for dedup ratio calculation)
+
+### Guarantees for operators
+
+1. **Dedup effectiveness is independent of compression:** Enabling `COLDKEEP_COMPRESSION=zstd` does not reduce dedup effectiveness; files using identical content still share chunks.
+2. **Logical dedup graph is invariant:** The set of unique chunks and their relationships is identical regardless of compression setting.
+3. **Only physical storage representation changes:** Compressed chunks occupy less disk space but represent the same logical dedup structure.
+4. **Cross-compression queries are safe:** Repositories with mixed compression modes (if supported by migration) maintain consistent dedup semantics.
+
 ## CI policy
 
 CI now separates correctness checks from benchmark measurement:
