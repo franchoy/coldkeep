@@ -2,11 +2,14 @@ package storage
 
 import (
 	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
@@ -33,6 +36,16 @@ type blockSnapshot struct {
 	PlaintextSize    int64
 	CompressedSize   int64
 	StoredBytes      []byte
+}
+
+type compressionSmokeMeasurement struct {
+	StoreDuration   time.Duration
+	RestoreDuration time.Duration
+	VerifyDuration  time.Duration
+	StoredBytes     int64
+	LogicalBytes    int64
+	PeakHeapAlloc   uint64
+	HeapIncrease    uint64
 }
 
 func writeFeatureGateInputFile(t *testing.T, data []byte) string {
@@ -317,6 +330,105 @@ func setRepositoryCompressionForTest(t *testing.T, dbconn *sql.DB, codec string,
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit repository compression update: %v", err)
+	}
+}
+
+func readFileByteTotalsForSmoke(t *testing.T, dbconn *sql.DB, fileID int64) (storedBytes int64, logicalBytes int64) {
+	t.Helper()
+
+	if err := dbconn.QueryRow(`
+		SELECT COALESCE(SUM(sb.stored_size), 0), COALESCE(SUM(sb.plaintext_size), 0)
+		FROM storage_blocks sb
+		JOIN chunk_block_refs r ON r.block_id = sb.id
+		JOIN file_chunk fc ON fc.chunk_id = r.chunk_id
+		WHERE fc.logical_file_id = $1
+	`, fileID).Scan(&storedBytes, &logicalBytes); err != nil {
+		t.Fatalf("read stored/logical byte totals for file %d: %v", fileID, err)
+	}
+	return storedBytes, logicalBytes
+}
+
+func gzipBytesForSmoke(t *testing.T, payload []byte) []byte {
+	t.Helper()
+
+	var out bytes.Buffer
+	zw := gzip.NewWriter(&out)
+	if _, err := zw.Write(payload); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return out.Bytes()
+}
+
+func runCompressionSmokeMeasurement(t *testing.T, codec string, payload []byte) compressionSmokeMeasurement {
+	t.Helper()
+
+	repo := NewTestRepository(t, WithCompression(codec), WithCompressionLevel(3))
+
+	runtime.GC()
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	baseline := mem.HeapAlloc
+	peak := baseline
+	recordPeak := func() {
+		runtime.ReadMemStats(&mem)
+		if mem.HeapAlloc > peak {
+			peak = mem.HeapAlloc
+		}
+	}
+
+	inPath := writeFeatureGateInputFile(t, payload)
+	start := time.Now()
+	result, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store with codec=%s: %v", codec, err)
+	}
+	storeDuration := time.Since(start)
+	recordPeak()
+
+	outPath := filepath.Join(t.TempDir(), "step514-"+codec+"-restore.bin")
+	start = time.Now()
+	if _, err := restoreFileWithDBAndDir(repo.DB, result.FileID, outPath, repo.ContainersDir, RestoreOptions{Overwrite: true}); err != nil {
+		t.Fatalf("restore with codec=%s: %v", codec, err)
+	}
+	restoreDuration := time.Since(start)
+	recordPeak()
+
+	restored, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read restored payload with codec=%s: %v", codec, err)
+	}
+	if !bytes.Equal(restored, payload) {
+		t.Fatalf("restored payload mismatch with codec=%s", codec)
+	}
+
+	start = time.Now()
+	if err := verifypkg.VerifyFileStandardWithContainersDir(repo.DB, int(result.FileID), repo.ContainersDir); err != nil {
+		t.Fatalf("verify file with codec=%s: %v", codec, err)
+	}
+	verifyDuration := time.Since(start)
+	recordPeak()
+
+	if err := verifypkg.VerifySystemStandardWithContainersDir(repo.DB, repo.ContainersDir); err != nil {
+		t.Fatalf("verify system with codec=%s: %v", codec, err)
+	}
+	recordPeak()
+
+	storedBytes, logicalBytes := readFileByteTotalsForSmoke(t, repo.DB, result.FileID)
+
+	if peak < baseline {
+		peak = baseline
+	}
+	return compressionSmokeMeasurement{
+		StoreDuration:   storeDuration,
+		RestoreDuration: restoreDuration,
+		VerifyDuration:  verifyDuration,
+		StoredBytes:     storedBytes,
+		LogicalBytes:    logicalBytes,
+		PeakHeapAlloc:   peak,
+		HeapIncrease:    peak - baseline,
 	}
 }
 
@@ -605,5 +717,77 @@ func TestFeatureGatedCompressionSwitchDoesNotMigrateExistingBlocksStep513(t *tes
 
 	if err := verifypkg.VerifySystemStandardWithContainersDir(repo.DB, repo.ContainersDir); err != nil {
 		t.Fatalf("verify repository after mixed compression files: %v", err)
+	}
+}
+
+func TestFeatureGatedCompressionActivationBenchmarkSmokeStep514(t *testing.T) {
+	RequireTestCompression(t, "zstd")
+
+	baseSource := bytes.Repeat([]byte("package main\n// step514 text/source benchmark smoke\nfunc bench(){println(\"x\")}\n"), 8192)
+	randomData := deterministicNoise(1024 * 1024)
+	alreadyCompressed := gzipBytesForSmoke(t, bytes.Repeat([]byte("already-compressed-step514-seed-"), 32768))
+	if len(alreadyCompressed) < 1024*1024 {
+		pad := deterministicNoise(1024*1024 - len(alreadyCompressed))
+		alreadyCompressed = append(alreadyCompressed, pad...)
+	}
+
+	datasets := []struct {
+		name    string
+		payload []byte
+	}{
+		{name: "text-source", payload: baseSource[:1024*1024]},
+		{name: "random", payload: randomData},
+		{name: "already-compressed", payload: alreadyCompressed[:1024*1024]},
+	}
+
+	const maxAdditionalHeapBytes uint64 = 256 * 1024 * 1024
+
+	for _, ds := range datasets {
+		ds := ds
+		t.Run(ds.name, func(t *testing.T) {
+			none := runCompressionSmokeMeasurement(t, storagecompression.CompressionNone, ds.payload)
+			zstd := runCompressionSmokeMeasurement(t, storagecompression.CompressionZstd, ds.payload)
+
+			if none.LogicalBytes <= 0 || zstd.LogicalBytes <= 0 {
+				t.Fatalf("expected positive logical byte totals, none=%d zstd=%d", none.LogicalBytes, zstd.LogicalBytes)
+			}
+
+			noneRatio := float64(none.StoredBytes) / float64(none.LogicalBytes)
+			zstdRatio := float64(zstd.StoredBytes) / float64(zstd.LogicalBytes)
+
+			t.Logf("step514 dataset=%s store_none=%s store_zstd=%s restore_none=%s restore_zstd=%s verify_none=%s verify_zstd=%s stored_none=%d stored_zstd=%d ratio_none=%.4f ratio_zstd=%.4f peak_heap_none=%d peak_heap_zstd=%d",
+				ds.name,
+				none.StoreDuration,
+				zstd.StoreDuration,
+				none.RestoreDuration,
+				zstd.RestoreDuration,
+				none.VerifyDuration,
+				zstd.VerifyDuration,
+				none.StoredBytes,
+				zstd.StoredBytes,
+				noneRatio,
+				zstdRatio,
+				none.PeakHeapAlloc,
+				zstd.PeakHeapAlloc,
+			)
+
+			if ds.name == "text-source" && zstdRatio >= noneRatio {
+				t.Fatalf("expected compression ratio improvement for text/source dataset: none=%.4f zstd=%.4f", noneRatio, zstdRatio)
+			}
+
+			if ds.name == "random" {
+				// Store-if-smaller policy should avoid significant expansion for incompressible data.
+				if zstd.StoredBytes > int64(float64(none.StoredBytes)*1.05) {
+					t.Fatalf("expected random dataset to avoid significant expansion under zstd/store-if-smaller: none=%d zstd=%d", none.StoredBytes, zstd.StoredBytes)
+				}
+			}
+
+			if none.HeapIncrease > maxAdditionalHeapBytes {
+				t.Fatalf("unexpected none memory spike in smoke test: heap_increase=%d threshold=%d", none.HeapIncrease, maxAdditionalHeapBytes)
+			}
+			if zstd.HeapIncrease > maxAdditionalHeapBytes {
+				t.Fatalf("unexpected zstd memory spike in smoke test: heap_increase=%d threshold=%d", zstd.HeapIncrease, maxAdditionalHeapBytes)
+			}
+		})
 	}
 }
