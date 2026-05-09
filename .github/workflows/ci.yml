@@ -554,6 +554,22 @@ jobs:
           DB_SSLMODE: disable
         run: ./coldkeep benchmark run --dataset small --workers 4 --output json | tee benchmark-${{ matrix.compression }}-w4.json
 
+      - name: Check regression (workers=1, uncompressed mode)
+        if: matrix.compression == 'none'
+        run: >-
+          python3 scripts/validate_regression_thresholds.py check benchmark-none-w1.json
+          --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
+          --mode uncompressed
+          --json-report regression-report-none-w1.json
+
+      - name: Check regression (workers=1, compressed mode)
+        if: matrix.compression == 'zstd'
+        run: >-
+          python3 scripts/validate_regression_thresholds.py check benchmark-zstd-w1.json
+          --baseline benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
+          --mode compressed
+          --json-report regression-report-zstd-w1.json
+
       - name: Upload benchmark outputs
         if: always()
         uses: actions/upload-artifact@v5
@@ -562,6 +578,7 @@ jobs:
           path: |
             benchmark-${{ matrix.compression }}-w1.json
             benchmark-${{ matrix.compression }}-w4.json
+            regression-report-${{ matrix.compression }}-w1.json
           if-no-files-found: ignore
 
   ci-required:

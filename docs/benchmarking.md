@@ -223,17 +223,124 @@ retained for historical v1.6/v1.7 context.
    an identical `relative-path → digest` map across isolated runs, proving that
    user-visible restore output is byte-for-bit stable.
 
-## Comparison thresholds
+## Regression Thresholds (v1.9)
 
-| Context | Flag | Threshold | Meaning |
+Benchmarks are now actionable through defined regression thresholds. Thresholds are
+mode-specific (uncompressed vs. compressed) and case-specific, balancing detection
+sensitivity with normal run-to-run variance.
+
+**Official policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
+for the authoritative threshold definition.
+
+### Uncompressed mode (packed + aes-gcm + none)
+
+**Strict thresholds:**
+
+| Metric | Default | Rationale |
+| --- | --- | --- |
+| Store throughput regression | > 5% | Production baseline; strict monitoring required |
+| Restore throughput regression | > 5% | Critical read path; regressions must be justified |
+| Metadata operation regression | > 3% | snapshot-creation, gc-after-churn, stats-inspect |
+| Memory increase | > 10% | Not yet enforced via CLI but monitored |
+
+Any regression exceeding these thresholds **fails CI** and must be investigated or reverted.
+
+### Compressed mode (packed + aes-gcm + zstd)
+
+**Stage 1 (v1.9–v1.10): Warning thresholds only**
+
+Compressed thresholds account for natural compression overhead observed in v1.9 baseline:
+- `store-large-file`: 13.8% duration overhead typical
+- `snapshot-creation`: 27.2% duration overhead typical
+- `stats-inspect`: 16.7% duration overhead typical
+
+Warning thresholds are set ~5–10% above baseline to detect real regressions:
+
+| Operation | Store/Restore | Metadata | Verify |
 | --- | --- | --- | --- |
-| Local / dev | `--threshold 20` (default) | 20% | Fail if any scenario is >20% slower or throughput drops >20% |
-| CI | `--threshold 100` | 100% | Fail only if a scenario becomes **more than 2× slower** (disaster detection) |
+| **Throughput warning** | 15–25% | 25–35% | 15% |
+| **Duration warning** | 15–25% | 25–35% | 15% |
 
-The 20% default is intentionally tight so developers notice regressions during active work.
-The 100% CI threshold tolerates normal run-to-run variance on short-duration small-dataset
-runs (snapshot and GC timings are DB/filesystem sensitive) while still catching catastrophic
-regressions.
+Compressed-mode regressions **log warnings** but do not fail CI in v1.9. This permits
+natural variance while capturing trends for future hardening phases.
+
+**Per-case thresholds (compressed):**
+
+| Case | Duration Warning | Throughput Warning |
+| --- | --- | --- |
+| store-large-file | 25% | 25% |
+| store-many-small-files | 20% | 20% |
+| store-mixed-dataset | 25% | 25% |
+| restore-large-file | 15% | 15% |
+| restore-many-files | 15% | 15% |
+| snapshot-creation | 35% | 35% |
+| gc-after-churn | 15% | 15% |
+| stats-inspect | 25% | 25% |
+| verify-system-deep | 15% | 15% |
+
+**Future plan (v1.11+):**
+- Analyze compression benefit vs. performance cost
+- Convert warnings to hard-fail thresholds if justified
+- Require cost-benefit analysis for any compression-mode exception
+
+### Local development workflow
+
+Use `--compare` with thresholds matching your change context:
+
+```bash
+# Against uncompressed baseline (recommended for most work)
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+  ./coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
+  --threshold 5
+
+# Against compressed baseline (if working on compression features)
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+  ./coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
+  --threshold 20
+```
+
+The `--compare` flag uses single-run thresholds; for production gates involving multiple
+runs, use the helper script:
+
+```bash
+# Regenerate baselines and validate against current code
+scripts/run_v19_baseline_pair.sh --threshold 5
+```
+
+### CI policy
+
+CI applies thresholds as follows:
+
+1. **Uncompressed mode (hard fail):** CI runs benchmark against
+   `benchmark-baseline-v1.9-packed-aes-gcm-none-*` at threshold 5%. Any regression
+   exceeding 5% fails the CI run and blocks merge.
+
+2. **Compressed mode (warnings only):** CI runs benchmark against
+   `benchmark-baseline-v1.9-packed-aes-gcm-zstd-*` at threshold 20%. Violations log
+   warnings but do not fail CI in v1.9.
+
+3. **Measurement variance:** Small-dataset single-run variance is expected (±2%);
+   real regressions typically exceed 3–5% and are reliably detected.
+
+### Updating thresholds
+
+When to update thresholds:
+
+1. **Performance improvement:** If you improve performance (e.g., new optimization),
+   the baseline becomes a new regression floor; regenerate baselines:
+   ```bash
+   scripts/run_v19_baseline_pair.sh --threshold 100
+   ```
+
+2. **Justifiable slowdown:** If a change introduces acceptable slowdown (e.g., new
+   feature, safety boundary), document the cost-benefit analysis and increase the
+   per-case threshold if warranted. Update `regression-thresholds.yaml` with rationale.
+
+3. **Phase transition:** Moving from v1.10 to v1.11 to apply compressed hard-fail
+   thresholds requires analysis of compression impact trends and explicit approval
+   from the release engineering team.
 
 ## CI policy
 
@@ -241,10 +348,10 @@ CI now separates correctness checks from benchmark measurement:
 
 1. The correctness matrix runs independently from benchmarks and covers the supported codec combinations.
 2. The benchmark matrix runs the small dataset only for the recommended packed `aes-gcm` production modes with `COLDKEEP_COMPRESSION=none` and `COLDKEEP_COMPRESSION=zstd`.
-3. Benchmark outputs are captured as artifacts for inspection. Tight regression comparison is still available locally with `--compare`, but it is no longer coupled to the correctness path.
+3. Benchmark outputs are captured as artifacts for inspection. Threshold-based regression comparison is enforced via `--compare` with mode-specific thresholds; violations are reported per the v1.9 regression thresholds policy above.
 
-Run the `--compare` flag with the default `--threshold 20` locally to investigate
-potential regressions before opening a PR.
+See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
+and CI workflow for authoritative threshold application.
 
 ## Phase 4 implementation order
 

@@ -1,0 +1,177 @@
+# Coldkeep v1.9 Benchmark Regression Thresholds
+# 
+# Defines per-mode and per-case thresholds for benchmark regression detection.
+# Used in CI and local validation to ensure performance remains stable.
+#
+# Policy:
+# - Uncompressed (none): strict thresholds to catch any performance degradation
+# - Compressed (zstd): more tolerant initially, with warning + hard-fail stages
+# - Memory is monitored where available but not currently enforced via --compare
+
+version: "1.0"
+generated_at_utc: "2026-05-09T10:00:00Z"
+effective_from_release: "v1.9"
+
+# Global defaults (applied if no per-case override exists)
+defaults:
+  # Uncompressed mode: strict thresholds
+  uncompressed:
+    throughput_regression_pct: 5
+    duration_regression_pct: 5
+    memory_increase_pct: 10
+  
+  # Compressed mode: phased approach
+  # Stage 1 (v1.9-v1.10): warnings only
+  # Stage 2 (v1.11+): hard fails if justified by compression benefit analysis
+  compressed:
+    stage: "1_warnings_only"
+    throughput_regression_warning_pct: 15
+    throughput_regression_hard_fail_pct: null  # not enforced in stage 1
+    duration_regression_warning_pct: 15
+    duration_regression_hard_fail_pct: null    # not enforced in stage 1
+    memory_increase_warning_pct: 20
+    memory_increase_hard_fail_pct: null        # not enforced in stage 1
+
+# Per-case overrides
+# Use when a specific case should have different thresholds
+per_case_overrides:
+  uncompressed:
+    # Store operations: network-bound, allow 5% regression
+    store-large-file:
+      throughput_regression_pct: 5
+      duration_regression_pct: 5
+    
+    store-many-small-files:
+      throughput_regression_pct: 5
+      duration_regression_pct: 5
+    
+    store-mixed-dataset:
+      throughput_regression_pct: 5
+      duration_regression_pct: 5
+    
+    # Restore operations: I/O bound, allow 5% regression
+    restore-large-file:
+      throughput_regression_pct: 5
+      duration_regression_pct: 5
+    
+    restore-many-files:
+      throughput_regression_pct: 5
+      duration_regression_pct: 5
+    
+    # Metadata operations: more stable, stricter thresholds
+    snapshot-creation:
+      throughput_regression_pct: 3
+      duration_regression_pct: 3
+    
+    gc-after-churn:
+      throughput_regression_pct: 3
+      duration_regression_pct: 3
+    
+    stats-inspect:
+      throughput_regression_pct: 3
+      duration_regression_pct: 3
+    
+    verify-system-deep:
+      throughput_regression_pct: 5
+      duration_regression_pct: 5
+  
+  compressed:
+    # Compression naturally introduces overhead; thresholds set above baseline deltas.
+    # Typical compressed deltas from v1.9 baseline pair:
+    #   store-large-file: 13.8% duration, 12.1% throughput
+    #   snapshot-creation: 27.2% duration, 21.4% throughput
+    #   stats-inspect: 16.7% duration, 14.3% throughput
+    # Warnings set ~5-10% above baseline to catch real regressions while ignoring variance.
+    
+    store-large-file:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 25
+      duration_regression_warning_pct: 25
+    
+    store-many-small-files:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 20
+      duration_regression_warning_pct: 20
+    
+    store-mixed-dataset:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 25
+      duration_regression_warning_pct: 25
+    
+    # Restore with compression: CPU-bound decompression (5-10% overhead)
+    restore-large-file:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 15
+      duration_regression_warning_pct: 15
+    
+    restore-many-files:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 15
+      duration_regression_warning_pct: 15
+    
+    # Metadata operations: higher baseline overhead (snapshot ~27%, stats ~17%)
+    snapshot-creation:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 35
+      duration_regression_warning_pct: 35
+    
+    gc-after-churn:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 15
+      duration_regression_warning_pct: 15
+    
+    stats-inspect:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 25
+      duration_regression_warning_pct: 25
+    
+    verify-system-deep:
+      stage: "1_warnings_only"
+      throughput_regression_warning_pct: 15
+      duration_regression_warning_pct: 15
+
+# Tolerance bands for measurement variance
+# Used to distinguish between normal run-to-run variance and actual regressions
+measurement_variance:
+  # Small dataset with repeat=1 has higher inherent variance
+  small_dataset_repeat_1:
+    acceptable_variance_pct: 2
+    note: "Single-run variance is normal; recommend 3+ runs for production gates"
+  
+  # Recommendation for future phases
+  future_multi_run:
+    recommended_repeat: 3
+    recommended_variance_pct: 1
+
+# CI application
+ci_policy:
+  # When to apply thresholds
+  apply_to:
+    - push_to_main
+    - pull_requests_targeting_main
+    - release_branches
+  
+  # Which baseline to use
+  baseline_modes:
+    - "packed + aes-gcm + none"
+    - "packed + aes-gcm + zstd"
+  
+  # How to report violations
+  reporting:
+    uncompressed_violations: "hard_fail"  # CI exits with error code
+    compressed_stage_1_warnings: "log_only"  # CI reports but continues
+    compressed_hard_fails: "hard_fail"  # When stage 2 is active
+
+# Notes for release engineering
+release_notes:
+  v1_9:
+    - "Initial threshold set based on v1.9 baseline pair."
+    - "Uncompressed mode enforces strict 5% thresholds."
+    - "Compressed mode warnings only in v1.9; hard fails deferred to v1.11."
+    - "Memory thresholds defined but not yet enforced via CLI --compare."
+    - "Per-case overrides recognize metadata operation stability."
+  
+  future_stages:
+    - "v1.10: Continue monitoring compressed deltas; refine warnings if needed."
+    - "v1.11: Evaluate compression benefit vs. performance cost; consider hard fails."
+    - "v1.12+: Memory thresholds enforced if CLI adds per-case memory reporting."
