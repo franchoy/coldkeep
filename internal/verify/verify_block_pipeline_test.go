@@ -3,6 +3,7 @@ package verify
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -164,5 +165,95 @@ func TestVerifyStoredBlockLogicalHashRequired(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), verifyErrBlockHashMismatch) {
 		t.Fatalf("expected block hash mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyStoredBlockOrderingPrefersPhysicalBeforeCompressedAndLogical(t *testing.T) {
+	logicalPayload := buildPipelineEncodedBytes(t, []byte("verify-order-physical-first"))
+	zstd, err := storagecompression.NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	compressedPayload, err := zstd.Compress(logicalPayload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	level := 3
+	meta := BlockStorageMetadata{
+		BlockID:          505,
+		ContainerID:      55,
+		ContainerOffset:  1024,
+		ContainerName:    "container_order.ck",
+		ContainerMaxSize: 1 << 20,
+		FormatVersion:    1,
+		Codec:            "none",
+		PlaintextSize:    int64(len(logicalPayload)),
+		StoredSize:       int64(len(compressedPayload)),
+		CompressionCodec: "zstd",
+		CompressionLevel: &level,
+		LogicalHash:      bytes.Repeat([]byte{0x11}, 32),
+		CompressedHash:   bytes.Repeat([]byte{0x22}, 32),
+		PhysicalHash:     bytes.Repeat([]byte{0x33}, 32),
+	}
+
+	_, err = VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: compressedPayload})
+	if err == nil {
+		t.Fatal("expected VerifyStoredBlock to fail")
+	}
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %v", err)
+	}
+	if vf.Stage != VerifyStagePhysicalPayload {
+		t.Fatalf("expected first failing stage %q, got %q", VerifyStagePhysicalPayload, vf.Stage)
+	}
+	if vf.Category != verifyErrPhysicalHashMismatch {
+		t.Fatalf("expected first failing category %q, got %q", verifyErrPhysicalHashMismatch, vf.Category)
+	}
+}
+
+func TestVerifyStoredBlockOrderingPrefersCompressedBeforeLogical(t *testing.T) {
+	logicalPayload := buildPipelineEncodedBytes(t, []byte("verify-order-compressed-first"))
+	zstd, err := storagecompression.NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("NewZstdCompressor: %v", err)
+	}
+	compressedPayload, err := zstd.Compress(logicalPayload)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	level := 3
+	meta := BlockStorageMetadata{
+		BlockID:          606,
+		ContainerID:      66,
+		ContainerOffset:  2048,
+		ContainerName:    "container_order2.ck",
+		ContainerMaxSize: 1 << 20,
+		FormatVersion:    1,
+		Codec:            "none",
+		PlaintextSize:    int64(len(logicalPayload)),
+		StoredSize:       int64(len(compressedPayload)),
+		CompressionCodec: "zstd",
+		CompressionLevel: &level,
+		LogicalHash:      bytes.Repeat([]byte{0x44}, 32),
+		CompressedHash:   bytes.Repeat([]byte{0x55}, 32),
+		PhysicalHash:     blocks.HashPhysical(compressedPayload),
+	}
+
+	_, err = VerifyStoredBlock(context.Background(), meta, staticContainerReader{payload: compressedPayload})
+	if err == nil {
+		t.Fatal("expected VerifyStoredBlock to fail")
+	}
+	var vf *VerifyFailure
+	if !errors.As(err, &vf) {
+		t.Fatalf("expected VerifyFailure, got: %v", err)
+	}
+	if vf.Stage != VerifyStageCompressedHash {
+		t.Fatalf("expected first failing stage %q, got %q", VerifyStageCompressedHash, vf.Stage)
+	}
+	if vf.Category != verifyErrCompressedHashMismatch {
+		t.Fatalf("expected first failing category %q, got %q", verifyErrCompressedHashMismatch, vf.Category)
 	}
 }

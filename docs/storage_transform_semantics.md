@@ -157,13 +157,28 @@ Meaning:
 
 ## Transform Ordering Contract
 
-The transform-aware write path is defined conceptually as:
+The transform-aware write path is frozen as:
 
-logical payload -> compress -> encrypt -> physical payload
+logical encode
+-> logical hash
+-> compress
+-> compressed hash
+-> encrypt
+-> physical hash
+-> persist
 
-The reverse read path is defined as:
+The reverse read path is frozen as:
 
-physical payload -> decrypt -> decompress -> logical payload
+read payload
+-> physical hash verify
+-> decrypt
+-> compressed hash verify
+-> decompress
+-> logical hash verify
+-> decode logical block
+
+This ordering is stable repository semantics for v1.9 and later.
+Reordering stages is a major contract change.
 
 Current runtime behavior:
 

@@ -34,18 +34,31 @@
 // their respective layer boundaries and stored in separate columns.
 // They carry no dedup semantics.
 //
-// # Transform ordering invariant
+// # Transform ordering invariant (frozen v1.9)
 //
-// Write path applies transforms in forward order:
+// Write path contract:
 //
-//	logical block → transform[0] → transform[1] → ... → persisted payload
+//	logical encode
+//	→ logical hash
+//	→ compression
+//	→ compressed hash
+//	→ encryption
+//	→ physical hash
+//	→ persist
 //
-// Read path applies transforms in reverse order:
+// Read path contract (strict inverse):
 //
-//	persisted payload → reverse(transform[n-1]) → ... → reverse(transform[0]) → logical block
+//	read payload
+//	→ physical hash verify
+//	→ decrypt
+//	→ compressed hash verify
+//	→ decompress
+//	→ logical hash verify
+//	→ decode logical block
 //
-// This symmetry is enforced by TransformPipeline and must be preserved
-// by all future transform implementations.
+// TransformPipeline enforces forward encode and reverse decode symmetry for
+// transform stages. Changing stage order changes repository semantics and is
+// intentionally considered a new major storage contract.
 //
 // # Future compression insertion point
 //
