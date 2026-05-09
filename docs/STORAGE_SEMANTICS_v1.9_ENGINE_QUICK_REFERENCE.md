@@ -85,11 +85,13 @@ type StoredBlock struct {
 
 ### D. Repository Config is NOT Engine Authority
 
-**Config Read:** At write time only
+**Repository Defaults (write policy only):**
 ```
 repository_config table:
-  - Key "compression": Value = "none" (default) | "zstd"
-  - Key "compression_level": Value = int [1..9]
+  - default_compression: "none" (default) | "zstd"
+  - default_compression_level: int [1..9]
+  - default_encryption: "none" by default (write path may opt into aes-gcm)
+  - default_packing: "packed-multi" in v1.9
 ```
 
 **Read/Verify Path:** IGNORES repository config
@@ -99,7 +101,7 @@ Read: Load block → Check block.codec (not config)
        Decrypt IF block.codec="aes-gcm" (not config)
 ```
 
-**Engine Implication:** Config is historical only. Block metadata is source-of-truth.
+**Engine Implication:** Defaults govern future writes only. Block metadata is source-of-truth forever.
 
 ---
 

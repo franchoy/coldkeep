@@ -451,14 +451,16 @@ Verify skips containers that are quarantined (corrupt/missing)
 ### 7.1 The Separation Contract (FROZEN)
 
 **Repository Configuration (READ AT WRITE TIME):**
-- `compression` setting: Used when encoding new blocks
-- `compression_level` setting: Used when encoding new blocks
-- `codec` setting: N/A (implied by COLDKEEP_KEY environment)
+- `default_compression`: Policy for newly written blocks
+- `default_compression_level`: Policy for newly written blocks (if zstd)
+- `default_encryption`: Policy for newly written blocks (none unless write path opts into aes-gcm)
+- `default_packing`: Policy for newly written blocks (v1.9 packed-multi by default)
 
 **Block Metadata (IMMUTABLE):**
 - `compression_codec` field: Actual compression applied (set at write time)
 - `codec` field: Actual encryption applied (set at write time)
 - Hash fields: Reflect actual transforms applied
+- Packing/placement metadata (`storage_blocks` + `chunk_block_refs`): Actual block layout applied
 
 **Read/Verify Logic (TRUSTS BLOCK METADATA):**
 ```
@@ -466,6 +468,7 @@ IGNORE repository configuration during read/verify.
 USE block.codec to determine if decryption needed.
 USE block.compression_codec to determine if decompression needed.
 USE block hash fields to validate transformations.
+USE persisted block mapping/layout metadata to reconstruct payload.
 
 Reason: Repository config may have changed since block was written.
 Block metadata is the source-of-truth for what was actually done.
@@ -484,6 +487,10 @@ Block metadata is the source-of-truth for what was actually done.
    - File A blocks remain unchanged
 
 **FROZEN INVARIANT:** Database block metadata is single source-of-truth. Configuration is guidance-only.
+
+**RETROCOMPATIBILITY GUARANTEE (FROZEN):**
+- Repository defaults MUST NEVER override historical block interpretation.
+- Old blocks are always interpreted using their persisted metadata, even after default changes.
 
 ### 7.2 Implications for Engine Extraction
 

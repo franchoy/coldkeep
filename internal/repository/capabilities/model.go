@@ -22,6 +22,12 @@ type RepositoryCapabilities struct {
 
 	DefaultCompression      string `json:"default_compression"`
 	DefaultCompressionLevel int    `json:"default_compression_level"`
+	DefaultEncryption       string `json:"default_encryption"`
+	DefaultPacking          string `json:"default_packing"`
+
+	// Read semantics are intentionally metadata-driven forever: repository
+	// defaults are write policy for future blocks only.
+	ReadPathMetadataDriven bool `json:"read_path_metadata_driven"`
 }
 
 const (

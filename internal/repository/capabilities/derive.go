@@ -28,6 +28,9 @@ func Derive(ctx context.Context, dbconn *sql.DB) (RepositoryCapabilities, error)
 	caps := RepositoryCapabilities{
 		DefaultCompression:      CompressionNone,
 		DefaultCompressionLevel: 3,
+		DefaultEncryption:       EncryptionNone,
+		DefaultPacking:          PackingPackedMulti,
+		ReadPathMetadataDriven:  true,
 	}
 
 	supportedCompression := make(map[string]struct{})
@@ -67,8 +70,9 @@ func Derive(ctx context.Context, dbconn *sql.DB) (RepositoryCapabilities, error)
 	if err != nil {
 		return RepositoryCapabilities{}, fmt.Errorf("derive repository capabilities: inspect storage_blocks table: %w", err)
 	}
+	hasChunkBlockRefsTable := false
 	if hasStorageBlocksTable {
-		hasChunkBlockRefsTable, err := tableExists(ctx, dbconn, "chunk_block_refs")
+		hasChunkBlockRefsTable, err = tableExists(ctx, dbconn, "chunk_block_refs")
 		if err != nil {
 			return RepositoryCapabilities{}, fmt.Errorf("derive repository capabilities: inspect chunk_block_refs table: %w", err)
 		}
@@ -95,6 +99,10 @@ func Derive(ctx context.Context, dbconn *sql.DB) (RepositoryCapabilities, error)
 		if err := collectObservedFromStorageBlocks(ctx, dbconn, observedCompression, observedEncryption, observedPacking); err != nil {
 			return RepositoryCapabilities{}, err
 		}
+	}
+
+	if !hasStorageBlocksTable || !hasChunkBlockRefsTable {
+		caps.DefaultPacking = PackingLegacySingle
 	}
 
 	caps.SupportedCompression = sortedSet(supportedCompression)

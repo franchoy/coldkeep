@@ -49,11 +49,28 @@ func TestDeriveFreshSQLiteRepositoryCapabilities(t *testing.T) {
 	if caps.DefaultCompressionLevel != 3 {
 		t.Fatalf("expected default compression level 3, got %d", caps.DefaultCompressionLevel)
 	}
+	if caps.DefaultEncryption != "none" {
+		t.Fatalf("expected default encryption none, got %q", caps.DefaultEncryption)
+	}
+	if caps.DefaultPacking != "packed-multi" {
+		t.Fatalf("expected default packing packed-multi, got %q", caps.DefaultPacking)
+	}
+	if !caps.ReadPathMetadataDriven {
+		t.Fatalf("expected read path to be metadata-driven")
+	}
 }
 
 func TestDeriveObservedMixedCapabilities(t *testing.T) {
 	dbconn := openSQLiteWithSchema(t)
 	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`
+		UPDATE repository_config
+		SET value = 'none'
+		WHERE key = 'compression'
+	`); err != nil {
+		t.Fatalf("set repository default compression=none: %v", err)
+	}
 
 	seedRepositoryForMixedObservation(t, dbconn)
 
@@ -65,6 +82,13 @@ func TestDeriveObservedMixedCapabilities(t *testing.T) {
 	assertSetEqual(t, caps.ObservedPacking, []string{"legacy-single", "packed-multi"})
 	assertSetEqual(t, caps.ObservedCompression, []string{"none", "zstd"})
 	assertSetEqual(t, caps.ObservedEncryption, []string{"aes-gcm", "none"})
+
+	if caps.DefaultCompression != "none" {
+		t.Fatalf("expected repository default compression to remain none, got %q", caps.DefaultCompression)
+	}
+	if !caps.ReadPathMetadataDriven {
+		t.Fatalf("expected read path to remain metadata-driven")
+	}
 }
 
 func TestDeriveLegacyOnlyLayoutCapabilities(t *testing.T) {
@@ -99,6 +123,9 @@ func TestDeriveLegacyOnlyLayoutCapabilities(t *testing.T) {
 		t.Fatalf("expected physical hash support false when storage_blocks is absent")
 	}
 	assertSetEqual(t, caps.ObservedPacking, []string{"legacy-single"})
+	if caps.DefaultPacking != "legacy-single" {
+		t.Fatalf("expected default packing legacy-single for legacy-only layout, got %q", caps.DefaultPacking)
+	}
 }
 
 func openSQLiteWithSchema(t *testing.T) *sql.DB {
