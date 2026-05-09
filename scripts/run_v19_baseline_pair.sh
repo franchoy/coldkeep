@@ -80,6 +80,13 @@ if [[ -z "${COLDKEEP_KEY:-}" ]]; then
   exit 1
 fi
 
+for required_var in DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME DB_SSLMODE; do
+  if [[ -z "${!required_var:-}" ]]; then
+    echo "${required_var} must be set for benchmark runs" >&2
+    exit 1
+  fi
+done
+
 mkdir -p "$OUT_DIR"
 
 BASE_A="$OUT_DIR/benchmark-baseline-v1.9-packed-aes-gcm-none-${DATASET}-w${WORKERS}-r${REPEAT}.json"
@@ -127,6 +134,12 @@ def sha256(path: pathlib.Path) -> str:
 
 env_a = load_envelope(base_a)
 env_b = load_envelope(base_b)
+
+# Normalize baseline files to a single canonical JSON envelope so
+# benchmark --compare can parse them deterministically.
+base_a.write_text(json.dumps(env_a, separators=(',', ':')) + '\n')
+base_b.write_text(json.dumps(env_b, separators=(',', ':')) + '\n')
+
 data_a = env_a['data']
 data_b = env_b['data']
 rows_a = {row['case']: row for row in data_a['rows']}
