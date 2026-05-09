@@ -1666,3 +1666,76 @@ All listed requirements are documented with concrete evidence in tests, benchmar
 Coldkeep v1.9 storage behavior is now fully validated, fully benchmarked, fully compatibility-tested, and semantically stable enough to become the foundation for v1.10 engine extraction.
 
 This invariant is locked for release-readiness and operator trust.
+
+---
+
+## Step 7.1 — Define Repository Capability Model (v1.10 prep)
+
+Phase 7 introduces semantic stabilization for engine extraction without changing
+storage behavior.
+
+Step 7.1 formalizes repository capability semantics in a centralized internal model.
+
+### Goal
+
+Repositories are not homogeneous. A repository can contain mixed storage rows
+across:
+
+- compression codecs
+- encryption modes
+- packing layouts
+- hash metadata availability
+
+Step 7.1 provides one source-of-truth capability surface so engine interfaces do
+not rely on scattered assumptions.
+
+### Implementation
+
+**Package:** `internal/repository/capabilities`
+
+**Core model:** `RepositoryCapabilities`
+
+- `SupportedCompression`
+- `SupportedEncryption`
+- `SupportedPacking`
+- `ObservedCompression`
+- `ObservedEncryption`
+- `ObservedPacking`
+- `SupportsPhysicalHash`
+- `SupportsCompressedHash`
+- `RepositoryFormatVersion`
+- `DefaultCompression`
+- `DefaultCompressionLevel`
+
+**Derivation entrypoint:** `capabilities.Derive(ctx, dbconn)`
+
+Derivation rules:
+
+1. Read schema format version (`schema_version`) and repository defaults
+   (`repository_config`).
+2. Detect table/column availability backend-safely (SQLite/Postgres).
+3. Compute **supported** capabilities from schema shape.
+4. Compute **observed** capabilities from actual block metadata rows.
+5. Keep defaults and observed metadata separate to avoid confusing
+   configuration intent with per-block reality.
+
+### What this step intentionally does NOT do
+
+- no network negotiation
+- no plugin discovery
+- no runtime capability exchange
+- no behavior change in storage write/read paths
+
+### Validation
+
+Unit coverage in `internal/repository/capabilities/derive_test.go` validates:
+
+- fresh repository capability derivation
+- mixed metadata repository derivation (`legacy-single` + `packed-multi`)
+- legacy-only layout derivation after packed tables are absent
+
+Checklist:
+
+- ✔ repository capabilities centralized
+- ✔ no scattered assumptions required for capability meaning
+- ✔ capabilities derived consistently from schema + metadata
