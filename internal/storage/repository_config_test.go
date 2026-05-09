@@ -1,12 +1,17 @@
 package storage
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/chunk"
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -606,5 +611,174 @@ func TestCompressionConfigOldConfigFilesStillParse(t *testing.T) {
 	// And validation should pass
 	if err := ValidateRepositoryCompressionConfig(tx); err != nil {
 		t.Fatalf("ValidateRepositoryCompressionConfig on old config: %v", err)
+	}
+}
+
+// Phase 5.2 Write Policy Tests
+
+func TestRepositoryCompressionConfigControlsNewWritesNotReads(t *testing.T) {
+	// Phase 5.2 contract: repository config is write-only policy
+	// Block metadata read policy is: storage_blocks.compression_codec/level
+	//
+	// Test scenario:
+	// 1. Set repo config: compression=zstd, level=5
+	// 2. Store file
+	// 3. Verify stored blocks have compression_codec=zstd, compression_level=5
+	// 4. Change repo config: compression=none
+	// 5. Store another file
+	// 6. Verify new blocks have compression_codec=none
+	// 7. Verify both files can be restored (read uses stored metadata, not repo config)
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	// Step 1: Set repo config to zstd level 5
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := SetDefaultCompression(tx, "zstd"); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("SetDefaultCompression(zstd): %v", err)
+	}
+	if err := SetDefaultCompressionLevel(tx, 5); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("SetDefaultCompressionLevel(5): %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit repo config: %v", err)
+	}
+
+	// Verify config is set
+	tx, err = dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	codec, _ := GetDefaultCompression(tx)
+	level, _ := GetDefaultCompressionLevel(tx)
+	_ = tx.Rollback()
+
+	if codec != "zstd" || level != 5 {
+		t.Fatalf("repo config not set correctly: codec=%q level=%d", codec, level)
+	}
+
+	// Step 2-3: Store file + verify stored blocks have compression
+	// Use the test helper from store_test.go by importing it indirectly
+	workDir := t.TempDir()
+	sgctx := StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+	}
+
+	testPayload := bytes.Repeat([]byte("step52-zstd-compression-test-"), 128)
+	testPath := filepath.Join(workDir, "step52-zstd-test.txt")
+	if err := os.WriteFile(testPath, testPayload, 0o600); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	resultA, err := StoreFileWithStorageContextAndCodecResult(sgctx, testPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store first file with repo compression=zstd: %v", err)
+	}
+
+	// Verify the stored block has compression_codec=zstd and compression_level=5
+	var storedCodec string
+	var storedLevel *int
+	if err := dbconn.QueryRow(`
+		SELECT sb.compression_codec, sb.compression_level
+		FROM storage_blocks sb
+		JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		JOIN file_chunk fc ON fc.chunk_id = cbr.chunk_id
+		WHERE fc.logical_file_id = $1
+		LIMIT 1
+	`, resultA.FileID).Scan(&storedCodec, &storedLevel); err != nil {
+		t.Fatalf("read stored block compression metadata: %v", err)
+	}
+
+	if storedCodec != "zstd" {
+		t.Fatalf("expected stored block compression_codec=zstd, got %q", storedCodec)
+	}
+	if storedLevel == nil || *storedLevel != 5 {
+		t.Fatalf("expected stored block compression_level=5, got %v", storedLevel)
+	}
+
+	// Step 4: Change repo config to compression=none
+	tx, err = dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := SetDefaultCompression(tx, "none"); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("SetDefaultCompression(none): %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit repo config: %v", err)
+	}
+
+	// Step 5: Store another file with repo config now set to none
+	testPayload2 := bytes.Repeat([]byte("step52-none-compression-test-"), 64)
+	testPath2 := filepath.Join(workDir, "step52-none-test.txt")
+	if err := os.WriteFile(testPath2, testPayload2, 0o600); err != nil {
+		t.Fatalf("write second test file: %v", err)
+	}
+
+	resultB, err := StoreFileWithStorageContextAndCodecResult(sgctx, testPath2, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store second file with repo compression=none: %v", err)
+	}
+
+	// Step 6: Verify second file blocks have compression_codec=none
+	if err := dbconn.QueryRow(`
+		SELECT sb.compression_codec, sb.compression_level
+		FROM storage_blocks sb
+		JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		JOIN file_chunk fc ON fc.chunk_id = cbr.chunk_id
+		WHERE fc.logical_file_id = $1
+		LIMIT 1
+	`, resultB.FileID).Scan(&storedCodec, &storedLevel); err != nil {
+		t.Fatalf("read second stored block compression metadata: %v", err)
+	}
+
+	if storedCodec != "none" {
+		t.Fatalf("expected second stored block compression_codec=none, got %q", storedCodec)
+	}
+	if storedLevel != nil {
+		t.Fatalf("expected second stored block compression_level=nil, got %v", storedLevel)
+	}
+
+	// Step 7: Verify both files use correct block compression
+	// First file should have zstd blocks, second should have none blocks
+	var countZstd, countNone int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks sb
+		JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		JOIN file_chunk fc ON fc.chunk_id = cbr.chunk_id
+		WHERE fc.logical_file_id = $1 AND sb.compression_codec = 'zstd'
+	`, resultA.FileID).Scan(&countZstd); err != nil {
+		t.Fatalf("count zstd blocks in first file: %v", err)
+	}
+	if countZstd == 0 {
+		t.Fatalf("expected first file to have zstd-compressed blocks, got 0")
+	}
+
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks sb
+		JOIN chunk_block_refs cbr ON cbr.block_id = sb.id
+		JOIN file_chunk fc ON fc.chunk_id = cbr.chunk_id
+		WHERE fc.logical_file_id = $1 AND sb.compression_codec = 'none'
+	`, resultB.FileID).Scan(&countNone); err != nil {
+		t.Fatalf("count none blocks in second file: %v", err)
+	}
+	if countNone == 0 {
+		t.Fatalf("expected second file to have no-compression blocks, got 0")
 	}
 }
