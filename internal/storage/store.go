@@ -2972,6 +2972,8 @@ func applyPackedBlockTransforms(
 	enc packedBlockEncoded,
 ) (packedBlockTransformed, error) {
 	// Stage 2a: Compress before encryption (if compression is active).
+	// Store-if-smaller policy: if compressed payload is not smaller than plaintext,
+	// store the block uncompressed. This handles expansion in tiny/random/already-compressed data.
 	compressedPayload := enc.plaintextEncoded
 	compressionCodec := packedStorageBlockCodecNone
 	compressionLevel := compression.level
@@ -2980,8 +2982,15 @@ func applyPackedBlockTransforms(
 		if err != nil {
 			return packedBlockTransformed{}, fmt.Errorf("compress block: %w", err)
 		}
-		compressedPayload = compressed
-		compressionCodec = compression.codec
+		// Apply store-if-smaller policy: only use compressed if it's actually smaller.
+		if len(compressed) < len(enc.plaintextEncoded) {
+			compressedPayload = compressed
+			compressionCodec = compression.codec
+		} else {
+			// Compression expanded the data; store uncompressed instead.
+			compressionCodec = packedStorageBlockCodecNone
+			compressionLevel = nil
+		}
 		if compressionCodec == storagecompression.CompressionNone {
 			compressionLevel = nil
 		}
