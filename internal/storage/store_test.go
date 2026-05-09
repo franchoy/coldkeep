@@ -5035,6 +5035,16 @@ func TestStoreFilePopulatesCompressionMetadataMatrix(t *testing.T) {
 	}
 }
 
+// TestStoreFileCompressionRoundTripIntegrationMatrixStep38 validates the store-if-smaller
+// compression policy. When compression is configured (codec=zstd), blocks are only stored
+// compressed if the compressed size is smaller than plaintext. Incompressible blocks
+// (small files, random data, already-compressed media) are stored uncompressed.
+// This creates mixed repositories where:
+//   - Repetitive data may be stored as zstd (compresses well)
+//   - Random data may be stored as none (compression expands)
+//   - Config means "attempt compression", not "force every block compressed"
+//
+// No force compression mode is exposed; store-if-smaller is the only policy.
 func TestStoreFileCompressionRoundTripIntegrationMatrixStep38(t *testing.T) {
 	deterministicBytes := func(seed int64, size int) []byte {
 		rng := rand.New(rand.NewSource(seed))
