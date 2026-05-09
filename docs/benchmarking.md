@@ -614,6 +614,54 @@ Test set:
 - ✓ **No unbounded memory growth:** repeated compression cycles + GC converge within bounded memory envelope
 - ✓ **Corruption always detected safely:** random byte corruption and truncation both force safe verify failure paths
 
+## Step 6.12 — Validate Legacy Repository Upgrade Path (v1.9)
+
+Core roadmap guarantee: **v1.8 repositories must upgrade safely without rewriting existing data.**
+
+### Validation scope
+
+Step 6.12 validates the v1.8 -> v1.9 upgrade path in a mixed-state repository:
+
+- create v1.8-style repository metadata shape (legacy `blocks` path)
+- upgrade/open with v1.9 runtime path
+- store new compressed blocks post-upgrade
+- restore old and new data together
+- verify old and new data together
+
+Critical invariants:
+
+- **No automatic recompression**
+- **No block rewriting**
+- **No container rewriting**
+
+### Implementation
+
+Legacy upgrade-path validation runs in tests/integration/:
+
+```bash
+# Run Step 6.12 (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/integration -run "TestStep612" -v
+
+# Test names:
+# - TestStep612LegacyUpgradePathNoRewriteIntegration
+```
+
+Key assertions include:
+
+- old legacy `blocks` rows are snapshot-equal before vs after upgrade/new writes
+- old container payload files keep identical size + hash before vs after upgrade/new writes
+- old chunks never gain packed refs (`chunk_block_refs`) automatically
+- new post-upgrade file emits compressed packed rows (`storage_blocks` + `compression_codec=zstd`)
+- restore succeeds for old and new logical files with exact precomputed hashes
+- verify succeeds on mixed old/new repository state
+
+### Validation checklist
+
+- ✓ **Old data untouched:** legacy block rows and legacy container payload bytes are unchanged
+- ✓ **Old blocks readable:** old logical files restore correctly after upgrade
+- ✓ **New blocks coexist safely:** new compressed packed blocks store/restore/verify alongside old legacy data
+- ✓ **Migration only additive:** old metadata path remains intact while new packed metadata is added for new chunks
+
 ## CI policy
 
 CI now separates correctness checks from benchmark measurement:
