@@ -62,6 +62,8 @@ Notes:
 - Legacy repositories remain restorable even after compression is introduced.
 - Mixed repositories containing both legacy and packed rows are expected
   steady-state.
+- Mixed repositories are first-class supported mode; homogeneous-state-only
+  assumptions are invalid.
 
 ### Legacy Readability Guarantee
 

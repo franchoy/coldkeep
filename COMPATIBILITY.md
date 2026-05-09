@@ -31,6 +31,7 @@ This section defines the explicit contract for historical repositories.
 - old repositories remain readable forever within the v1.x compatibility policy
 - historical data remains restorable through metadata replay semantics
 - mixed repositories (legacy + newer block metadata/layout) remain valid steady-state
+- mixed repositories are first-class operating mode, not migration edge case
 
 ### Optional / Not Guaranteed
 
@@ -58,6 +59,12 @@ Path semantics:
 - migration does not imply automatic re-chunking or recompression
 - migration does not imply eager conversion of historical block metadata/layout
 - any future rewrite tooling must be explicit, operator-invoked, and documented as opt-in
+
+Mixed-mode read semantics:
+
+- per-block metadata is authoritative for read/verify behavior
+- repository defaults are non-authoritative for reads
+- compatibility assumptions must not require homogeneous repository state
 
 ## Guarantee 1: Restore Correctness Across Chunker Versions
 

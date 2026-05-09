@@ -342,6 +342,27 @@ IF restore encounters mixed blocks:
 
 ## 5. Mixed Repository Guarantees
 
+### 5.0 First-Class Mixed Repository Contract (FROZEN)
+
+Mixed repositories are normal, expected behavior.
+
+A single repository may legitimately contain, at the same time:
+
+| Block | Compression | Encryption | Packing |
+| --- | --- | --- | --- |
+| A | `none` | `none` | `legacy-single` |
+| B | `none` | `aes-gcm` | `packed-multi` |
+| C | `zstd` | `aes-gcm` | `packed-multi` |
+
+Interpretation rules:
+
+- Per-block metadata is authoritative for reads and verify.
+- Repository defaults are non-authoritative for reads.
+- Homogeneous-repository assumptions are invalid by contract.
+
+**FROZEN INVARIANT:** Mixed-mode coexistence is a supported steady-state, not a
+transition error.
+
 ### 5.1 Mixed Codec State
 
 A single repository can contain:

@@ -146,11 +146,21 @@ restore(file_id, same_repo_state)
 
 ### F. Mixed Repository Behavior (FROZEN)
 
+Mixed repositories are first-class and expected.
+
+Example valid repository state:
+
+| Block | Compression | Encryption | Packing |
+| --- | --- | --- | --- |
+| A | `none` | `none` | `legacy-single` |
+| B | `none` | `aes-gcm` | `packed-multi` |
+| C | `zstd` | `aes-gcm` | `packed-multi` |
+
 **One repository can contain:**
 - Plain (`codec=plain`) + AES-GCM (`codec=aes-gcm`) blocks simultaneously
 - Uncompressed (`compression_codec=none`) + Zstd (`compression_codec=zstd`) blocks simultaneously
 
-**Read Path:** Per-block field determines action. Configuration is ignored.
+**Read Path:** Per-block metadata determines action. Repository defaults are non-authoritative for reads.
 
 **Stats:** Computed from block metadata; config-independent:
 ```
