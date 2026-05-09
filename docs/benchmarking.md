@@ -516,6 +516,54 @@ Implementation details:
 - Restores live files and validates SHA-256 hashes.
 - Runs `verify system` post-GC (`VerifyStandard`) as final safety gate.
 
+## Step 6.10 — Validate Mixed Repository Stability (v1.9)
+
+Core roadmap guarantee: **Mixed repositories are normal behavior and must remain stable.**
+
+### Validation scope
+
+Step 6.10 validates repository stability through an end-to-end evolution path:
+
+- **v1.8 blocks path:** legacy metadata/read path
+- **Phase 5 uncompressed path:** packed metadata with `compression=none`
+- **zstd path:** packed metadata with `compression=zstd`
+- **encryption mode transitions:** `plain` and `aes-gcm` blocks in one repository
+- **store-if-smaller fallback path:** zstd-configured writes that safely store as `none` when compression expands payloads
+
+After evolution, validation executes:
+
+- **restore everything**
+- **verify everything**
+- **GC everything**
+- **stats everything**
+
+### Validation checklist
+
+- ✓ **Mixed repositories stable:** legacy + packed + encrypted + compressed data co-exist safely
+- ✓ **Per-block metadata fully sufficient:** packed block metadata is complete and read-safe
+- ✓ **Repository defaults never required for reads:** restores remain correct after changing repository compression defaults
+
+### Implementation
+
+Mixed repository stability validation runs in tests/adversarial/:
+
+```bash
+# Run Step 6.10 (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep610" -v
+
+# Test names:
+# - TestStep610MixedRepositoryStability
+```
+
+Key assertions include:
+
+- Old chunks remain on legacy read path while new chunks use packed refs.
+- Compression codec distribution contains both `none` and `zstd` in mixed states.
+- Store-if-smaller fallback is observed for incompressible payloads under zstd defaults.
+- Full restore hash checks pass before and after repository-default changes.
+- Verify and GC continue to pass in mixed repository states.
+- Stats report both legacy and packed block populations.
+
 ## CI policy
 
 CI now separates correctness checks from benchmark measurement:
