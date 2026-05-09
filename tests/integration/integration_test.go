@@ -7878,6 +7878,28 @@ func TestVerifyFileFullPassesOnCleanStoredFile(t *testing.T) {
 	}
 }
 
+func TestVerifyFileFullPassesOnCleanPackedMultiChunkFile(t *testing.T) {
+	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_full_packed_multi.bin", 2*1024*1024)
+	defer dbconn.Close()
+
+	var packedRefs int
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM file_chunk fc
+		JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+		WHERE fc.logical_file_id = $1
+	`, fileID).Scan(&packedRefs); err != nil {
+		t.Fatalf("count packed refs: %v", err)
+	}
+	if packedRefs == 0 {
+		t.Fatalf("expected packed block refs for file %d", fileID)
+	}
+
+	if err := maintenance.VerifyCommandWithContainersDir(container.ContainersDir, "file", int(fileID), verify.VerifyFull); err != nil {
+		t.Fatalf("verify file --full on clean packed multi-chunk file should pass: %v", err)
+	}
+}
+
 func TestVerifyFileDeepPassesOnCleanStoredFile(t *testing.T) {
 	dbconn, _, fileID := testutils.SetupStoredFileForVerification(t, "verify_file_deep_clean.bin", 256*1024)
 	defer dbconn.Close()

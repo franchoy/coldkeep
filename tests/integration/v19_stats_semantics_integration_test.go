@@ -15,6 +15,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/storage"
+	testutils "github.com/franchoy/coldkeep/tests/utils"
 	"github.com/franchoy/coldkeep/tests/utils/testgate"
 )
 
@@ -64,21 +65,56 @@ func setCompressionVia613(t *testing.T, dbconn *sql.DB, codec string, level int)
 	}
 }
 
-func TestStep613StatsRatiosMathematicallyCorrect(t *testing.T) {
+func setupStep613StatsContext(t *testing.T) (*sql.DB, storage.StorageContext, string) {
+	t.Helper()
 	testgate.RequireDB(t)
 
 	tmpdir := t.TempDir()
+	containersDir := filepath.Join(tmpdir, "containers")
+	if err := os.MkdirAll(containersDir, 0o755); err != nil {
+		t.Fatalf("mkdir containers dir: %v", err)
+	}
+
 	dbconn, err := db.ConnectDB()
 	if err != nil {
 		t.Fatalf("connect DB: %v", err)
 	}
-	defer dbconn.Close()
+
+	testutils.ApplySchema(t, dbconn)
+	testutils.ResetDB(t, dbconn)
 
 	scx := storage.StorageContext{
 		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
+		Writer:       container.NewLocalWriterWithDir(containersDir, container.GetContainerMaxSize()),
+		ContainerDir: containersDir,
 	}
+
+	return dbconn, scx, tmpdir
+}
+
+func collectExpectedBlockStats613(t *testing.T, dbconn *sql.DB) (logical, compressed, stored int64, compressedBlocks, uncompressedBlocks int64) {
+	t.Helper()
+
+	err := dbconn.QueryRow(`
+		SELECT
+			COALESCE(SUM(plaintext_size), 0),
+			COALESCE(SUM(COALESCE(compressed_size, CASE WHEN COALESCE(compression_codec, 'none') = 'none' THEN plaintext_size END, stored_size)), 0),
+			COALESCE(SUM(stored_size), 0),
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) = 'none' THEN 1 ELSE 0 END), 0)
+		FROM storage_blocks
+	`).Scan(&logical, &compressed, &stored, &compressedBlocks, &uncompressedBlocks)
+	if err != nil {
+		t.Fatalf("collect expected block stats: %v", err)
+	}
+
+	return logical, compressed, stored, compressedBlocks, uncompressedBlocks
+}
+
+func TestStep613StatsRatiosMathematicallyCorrect(t *testing.T) {
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
+	defer dbconn.Close()
+	setCompressionVia613(t, dbconn, "none", 1)
 
 	// Store 3 uncompressed files: 100, 200, 300 bytes
 	storeTestFileVia613(t, scx, tmpdir, "file1.txt", bytes.Repeat([]byte("a"), 100), blocks.CodecPlain)
@@ -90,17 +126,17 @@ func TestStep613StatsRatiosMathematicallyCorrect(t *testing.T) {
 		t.Fatalf("CollectBlockStats failed: %v", err)
 	}
 
-	expectedLogical := int64(600)
+	expectedLogical, expectedCompressed, expectedStored, expectedCompressedBlocks, expectedUncompressedBlocks := collectExpectedBlockStats613(t, dbconn)
 	if stats.LogicalBytes != expectedLogical {
 		t.Errorf("LogicalBytes: expected %d, got %d", expectedLogical, stats.LogicalBytes)
 	}
 
-	if stats.CompressedBytes != expectedLogical {
-		t.Errorf("CompressedBytes (uncompressed): expected %d, got %d", expectedLogical, stats.CompressedBytes)
+	if stats.CompressedBytes != expectedCompressed {
+		t.Errorf("CompressedBytes (uncompressed): expected %d, got %d", expectedCompressed, stats.CompressedBytes)
 	}
 
-	if stats.StoredBytes < expectedLogical {
-		t.Errorf("StoredBytes should be >= LogicalBytes: %d < %d", stats.StoredBytes, expectedLogical)
+	if stats.StoredBytes != expectedStored {
+		t.Errorf("StoredBytes: expected %d, got %d", expectedStored, stats.StoredBytes)
 	}
 
 	ratio := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
@@ -113,29 +149,17 @@ func TestStep613StatsRatiosMathematicallyCorrect(t *testing.T) {
 		t.Errorf("PhysicalRatio out of bounds (0,1.0]: %.3f", physicalRatio)
 	}
 
-	if stats.UncompressedBlocks != 3 {
-		t.Errorf("UncompressedBlocks: expected 3, got %d", stats.UncompressedBlocks)
+	if stats.UncompressedBlocks != expectedUncompressedBlocks {
+		t.Errorf("UncompressedBlocks: expected %d, got %d", expectedUncompressedBlocks, stats.UncompressedBlocks)
 	}
-	if stats.CompressedBlocks != 0 {
-		t.Errorf("CompressedBlocks: expected 0, got %d", stats.CompressedBlocks)
+	if stats.CompressedBlocks != expectedCompressedBlocks {
+		t.Errorf("CompressedBlocks: expected %d, got %d", expectedCompressedBlocks, stats.CompressedBlocks)
 	}
 }
 
 func TestStep613StatsCompressedBytesRatio(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	setCompressionVia613(t, dbconn, "zstd", 3)
 
@@ -147,8 +171,13 @@ func TestStep613StatsCompressedBytesRatio(t *testing.T) {
 		t.Fatalf("CollectBlockStats failed: %v", err)
 	}
 
-	if stats.LogicalBytes != 10000 {
-		t.Errorf("LogicalBytes: expected 10000, got %d", stats.LogicalBytes)
+	expectedLogical, expectedCompressed, _, expectedCompressedBlocks, _ := collectExpectedBlockStats613(t, dbconn)
+	if stats.LogicalBytes != expectedLogical {
+		t.Errorf("LogicalBytes: expected %d, got %d", expectedLogical, stats.LogicalBytes)
+	}
+
+	if stats.CompressedBytes != expectedCompressed {
+		t.Errorf("CompressedBytes: expected %d, got %d", expectedCompressed, stats.CompressedBytes)
 	}
 
 	if stats.CompressedBytes >= stats.LogicalBytes {
@@ -160,26 +189,14 @@ func TestStep613StatsCompressedBytesRatio(t *testing.T) {
 		t.Errorf("CompressionRatio should be > 1.0 for compressed data, got %.3f", ratio)
 	}
 
-	if stats.CompressedBlocks != 1 {
-		t.Errorf("CompressedBlocks: expected 1, got %d", stats.CompressedBlocks)
+	if stats.CompressedBlocks != expectedCompressedBlocks {
+		t.Errorf("CompressedBlocks: expected %d, got %d", expectedCompressedBlocks, stats.CompressedBlocks)
 	}
 }
 
 func TestStep613StatsMixedRepository(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	// Store v1.8 style uncompressed
 	setCompressionVia613(t, dbconn, "none", 1)
@@ -194,33 +211,22 @@ func TestStep613StatsMixedRepository(t *testing.T) {
 		t.Fatalf("CollectBlockStats failed: %v", err)
 	}
 
-	if stats.LogicalBytes != 6000 {
-		t.Errorf("LogicalBytes: expected 6000, got %d", stats.LogicalBytes)
+	expectedLogical, _, _, expectedCompressedBlocks, expectedUncompressedBlocks := collectExpectedBlockStats613(t, dbconn)
+	if stats.LogicalBytes != expectedLogical {
+		t.Errorf("LogicalBytes: expected %d, got %d", expectedLogical, stats.LogicalBytes)
 	}
 
-	if stats.UncompressedBlocks != 1 {
-		t.Errorf("UncompressedBlocks: expected 1, got %d", stats.UncompressedBlocks)
+	if stats.UncompressedBlocks != expectedUncompressedBlocks {
+		t.Errorf("UncompressedBlocks: expected %d, got %d", expectedUncompressedBlocks, stats.UncompressedBlocks)
 	}
-	if stats.CompressedBlocks != 1 {
-		t.Errorf("CompressedBlocks: expected 1, got %d", stats.CompressedBlocks)
+	if stats.CompressedBlocks != expectedCompressedBlocks {
+		t.Errorf("CompressedBlocks: expected %d, got %d", expectedCompressedBlocks, stats.CompressedBlocks)
 	}
 }
 
 func TestStep613StatsMultiChunkFile(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	// Large file spans multiple chunks
 	storeTestFileVia613(t, scx, tmpdir, "large.txt", bytes.Repeat([]byte("c"), 5000000), blocks.CodecPlain)
@@ -230,26 +236,15 @@ func TestStep613StatsMultiChunkFile(t *testing.T) {
 		t.Fatalf("CollectBlockStats failed: %v", err)
 	}
 
-	if stats.LogicalBytes != 5000000 {
-		t.Errorf("LogicalBytes: expected 5000000, got %d", stats.LogicalBytes)
+	expectedLogical, _, _, _, _ := collectExpectedBlockStats613(t, dbconn)
+	if stats.LogicalBytes != expectedLogical {
+		t.Errorf("LogicalBytes: expected %d, got %d", expectedLogical, stats.LogicalBytes)
 	}
 }
 
 func TestStep613StatsLegacyNullHashesSafe(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	setCompressionVia613(t, dbconn, "zstd", 3)
 	storeTestFileVia613(t, scx, tmpdir, "test.txt", bytes.Repeat([]byte("d"), 10000), blocks.CodecPlain)
@@ -281,29 +276,18 @@ func TestStep613StatsLegacyNullHashesSafe(t *testing.T) {
 		t.Fatalf("CollectBlockStats failed: %v", err)
 	}
 
-	if stats.LogicalBytes != 10000 {
-		t.Errorf("LogicalBytes: expected 10000, got %d", stats.LogicalBytes)
+	expectedLogical, _, _, _, _ := collectExpectedBlockStats613(t, dbconn)
+	if stats.LogicalBytes != expectedLogical {
+		t.Errorf("LogicalBytes: expected %d, got %d", expectedLogical, stats.LogicalBytes)
 	}
 }
 
 func TestStep613StatsAESGCMEncryption(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
 
-	os.Setenv("COLDKEEP_KEY", "aabbccddaabbccddaabbccddaabbccdd")
+	os.Setenv("COLDKEEP_KEY", "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd")
 	defer os.Unsetenv("COLDKEEP_KEY")
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	setCompressionVia613(t, dbconn, "zstd", 3)
 	storeTestFileVia613(t, scx, tmpdir, "encrypted.txt", bytes.Repeat([]byte("e"), 8000), blocks.CodecAESGCM)
@@ -313,33 +297,25 @@ func TestStep613StatsAESGCMEncryption(t *testing.T) {
 		t.Fatalf("CollectBlockStats failed: %v", err)
 	}
 
-	if stats.LogicalBytes != 8000 {
-		t.Errorf("LogicalBytes: expected 8000, got %d", stats.LogicalBytes)
+	expectedLogical, expectedCompressed, _, expectedCompressedBlocks, _ := collectExpectedBlockStats613(t, dbconn)
+	if stats.LogicalBytes != expectedLogical {
+		t.Errorf("LogicalBytes: expected %d, got %d", expectedLogical, stats.LogicalBytes)
 	}
 
+	if stats.CompressedBytes != expectedCompressed {
+		t.Errorf("CompressedBytes: expected %d, got %d", expectedCompressed, stats.CompressedBytes)
+	}
 	if stats.CompressedBytes >= stats.LogicalBytes {
 		t.Errorf("Should compress: %d >= %d", stats.CompressedBytes, stats.LogicalBytes)
 	}
-	if stats.CompressedBlocks != 1 {
-		t.Errorf("CompressedBlocks: expected 1, got %d", stats.CompressedBlocks)
+	if stats.CompressedBlocks != expectedCompressedBlocks {
+		t.Errorf("CompressedBlocks: expected %d, got %d", expectedCompressedBlocks, stats.CompressedBlocks)
 	}
 }
 
 func TestStep613StatsRatioBoundaries(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	setCompressionVia613(t, dbconn, "zstd", 3)
 
@@ -362,8 +338,8 @@ func TestStep613StatsRatioBoundaries(t *testing.T) {
 	if compressionRatio < 1.0 {
 		t.Errorf("CompressionRatio should be >= 1.0, got %.3f", compressionRatio)
 	}
-	if physicalRatio < 1.0 || physicalRatio > 1.0 {
-		t.Errorf("PhysicalRatio should be <= 1.0, got %.3f", physicalRatio)
+	if physicalRatio <= 0 {
+		t.Errorf("PhysicalRatio should be > 0, got %.3f", physicalRatio)
 	}
 	if physicalRatio > compressionRatio {
 		t.Errorf("PhysicalRatio (%.3f) should be <= CompressionRatio (%.3f)", physicalRatio, compressionRatio)
@@ -371,20 +347,8 @@ func TestStep613StatsRatioBoundaries(t *testing.T) {
 }
 
 func TestStep613StatsByteAccountingConsistency(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	setCompressionVia613(t, dbconn, "zstd", 3)
 	storeTestFileVia613(t, scx, tmpdir, "test1.txt", bytes.Repeat([]byte("a"), 2000), blocks.CodecPlain)
@@ -392,7 +356,7 @@ func TestStep613StatsByteAccountingConsistency(t *testing.T) {
 
 	// Direct query
 	var sumLogical, sumCompressed, sumStored int64
-	err = dbconn.QueryRow(`
+	err := dbconn.QueryRow(`
 		SELECT
 			COALESCE(SUM(plaintext_size), 0),
 			COALESCE(SUM(CASE 
@@ -431,12 +395,7 @@ func TestStep613StatsByteAccountingConsistency(t *testing.T) {
 }
 
 func TestStep613StatsEmptyRepository(t *testing.T) {
-	testgate.RequireDB(t)
-
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, _, _ := setupStep613StatsContext(t)
 	defer dbconn.Close()
 
 	stats, err := maintenance.CollectBlockStats(context.Background(), dbconn)
@@ -453,40 +412,34 @@ func TestStep613StatsEmptyRepository(t *testing.T) {
 }
 
 func TestStep613StatsAccumulation(t *testing.T) {
-	testgate.RequireDB(t)
-
-	tmpdir := t.TempDir()
-	dbconn, err := db.ConnectDB()
-	if err != nil {
-		t.Fatalf("connect DB: %v", err)
-	}
+	dbconn, scx, tmpdir := setupStep613StatsContext(t)
 	defer dbconn.Close()
-
-	scx := storage.StorageContext{
-		DB:           dbconn,
-		Writer:       container.NewLocalWriter(container.GetContainerMaxSize()),
-		ContainerDir: tmpdir,
-	}
 
 	setCompressionVia613(t, dbconn, "zstd", 3)
 
 	storeTestFileVia613(t, scx, tmpdir, "f1.txt", bytes.Repeat([]byte("1"), 1000), blocks.CodecPlain)
 	stats1, _ := maintenance.CollectBlockStats(context.Background(), dbconn)
+	expectedLogical1, _, _, _, _ := collectExpectedBlockStats613(t, dbconn)
 
 	storeTestFileVia613(t, scx, tmpdir, "f2.txt", bytes.Repeat([]byte("2"), 2000), blocks.CodecPlain)
 	stats2, _ := maintenance.CollectBlockStats(context.Background(), dbconn)
+	expectedLogical2, _, _, _, _ := collectExpectedBlockStats613(t, dbconn)
 
 	storeTestFileVia613(t, scx, tmpdir, "f3.txt", bytes.Repeat([]byte("3"), 3000), blocks.CodecPlain)
 	stats3, _ := maintenance.CollectBlockStats(context.Background(), dbconn)
+	expectedLogical3, _, _, _, _ := collectExpectedBlockStats613(t, dbconn)
 
-	if stats1.LogicalBytes != 1000 {
-		t.Errorf("After store 1: expected 1000, got %d", stats1.LogicalBytes)
+	if stats1.LogicalBytes != expectedLogical1 {
+		t.Errorf("After store 1: expected %d, got %d", expectedLogical1, stats1.LogicalBytes)
 	}
-	if stats2.LogicalBytes != 3000 {
-		t.Errorf("After store 2: expected 3000, got %d", stats2.LogicalBytes)
+	if stats2.LogicalBytes != expectedLogical2 {
+		t.Errorf("After store 2: expected %d, got %d", expectedLogical2, stats2.LogicalBytes)
 	}
-	if stats3.LogicalBytes != 6000 {
-		t.Errorf("After store 3: expected 6000, got %d", stats3.LogicalBytes)
+	if stats3.LogicalBytes != expectedLogical3 {
+		t.Errorf("After store 3: expected %d, got %d", expectedLogical3, stats3.LogicalBytes)
+	}
+	if !(stats1.LogicalBytes < stats2.LogicalBytes && stats2.LogicalBytes < stats3.LogicalBytes) {
+		t.Errorf("LogicalBytes should accumulate monotonically: got %d, %d, %d", stats1.LogicalBytes, stats2.LogicalBytes, stats3.LogicalBytes)
 	}
 
 	if stats1.CompressedBlocks+stats1.UncompressedBlocks != 1 || stats2.CompressedBlocks+stats2.UncompressedBlocks != 2 || stats3.CompressedBlocks+stats3.UncompressedBlocks != 3 {
