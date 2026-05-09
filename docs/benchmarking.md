@@ -147,7 +147,7 @@ baseline-refresh decision is documented.
 
 - `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
   - Baseline A (uncompressed): `packed + aes-gcm + none`
-  - Purpose: protect v1.8 behavior and detect non-compression regressions.
+   - Purpose: protect v1.9 behavior and detect non-compression regressions.
 - `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
   - Baseline B (compressed): `packed + aes-gcm + zstd`
   - Purpose: measure compression tradeoffs and detect compression regressions.

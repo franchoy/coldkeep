@@ -2,6 +2,10 @@
 
 Status: decision finalized for v1.8 release hardening; archived as historical decision evidence.
 
+Historical note: this file is an archive of the v1.8 block-size decision.
+Current benchmark freeze policy and baselines are tracked under
+`benchmarks/v1.9/` and `docs/internal/benchmark_baselines_v1_9.md`.
+
 ## Final Decision
 
 - v1.8 introduces packed storage blocks for new writes.

@@ -8,7 +8,8 @@ approach.
 Version numbers indicate conceptual milestones rather than
 production stability.
 
-v1.8 adds packed storage blocks and completes AES-GCM packed-block integration.
+v1.9 formalizes transform-based storage semantics with block-level compression,
+explicit verification stages, and frozen engine-extraction contracts.
 
 For the current operator-facing contract, see [README.md](README.md).
 For guarantee-to-evidence mapping, see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md).
@@ -16,6 +17,36 @@ For release-gate execution, see [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST
 
 Use this file for milestone history and release deltas. If you are new to the
 project, do not start here; start with [README.md](README.md).
+
+------------------------------------------------------------------------
+
+## [1.9.0] - 2026-05-09
+
+### Added (v1.9 transform architecture freeze)
+
+- Block-level compression support with metadata-driven read behavior (`none`, `zstd`) and store-if-smaller policy.
+- Explicit transform/hash semantics documentation: logical, compressed, and physical payload layers.
+- Staged verification model with explicit failure-stage classification (physical, decrypt, compressed hash, decompress, logical hash, decode, chunk refs, snapshots).
+- Repository capability modeling (`internal/repository/capabilities`) for explicit supported vs observed storage features.
+- Frozen v1.9 storage semantics references for engine extraction (`docs/STORAGE_SEMANTICS_v1.9.md`, engine quick reference, ADR set).
+
+### Changed (v1.9 transform architecture freeze)
+
+- Read path and verify behavior are formally metadata-driven and mixed-repository safe.
+- Compression defaults are write-policy only; existing historical blocks are never auto-rewritten.
+- Benchmark baseline policy is frozen under `benchmarks/v1.9/` with explicit regression-threshold contracts.
+
+### Compatibility (v1.9 transform architecture freeze)
+
+- v1.9 reads v1.7 and v1.8 repositories without forced rewrite or recompression.
+- Mixed repositories (legacy + packed + compressed + encrypted) remain supported steady-state.
+- v1.7 is not guaranteed to read repositories containing newer v1.8/v1.9 packed metadata.
+- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`; older schemas auto-upgrade to required v15 at startup.
+
+### Not included (v1.9 transform architecture freeze)
+
+- No automatic background rewrite/recompression tooling.
+- No storage redesign beyond frozen v1.9 semantics (v1.10 is extraction-focused).
 
 ------------------------------------------------------------------------
 

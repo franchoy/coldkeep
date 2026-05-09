@@ -183,9 +183,9 @@ Why `storage_blocks` embeds the nonce in the payload (no dedicated column):
 
 - `storage_blocks` has no dedicated nonce column. The 12-byte AES-GCM nonce is prepended to the ciphertext when writing. The reader identifies the nonce boundary from the fixed nonce size and codec type before decryption.
 
-Forward-looking note:
+Current-state note:
 
-- v1.8 does not include block-level compression. v1.9 will extend the packed-block foundation with block-level compression.
+- v1.8 did not include block-level compression. v1.9 extends the packed-block foundation with block-level compression while preserving mixed-repository compatibility.
 
 Chunker evolution model:
 

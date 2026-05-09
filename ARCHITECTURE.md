@@ -29,7 +29,7 @@ The architecture composes:
 - append-only container files on disk
 - lifecycle-aware recovery and verification paths
 
-Correctness has eight explicit layers:
+Correctness has ten explicit layers:
 
 - v1.0 storage correctness: deterministic restore, integrity, recovery, GC safety
 - v1.1 interface correctness: batch CLI contract stability and deterministic orchestration
@@ -40,6 +40,7 @@ Correctness has eight explicit layers:
 - v1.6 observability and simulation contract hardening: read-only introspection, exact GC simulation parity, tooling-safe trace channel behavior
 - v1.7 deterministic performance foundation: controlled execution, benchmark-backed validation, and release-readiness safety proof without storage-format or schema-breaking changes
 - v1.8 packed block abstraction: multiple chunks per physical storage block, AES-GCM packed-block integration, and release hardening while preserving all existing correctness guarantees
+- v1.9 transform architecture freeze: block-level compression semantics, metadata-driven read path, explicit verify stages, and frozen storage contracts for engine extraction
 
 Migration philosophy:
 
@@ -61,14 +62,14 @@ This diagram is a mental anchor for how guarantees compose across layers.
 
 ```text
 +------------------------------------------------------------+
-| Block Abstraction (v1.8)                                   |
+| Transform Architecture Freeze (v1.9)                       |
 |------------------------------------------------------------|
 | Packed multi-chunk storage blocks (storage_blocks +        |
 |   chunk_block_refs)                                        |
-| AES-GCM packed-block integration (per-chunk companion rows)|
-| Dual-compat read path (legacy + packed)                    |
-| Block-level integrity hash                                 |
-| COLDKEEP_BLOCK_TARGET_SIZE_MB operator override            |
+| Compression-before-encryption write ordering               |
+| Logical/compressed/physical hash semantics                 |
+| Explicit staged verification pipeline                      |
+| Metadata-driven mixed-repository read path                 |
 +------------------------------------------------------------+
     ^
     | extends snapshot retention layer
@@ -134,8 +135,8 @@ Core entities:
 - chunk: content-addressed chunk identity (chunk hash, size, reference/pin counters, lifecycle state)
 - file_chunk: ordered mapping between logical files and their chunks
 - blocks: physical placement and codec metadata for each chunk (legacy single-chunk layout)
-- storage_blocks: v1.8 packed physical block (container placement, block hash, codec, sizes)
-- chunk_block_refs: v1.8 per-chunk placement inside a packed storage block
+- storage_blocks: v1.8+ packed physical block (container placement, block hash, codec, sizes, transform metadata)
+- chunk_block_refs: v1.8+ per-chunk placement inside a packed storage block
 - container: physical append-only container file on disk
 
 Storage pipeline:
@@ -521,7 +522,7 @@ Guarantees hold within the documented operating assumptions:
 - container files are not manually altered
 - filesystem honors write + fsync semantics
 - PostgreSQL deployment provides expected transactional, locking, and advisory-lock behavior
-- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
+- Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v15 schema at startup.
 
 ## Interface Correctness Layer (v1.1)
 

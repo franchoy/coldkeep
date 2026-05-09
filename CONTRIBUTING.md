@@ -4,7 +4,7 @@ Thank you for your interest in contributing to coldkeep.
 
 coldkeep v1.x is a correctness-first storage engine.
 
-The project currently has nine explicit correctness layers:
+The project currently has ten explicit correctness layers:
 
 - storage correctness (v1.0 core)
 - interaction correctness for CLI/automation contracts (v1.1)
@@ -15,6 +15,7 @@ The project currently has nine explicit correctness layers:
 - observability and simulation contract hardening (v1.6)
 - deterministic performance foundation through controlled execution and benchmark-backed validation (v1.7)
 - packed storage block abstraction, AES-GCM packed-block integration, and release hardening (v1.8)
+- transform-based storage architecture freeze and compression semantics hardening (v1.9)
 
 The project originated as a research prototype, and continues to
 prioritize correctness, determinism, and clarity over feature velocity.
@@ -151,7 +152,7 @@ export COLDKEEP_DB_AUTO_BOOTSTRAP=true
 
 Missing PostgreSQL schema requires manual schema application or
 `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
-the required v12 schema at startup.
+the required v15 schema at startup.
 
 Build:
 
@@ -311,7 +312,7 @@ simulation loop sets it per run (`plain` then `aes-gcm`).
 
 Missing PostgreSQL schema requires manual schema application or
 `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to
-the required v12 schema at startup.
+the required v15 schema at startup.
 
 1. Run the quality job equivalent (same intent as CI `quality`):
 

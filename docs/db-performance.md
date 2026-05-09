@@ -1,5 +1,9 @@
 # DB Performance
 
+Historical note: this document captures v1.7-era DB performance work.
+For current v1.9 contract/baseline framing, see `docs/benchmarking.md` and
+`docs/internal/benchmark_baselines_v1_9.md`.
+
 v1.7 DB performance work is intentionally conservative: controlled execution,
 query-shape cleanup, and measured validation rather than daemon-style
 concurrency expansion.

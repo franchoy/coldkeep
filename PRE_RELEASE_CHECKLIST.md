@@ -20,26 +20,27 @@ Execution model (step-by-step):
 - If a step fails, fix the issue and re-run that step before moving forward.
 - For releases that include snapshot/retention scope, treat sections 15-17 as required release gates after sections 1-13.
 
-Checklist status interpretation for v1.8:
+Checklist status interpretation for v1.9:
 
-- Active v1.8 blockers are the current release-gate sections (1-11, 15-18).
+- Active v1.9 blockers are the current release-gate sections (1-11, 15-18).
 - Historical template sections (12-14) are archived reference material only.
-- Unchecked boxes in sections 12-14 are intentional historical state and are not v1.8 blockers unless a release manager explicitly promotes one into the active v1.8 gate.
+- Unchecked boxes in sections 12-14 are intentional historical state and are not v1.9 blockers unless a release manager explicitly promotes one into the active v1.9 gate.
 
-## Release Freeze Policy (v1.8 Phase 9 Step 1)
+## Release Freeze Policy (v1.9 Phase 9 Step 1)
 
 Before running the technical release checks below, freeze implementation scope.
 
-Phase 9 goal: make v1.8 boring in production: no surprises, no hidden dev
+Phase 9 goal: make v1.9 boring in production: no surprises, no hidden dev
 paths, and every operator-facing behavior documented while preserving
 deterministic restore, GC safety, snapshot correctness, and stable CLI behavior.
 
 Release-positioning note:
 
-- v1.8 introduces packed-block storage metadata for new writes.
-- v1.8 reads v1.7 repositories without forced rewrite.
-- v1.8 default packed block target is 1 MiB.
-- v1.8 keeps mixed legacy/packed repositories as valid steady-state.
+- v1.9 keeps packed-block storage metadata for new writes.
+- v1.9 adds block-level compression with store-if-smaller semantics.
+- v1.9 reads v1.7/v1.8 repositories without forced rewrite.
+- v1.9 default packed block target remains 1 MiB.
+- v1.9 keeps mixed legacy/packed/compressed repositories as valid steady-state.
 - restore determinism is preserved.
 - GC safety is preserved.
 - snapshot semantics are preserved.
@@ -57,7 +58,7 @@ Allowed during this gate:
 
 Required before final tag creation:
 
-- release notes file for the target version exists (for v1.8: `RELEASE_NOTES_v1.8.0.md`),
+- release notes file for the target version exists (for v1.9: `RELEASE_NOTES_v1.9.0.md`),
 - benchmark command support level is documented clearly (`coldkeep benchmark` CLI vs phase harness scripts),
 - historical phase benchmark reports are marked as archived evidence, not live implementation spec.
 
@@ -101,7 +102,7 @@ Review this before starting Step 1.
 
 Operator expectation surface for supported PostgreSQL deployments:
 
-- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
+- Schema/bootstrap: coldkeep expects the tracked schema/migration version managed by this release. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v15 schema at startup.
 - Locking behavior: coldkeep expects normal PostgreSQL row/table lock semantics and transactional guarantees under default supported isolation behavior.
 - Advisory locks: maintenance and coordination flows rely on PostgreSQL advisory locking primitives being available and functioning correctly.
 
@@ -536,15 +537,15 @@ Confirm:
 
 Sections 12-14 are retained as historical release templates for prior release
 tracks (v1.5/v1.6). Unchecked boxes in these sections are intentional and do
-not represent unfinished blockers for the current v1.8 release.
+not represent unfinished blockers for the current v1.9 release.
 
 Historical status marker:
 
 - Sections 12-14 are archived reference templates only.
-- They are explicitly non-gating for v1.8 final sign-off.
+- They are explicitly non-gating for v1.9 final sign-off.
 - Keep checklist boxes unchanged in these sections to preserve historical parity.
 
-For v1.8 final tagging, use the active release-gate flow in earlier sections
+For v1.9 final tagging, use the active release-gate flow in earlier sections
 plus the snapshot sign-off sections that follow.
 
 ## 12) Historical Template (Archived, Non-gating) - v1.5 CDC / chunker-evolution contract

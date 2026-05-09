@@ -1,5 +1,9 @@
 # Coldkeep I/O Performance
 
+Historical note: this document captures phase-era I/O performance evidence.
+For current v1.9 baseline and regression policy, use
+`docs/benchmarking.md` and `docs/internal/benchmark_baselines_v1_9.md`.
+
 This document tracks I/O-focused performance work and the corresponding safety
 contracts.
 
