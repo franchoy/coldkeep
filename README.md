@@ -208,6 +208,11 @@ For full guarantees, non-guarantees, and upgrade behavior details:
 - [COMPATIBILITY.md](COMPATIBILITY.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 
+Legacy compatibility contract (v1.9):
+
+- mandatory: old repositories remain readable/restorable
+- not guaranteed: automatic rewrite, recompression, or eager migration of historical data
+
 ## When to use coldkeep
 
 Good fit:

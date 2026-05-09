@@ -74,6 +74,14 @@ That means:
 - repository defaults only affect future writes
 - no automatic recompression or migration is performed in the background
 
+Explicitly not guaranteed:
+
+- automatic rewrite of historical repositories
+- eager migration of historical block layouts
+- automatic recompression of historical blocks
+
+Migration semantics are additive and readability-first.
+
 ## Benchmark Matrix
 
 Benchmarking is intentionally narrower than correctness coverage.

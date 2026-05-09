@@ -22,6 +22,43 @@ Migration philosophy:
 
 - coldkeep prefers non-destructive evolution over automatic optimization.
 
+## Legacy Repository Compatibility Guarantees (Frozen v1.9)
+
+This section defines the explicit contract for historical repositories.
+
+### Mandatory Guarantees
+
+- old repositories remain readable forever within the v1.x compatibility policy
+- historical data remains restorable through metadata replay semantics
+- mixed repositories (legacy + newer block metadata/layout) remain valid steady-state
+
+### Optional / Not Guaranteed
+
+- old repositories are not rewritten automatically
+- old repositories are not recompressed automatically
+- old repositories are not migrated eagerly in the background
+
+### Supported Upgrade Paths
+
+Readability and restore compatibility are guaranteed for the following paths:
+
+- v1.7 repository -> v1.8 runtime
+- v1.8 repository -> v1.9 runtime
+- v1.7 repository -> v1.9 runtime (sequential migrations applied at startup)
+
+Path semantics:
+
+- schema migration may be applied as required by runtime startup
+- payload/layout migration is additive only and never an eager rewrite requirement
+- newer defaults apply to future writes only
+
+### Migration Semantics (Explicit)
+
+- migration guarantees readability, not rewrite optimization
+- migration does not imply automatic re-chunking or recompression
+- migration does not imply eager conversion of historical block metadata/layout
+- any future rewrite tooling must be explicit, operator-invoked, and documented as opt-in
+
 ## Guarantee 1: Restore Correctness Across Chunker Versions
 
 Contract:
