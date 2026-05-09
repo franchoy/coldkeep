@@ -64,3 +64,101 @@ func (r *Repository) SetDefaultChunkerVersion(v chunk.Version) error {
 
 	return nil
 }
+
+// GetDefaultCompression returns the repository-level default compression codec.
+// The provided db handle is optional and allows callers to pass an explicit
+// connection; when nil, the repository's configured DB is used.
+func (r *Repository) GetDefaultCompression(dbconn *sql.DB) (string, error) {
+	if dbconn == nil {
+		if r == nil || r.db == nil {
+			return defaultCompressionCodec, nil
+		}
+		dbconn = r.db
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	return GetDefaultCompression(tx)
+}
+
+// SetDefaultCompression persists the repository-level default compression codec.
+// The provided db handle is optional and allows callers to pass an explicit
+// connection; when nil, the repository's configured DB is used.
+func (r *Repository) SetDefaultCompression(dbconn *sql.DB, codec string) error {
+	if dbconn == nil {
+		if r == nil || r.db == nil {
+			return nil
+		}
+		dbconn = r.db
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		return err
+	}
+
+	if err := SetDefaultCompression(tx, codec); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return nil
+}
+
+// GetDefaultCompressionLevel returns the repository-level default compression
+// level. The provided db handle is optional and allows callers to pass an
+// explicit connection; when nil, the repository's configured DB is used.
+func (r *Repository) GetDefaultCompressionLevel(dbconn *sql.DB) (int, error) {
+	if dbconn == nil {
+		if r == nil || r.db == nil {
+			return defaultCompressionLevel, nil
+		}
+		dbconn = r.db
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	return GetDefaultCompressionLevel(tx)
+}
+
+// SetDefaultCompressionLevel persists the repository-level default compression
+// level. The provided db handle is optional and allows callers to pass an
+// explicit connection; when nil, the repository's configured DB is used.
+func (r *Repository) SetDefaultCompressionLevel(dbconn *sql.DB, level int) error {
+	if dbconn == nil {
+		if r == nil || r.db == nil {
+			return nil
+		}
+		dbconn = r.db
+	}
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		return err
+	}
+
+	if err := SetDefaultCompressionLevel(tx, level); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return nil
+}

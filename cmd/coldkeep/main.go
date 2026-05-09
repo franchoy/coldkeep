@@ -59,36 +59,38 @@ const (
 var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
-	"codec":           true,
-	"destination":     true,
-	"filter":          true,
-	"input":           true,
-	"limit":           true,
-	"mode":            true,
-	"offset":          true,
-	"name":            true,
-	"id":              true,
-	"from":            true,
-	"label":           true,
-	"since":           true,
-	"type":            true,
-	"until":           true,
-	"min-size":        true,
-	"max-size":        true,
-	"output":          true,
-	"stored-path":     true,
-	"path":            true,
-	"prefix":          true,
-	"pattern":         true,
-	"regex":           true,
-	"delete-snapshot": true,
-	"modified-after":  true,
-	"modified-before": true,
-	"dataset":         true,
-	"repeat":          true,
-	"compare":         true,
-	"threshold":       true,
-	"workers":         true,
+	"codec":             true,
+	"compression":       true,
+	"compression-level": true,
+	"destination":       true,
+	"filter":            true,
+	"input":             true,
+	"limit":             true,
+	"mode":              true,
+	"offset":            true,
+	"name":              true,
+	"id":                true,
+	"from":              true,
+	"label":             true,
+	"since":             true,
+	"type":              true,
+	"until":             true,
+	"min-size":          true,
+	"max-size":          true,
+	"output":            true,
+	"stored-path":       true,
+	"path":              true,
+	"prefix":            true,
+	"pattern":           true,
+	"regex":             true,
+	"delete-snapshot":   true,
+	"modified-after":    true,
+	"modified-before":   true,
+	"dataset":           true,
+	"repeat":            true,
+	"compare":           true,
+	"threshold":         true,
+	"workers":           true,
 }
 
 type cliOutputMode string
@@ -368,7 +370,7 @@ func runCLI(args []string) int {
 
 	switch parsed.method {
 	case "init":
-		err = initCommand()
+		err = initCommand(parsed, outputMode)
 	case "config":
 		err = runConfigCommand(parsed, outputMode)
 	case "doctor":
@@ -846,12 +848,12 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 	if len(parsed.positionals) < 2 {
-		return usageErrorf("Usage: coldkeep config <get|set> default-chunker [value]")
+		return usageErrorf("Usage: coldkeep config <get|set> <default-chunker|compression|compression-level> [value]")
 	}
 
 	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
 	key := strings.TrimSpace(strings.ToLower(parsed.positionals[1]))
-	if key != "default-chunker" {
+	if key != "default-chunker" && key != "compression" && key != "compression-level" {
 		return usageErrorf("unknown config key: %s", parsed.positionals[1])
 	}
 
@@ -866,7 +868,51 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	switch subcommand {
 	case "get":
 		if len(parsed.positionals) != 2 {
-			return usageErrorf("Usage: coldkeep config get default-chunker")
+			return usageErrorf("Usage: coldkeep config get <default-chunker|compression|compression-level>")
+		}
+
+		switch key {
+		case "compression":
+			codec, err := repo.GetDefaultCompression(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config get",
+					"data": map[string]any{
+						"key":   "compression",
+						"value": codec,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintln(os.Stdout, codec)
+			return nil
+
+		case "compression-level":
+			level, err := repo.GetDefaultCompressionLevel(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config get",
+					"data": map[string]any{
+						"key":   "compression-level",
+						"value": level,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "%d\n", level)
+			return nil
 		}
 
 		v, err := repo.GetDefaultChunkerVersion()
@@ -893,7 +939,76 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 	case "set":
 		if len(parsed.positionals) != 3 {
-			return usageErrorf("Usage: coldkeep config set default-chunker <value>")
+			return usageErrorf("Usage: coldkeep config set <default-chunker|compression|compression-level> <value>")
+		}
+
+		switch key {
+		case "compression":
+			codec := strings.TrimSpace(parsed.positionals[2])
+			if !storage.IsRegisteredCompressionCodec(codec) {
+				return usageErrorf("invalid compression codec %q, must be 'none' or 'zstd'", codec)
+			}
+			previous, err := repo.GetDefaultCompression(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if err := repo.SetDefaultCompression(sgctx.DB, codec); err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config set",
+					"data": map[string]any{
+						"key":   "compression",
+						"value": codec,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "compression set to %s\n", codec)
+			if previous != codec {
+				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
+				_, _ = fmt.Fprintln(os.Stdout, "    Blocks remain readable according to their stored metadata.")
+			}
+			return nil
+
+		case "compression-level":
+			levelStr := strings.TrimSpace(parsed.positionals[2])
+			level, err := strconv.Atoi(levelStr)
+			if err != nil {
+				return usageErrorf("invalid compression-level %q, must be an integer 1-9", levelStr)
+			}
+			if level < 1 || level > 9 {
+				return usageErrorf("compression-level %d out of range, must be 1-9", level)
+			}
+			previous, err := repo.GetDefaultCompressionLevel(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if err := repo.SetDefaultCompressionLevel(sgctx.DB, level); err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config set",
+					"data": map[string]any{
+						"key":   "compression-level",
+						"value": level,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "compression-level set to %d\n", level)
+			if previous != level {
+				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
+			}
+			return nil
 		}
 
 		v, err := validateConfigDefaultChunkerVersion(parsed.positionals[2])
