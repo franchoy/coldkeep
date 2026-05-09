@@ -19,6 +19,22 @@ type chunkGraphRef struct {
 	Size      int64
 }
 
+type blockSnapshot struct {
+	ID               int64
+	BlockHash        []byte
+	CompressedHash   []byte
+	PhysicalHash     []byte
+	ContainerID      int64
+	ContainerFile    string
+	ContainerOffset  int64
+	StoredSize       int64
+	CompressionCodec string
+	CompressionLevel sql.NullInt64
+	PlaintextSize    int64
+	CompressedSize   int64
+	StoredBytes      []byte
+}
+
 func writeFeatureGateInputFile(t *testing.T, data []byte) string {
 	t.Helper()
 	inPath := filepath.Join(t.TempDir(), "feature-gate-input.bin")
@@ -209,6 +225,99 @@ func readDistinctBlockIDsForFile(t *testing.T, dbconn *sql.DB, fileID int64) []i
 		t.Fatalf("iterate block ids for file %d: %v", fileID, err)
 	}
 	return ids
+}
+
+func snapshotBlocksForFile(t *testing.T, repo *TestRepository, fileID int64) []blockSnapshot {
+	t.Helper()
+
+	rows, err := repo.DB.Query(`
+		SELECT DISTINCT
+			sb.id,
+			sb.block_hash,
+			sb.compressed_hash,
+			sb.physical_hash,
+			sb.container_id,
+			c.filename,
+			sb.container_offset,
+			sb.stored_size,
+			sb.compression_codec,
+			sb.compression_level,
+			sb.plaintext_size,
+			sb.compressed_size
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		JOIN chunk_block_refs r ON r.block_id = sb.id
+		JOIN file_chunk fc ON fc.chunk_id = r.chunk_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY sb.id
+	`, fileID)
+	if err != nil {
+		t.Fatalf("query block snapshot for file %d: %v", fileID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]blockSnapshot, 0)
+	for rows.Next() {
+		var snap blockSnapshot
+		if err := rows.Scan(
+			&snap.ID,
+			&snap.BlockHash,
+			&snap.CompressedHash,
+			&snap.PhysicalHash,
+			&snap.ContainerID,
+			&snap.ContainerFile,
+			&snap.ContainerOffset,
+			&snap.StoredSize,
+			&snap.CompressionCodec,
+			&snap.CompressionLevel,
+			&snap.PlaintextSize,
+			&snap.CompressedSize,
+		); err != nil {
+			t.Fatalf("scan block snapshot row for file %d: %v", fileID, err)
+		}
+
+		containerPath := filepath.Join(repo.ContainersDir, snap.ContainerFile)
+		fh, err := os.Open(containerPath)
+		if err != nil {
+			t.Fatalf("open container file for block %d: %v", snap.ID, err)
+		}
+		payload := make([]byte, snap.StoredSize)
+		if _, err := fh.ReadAt(payload, snap.ContainerOffset); err != nil {
+			_ = fh.Close()
+			t.Fatalf("read stored bytes for block %d: %v", snap.ID, err)
+		}
+		if err := fh.Close(); err != nil {
+			t.Fatalf("close container file for block %d: %v", snap.ID, err)
+		}
+		snap.StoredBytes = payload
+		out = append(out, snap)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate block snapshot rows for file %d: %v", fileID, err)
+	}
+	return out
+}
+
+func setRepositoryCompressionForTest(t *testing.T, dbconn *sql.DB, codec string, level int) {
+	t.Helper()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin repository compression update: %v", err)
+	}
+	if err := SetDefaultCompression(tx, codec); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("set repository compression=%q: %v", codec, err)
+	}
+	if codec == storagecompression.CompressionZstd {
+		if err := SetDefaultCompressionLevel(tx, level); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("set repository compression_level=%d: %v", level, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit repository compression update: %v", err)
+	}
 }
 
 func TestFeatureGatedCompressionStoreIfSmallerDeterministicCases(t *testing.T) {
@@ -417,5 +526,84 @@ func TestFeatureGatedCompressionDuplicateStorePreservesDedupAndCompressionStep51
 		if err := verifypkg.VerifyFileStandardWithContainersDir(repo.DB, int(restore.fileID), repo.ContainersDir); err != nil {
 			t.Fatalf("verify restored file %s: %v", restore.outName, err)
 		}
+	}
+}
+
+func TestFeatureGatedCompressionSwitchDoesNotMigrateExistingBlocksStep513(t *testing.T) {
+	RequireTestCompression(t, "zstd")
+
+	repo := NewTestRepository(t, WithCompression("none"))
+
+	payloadOld := bytes.Repeat([]byte("step513-old-none-payload-"), 4096)
+	pathOld := writeFeatureGateInputFile(t, payloadOld)
+	resultOld, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, pathOld, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store old file with compression=none: %v", err)
+	}
+
+	oldBefore := snapshotBlocksForFile(t, repo, resultOld.FileID)
+	if len(oldBefore) == 0 {
+		t.Fatal("expected old file to create at least one block")
+	}
+	for _, b := range oldBefore {
+		if b.CompressionCodec != storagecompression.CompressionNone {
+			t.Fatalf("expected old block %d codec=none before switch, got %q", b.ID, b.CompressionCodec)
+		}
+	}
+
+	setRepositoryCompressionForTest(t, repo.DB, storagecompression.CompressionZstd, 3)
+
+	payloadNew := bytes.Repeat([]byte("step513-new-zstd-payload-"), 8192)
+	pathNew := writeFeatureGateInputFile(t, payloadNew)
+	resultNew, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, pathNew, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store new file with compression=zstd: %v", err)
+	}
+
+	oldAfter := snapshotBlocksForFile(t, repo, resultOld.FileID)
+	if !reflect.DeepEqual(oldBefore, oldAfter) {
+		t.Fatalf("expected old block rows and bytes to remain unchanged after compression switch; before=%v after=%v", oldBefore, oldAfter)
+	}
+
+	newBlocks := snapshotBlocksForFile(t, repo, resultNew.FileID)
+	if len(newBlocks) == 0 {
+		t.Fatal("expected new file to create at least one block")
+	}
+	var zstdBlocks int
+	for _, b := range newBlocks {
+		if b.CompressionCodec == storagecompression.CompressionZstd {
+			zstdBlocks++
+		}
+	}
+	if zstdBlocks == 0 {
+		t.Fatal("expected at least one new block to use zstd compression after config switch")
+	}
+
+	for _, restore := range []struct {
+		fileID  int64
+		payload []byte
+		name    string
+	}{
+		{fileID: resultOld.FileID, payload: payloadOld, name: "old"},
+		{fileID: resultNew.FileID, payload: payloadNew, name: "new"},
+	} {
+		outPath := filepath.Join(t.TempDir(), "step513-"+restore.name+".restore")
+		if _, err := restoreFileWithDBAndDir(repo.DB, restore.fileID, outPath, repo.ContainersDir, RestoreOptions{Overwrite: true}); err != nil {
+			t.Fatalf("restore %s file: %v", restore.name, err)
+		}
+		got, err := os.ReadFile(outPath)
+		if err != nil {
+			t.Fatalf("read restored %s file: %v", restore.name, err)
+		}
+		if !bytes.Equal(got, restore.payload) {
+			t.Fatalf("restored bytes mismatch for %s file", restore.name)
+		}
+		if err := verifypkg.VerifyFileStandardWithContainersDir(repo.DB, int(restore.fileID), repo.ContainersDir); err != nil {
+			t.Fatalf("verify %s file: %v", restore.name, err)
+		}
+	}
+
+	if err := verifypkg.VerifySystemStandardWithContainersDir(repo.DB, repo.ContainersDir); err != nil {
+		t.Fatalf("verify repository after mixed compression files: %v", err)
 	}
 }
