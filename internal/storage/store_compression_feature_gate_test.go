@@ -5,12 +5,19 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	verifypkg "github.com/franchoy/coldkeep/internal/verify"
 )
+
+type chunkGraphRef struct {
+	ChunkHash string
+	Offset    int64
+	Size      int64
+}
 
 func writeFeatureGateInputFile(t *testing.T, data []byte) string {
 	t.Helper()
@@ -145,6 +152,65 @@ func deterministicNoise(size int) []byte {
 	return out
 }
 
+func readFileChunkGraph(t *testing.T, dbconn *sql.DB, fileID int64) []chunkGraphRef {
+	t.Helper()
+
+	rows, err := dbconn.Query(`
+		SELECT c.chunk_hash, r.offset_in_block, r.size_in_block
+		FROM file_chunk fc
+		JOIN chunk c ON c.id = fc.chunk_id
+		JOIN chunk_block_refs r ON r.chunk_id = c.id
+		WHERE fc.logical_file_id = $1
+		ORDER BY fc.chunk_order, r.offset_in_block
+	`, fileID)
+	if err != nil {
+		t.Fatalf("query file chunk graph for file %d: %v", fileID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	graph := make([]chunkGraphRef, 0)
+	for rows.Next() {
+		var ref chunkGraphRef
+		if err := rows.Scan(&ref.ChunkHash, &ref.Offset, &ref.Size); err != nil {
+			t.Fatalf("scan chunk graph row for file %d: %v", fileID, err)
+		}
+		graph = append(graph, ref)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate chunk graph rows for file %d: %v", fileID, err)
+	}
+	return graph
+}
+
+func readDistinctBlockIDsForFile(t *testing.T, dbconn *sql.DB, fileID int64) []int64 {
+	t.Helper()
+
+	rows, err := dbconn.Query(`
+		SELECT DISTINCT r.block_id
+		FROM file_chunk fc
+		JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+		WHERE fc.logical_file_id = $1
+		ORDER BY r.block_id
+	`, fileID)
+	if err != nil {
+		t.Fatalf("query distinct block ids for file %d: %v", fileID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	ids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan block id for file %d: %v", fileID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate block ids for file %d: %v", fileID, err)
+	}
+	return ids
+}
+
 func TestFeatureGatedCompressionStoreIfSmallerDeterministicCases(t *testing.T) {
 	RequireTestCompression(t, "zstd")
 
@@ -235,5 +301,121 @@ func TestFeatureGatedCompressionStoreIfSmallerDeterministicCases(t *testing.T) {
 				t.Fatalf("verify file standard: %v", err)
 			}
 		})
+	}
+}
+
+func TestFeatureGatedCompressionDuplicateStorePreservesDedupAndCompressionStep512(t *testing.T) {
+	RequireTestCompression(t, "zstd")
+
+	repo := NewTestRepository(t, WithCompression("zstd"), WithCompressionLevel(3))
+	payload := bytes.Repeat([]byte("step512-duplicate-compressible-payload-"), 8192)
+
+	pathA := writeFeatureGateInputFile(t, payload)
+	resultA, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, pathA, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store first duplicate payload: %v", err)
+	}
+
+	graphA := readFileChunkGraph(t, repo.DB, resultA.FileID)
+	if len(graphA) == 0 {
+		t.Fatal("expected non-empty chunk graph for first store")
+	}
+	blockIDsA := readDistinctBlockIDsForFile(t, repo.DB, resultA.FileID)
+	if len(blockIDsA) == 0 {
+		t.Fatal("expected non-empty block id set for first store")
+	}
+
+	metaA := readStoredBlockMetaWithHashesForFile(t, repo.DB, resultA.FileID)
+	if metaA.Codec != storagecompression.CompressionZstd {
+		t.Fatalf("expected first store codec=zstd, got %q", metaA.Codec)
+	}
+	if metaA.CompressedSize >= metaA.PlaintextSize {
+		t.Fatalf("expected first store compression savings, got compressed=%d plaintext=%d", metaA.CompressedSize, metaA.PlaintextSize)
+	}
+
+	var chunkRowsBefore int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRowsBefore); err != nil {
+		t.Fatalf("count chunk rows before duplicate store: %v", err)
+	}
+	var blockRowsBefore int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockRowsBefore); err != nil {
+		t.Fatalf("count storage_blocks rows before duplicate store: %v", err)
+	}
+	var refsRowsBefore int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsRowsBefore); err != nil {
+		t.Fatalf("count chunk_block_refs rows before duplicate store: %v", err)
+	}
+
+	pathB := writeFeatureGateInputFile(t, payload)
+	resultB, err := StoreFileWithStorageContextAndCodecResult(repo.Storage, pathB, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store second duplicate payload: %v", err)
+	}
+	if !resultB.AlreadyStored {
+		t.Fatalf("expected duplicate payload to resolve as already stored under compression")
+	}
+
+	graphB := readFileChunkGraph(t, repo.DB, resultB.FileID)
+	if !reflect.DeepEqual(graphA, graphB) {
+		t.Fatalf("expected duplicate store to preserve logical chunk graph; first=%v second=%v", graphA, graphB)
+	}
+	blockIDsB := readDistinctBlockIDsForFile(t, repo.DB, resultB.FileID)
+	if !reflect.DeepEqual(blockIDsA, blockIDsB) {
+		t.Fatalf("expected duplicate store to preserve block packing map; first=%v second=%v", blockIDsA, blockIDsB)
+	}
+
+	var chunkRowsAfter int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk`).Scan(&chunkRowsAfter); err != nil {
+		t.Fatalf("count chunk rows after duplicate store: %v", err)
+	}
+	if chunkRowsAfter != chunkRowsBefore {
+		t.Fatalf("expected no duplicate chunk rows from compression-enabled duplicate store; before=%d after=%d", chunkRowsBefore, chunkRowsAfter)
+	}
+	var blockRowsAfter int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM storage_blocks`).Scan(&blockRowsAfter); err != nil {
+		t.Fatalf("count storage_blocks rows after duplicate store: %v", err)
+	}
+	if blockRowsAfter != blockRowsBefore {
+		t.Fatalf("expected no new storage_blocks rows from duplicate store; before=%d after=%d", blockRowsBefore, blockRowsAfter)
+	}
+	var refsRowsAfter int
+	if err := repo.DB.QueryRow(`SELECT COUNT(*) FROM chunk_block_refs`).Scan(&refsRowsAfter); err != nil {
+		t.Fatalf("count chunk_block_refs rows after duplicate store: %v", err)
+	}
+	if refsRowsAfter != refsRowsBefore {
+		t.Fatalf("expected no new chunk_block_refs rows from duplicate store; before=%d after=%d", refsRowsBefore, refsRowsAfter)
+	}
+
+	for _, blockID := range blockIDsB {
+		var codec string
+		if err := repo.DB.QueryRow(`SELECT compression_codec FROM storage_blocks WHERE id = $1`, blockID).Scan(&codec); err != nil {
+			t.Fatalf("read compression codec for deduped block %d: %v", blockID, err)
+		}
+		if codec != storagecompression.CompressionZstd {
+			t.Fatalf("expected deduped/packed block %d to keep zstd codec, got %q", blockID, codec)
+		}
+	}
+
+	for _, restore := range []struct {
+		fileID  int64
+		outName string
+	}{
+		{fileID: resultA.FileID, outName: "step512-restore-a.bin"},
+		{fileID: resultB.FileID, outName: "step512-restore-b.bin"},
+	} {
+		outPath := filepath.Join(t.TempDir(), restore.outName)
+		if _, err := restoreFileWithDBAndDir(repo.DB, restore.fileID, outPath, repo.ContainersDir, RestoreOptions{Overwrite: true}); err != nil {
+			t.Fatalf("restore %s: %v", restore.outName, err)
+		}
+		got, err := os.ReadFile(outPath)
+		if err != nil {
+			t.Fatalf("read restored file %s: %v", restore.outName, err)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("restored bytes mismatch for %s", restore.outName)
+		}
+		if err := verifypkg.VerifyFileStandardWithContainersDir(repo.DB, int(restore.fileID), repo.ContainersDir); err != nil {
+			t.Fatalf("verify restored file %s: %v", restore.outName, err)
+		}
 	}
 }
