@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/snapshot"
 )
 
@@ -410,10 +411,22 @@ func legacyInspectRepositorySummary(ctx context.Context, dbconn *sql.DB) (map[st
 	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM snapshot`).Scan(&snapshots); err != nil {
 		return nil, err
 	}
+	blockStats, err := maintenance.CollectBlockStats(ctx, dbconn)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
-		"total_files":     logicalFiles,
-		"total_chunks":    chunks,
-		"total_snapshots": snapshots,
+		"total_files":                 logicalFiles,
+		"total_chunks":                chunks,
+		"total_snapshots":             snapshots,
+		"logical_bytes":               blockStats.LogicalBytes,
+		"compressed_bytes":            blockStats.CompressedBytes,
+		"stored_bytes":                blockStats.StoredBytes,
+		"compression_ratio":           blockStats.CompressionRatio,
+		"physical_ratio":              blockStats.PhysicalRatio,
+		"compressed_blocks":           blockStats.CompressedBlocks,
+		"uncompressed_blocks":         blockStats.UncompressedBlocks,
+		"compression_codec_breakdown": blockStats.CompressionCodecBreakdown,
 	}, nil
 }
 

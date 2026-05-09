@@ -496,6 +496,12 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	if blockStats.CompressedBytes != 512 {
 		t.Fatalf("compressed bytes mismatch with legacy NULL compressed_size fallback: got=%d want=512", blockStats.CompressedBytes)
 	}
+	if blockStats.CompressedBlocks != 0 {
+		t.Fatalf("compressed blocks mismatch: got=%d want=0", blockStats.CompressedBlocks)
+	}
+	if blockStats.UncompressedBlocks != 1 {
+		t.Fatalf("uncompressed blocks mismatch: got=%d want=1", blockStats.UncompressedBlocks)
+	}
 	if blockStats.StoredBytes != 480 {
 		t.Fatalf("stored bytes mismatch: got=%d want=480", blockStats.StoredBytes)
 	}
@@ -512,6 +518,9 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	}
 	if got := blockStats.CodecDistribution["none"]; got != 1 {
 		t.Fatalf("codec distribution mismatch for none: got=%d want=1", got)
+	}
+	if got := blockStats.CompressionCodecBreakdown["none"]; got != 1 {
+		t.Fatalf("compression codec breakdown mismatch for none: got=%d want=1", got)
 	}
 
 	stats, err := runStatsResultWithDB(ctx, dbconn)
@@ -564,6 +573,18 @@ func TestCollectBlockStatsCompressionAggregatesMixedRepository(t *testing.T) {
 	}
 	if blockStats.StoredBytes != 450 {
 		t.Fatalf("stored bytes mismatch: got=%d want=450", blockStats.StoredBytes)
+	}
+	if blockStats.CompressedBlocks != 1 {
+		t.Fatalf("compressed blocks mismatch: got=%d want=1", blockStats.CompressedBlocks)
+	}
+	if blockStats.UncompressedBlocks != 1 {
+		t.Fatalf("uncompressed blocks mismatch: got=%d want=1", blockStats.UncompressedBlocks)
+	}
+	if got := blockStats.CompressionCodecBreakdown["none"]; got != 1 {
+		t.Fatalf("compression codec breakdown mismatch for none: got=%d want=1", got)
+	}
+	if got := blockStats.CompressionCodecBreakdown["zstd"]; got != 1 {
+		t.Fatalf("compression codec breakdown mismatch for zstd: got=%d want=1", got)
 	}
 	if blockStats.CompressionRatio <= 1.0 {
 		t.Fatalf("expected compression ratio > 1.0 for repetitive zstd data, got=%.4f", blockStats.CompressionRatio)

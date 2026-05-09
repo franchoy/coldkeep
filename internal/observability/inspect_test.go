@@ -97,6 +97,22 @@ func TestInspectRepositoryBasic(t *testing.T) {
 	if _, err := dbconn.Exec(`INSERT INTO snapshot (id, created_at, type) VALUES (?, ?, ?)`, "s1", time.Now().UTC(), "full"); err != nil {
 		t.Fatalf("insert snapshot: %v", err)
 	}
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, quarantine) VALUES (?, ?, ?, ?)`, "ctr_repo.bin", 1024, 2048, 0)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := containerRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container last insert id: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, compression_codec, compressed_size)
+		VALUES
+			(1, 'none', 100, 100, ?, 0, x'11', 'none', NULL),
+			(1, 'none', 1000, 400, ?, 100, x'22', 'zstd', 350)
+	`, containerID, containerID); err != nil {
+		t.Fatalf("insert storage blocks: %v", err)
+	}
 	svc := newServiceForTest(dbconn, nil)
 
 	result, err := svc.Inspect(context.Background(), EntityRepository, "", InspectOptions{})
@@ -118,6 +134,28 @@ func TestInspectRepositoryBasic(t *testing.T) {
 	}
 	if got := result.Summary["total_snapshots"]; got != int64(1) {
 		t.Fatalf("expected total_snapshots=1, got %v", got)
+	}
+	if got := result.Summary["logical_bytes"]; got != int64(1100) {
+		t.Fatalf("expected logical_bytes=1100, got %v", got)
+	}
+	if got := result.Summary["compressed_bytes"]; got != int64(450) {
+		t.Fatalf("expected compressed_bytes=450, got %v", got)
+	}
+	if got := result.Summary["stored_bytes"]; got != int64(500) {
+		t.Fatalf("expected stored_bytes=500, got %v", got)
+	}
+	if got := result.Summary["compressed_blocks"]; got != int64(1) {
+		t.Fatalf("expected compressed_blocks=1, got %v", got)
+	}
+	if got := result.Summary["uncompressed_blocks"]; got != int64(1) {
+		t.Fatalf("expected uncompressed_blocks=1, got %v", got)
+	}
+	breakdown, ok := result.Summary["compression_codec_breakdown"].(map[string]int64)
+	if !ok {
+		t.Fatalf("expected compression_codec_breakdown map[string]int64, got %T", result.Summary["compression_codec_breakdown"])
+	}
+	if breakdown["none"] != 1 || breakdown["zstd"] != 1 {
+		t.Fatalf("unexpected compression_codec_breakdown: %+v", breakdown)
 	}
 }
 

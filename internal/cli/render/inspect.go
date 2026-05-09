@@ -144,6 +144,20 @@ func orderedSummaryRows(entityType observability.EntityType, summary map[string]
 
 func preferredSummaryOrder(entityType observability.EntityType) []string {
 	switch entityType {
+	case observability.EntityRepository:
+		return []string{
+			"total_files",
+			"total_chunks",
+			"total_snapshots",
+			"logical_bytes",
+			"compressed_bytes",
+			"stored_bytes",
+			"compression_ratio",
+			"physical_ratio",
+			"compressed_blocks",
+			"uncompressed_blocks",
+			"compression_codec_breakdown",
+		}
 	case observability.EntityChunk:
 		return []string{"size_bytes", "chunker_version", "container_id"}
 	case observability.EntityLogicalFile, observability.EntityFile:

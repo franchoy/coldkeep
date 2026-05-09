@@ -41,20 +41,23 @@ type SnapshotRetentionStats struct {
 // BlockStats summarizes legacy and packed block layout metrics for benchmarking
 // and operator visibility.
 type BlockStats struct {
-	StorageBlocks     int64            `json:"storage_blocks_count"`
-	ChunkBlockRefs    int64            `json:"chunk_block_refs_count"`
-	AvgChunksPerBlock float64          `json:"avg_chunks_per_block"`
-	AvgPlaintextSize  float64          `json:"avg_block_plaintext_size"`
-	AvgStoredSize     float64          `json:"avg_block_stored_size"`
-	LogicalBytes      int64            `json:"logical_bytes"`
-	CompressedBytes   int64            `json:"compressed_bytes"`
-	StoredBytes       int64            `json:"stored_bytes"`
-	CompressionRatio  float64          `json:"compression_ratio"`
-	PhysicalRatio     float64          `json:"physical_ratio"`
-	FillRatio         float64          `json:"avg_block_fill_ratio"`
-	LegacyBlocks      int64            `json:"legacy_block_count"`
-	PackedBlocks      int64            `json:"packed_block_count"`
-	CodecDistribution map[string]int64 `json:"codec_distribution"`
+	StorageBlocks             int64            `json:"storage_blocks_count"`
+	ChunkBlockRefs            int64            `json:"chunk_block_refs_count"`
+	AvgChunksPerBlock         float64          `json:"avg_chunks_per_block"`
+	AvgPlaintextSize          float64          `json:"avg_block_plaintext_size"`
+	AvgStoredSize             float64          `json:"avg_block_stored_size"`
+	LogicalBytes              int64            `json:"logical_bytes"`
+	CompressedBytes           int64            `json:"compressed_bytes"`
+	StoredBytes               int64            `json:"stored_bytes"`
+	CompressionRatio          float64          `json:"compression_ratio"`
+	PhysicalRatio             float64          `json:"physical_ratio"`
+	CompressedBlocks          int64            `json:"compressed_blocks"`
+	UncompressedBlocks        int64            `json:"uncompressed_blocks"`
+	FillRatio                 float64          `json:"avg_block_fill_ratio"`
+	LegacyBlocks              int64            `json:"legacy_block_count"`
+	PackedBlocks              int64            `json:"packed_block_count"`
+	CodecDistribution         map[string]int64 `json:"codec_distribution"`
+	CompressionCodecBreakdown map[string]int64 `json:"compression_codec_breakdown"`
 }
 
 // StatsResult holds the snapshot emitted by RunStatsResult.
@@ -400,7 +403,10 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 		ctx = context.Background()
 	}
 
-	out := BlockStats{CodecDistribution: map[string]int64{}}
+	out := BlockStats{
+		CodecDistribution:         map[string]int64{},
+		CompressionCodecBreakdown: map[string]int64{},
+	}
 
 	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM storage_blocks`).Scan(&out.StorageBlocks); err != nil {
 		return BlockStats{}, fmt.Errorf("count storage_blocks: %w", err)
@@ -432,6 +438,15 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 		FROM storage_blocks
 	`).Scan(&out.LogicalBytes, &out.CompressedBytes, &out.StoredBytes); err != nil {
 		return BlockStats{}, fmt.Errorf("aggregate compression sizes: %w", err)
+	}
+
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) = 'none' THEN 1 ELSE 0 END), 0)
+		FROM storage_blocks
+	`).Scan(&out.CompressedBlocks, &out.UncompressedBlocks); err != nil {
+		return BlockStats{}, fmt.Errorf("aggregate compressed/uncompressed block counts: %w", err)
 	}
 	if out.CompressedBytes > 0 {
 		out.CompressionRatio = float64(out.LogicalBytes) / float64(out.CompressedBytes)
@@ -478,6 +493,32 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 	}
 	if err := rows.Err(); err != nil {
 		return BlockStats{}, fmt.Errorf("iterate codec distribution: %w", err)
+	}
+
+	compressionCodecRows, err := dbconn.QueryContext(ctx, `
+		SELECT lower(trim(COALESCE(compression_codec, 'none'))) AS compression_codec, COUNT(*)
+		FROM storage_blocks
+		GROUP BY lower(trim(COALESCE(compression_codec, 'none')))
+		ORDER BY compression_codec
+	`)
+	if err != nil {
+		return BlockStats{}, fmt.Errorf("compression codec breakdown: %w", err)
+	}
+	defer func() { _ = compressionCodecRows.Close() }()
+
+	for compressionCodecRows.Next() {
+		var codec string
+		var count int64
+		if err := compressionCodecRows.Scan(&codec, &count); err != nil {
+			return BlockStats{}, fmt.Errorf("scan compression codec breakdown: %w", err)
+		}
+		if codec == "" {
+			codec = "none"
+		}
+		out.CompressionCodecBreakdown[codec] = count
+	}
+	if err := compressionCodecRows.Err(); err != nil {
+		return BlockStats{}, fmt.Errorf("iterate compression codec breakdown: %w", err)
 	}
 
 	return out, nil

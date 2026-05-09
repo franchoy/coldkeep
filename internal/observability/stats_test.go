@@ -74,20 +74,23 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 			SharedBytes:                    10,
 		},
 		BlockStats: maintenance.BlockStats{
-			StorageBlocks:     4,
-			ChunkBlockRefs:    10,
-			AvgChunksPerBlock: 2.5,
-			AvgPlaintextSize:  900,
-			AvgStoredSize:     860,
-			LogicalBytes:      3600,
-			CompressedBytes:   2800,
-			StoredBytes:       3440,
-			CompressionRatio:  1.2857142857,
-			PhysicalRatio:     1.0465116279,
-			FillRatio:         0.88,
-			LegacyBlocks:      2,
-			PackedBlocks:      4,
-			CodecDistribution: map[string]int64{"none": 4},
+			StorageBlocks:             4,
+			ChunkBlockRefs:            10,
+			AvgChunksPerBlock:         2.5,
+			AvgPlaintextSize:          900,
+			AvgStoredSize:             860,
+			LogicalBytes:              3600,
+			CompressedBytes:           2800,
+			StoredBytes:               3440,
+			CompressionRatio:          1.2857142857,
+			PhysicalRatio:             1.0465116279,
+			CompressedBlocks:          3,
+			UncompressedBlocks:        1,
+			FillRatio:                 0.88,
+			LegacyBlocks:              2,
+			PackedBlocks:              4,
+			CodecDistribution:         map[string]int64{"none": 4},
+			CompressionCodecBreakdown: map[string]int64{"none": 1, "zstd": 3},
 		},
 	}
 
@@ -124,10 +127,19 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	if result.BlockLayout.LogicalBytes != 3600 || result.BlockLayout.CompressedBytes != 2800 || result.BlockLayout.StoredBytes != 3440 {
 		t.Fatalf("unexpected block layout byte aggregates: %+v", result.BlockLayout)
 	}
+	if result.BlockLayout.CompressedBlocks != 3 || result.BlockLayout.UncompressedBlocks != 1 {
+		t.Fatalf("unexpected block layout compressed/uncompressed counts: %+v", result.BlockLayout)
+	}
 	assertFloatApprox(t, result.BlockLayout.CompressionRatio, 1.2857142857, 1e-9, "block layout compression_ratio")
 	assertFloatApprox(t, result.BlockLayout.PhysicalRatio, 1.0465116279, 1e-9, "block layout physical_ratio")
 	if got := result.BlockLayout.CodecDistribution["none"]; got != 4 {
 		t.Fatalf("unexpected block layout codec distribution: %+v", result.BlockLayout.CodecDistribution)
+	}
+	if got := result.BlockLayout.CompressionCodecBreakdown["none"]; got != 1 {
+		t.Fatalf("unexpected block layout compression codec distribution: %+v", result.BlockLayout.CompressionCodecBreakdown)
+	}
+	if got := result.BlockLayout.CompressionCodecBreakdown["zstd"]; got != 3 {
+		t.Fatalf("unexpected block layout compression codec distribution: %+v", result.BlockLayout.CompressionCodecBreakdown)
 	}
 	if result.Efficiency.LogicalBytes != 500 {
 		t.Fatalf("unexpected efficiency logical_bytes: %d", result.Efficiency.LogicalBytes)

@@ -140,6 +140,27 @@ func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 	if _, err := fmt.Fprintf(w, "  avg_block_stored_size: %s\n", formatIECBytes(int64(r.BlockLayout.AvgBlockStoredSize))); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(w, "  logical_bytes: %s\n", formatIECBytes(r.BlockLayout.LogicalBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  compressed_bytes: %s\n", formatIECBytes(r.BlockLayout.CompressedBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  stored_bytes: %s\n", formatIECBytes(r.BlockLayout.StoredBytes)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  compression_ratio: %.3f\n", r.BlockLayout.CompressionRatio); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  physical_ratio: %.3f\n", r.BlockLayout.PhysicalRatio); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  compressed_blocks: %s\n", formatIntGrouped(r.BlockLayout.CompressedBlocks)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  uncompressed_blocks: %s\n", formatIntGrouped(r.BlockLayout.UncompressedBlocks)); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(w, "  avg_block_fill_ratio: %.3f\n", r.BlockLayout.AvgBlockFillRatio); err != nil {
 		return err
 	}
@@ -157,6 +178,18 @@ func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 		sort.Strings(codecs)
 		for _, codec := range codecs {
 			if _, err := fmt.Fprintf(w, "  codec[%s]: %s\n", codec, formatIntGrouped(r.BlockLayout.CodecDistribution[codec])); err != nil {
+				return err
+			}
+		}
+	}
+	if len(r.BlockLayout.CompressionCodecBreakdown) > 0 {
+		compressionCodecs := make([]string, 0, len(r.BlockLayout.CompressionCodecBreakdown))
+		for codec := range r.BlockLayout.CompressionCodecBreakdown {
+			compressionCodecs = append(compressionCodecs, codec)
+		}
+		sort.Strings(compressionCodecs)
+		for _, codec := range compressionCodecs {
+			if _, err := fmt.Fprintf(w, "  compression_codec[%s]: %s\n", codec, formatIntGrouped(r.BlockLayout.CompressionCodecBreakdown[codec])); err != nil {
 				return err
 			}
 		}

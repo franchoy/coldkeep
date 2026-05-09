@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/graph"
+	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -106,14 +107,27 @@ func (s *Service) inspectRepository(ctx context.Context, opts InspectOptions) (*
 		return nil, fmt.Errorf("inspect repository snapshot count: %w", err)
 	}
 
+	blockStats, err := maintenance.CollectBlockStats(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("inspect repository block compression stats: %w", err)
+	}
+
 	result := &InspectResult{
 		GeneratedAtUTC: s.now(),
 		EntityType:     EntityRepository,
 		EntityID:       "repository",
 		Summary: map[string]any{
-			"total_files":     logicalFiles,
-			"total_chunks":    chunks,
-			"total_snapshots": snapshots,
+			"total_files":                 logicalFiles,
+			"total_chunks":                chunks,
+			"total_snapshots":             snapshots,
+			"logical_bytes":               blockStats.LogicalBytes,
+			"compressed_bytes":            blockStats.CompressedBytes,
+			"stored_bytes":                blockStats.StoredBytes,
+			"compression_ratio":           blockStats.CompressionRatio,
+			"physical_ratio":              blockStats.PhysicalRatio,
+			"compressed_blocks":           blockStats.CompressedBlocks,
+			"uncompressed_blocks":         blockStats.UncompressedBlocks,
+			"compression_codec_breakdown": blockStats.CompressionCodecBreakdown,
 		},
 	}
 
