@@ -79,7 +79,7 @@ func TestStoreFileReadsMixedCompressionBlocksAfterRepositoryDefaultChangesStep36
 		ContainerDir: workDir,
 	}
 
-	setDefaults("none", 0)
+	setDefaults("none", 1)
 	aPayload := bytes.Repeat([]byte("step36-none-"), 48)
 	aPath := filepath.Join(workDir, "step36-none.txt")
 	if err := os.WriteFile(aPath, aPayload, 0o600); err != nil {
@@ -134,7 +134,7 @@ func TestStoreFileReadsMixedCompressionBlocksAfterRepositoryDefaultChangesStep36
 	}
 
 	// Flip defaults again to ensure restore does not depend on current repository setting.
-	setDefaults("none", 0)
+	setDefaults("none", 1)
 
 	if got := restoreFileBytesForTest(t, dbconn, resultA.FileID, workDir, "step36-none.restore"); !bytes.Equal(got, aPayload) {
 		t.Fatalf("restored first file mismatch")
