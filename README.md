@@ -745,6 +745,7 @@ Deleting a snapshot removes metadata only. Data remains retained when still refe
 
 `--dry-run` is read-only and reports impact details (lineage preview and file-count breakdown) without applying changes.
 Dry-run impact describes metadata/reference effects and does not guarantee disk-space reclamation.
+When both `--force` and `--dry-run` are passed, `--dry-run` takes precedence and the command remains read-only.
 
 `snapshot delete --dry-run` preview includes:
 

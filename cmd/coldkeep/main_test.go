@@ -5655,6 +5655,66 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotCommandDeleteDryRunOverridesForce(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalDelete := deleteSnapshotPhase
+	originalPreview := snapshotDeleteLineagePreviewPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		deleteSnapshotPhase = originalDelete
+		snapshotDeleteLineagePreviewPhase = originalPreview
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	deleteCalled := false
+	deleteSnapshotPhase = func(_ context.Context, _ *sql.DB, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+
+	snapshotDeleteLineagePreviewPhase = func(_ context.Context, _ *sql.DB, snapshotID string) (*snapshotDeleteLineagePreview, error) {
+		return &snapshotDeleteLineagePreview{SnapshotID: snapshotID}, nil
+	}
+
+	output := captureStdout(t, func() {
+		err := runSnapshotCommand(parsedCommandLine{
+			method:      "snapshot",
+			positionals: []string{"delete", "snap-del-precedence"},
+			flags: map[string][]string{
+				"force":   {""},
+				"dry-run": {""},
+				"output":  {"json"},
+			},
+		}, outputModeJSON)
+		if err != nil {
+			t.Fatalf("runSnapshotCommand delete with --force and --dry-run returned error: %v", err)
+		}
+	})
+
+	if deleteCalled {
+		t.Fatal("expected delete phase not to run when --dry-run is present")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		t.Fatalf("parse snapshot delete precedence JSON output: %v output=%q", err, output)
+	}
+	data := payload["data"].(map[string]any)
+	if got, _ := data["action"].(string); got != "delete_dry_run" {
+		t.Fatalf("expected action=delete_dry_run when both flags are set, got %v", data)
+	}
+	if got, _ := data["dry_run"].(bool); !got {
+		t.Fatalf("expected dry_run=true when both flags are set, got %v", data)
+	}
+}
+
 func TestRunSnapshotCommandDeleteRejectsDeleteUnusedFlag(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",

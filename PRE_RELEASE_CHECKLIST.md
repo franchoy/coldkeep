@@ -814,7 +814,7 @@ Use this as the final snapshot gate before tagging a release.
 
 - [ ] Retained logical roots are computed from `physical_file` union `snapshot_file`
 - [ ] Snapshot-only retained content is GC-safe
-- [ ] Deleting a snapshot changes only future GC eligibility
+- [ ] Deleting a snapshot changes only future GC eligibility; eligibility changes only when all retaining snapshots are removed
 - [ ] Child snapshot remains restorable after deleting its lineage parent
 - [ ] Stats expose snapshot retention pressure
 - [ ] Verify audits persisted snapshot reachability anomalies
@@ -836,7 +836,7 @@ Integration tests:
 - [ ] Snapshot lifecycle end-to-end works
 - [ ] Filtered snapshot show returns correct matched counts
 - [ ] Filtered snapshot diff summary matches returned entries
-- [ ] Snapshot-retained content blocks GC until snapshot delete
+- [ ] Snapshot-retained content blocks GC until all retaining snapshots are deleted
 - [ ] Long-run snapshot churn test remains green
 
 Adversarial tests:
@@ -937,7 +937,7 @@ Additional CLI validation and policy checks:
 - [ ] `snapshot diff --filter added|removed|modified` works as specified
 - [ ] `--path`, `--prefix`, `--pattern`, `--regex`, `--min-size`, `--max-size`, `--modified-after`, and `--modified-before` validate at CLI level
 - [ ] Invalid regex/pattern/time/size ranges fail as usage errors (exit code `2`)
-- [ ] `snapshot delete` requires either `--force` or `--dry-run` (do not pass both)
+- [ ] `snapshot delete` requires at least one of `--force` or `--dry-run`; when both are provided, `--dry-run` takes precedence (read-only)
 
 ## 17) Verify snapshot / retention contract (manual gate)
 
@@ -971,7 +971,7 @@ metadata only (never as a command target).
 # delete snapshot
 ./coldkeep snapshot delete pre-gc-gate --force --output json
 
-# confirm GC eligibility changes only after delete
+# confirm GC eligibility changes only after all retaining snapshots are deleted
 ./coldkeep gc --dry-run --output json
 ```
 
