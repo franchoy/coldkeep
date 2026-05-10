@@ -45,7 +45,7 @@ container_bytes
 | logical_hash | `storage_blocks.block_hash` | Encoded block (pre-transform) | ✗ NEVER | Verify logical content |
 | compressed_hash | `storage_blocks.compressed_hash` | After compression stage (zstd bytes or logical bytes for compression_codec=none) | ✓ legacy only | Verify compression layer |
 | physical_hash | `storage_blocks.physical_hash` | Persisted bytes (nonce||ciphertext for aes-gcm; compressed payload bytes for codec=none) | ✓ legacy only | Verify on-disk bytes |
-| chunk_hash | `chunks.chunk_hash` | Plaintext chunk (dedup key) | ✗ NEVER | Dedup identity |
+| chunk_hash | `chunk.chunk_hash` | Plaintext chunk (dedup key) | ✗ NEVER | Dedup identity |
 
 **Engine Rule:** Trust per-block metadata. Verify skips missing hashes (legacy support).
 
@@ -86,10 +86,10 @@ type StoredBlock struct {
     
     // Location
     ContainerID    int64
-    BlockOffset    int64
+    ContainerOffset int64
     
-    // Chunk mapping (JSON)
-    ChunkBlockMap  []ChunkRef     // [{chunk_id, offset_in_block, size_in_block}]
+    // Chunk mapping (loaded from chunk_block_refs table)
+    ChunkRefs      []ChunkRef      // [{chunk_id, offset_in_block, size_in_block}]
 }
 ```
 
