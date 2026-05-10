@@ -163,7 +163,7 @@ For compressed+aes-gcm blocks:
    logical_hash ≠ compressed_hash ≠ physical_hash
    (compression then encryption)
 
-Restore: Verify inProgressively in reverse; stop on first mismatch.
+Restore: Verify progressively in reverse; stop on first mismatch.
 ```
 
 ### 2.4 Hash Role Authority (FROZEN)
