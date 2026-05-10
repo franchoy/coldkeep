@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
 )
 
 type Codec string
@@ -35,11 +37,9 @@ type Block struct {
 	ID              int64
 	FormatVersion   int
 	Codec           string
-	PlaintextSize   int64
-	StoredSize      int64
+	Metadata        storagemetadata.BlockStorageMetadata
 	ContainerID     int64
 	ContainerOffset int64
-	BlockHash       []byte
 }
 
 // ChunkSegment represents one chunk placement inside a physical block.
@@ -100,7 +100,7 @@ func GetBlockTransformer(codec Codec) (Transformer, error) {
 	case CodecAESGCM:
 		key, err := LoadEncryptionKey()
 		if err != nil {
-			return nil, fmt.Errorf("aes-gcm requires COLDKEEP_KEY\n\nRun:\n  coldkeep init")
+			return nil, fmt.Errorf("aes-gcm requires COLDKEEP_KEY: %w\n\nRun:\n  coldkeep init", err)
 		}
 		return &AESGCMTransformer{Key: key}, nil
 	default:

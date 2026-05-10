@@ -11,7 +11,7 @@ import (
 	dbschema "github.com/franchoy/coldkeep/db"
 )
 
-const requiredPostgresSchemaVersion = 12
+const requiredPostgresSchemaVersion = 15
 
 type sqliteContextExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -588,11 +588,21 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 			format_version INTEGER NOT NULL CHECK (format_version > 0),
 			codec TEXT NOT NULL,
 			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			compression_codec TEXT NOT NULL DEFAULT 'none' CHECK (compression_codec IN ('none', 'zstd')),
+			compression_level INTEGER,
+			compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0),
 			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
 			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
 			container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
 			block_hash BLOB NOT NULL,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			compressed_hash BLOB,
+			physical_hash BLOB,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CHECK (
+				(compression_codec = 'none' AND compression_level IS NULL)
+				OR
+				(compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+			)
 		)
 	`); err != nil {
 		return fmt.Errorf("create storage_blocks table: %w", err)
@@ -636,6 +646,144 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 	return nil
 }
 
+func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	hasStorageBlocks, err := sqliteHasTable(dbconn, ctx, "storage_blocks")
+	if err != nil {
+		return fmt.Errorf("inspect storage_blocks table existence: %w", err)
+	}
+	if hasStorageBlocks {
+		for _, columnSpec := range []struct {
+			name string
+			sql  string
+		}{
+			{name: "compression_codec", sql: `ALTER TABLE storage_blocks ADD COLUMN compression_codec TEXT NOT NULL DEFAULT 'none'`},
+			{name: "compression_level", sql: `ALTER TABLE storage_blocks ADD COLUMN compression_level INTEGER`},
+			{name: "compressed_size", sql: `ALTER TABLE storage_blocks ADD COLUMN compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0)`},
+			{name: "compressed_hash", sql: `ALTER TABLE storage_blocks ADD COLUMN compressed_hash BLOB`},
+			{name: "physical_hash", sql: `ALTER TABLE storage_blocks ADD COLUMN physical_hash BLOB`},
+		} {
+			hasColumn, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", columnSpec.name)
+			if err != nil {
+				return fmt.Errorf("inspect storage_blocks.%s: %w", columnSpec.name, err)
+			}
+			if !hasColumn {
+				if _, err := dbconn.ExecContext(ctx, columnSpec.sql); err != nil {
+					return fmt.Errorf("add storage_blocks.%s: %w", columnSpec.name, err)
+				}
+			}
+		}
+
+		// Canonicalize known historical values and fail fast on unsupported
+		// non-empty codecs. SQLite cannot add a new CHECK constraint to an
+		// existing column via ALTER TABLE, so this explicit validation protects
+		// per-block transform metadata semantics during migration.
+		if _, err := dbconn.ExecContext(ctx, `
+			UPDATE storage_blocks
+			SET compression_codec = LOWER(TRIM(compression_codec))
+			WHERE compression_codec IS NOT NULL
+		`); err != nil {
+			return fmt.Errorf("canonicalize storage_blocks.compression_codec casing: %w", err)
+		}
+		if _, err := dbconn.ExecContext(ctx, `
+			UPDATE storage_blocks
+			SET compression_codec = 'none'
+			WHERE compression_codec IS NULL
+			   OR TRIM(compression_codec) = ''
+		`); err != nil {
+			return fmt.Errorf("normalize storage_blocks.compression_codec null/empty values: %w", err)
+		}
+
+		var unsupportedCount int64
+		if err := dbconn.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM storage_blocks
+			WHERE compression_codec IS NOT NULL
+			  AND TRIM(compression_codec) <> ''
+			  AND compression_codec NOT IN ('none', 'zstd')
+		`).Scan(&unsupportedCount); err != nil {
+			return fmt.Errorf("validate storage_blocks.compression_codec values: %w", err)
+		}
+		if unsupportedCount > 0 {
+			return fmt.Errorf("unsupported non-empty storage_blocks.compression_codec values detected: %d rows (expected none|zstd)", unsupportedCount)
+		}
+
+		// SQLite cannot add a new CHECK constraint to an existing table with
+		// ALTER TABLE, so enforce the v1.9 compression_level contract here for
+		// upgraded repositories and fail fast on invalid legacy rows.
+		var invalidContractCount int64
+		if err := dbconn.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM storage_blocks
+			WHERE NOT (
+				(compression_codec = 'none' AND compression_level IS NULL)
+				OR
+				(compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+			)
+		`).Scan(&invalidContractCount); err != nil {
+			return fmt.Errorf("validate storage_blocks compression_level contract: %w", err)
+		}
+		if invalidContractCount > 0 {
+			return fmt.Errorf("invalid storage_blocks compression_level contract: %d rows violate (none=>NULL, zstd=>1..9)", invalidContractCount)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS repository_config (
+			key TEXT PRIMARY KEY CHECK (key != ''),
+			value TEXT NOT NULL CHECK (value != '')
+		)
+	`); err != nil {
+		return fmt.Errorf("create repository_config table for transform metadata defaults: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 13
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 13: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (13)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 13: %w", err)
+	}
+
+	return nil
+}
+
+func runSQLiteRepositoryCompressionConfigMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	// Add compression config keys to repository_config table
+	// This migration is idempotent: uses INSERT OR IGNORE to avoid conflicts
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO repository_config(key, value)
+		VALUES ('compression', 'none')
+	`); err != nil {
+		return fmt.Errorf("seed repository_config.compression: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO repository_config(key, value)
+		VALUES ('compression_level', '3')
+	`); err != nil {
+		return fmt.Errorf("seed repository_config.compression_level: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		DELETE FROM schema_version WHERE version < 14
+	`); err != nil {
+		return fmt.Errorf("clean sqlite schema_version before 14: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, `
+		INSERT OR IGNORE INTO schema_version(version) VALUES (14)
+	`); err != nil {
+		return fmt.Errorf("insert sqlite schema_version 14: %w", err)
+	}
+
+	return nil
+}
+
 func loadSQLiteSchema() (string, error) {
 	if dbschema.SQLiteSchema == "" {
 		return "", errors.New("embedded sqlite schema is empty")
@@ -643,6 +791,42 @@ func loadSQLiteSchema() (string, error) {
 	return dbschema.SQLiteSchema, nil
 }
 
+func runSQLiteStorageBlocksCompressionMetadataMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
+	// Add compression_ratio and payload_hash columns to storage_blocks table.
+	// payload_hash is a deprecated lowercase-hex mirror of block_hash retained
+	// for compatibility and observability only.
+	// Migration is idempotent: columns added with defaults.
+
+	hasRatioCol, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", "compression_ratio")
+	if err != nil {
+		return fmt.Errorf("check compression_ratio column: %w", err)
+	}
+	if !hasRatioCol {
+		if _, err := dbconn.ExecContext(ctx, "ALTER TABLE storage_blocks ADD COLUMN compression_ratio REAL DEFAULT 1.0"); err != nil {
+			return fmt.Errorf("add compression_ratio column: %w", err)
+		}
+	}
+
+	hasHashCol, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", "payload_hash")
+	if err != nil {
+		return fmt.Errorf("check payload_hash column: %w", err)
+	}
+	if !hasHashCol {
+		if _, err := dbconn.ExecContext(ctx, "ALTER TABLE storage_blocks ADD COLUMN payload_hash TEXT"); err != nil {
+			return fmt.Errorf("add payload_hash column: %w", err)
+		}
+	}
+
+	if _, err := dbconn.ExecContext(ctx, "DELETE FROM schema_version WHERE version < 15"); err != nil {
+		return fmt.Errorf("clean schema_version before 15: %w", err)
+	}
+
+	if _, err := dbconn.ExecContext(ctx, "INSERT OR IGNORE INTO schema_version(version) VALUES (15)"); err != nil {
+		return fmt.Errorf("insert schema_version 15: %w", err)
+	}
+
+	return nil
+}
 func loadPostgresSchema() (string, error) {
 	if dbschema.PostgresSchema == "" {
 		return "", errors.New("embedded postgres schema is empty")
@@ -824,6 +1008,18 @@ func RunMigrations(dbconn *sql.DB) error {
 	}
 
 	if err := runSQLiteBlockAbstractionFoundationMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteStorageTransformMetadataMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteRepositoryCompressionConfigMigration(tx, ctx); err != nil {
+		return err
+	}
+
+	if err := runSQLiteStorageBlocksCompressionMetadataMigration(tx, ctx); err != nil {
 		return err
 	}
 

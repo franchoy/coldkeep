@@ -490,12 +490,44 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	if blockStats.AvgStoredSize != 480 {
 		t.Fatalf("avg stored size mismatch: got=%.2f want=480", blockStats.AvgStoredSize)
 	}
+	if blockStats.LogicalBytes != 512 {
+		t.Fatalf("logical bytes mismatch: got=%d want=512", blockStats.LogicalBytes)
+	}
+	if blockStats.CompressedBytes != 512 {
+		t.Fatalf("compressed bytes mismatch with legacy NULL compressed_size fallback: got=%d want=512", blockStats.CompressedBytes)
+	}
+	if blockStats.CompressedBlocks != 0 {
+		t.Fatalf("compressed blocks mismatch: got=%d want=0", blockStats.CompressedBlocks)
+	}
+	if blockStats.UncompressedBlocks != 1 {
+		t.Fatalf("uncompressed blocks mismatch: got=%d want=1", blockStats.UncompressedBlocks)
+	}
+	if blockStats.StoredBytes != 480 {
+		t.Fatalf("stored bytes mismatch: got=%d want=480", blockStats.StoredBytes)
+	}
+	if math.Abs(blockStats.CompressionSizeRatio-1.0) > 1e-9 {
+		t.Fatalf("compression size ratio mismatch for compression=none: got=%.9f want=1.000000000", blockStats.CompressionSizeRatio)
+	}
+	if math.Abs(blockStats.CompressionFactor-1.0) > 1e-9 {
+		t.Fatalf("compression factor mismatch for compression=none: got=%.9f want=1.000000000", blockStats.CompressionFactor)
+	}
+	wantPhysicalSizeRatio := float64(480) / float64(512)
+	if math.Abs(blockStats.PhysicalSizeRatio-wantPhysicalSizeRatio) > 1e-9 {
+		t.Fatalf("physical size ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalSizeRatio, wantPhysicalSizeRatio)
+	}
+	wantPhysicalFactor := float64(512) / float64(480)
+	if math.Abs(blockStats.PhysicalFactor-wantPhysicalFactor) > 1e-9 {
+		t.Fatalf("physical factor mismatch: got=%.9f want=%.9f", blockStats.PhysicalFactor, wantPhysicalFactor)
+	}
 	wantFillRatio := float64(512) / float64(2*1024*1024)
 	if math.Abs(blockStats.FillRatio-wantFillRatio) > 1e-9 {
 		t.Fatalf("fill ratio mismatch: got=%.9f want=%.9f", blockStats.FillRatio, wantFillRatio)
 	}
 	if got := blockStats.CodecDistribution["none"]; got != 1 {
 		t.Fatalf("codec distribution mismatch for none: got=%d want=1", got)
+	}
+	if got := blockStats.CompressionCodecBreakdown["none"]; got != 1 {
+		t.Fatalf("compression codec breakdown mismatch for none: got=%d want=1", got)
 	}
 
 	stats, err := runStatsResultWithDB(ctx, dbconn)
@@ -504,5 +536,88 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	}
 	if stats.BlockStats.StorageBlocks != 1 || stats.BlockStats.ChunkBlockRefs != 2 {
 		t.Fatalf("runStats block stats mismatch: %+v", stats.BlockStats)
+	}
+}
+
+func TestCollectBlockStatsCompressionAggregatesMixedRepository(t *testing.T) {
+	dbconn := openStatsTestDB(t)
+	ctx := context.Background()
+
+	containerRes, err := dbconn.Exec(`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES (?, ?, ?, 1, 0)`, "stats-compression.bin", 0, 64*1024*1024)
+	if err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	containerID, err := containerRes.LastInsertId()
+	if err != nil {
+		t.Fatalf("container id: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO storage_blocks (format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash, compression_codec)
+		VALUES
+			(1, 'none', 100, 100, ?, 0, x'11', 'none'),
+			(1, 'none', 1000, 350, ?, 100, x'22', 'zstd')
+	`, containerID, containerID); err != nil {
+		t.Fatalf("insert storage blocks: %v", err)
+	}
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_size = 300 WHERE block_hash = x'22'`); err != nil {
+		t.Fatalf("set zstd compressed_size: %v", err)
+	}
+
+	blockStats, err := CollectBlockStats(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("CollectBlockStats: %v", err)
+	}
+
+	if blockStats.StorageBlocks != 2 {
+		t.Fatalf("storage blocks mismatch: got=%d want=2", blockStats.StorageBlocks)
+	}
+	if blockStats.LogicalBytes != 1100 {
+		t.Fatalf("logical bytes mismatch: got=%d want=1100", blockStats.LogicalBytes)
+	}
+	if blockStats.CompressedBytes != 400 {
+		t.Fatalf("compressed bytes mismatch: got=%d want=400", blockStats.CompressedBytes)
+	}
+	if blockStats.StoredBytes != 450 {
+		t.Fatalf("stored bytes mismatch: got=%d want=450", blockStats.StoredBytes)
+	}
+	if blockStats.CompressedBlocks != 1 {
+		t.Fatalf("compressed blocks mismatch: got=%d want=1", blockStats.CompressedBlocks)
+	}
+	if blockStats.UncompressedBlocks != 1 {
+		t.Fatalf("uncompressed blocks mismatch: got=%d want=1", blockStats.UncompressedBlocks)
+	}
+	if got := blockStats.CompressionCodecBreakdown["none"]; got != 1 {
+		t.Fatalf("compression codec breakdown mismatch for none: got=%d want=1", got)
+	}
+	if got := blockStats.CompressionCodecBreakdown["zstd"]; got != 1 {
+		t.Fatalf("compression codec breakdown mismatch for zstd: got=%d want=1", got)
+	}
+	if blockStats.CompressionFactor <= 1.0 {
+		t.Fatalf("expected compression factor > 1.0 for repetitive zstd data, got=%.4f", blockStats.CompressionFactor)
+	}
+	wantCompressionSizeRatio := float64(400) / float64(1100)
+	if math.Abs(blockStats.CompressionSizeRatio-wantCompressionSizeRatio) > 1e-9 {
+		t.Fatalf("compression size ratio mismatch: got=%.9f want=%.9f", blockStats.CompressionSizeRatio, wantCompressionSizeRatio)
+	}
+	wantCompressionFactor := float64(1100) / float64(400)
+	if math.Abs(blockStats.CompressionFactor-wantCompressionFactor) > 1e-9 {
+		t.Fatalf("compression factor mismatch: got=%.9f want=%.9f", blockStats.CompressionFactor, wantCompressionFactor)
+	}
+	wantPhysicalSizeRatio := float64(450) / float64(1100)
+	if math.Abs(blockStats.PhysicalSizeRatio-wantPhysicalSizeRatio) > 1e-9 {
+		t.Fatalf("physical size ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalSizeRatio, wantPhysicalSizeRatio)
+	}
+	wantPhysicalFactor := float64(1100) / float64(450)
+	if math.Abs(blockStats.PhysicalFactor-wantPhysicalFactor) > 1e-9 {
+		t.Fatalf("physical factor mismatch: got=%.9f want=%.9f", blockStats.PhysicalFactor, wantPhysicalFactor)
+	}
+
+	stats, err := runStatsResultWithDB(ctx, dbconn)
+	if err != nil {
+		t.Fatalf("runStatsResultWithDB: %v", err)
+	}
+	if stats.BlockStats.LogicalBytes != 1100 || stats.BlockStats.CompressedBytes != 400 || stats.BlockStats.StoredBytes != 450 {
+		t.Fatalf("runStats compression aggregate mismatch: %+v", stats.BlockStats)
 	}
 }

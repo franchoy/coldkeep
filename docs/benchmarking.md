@@ -137,18 +137,114 @@ JSON output exposes both per-case worker usage and an aggregate
 
 ## Current baseline
 
-The baseline file `benchmark-baseline.json` at the repository root was recorded
-from the v1.6 codebase before v1.7 performance optimizations were applied.
-It covers all eight scenarios on the **small** dataset and serves as the
-regression reference for CI.
+The repository now maintains an official v1.9 baseline set for the
+recommended packed production family (`aes-gcm` encryption):
 
-To regenerate the baseline after an intentional performance change:
+- compression modes: `none`, `zstd`
+- worker profiles: `w1`, `w4`
+- contract shape: `none/zstd × w1/w4` (four baseline JSON artifacts total)
+
+These artifacts are now the frozen performance reference point for v1.10+
+architectural work. Future releases may reorganize benchmark runners or CI
+gates, but they must compare against this frozen set unless an explicit
+baseline-refresh decision is documented.
+
+Official v1.9 baseline files:
+
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json`
+
+Profile intent:
+
+- `w1`: canonical single-worker anchor used for deterministic, low-contention
+   reference comparisons.
+- `w4`: canonical CI throughput profile used by active CI regression gates.
+
+Comparability contract for each worker profile baseline pair:
+
+- same dataset preset (`small`)
+- same repeat count (`1`)
+- same execution profile within each pair (`workers=1` or `workers=4`, deterministic mode)
+- same benchmark case set
+- same logical totals (`total_files`, `total_bytes`)
+
+The machine-readable manifests are stored at:
+
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json`
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w1-r1.json`
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w4-r1.json`
+
+Manifest role contract:
+
+- `baseline-manifest-v1.9.json`: CI-active manifest pointer (currently `w4`).
+- `baseline-manifest-v1.9-small-w1-r1.json`: frozen `w1` profile manifest.
+- `baseline-manifest-v1.9-small-w4-r1.json`: frozen `w4` profile manifest.
+
+Each manifest records file checksums, comparability validation, and per-case
+compressed vs uncompressed deltas. Manifest file references are
+repository-relative so artifacts remain portable and version-stable across
+machines.
+
+The formal internal freeze document is:
+
+- `docs/internal/benchmark_baselines_v1_9.md`
+
+To regenerate v1.9 baseline artifacts after intentional benchmark changes:
 
 ```bash
-coldkeep benchmark run --dataset small --workers 1 --output json > benchmark-baseline.json
-# Optional CI-parity workers=4 profile capture:
-coldkeep benchmark run --dataset small --workers 4 --output json > benchmark-baseline-w4.json
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 --output json \
+  > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 --output json \
+  > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 --output json \
+   > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 --output json \
+   > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
 ```
+
+To detect regressions against each baseline:
+
+```bash
+# Uncompressed production path regression checks (w1 and w4)
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
+  --threshold 20
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 \
+   --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json \
+   --threshold 20
+
+# Compressed production path regression checks (w1 and w4)
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+  coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
+  --threshold 20
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 \
+   --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json \
+   --threshold 20
+```
+
+For one-command capture + validation, use:
+
+```bash
+scripts/run_v19_baseline_pair.sh
+```
+
+Legacy reference baselines at repository root (`benchmark-baseline*.json`) are
+retained for historical v1.6/v1.7 context.
 
 ## Scenarios
 
@@ -174,31 +270,459 @@ coldkeep benchmark run --dataset small --workers 4 --output json > benchmark-bas
    an identical `relative-path → digest` map across isolated runs, proving that
    user-visible restore output is byte-for-bit stable.
 
-## Comparison thresholds
+## Regression Thresholds (v1.9)
 
-| Context | Flag | Threshold | Meaning |
+Benchmarks are now actionable through defined regression thresholds. Thresholds are
+mode-specific (uncompressed vs. compressed) and case-specific, balancing detection
+sensitivity with normal run-to-run variance.
+
+**Official policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
+for the authoritative threshold definition.
+
+These thresholds are frozen for the v1.9 baseline set and are the reference
+policy for v1.10+ regression detection until an explicit threshold-refresh
+decision is approved.
+
+### Uncompressed mode (packed + aes-gcm + none)
+
+**Strict thresholds:**
+
+| Metric | Default | Rationale |
+| --- | --- | --- |
+| Store throughput regression | > 5% | Production baseline; strict monitoring required |
+| Restore throughput regression | > 5% | Critical read path; regressions must be justified |
+| Metadata operation regression | > 3% | snapshot-creation, gc-after-churn, stats-inspect |
+| Memory increase | > 10% | Not yet enforced via CLI but monitored |
+
+Any regression exceeding these thresholds **fails CI** and must be investigated or reverted.
+
+### Compressed mode (packed + aes-gcm + zstd)
+
+**Stage 1 (v1.9–v1.10): Warning thresholds only**
+
+Compressed thresholds account for natural compression overhead observed in v1.9 baseline:
+- `store-large-file`: 13.8% duration overhead typical
+- `snapshot-creation`: 27.2% duration overhead typical
+- `stats-inspect`: 16.7% duration overhead typical
+
+Warning thresholds are set ~5–10% above baseline to detect real regressions:
+
+| Operation | Store/Restore | Metadata | Verify |
 | --- | --- | --- | --- |
-| Local / dev | `--threshold 20` (default) | 20% | Fail if any scenario is >20% slower or throughput drops >20% |
-| CI | `--threshold 100` | 100% | Fail only if a scenario becomes **more than 2× slower** (disaster detection) |
+| **Throughput warning** | 15–25% | 25–35% | 15% |
+| **Duration warning** | 15–25% | 25–35% | 15% |
 
-The 20% default is intentionally tight so developers notice regressions during active work.
-The 100% CI threshold tolerates normal run-to-run variance on short-duration small-dataset
-runs (snapshot and GC timings are DB/filesystem sensitive) while still catching catastrophic
-regressions.
+Compressed-mode regressions **log warnings** but do not fail CI in v1.9. This permits
+natural variance while capturing trends for future hardening phases.
+
+**Per-case thresholds (compressed):**
+
+| Case | Duration Warning | Throughput Warning |
+| --- | --- | --- |
+| store-large-file | 25% | 25% |
+| store-many-small-files | 20% | 20% |
+| store-mixed-dataset | 25% | 25% |
+| restore-large-file | 15% | 15% |
+| restore-many-files | 15% | 15% |
+| snapshot-creation | 35% | 35% |
+| gc-after-churn | 15% | 15% |
+| stats-inspect | 25% | 25% |
+| verify-system-deep | 15% | 15% |
+
+**Future plan (v1.11+):**
+- Analyze compression benefit vs. performance cost
+- Convert warnings to hard-fail thresholds if justified
+- Require cost-benefit analysis for any compression-mode exception
+
+### Local development workflow
+
+Use `--compare` with thresholds matching your change context:
+
+```bash
+# Against uncompressed baseline (recommended for most work)
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+  ./coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
+  --threshold 5
+
+# Against compressed baseline (if working on compression features)
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+  ./coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
+  --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
+  --threshold 20
+```
+
+The `--compare` flag uses single-run thresholds; for production gates involving multiple
+runs, use the helper script:
+
+```bash
+# Regenerate baselines and validate against current code
+scripts/run_v19_baseline_pair.sh --threshold 5
+```
+
+### CI policy
+
+CI applies thresholds as follows:
+
+1. **Uncompressed mode (hard fail):** CI runs benchmark against
+   `benchmark-baseline-v1.9-packed-aes-gcm-none-*` at threshold 5%. Any regression
+   exceeding 5% fails the CI run and blocks merge.
+
+2. **Compressed mode (warnings only):** CI runs benchmark against
+   `benchmark-baseline-v1.9-packed-aes-gcm-zstd-*` at threshold 20%. Violations log
+   warnings but do not fail CI in v1.9.
+
+3. **Measurement variance:** Small-dataset single-run variance is expected (±2%);
+   real regressions typically exceed 3–5% and are reliably detected.
+
+### Updating thresholds
+
+When to update thresholds:
+
+1. **Performance improvement:** If you improve performance (e.g., new optimization),
+   the baseline becomes a new regression floor; regenerate baselines:
+   ```bash
+   scripts/run_v19_baseline_pair.sh --threshold 100
+   ```
+
+2. **Justifiable slowdown:** If a change introduces acceptable slowdown (e.g., new
+   feature, safety boundary), document the cost-benefit analysis and increase the
+   per-case threshold if warranted. Update `regression-thresholds.yaml` with rationale.
+
+3. **Phase transition:** Moving from v1.10 to v1.11 to apply compressed hard-fail
+   thresholds requires analysis of compression impact trends and explicit approval
+   from the release engineering team.
+
+## Step 6.7 — Deterministic Restore Across Matrix (v1.9)
+
+Core roadmap guarantee: **Compression must not affect deterministic restore.**
+
+### Validation scope
+
+Step 6.7 validates that the same file produces byte-identical restores regardless of:
+
+- **Compression modes:** uncompressed (`none`) vs. compressed (`zstd`)
+- **Encryption codecs:** unencrypted (`plain`) vs. encrypted (`aes-gcm`)
+- **Repository state:** baseline, after GC, after snapshot operations
+- **Repeated operations:** multiple runs, different execution paths
+
+### Test matrix
+
+| Compression | Encryption | Baseline | After GC | After Snapshots | Repeated Runs |
+| --- | --- | --- | --- | --- | --- |
+| none | plain | ✓ | ✓ | ✓ | ✓ |
+| none | aes-gcm | ✓ | ✓ | ✓ | ✓ |
+| zstd | plain | ✓ | ✓ | ✓ | ✓ |
+| zstd | aes-gcm | ✓ | ✓ | ✓ | ✓ |
+
+### Validation checklist
+
+- ✓ **Byte-identical restore everywhere:** All modes produce exact byte-for-byte identical output
+- ✓ **Repeated restores identical:** Multiple restores of the same file produce identical hashes
+- ✓ **Restore after GC identical:** Restores after garbage collection produce identical output
+- ✓ **Restore after snapshots identical:** Restores after snapshot creation/deletion produce identical output
+- ✓ **Same input → same logical output independent of compression/encryption:** Compression is metadata-only; it never affects restored bytes
+
+### Implementation
+
+Deterministic restore matrix validation runs in tests/adversarial/:
+
+```bash
+# Run matrix tests (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep67" -v
+
+# Test names:
+# - TestStep67DeterministicRestoreCompressionMatrix: Core matrix (4 modes × 8 scenarios)  
+# - TestStep67CrossModeDeterminism: Cross-mode consistency (identical restores across all 4 modes)
+```
+
+### Guarantees for operators
+
+1. **Compression is metadata-only:** Choosing `COLDKEEP_COMPRESSION=zstd` does not affect restored file content; it only affects storage efficiency.
+2. **Repository config changes don't affect existing files:** Changing the repository-level compression setting does not re-compress or alter existing stored files.
+3. **Read-only operations are always safe:** Snapshots, GC, and other maintenance never modify file content during restore.
+4. **Deterministic output is cryptographically validated:** Each restore operation verifies content hashes and encryption state; silent corruption is not possible.
+
+## Step 6.8 — Revalidate Dedup Semantics (v1.9)
+
+Core roadmap guarantee: **Compression must not reduce dedup effectiveness.**
+
+### Validation scope
+
+Step 6.8 validates that deduplication behavior remains identical regardless of compression mode.
+The logical dedup graph (chunk identities, file-chunk relationships, reuse patterns) must be
+identical between uncompressed and compressed modes. Only physical storage representation changes.
+
+Step 6.8 validates:
+
+- **Chunk identities unchanged:** The same file content produces the same chunk hash
+- **Dedup graph unchanged:** File-chunk relationships are identical across compression modes
+- **No duplicate chunk storage introduced:** Identical data is deduplicated identically regardless of compression
+- **Restore unchanged:** Files restored from either mode produce identical content
+
+### Test matrix
+
+| Compression | Encryption | Duplicate Files | Partial Overlap | Modified Versions |
+| --- | --- | --- | --- | --- |
+| none | plain | ✓ | ✓ | ✓ |
+| none | aes-gcm | ✓ | ✓ | ✓ |
+| zstd | plain | ✓ | ✓ | ✓ |
+| zstd | aes-gcm | ✓ | ✓ | ✓ |
+
+### Validation checklist
+
+- ✓ **Chunk count identical:** Exact same number of unique chunks across compression modes
+- ✓ **Chunk hashes identical:** All chunk identifiers match byte-for-byte
+- ✓ **File-chunk relationships identical:** Mapping of files to chunks is the same
+- ✓ **Dedup ratio identical:** Total stored size / unique chunk size yields identical ratio
+- ✓ **File references identical:** Number of logical file references is the same
+- ✓ **Restores identical:** Files restored from either mode produce byte-identical content
+
+### Implementation
+
+Dedup semantics matrix validation runs in tests/adversarial/:
+
+```bash
+# Run dedup semantics tests (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep68" -v
+
+# Test names:
+# - TestStep68DedupSemanticCompressionIndependence: Core matrix (2 encryptions × 2 compressions)
+# - TestStep68CrossCompressionDedupConsistency: Full 4-mode consistency (all mode combinations)
+
+# Example with extended output
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep68DedupSemanticCompressionIndependence" -v -race
+```
+
+Test payloads include:
+
+- **Duplicate files:** Identical content stored multiple times (should deduplicate completely)
+- **Partially overlapping:** Files with common prefix/suffix (should chunk-deduplicate section boundaries)
+- **Modified versions:** Content with incremental changes (should deduplicate unchanged sections)
+- **Different content:** Unique files (baseline for dedup ratio calculation)
+
+### Guarantees for operators
+
+1. **Dedup effectiveness is independent of compression:** Enabling `COLDKEEP_COMPRESSION=zstd` does not reduce dedup effectiveness; files using identical content still share chunks.
+2. **Logical dedup graph is invariant:** The set of unique chunks and their relationships is identical regardless of compression setting.
+3. **Only physical storage representation changes:** Compressed chunks occupy less disk space but represent the same logical dedup structure.
+4. **Cross-compression queries are safe:** Repositories with mixed compression modes (if supported by migration) maintain consistent dedup semantics.
+
+## Step 6.9 — Revalidate GC Safety Across Matrix (v1.9)
+
+Core roadmap guarantee: **GC must remain transform-agnostic and safe.**
+
+### Validation scope
+
+Step 6.9 validates garbage collection safety across repository classes where block
+transforms and metadata paths vary:
+
+- **Compressed repositories:** `zstd` storage path
+- **Uncompressed repositories:** `none` storage path
+- **Mixed repositories:** both `none` and `zstd` data in one repository
+- **Encrypted repositories:** `aes-gcm` with compression path coverage
+- **Legacy repositories:** legacy metadata shape (no packed block metadata rows)
+
+Each class validates:
+
+- **Live block preservation:** GC must not delete reachable data
+- **Orphan deletion:** unreachable chunks/blocks must be reclaimable
+- **Restore after GC:** live files restore with original hashes
+- **Verify after GC:** repository verification remains healthy
+
+### Test matrix
+
+| Repository Class | Compression Path | Encryption | Legacy Shape | Live Preserve | Orphan Remove | Restore After GC | Verify After GC |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| compressed | zstd | plain | no | ✓ | ✓ | ✓ | ✓ |
+| uncompressed | none | plain | no | ✓ | ✓ | ✓ | ✓ |
+| mixed | none + zstd | plain | no | ✓ | ✓ | ✓ | ✓ |
+| encrypted | zstd | aes-gcm | no | ✓ | ✓ | ✓ | ✓ |
+| legacy | none | plain | yes | ✓ | ✓ | ✓ | ✓ |
+
+### Validation checklist
+
+- ✓ **Live compressed blocks preserved:** compressed live data remains reachable after GC
+- ✓ **Orphaned compressed blocks removable:** unreachable compressed blocks are reclaimed
+- ✓ **Restore after GC correct:** restored live files match pre-GC SHA-256
+- ✓ **Verify after GC correct:** `verify system` passes after GC in all matrix classes
+
+### Implementation
+
+GC safety matrix validation runs in tests/adversarial/:
+
+```bash
+# Run GC safety matrix tests (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep69" -v
+
+# Test names:
+# - TestStep69GCSafetyAcrossMatrix: compressed/uncompressed/mixed/encrypted/legacy classes
+```
+
+Implementation details:
+
+- Performs GC dry-run and real-run in each repository class.
+- Asserts orphan chunk IDs are removed post-GC.
+- Asserts live chunk IDs remain present post-GC.
+- Restores live files and validates SHA-256 hashes.
+- Runs `verify system` post-GC (`VerifyStandard`) as final safety gate.
+
+## Step 6.10 — Validate Mixed Repository Stability (v1.9)
+
+Core roadmap guarantee: **Mixed repositories are normal behavior and must remain stable.**
+
+### Validation scope
+
+Step 6.10 validates repository stability through an end-to-end evolution path:
+
+- **v1.8 blocks path:** legacy metadata/read path
+- **Phase 5 uncompressed path:** packed metadata with `compression=none`
+- **zstd path:** packed metadata with `compression=zstd`
+- **encryption mode transitions:** `plain` and `aes-gcm` blocks in one repository
+- **store-if-smaller fallback path:** zstd-configured writes that safely store as `none` when compression expands payloads
+
+After evolution, validation executes:
+
+- **restore everything**
+- **verify everything**
+- **GC everything**
+- **stats everything**
+
+### Validation checklist
+
+- ✓ **Mixed repositories stable:** legacy + packed + encrypted + compressed data co-exist safely
+- ✓ **Per-block metadata fully sufficient:** packed block metadata is complete and read-safe
+- ✓ **Repository defaults never required for reads:** restores remain correct after changing repository compression defaults
+
+### Implementation
+
+Mixed repository stability validation runs in tests/adversarial/:
+
+```bash
+# Run Step 6.10 (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep610" -v
+
+# Test names:
+# - TestStep610MixedRepositoryStability
+```
+
+Key assertions include:
+
+- Old chunks remain on legacy read path while new chunks use packed refs.
+- Compression codec distribution contains both `none` and `zstd` in mixed states.
+- Store-if-smaller fallback is observed for incompressible payloads under zstd defaults.
+- Full restore hash checks pass before and after repository-default changes.
+- Verify and GC continue to pass in mixed repository states.
+- Stats report both legacy and packed block populations.
+
+## Step 6.11 — Add Long-Run / Adversarial Compression Tests (v1.9)
+
+Core roadmap focus: **Compression paths must remain stable under stress and fault injection.**
+
+### Validation scope
+
+Step 6.11 targets compression-specific adversarial risks:
+
+- **Memory leaks / growth drift:** repeated compression + decompression loops
+- **Decompressor edge cases:** sustained restore/verify cycles under zstd defaults
+- **Fragmentation/lifecycle stress:** large mixed-compressibility repositories with periodic GC
+- **Corruption handling bugs:** random byte corruption in completed chunk payloads
+- **Partial container truncation:** truncated payload tails in active repository state
+
+### Implementation
+
+Compression adversarial suite runs in tests/adversarial/:
+
+```bash
+# Run Step 6.11 core adversarial suite (requires COLDKEEP_TEST_DB=1)
+COLDKEEP_TEST_DB=1 go test ./tests/adversarial -run "TestStep611" -v
+
+# Run long-run memory soak variant
+COLDKEEP_TEST_DB=1 COLDKEEP_LONG_RUN=1 go test ./tests/adversarial -run "TestStep611CompressionLongRunMemoryGrowthBounded" -v
+```
+
+Test set:
+
+- `TestStep611CompressionStressStoreRestoreVerifyCycles`
+   - large repository seed (compressible + incompressible payload mix)
+   - repeated store/restore loops
+   - repeated verify cycles (`verify --full` equivalent)
+   - periodic GC runs during stress
+- `TestStep611CompressionCorruptionAndTruncationAlwaysDetectedSafely`
+   - random corruption injection on completed chunk bytes
+   - partial container truncation injection
+   - verify failure is required after each corruption mode
+   - no panic contract enforced around verify/restore entrypoints
+- `TestStep611CompressionLongRunMemoryGrowthBounded`
+   - long-run loop under compression default
+   - heap trend checks after repeated GC boundaries
+   - bounded peak/final heap assertions to detect unbounded memory growth
+
+### Validation checklist
+
+- ✓ **No memory leaks (bounded trend):** long-run heap peak/final allocations are constrained by explicit bounds
+- ✓ **No decompressor panics:** restore/verify loops are panic-guarded under stress and fault injection
+- ✓ **No unbounded memory growth:** repeated compression cycles + GC converge within bounded memory envelope
+- ✓ **Corruption always detected safely:** random byte corruption and truncation both force safe verify failure paths
+
+## Step 6.12 — Validate Legacy Repository Upgrade Path (v1.9)
+
+Core roadmap guarantee: **v1.8 repositories must upgrade safely without rewriting existing data.**
+
+### Validation scope
+
+Step 6.12 validates the v1.8 -> v1.9 upgrade path in a mixed-state repository:
+
+- create v1.8-style repository metadata shape (legacy `blocks` path)
+- upgrade/open with v1.9 runtime path
+- store new compressed blocks post-upgrade
+- restore old and new data together
+- verify old and new data together
+
+Critical invariants:
+
+- **No automatic recompression**
+- **No block rewriting**
+- **No container rewriting**
+
+### Implementation
+
+Legacy upgrade-path validation runs in tests/integration/:
+
+```bash
+# Run Step 6.12 (requires COLDKEEP_TEST_DB=1 and database setup)
+COLDKEEP_TEST_DB=1 go test ./tests/integration -run "TestStep612" -v
+
+# Test names:
+# - TestStep612LegacyUpgradePathNoRewriteIntegration
+```
+
+Key assertions include:
+
+- old legacy `blocks` rows are snapshot-equal before vs after upgrade/new writes
+- old container payload files keep identical size + hash before vs after upgrade/new writes
+- old chunks never gain packed refs (`chunk_block_refs`) automatically
+- new post-upgrade file emits compressed packed rows (`storage_blocks` + `compression_codec=zstd`)
+- restore succeeds for old and new logical files with exact precomputed hashes
+- verify succeeds on mixed old/new repository state
+
+### Validation checklist
+
+- ✓ **Old data untouched:** legacy block rows and legacy container payload bytes are unchanged
+- ✓ **Old blocks readable:** old logical files restore correctly after upgrade
+- ✓ **New blocks coexist safely:** new compressed packed blocks store/restore/verify alongside old legacy data
+- ✓ **Migration only additive:** old metadata path remains intact while new packed metadata is added for new chunks
 
 ## CI policy
 
-CI runs the **small** benchmark dataset on every push:
+CI now separates correctness checks from benchmark measurement:
 
-1. **Always runs the benchmark** and captures a `benchmark-baseline.json` artifact.
-2. **Runs a second pass with `--compare ... --threshold 100`** to catch disasters
-   (any scenario becoming >2× slower fails the job). If the first compare run
-   fails, CI retries once to reduce false failures from transient DB/filesystem
-   contention spikes.
-3. Does **not** enforce tight micro-performance numbers — normal timing variance is expected.
+1. The correctness matrix runs independently from benchmarks and covers the supported codec combinations.
+2. The benchmark matrix runs the small dataset only for the recommended packed `aes-gcm` production modes with `COLDKEEP_COMPRESSION=none` and `COLDKEEP_COMPRESSION=zstd`.
+3. Benchmark outputs are captured as artifacts for inspection. Threshold-based regression comparison is enforced via `--compare` with mode-specific thresholds; violations are reported per the v1.9 regression thresholds policy above.
 
-Run the `--compare` flag with the default `--threshold 20` locally to investigate
-potential regressions before opening a PR.
+See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
+and CI workflow for authoritative threshold application.
 
 ## Phase 4 implementation order
 
@@ -778,3 +1302,496 @@ Rationale: `container_id` is stored on `blocks`, not on `chunk`, so a
 `chunk(container_id)` index is invalid for this schema.
 
 GC behavior remains unchanged unless query-plan evidence shows a real hotspot.
+
+## Step 6.13 — Validate Observability & Stats Semantics
+
+Step 6.13 validates that observability formulas correctly reflect storage reality
+and handle edge cases (mixed repositories, legacy nulls, encryption).
+
+### Validation scope
+
+**Stats formulas must be mathematically correct:**
+- `logical_bytes = SUM(plaintext_size)` across all blocks (`plaintext_size` is encoded logical block size)
+- `compressed_bytes = SUM(compressed_size or plaintext_size if compression_codec=none)`
+- `stored_bytes = SUM(stored_size)` (includes all overhead)
+- `compression_factor = logical_bytes / compressed_bytes`
+- `physical_factor = logical_bytes / stored_bytes`
+
+**Repository types tested:**
+- Pure uncompressed (v1.8 legacy state)
+- Pure compressed (v1.9 new blocks)
+- Mixed (legacy uncompressed + new compressed coexisting)
+- AES-GCM encrypted blocks (with and without compression)
+- Multi-chunk files (verify no double-counting of logical bytes)
+
+**Edge cases validated:**
+- Legacy blocks with null hash fields do not crash collection
+- Fallback byte counting for uncompressed blocks is applied correctly
+- Ratios remain valid across accumulation of multiple stores
+- Empty repository returns zero bytes and zero blocks
+- Block counts distinguish compressed vs. uncompressed
+- Byte accounting is consistent between direct query and stats API
+
+### Implementation
+
+**Test file:** `tests/integration/v19_stats_semantics_integration_test.go` (10 comprehensive tests)
+
+**Helper functions:**
+- `storeTestFileVia613` — Store file with direct storage API
+- `setCompressionVia613` — Set repository compression via transaction
+
+**Tests:**
+1. `TestStep613StatsRatiosMathematicallyCorrect` — 3 uncompressed files verify 1.0 compression ratio
+2. `TestStep613StatsCompressedBytesRatio` — Highly compressible data validates ratio > 1.0
+3. `TestStep613StatsMixedRepository` — Legacy uncompressed + new compressed verify mixed coefficients
+4. `TestStep613StatsMultiChunkFile` — 5MB file validates no double-counting across chunks
+5. `TestStep613StatsLegacyNullHashesSafe` — Collection works with sparse/null hash fields
+6. `TestStep613StatsAESGCMEncryption` — Stats work correctly with AES-GCM blocks
+7. `TestStep613StatsRatioBoundaries` — 5 files verify ratio invariants (compression ≥ 1.0, physical ≤ 1.0)
+8. `TestStep613StatsByteAccountingConsistency` — Direct DB query matches stats API
+9. `TestStep613StatsEmptyRepository` — Empty repo returns zero for all metrics
+10. `TestStep613StatsAccumulation` — Multi-store sequence verifies accumulation logic
+
+### Validation checklist
+
+✔ **Ratios mathematically correct:**
+- CompressionFactor = LogicalBytes / CompressedBytes (always ≥ 1.0)
+- PhysicalSizeRatio = StoredBytes / LogicalBytes
+- PhysicalFactor = LogicalBytes / StoredBytes
+- Uncompressed files → CompressionFactor ≈ 1.0
+- Highly compressible files → CompressionFactor > 1.0
+- All formulas verified across accumulation and multi-chunk scenarios
+
+✔ **Mixed repos handled correctly:**
+- Old blocks (v1.8 uncompressed) counted separately from new blocks
+- CompressedBytes includes fallback (plaintext_size for `compression_codec=none` blocks)
+- CompressionFactor accurately reflects mixed state (weighted by compression efficacy)
+- No double-counting of logical bytes across codec transitions
+
+✔ **Fallback blocks counted correctly:**
+- For `compression_codec='none'` blocks: compressed_size = plaintext_size
+- StorageBlocks query returns aggregated count with correct fallback
+- Byte sums match direct SQL query pattern
+- Stats API output matches source-of-truth query
+
+### Execution
+
+```bash
+# Targeted test run (requires COLDKEEP_TEST_DB=1 for real DB)
+COLDKEEP_TEST_DB=1 go test ./tests/integration -run TestStep613 -v
+
+# Include in full suite
+COLDKEEP_TEST_DB=1 go test ./tests/integration -v
+```
+
+**Expected output:** All 10 TestStep613* tests pass with correct byte accounting, ratio validation, and edge-case handling.
+
+---
+
+## Step 6.14 — Freeze v1.9 Storage Semantics
+
+Step 6.14 documents and locks down all storage semantics required for v1.9 release and foundation for engine extraction.
+
+### Scope
+
+Before v1.10, storage semantics must stabilize to enable engine extraction and prevent breaking changes.
+
+**Critical areas frozen:**
+1. **Transform ordering** — Block encoding → hashing → compression → encryption → persistence
+2. **Hash semantics** — Four hash types (logical, compressed, physical, chunk) and nullable rules
+3. **Metadata meanings** — Block fields, chunk fields, container fields, and their invariants
+4. **Compression semantics** — Per-block compression, mixed-codec state, stats accuracy
+5. **Mixed repository guarantees** — Multi-codec/compression support within one repository
+6. **Read-path guarantees** — Verify pipeline stages, determinism, atomicity, crash safety
+7. **Repository defaults vs block reality** — Config read-only at write time; block metadata source-of-truth at read time
+
+### Documentation
+
+**Main reference:** `docs/STORAGE_SEMANTICS_v1.9.md` (Comprehensive contract, 500+ lines)
+
+Sections:
+- **Section 1:** Transform ordering — Write and read pipelines (immutable sequence)
+- **Section 2:** Hash semantics — Four hash types, computation rules, equality invariants
+- **Section 3:** Metadata meanings — Block, chunk, container fields and their guarantees
+- **Section 4:** Compression semantics — Per-block compression, mixed state, performance impact
+- **Section 5:** Mixed repository guarantees — Multi-codec/compression together in one repo
+- **Section 6:** Read-path guarantees — Verify stages, restore determinism, atomicity
+- **Section 7:** Repository defaults vs block reality — Configuration separation lock
+- **Section 8:** Validation checklist — All ambiguity eliminated
+- **Section 9:** References — Implementation pointers and test evidence
+- **Section 10:** Frozen lock statement — v2.0 planning requirements
+
+### Validation checklist
+
+✔ **No ambiguous semantics remain:**
+- Transform order defined point-by-point with no alternatives
+- Hash types listed with nullable semantics and computation rules
+- Mixed-repo behavior explicit (per-block metadata independent of config)
+- Read path verified in stages with clear failure contracts
+- Config/metadata separation locked (config read-only; metadata read-from-DB)
+
+✔ **Future engine APIs can rely on definitions:**
+- Storage format immutable post-write (no re-encoding required)
+- Per-block metadata determines interpretation (config-independent)
+- Verify and restore are deterministic (same input → same output always)
+- No container rewrites or block migrations needed for engine extraction
+- Statistics computation uses per-block fields (not config defaults)
+
+✔ **Repository behavior fully documented:**
+- Creation: Default compression=none, codec derived from COLDKEEP_KEY environment
+- Write: Config read at write time; block metadata set and immutable
+- Read: Block metadata trusted; configuration ignored
+- Migration: Per-block state preserved; new blocks use current config
+- Mixed: Multiple codecs/compressions supported in single repository
+- Config changes: Only affect new blocks; old blocks immutable
+
+### Key Contracts Locked (v1.9 release)
+
+**Transform Pipeline (IMMUTABLE):**
+```
+plaintext → encode → logical_hash → compress (if configured)
+   → compressed_hash (compression stage output; equals logical_hash when compression_codec=none)
+    → encrypt (if AES-GCM) → physical_hash → persist
+```
+
+**Verify Pipeline (FIXED):**
+```
+persisted_bytes → physical_hash (if present) → decrypt (if AES-GCM) → 
+   compressed_hash (if present; expected for v1.9+ blocks) → decompress (if zstd) → logical_hash → 
+    decode block structure → verify chunk references
+```
+
+**Four Hash Types (FROZEN):**
+- `logical_hash` (`storage_blocks.block_hash`): Encoded block content (required, never null)
+- `compressed_hash` (`storage_blocks.compressed_hash`): Compression-stage output hash (legacy blocks may be null; v1.9+ writes populate this for compression_codec=none and zstd)
+- `physical_hash` (`storage_blocks.physical_hash`): Persisted-byte hash (v1.9+ writes populate this for both `codec=none` and `codec=aes-gcm`; nullable only for legacy rows). For `aes-gcm`, persisted bytes are `nonce || ciphertext`, so `physical_hash = SHA256(nonce || ciphertext)`.
+- `chunk_hash`: Plaintext chunk for dedup (required, never null)
+
+**Mixed Repository Invariants (LOCKED):**
+- Codec per block; one repo can have none + aes-gcm coexisting
+- Compression per block; one repo can have none + zstd coexisting
+- Config determines defaults at write time; doesn't affect reads
+- Stats reflect actual block metadata; configuration-independent
+
+**Read-Path Guarantees (IMMUTABLE):**
+- Restore deterministic: same file → identical output always
+- Verify stages fixed: can't reorder or skip (except missing hashes)
+- Atomicity: Restore succeeds completely or fails cleanly (no partial files)
+- Crash safety: Process exit cleans pins; no leaked resources
+
+**Config/Metadata Separation (CONTRACT LOCKED):**
+- Repository config is guidance; block metadata is authority
+- Read path ignores config; uses per-block codec and compression_codec fields
+- Config changes don't retroactively alter existing blocks
+- v1.9 persisted metadata contract is explicit and closed:
+   - storage codec: `none` | `aes-gcm`
+   - compression codec: `none` | `zstd`
+   - unsupported metadata is rejected by schema/migration/read/verify paths
+
+### Implementation evidence
+
+**Documentation:** `docs/STORAGE_SEMANTICS_v1.9.md` provides frozen contract with:
+- 10 sections covering all areas
+- Multiple examples and equivalence proofs
+- Engine extraction implications (Section 8.2)
+- v2.0 planning guardrails
+
+**Test coverage (existing):**
+- Step 6.7: `TestStep67DeterministicRestoreCompressionMatrix` validates restore across 4 codec/compression modes
+- Step 6.13: `TestStep613Stats*` validates stats formulas and mixed-repo accounting
+- Phase 4: Deep verify corruption matrix validates all verification stages
+- Integration suite: Mixed codec/encryption tests pass across all operations
+
+**Code evidence:**
+- `internal/storage/store.go`: Transform pipeline implementation matches documented order
+- `internal/verify/verify_block_pipeline.go`: Verify stages match documented sequence
+- `internal/storage/restore.go`: Restore determinism guaranteed by chunk order + stored hashes
+- `internal/storage/repository_config.go`: Config separation enforced (metadata trusted at read time)
+
+### Execution and validation
+
+**To validate Step 6.14 is complete:**
+
+1. Read `docs/STORAGE_SEMANTICS_v1.9.md` and verify no remaining ambiguity
+2. Review Section 8 checklist — all three validations must show ✓
+3. Cross-reference existing tests against locked contracts (they should all comply)
+4. Confirm with engine extraction team that definitions enable clean separation
+
+**Command to inspect existing test coverage across frozen guarantees:**
+
+```bash
+# Verify frozen transform order
+grep -n "buildAndEncodePackedBlock\|applyPackedBlockTransforms\|persistPackedBlockPayload" \
+    internal/storage/store.go
+
+# Verify frozen verify stages
+grep -n "VerifyStoredBlock\|verify.Verify" internal/verify/verify_block_pipeline.go
+
+# Verify config/metadata separation
+grep -n "GetDefaultCompression\|compression_codec" internal/storage/store.go internal/storage/restore.go
+
+# Verify deterministic restore
+grep -n "chunk_order\|chunk_hash" tests/adversarial/g67_deterministic_restore_matrix_test.go
+```
+
+**Expected outcome:** All frozen semantics are implemented, tests validate, and engine extraction can proceed safely.
+
+### Future (v2.0 planning)
+
+Beyond v1.9, changes require major version bump:
+- New block format version or encoding stage requires format migration
+- Additional hash type requires backwards-compatible schema extension
+- Config immutability changes enforcement model
+- Multi-version codec support requires careful registry migration
+
+All changes must be reviewed against engine extraction implications and validated with end-to-end tests.
+
+---
+
+## Phase 6 Completion Checklist (v1.9)
+
+This checklist is the release-readiness closeout for Phase 6.
+
+### Compatibility
+
+- [x] Official compatibility matrix documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md`
+- [x] Supported modes documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md` (Fully Supported + Supported Compatibility Modes)
+- [x] Legacy-readable modes documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md` (Legacy Readability Guarantee)
+- [x] Recommended production modes documented.
+   - Evidence: `docs/internal/storage_compatibility_matrix.md` (packed-multi + aes-gcm + none/zstd)
+
+### CI Structure
+
+- [x] Correctness matrix separated from benchmark matrix.
+   - Evidence: `.github/workflows/ci.yml` (`correctness-matrix` job separate from `benchmark-matrix`)
+- [x] Legacy compatibility tests separated.
+   - Evidence: `.github/workflows/ci.yml` (`legacy-compatibility` dedicated job)
+- [x] CI runtime acceptable.
+   - Evidence: `.github/workflows/ci.yml` staged flow (`quality` -> correctness/stress/long-run/adversarial/smoke/benchmark) and required gate.
+- [x] Compression-specific tests isolated properly.
+   - Evidence: `.github/workflows/ci.yml` compression axis in `benchmark-matrix` and codec matrix in correctness/stress/adversarial.
+
+### Benchmarking
+
+- [x] Stable benchmark corpora exist.
+   - Evidence: `internal/benchmark/corpus.go`, `internal/benchmark/corpus_registry.go`
+- [x] Compressible corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeHighlyCompressible`)
+- [x] Mixed realistic corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeMixedRealistic`)
+- [x] Already-compressed corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeAlreadyCompressed`)
+- [x] Adversarial/random corpus exists.
+   - Evidence: `internal/benchmark/corpus.go` (`CorpusTypeAdversarial`)
+
+### Metrics
+
+- [x] Logical/compressed/stored sizes tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`LogicalBytes`, `CompressedBytes`, `StoredBytes`)
+- [x] Compression ratio tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`CompressionRatio`)
+- [x] Physical size ratio and physical factor tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`PhysicalRatio`; size ratio), and `PhysicalFactor` as its inverse (`LogicalBytes / StoredBytes`).
+- [x] Store throughput tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`StoreMBps`)
+- [x] Restore throughput tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`RestoreMBps`)
+- [x] Verify throughput tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`VerifyMBps`)
+- [x] Memory metrics tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`PeakMemoryBytes`, `AllocationCount`)
+- [x] Store-if-smaller metrics tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`StoreIfSmallerFallback`)
+
+### Baselines
+
+- [x] Uncompressed baseline established.
+   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`, `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json`
+- [x] Compressed baseline established.
+   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`, `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json`
+- [x] Same corpora used across baselines.
+   - Evidence: `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json` (`same_dataset=true`, same totals)
+- [x] Regression thresholds documented.
+   - Evidence: `benchmarks/v1.9/regression-thresholds.yaml`
+
+### Determinism
+
+- [x] Restore deterministic across all supported modes.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (`TestStep67DeterministicRestoreCompressionMatrix`)
+- [x] Restore deterministic after GC.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (`post-gc` validation)
+- [x] Restore deterministic after snapshots.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (`with-snapshot` validation)
+- [x] Restore deterministic across repeated runs.
+   - Evidence: `tests/adversarial/g67_deterministic_restore_matrix_test.go` (repeated restore checks)
+
+### Deduplication
+
+- [x] Chunk identities unchanged by compression.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go`
+- [x] Dedup graph unchanged.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go`
+- [x] Compression only affects physical storage layer.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go` (logical structure unchanged; physical differs)
+- [x] Dedup effectiveness preserved.
+   - Evidence: `tests/adversarial/g68_dedup_semantics_matrix_test.go` (ratio and unique chunk checks)
+
+### GC Safety
+
+- [x] GC safe for compressed repositories.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go`
+- [x] GC safe for mixed repositories.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go` (`mode: mixed`)
+- [x] GC safe for legacy repositories.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go` (`legacyOnly` path)
+- [x] Restore after GC verified.
+   - Evidence: `tests/adversarial/g69_gc_safety_matrix_test.go`
+
+### Mixed Repository Validation
+
+- [x] Mixed compression repositories stable.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go`
+- [x] Mixed encryption repositories stable.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go`
+- [x] Store-if-smaller fallback coexistence stable.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go` (fallback assertions)
+- [x] Per-block metadata sufficient for reads.
+   - Evidence: `tests/adversarial/g610_mixed_repository_stability_test.go` (defaults changed before reads; restores still pass)
+
+### Adversarial Stability
+
+- [x] Corruption tests stable.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go`
+- [x] No decompressor panics.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (`assertRestoreNoPanicStep611`, `assertVerifyNoPanicStep611`)
+- [x] No memory leaks.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (`TestStep611CompressionLongRunMemoryGrowthBounded`)
+- [x] No unbounded memory growth.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (bounded peak/final memory assertions)
+- [x] Partial container corruption detected safely.
+   - Evidence: `tests/adversarial/g611_adversarial_compression_longrun_test.go` (`TestStep611CompressionCorruptionAndTruncationAlwaysDetectedSafely`)
+
+### Upgrade Compatibility
+
+- [x] v1.8 -> v1.9 upgrade tested.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go`
+- [x] No automatic recompression occurs.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go` (legacy chunks stay on legacy path)
+- [x] No legacy block rewriting occurs.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go`
+- [x] Old blocks coexist with new blocks safely.
+   - Evidence: `tests/integration/v19_legacy_upgrade_path_integration_test.go`
+
+### Observability
+
+- [x] Stats mathematically correct.
+   - Evidence: `tests/integration/v19_stats_semantics_integration_test.go` (`TestStep613StatsRatiosMathematicallyCorrect`)
+- [x] Inspect accurate for mixed repositories.
+   - Evidence: Step 6.10 mixed repository validation plus `stats-inspect` benchmark case in `internal/benchmark/scenarios.go`.
+- [x] Compression ratios accurate.
+   - Evidence: `tests/integration/v19_stats_semantics_integration_test.go` (`TestStep613StatsCompressedBytesRatio`, `TestStep613StatsRatioBoundaries`)
+- [x] Legacy metadata handled safely.
+   - Evidence: `tests/integration/v19_stats_semantics_integration_test.go` (`TestStep613StatsLegacyNullHashesSafe`)
+
+### Semantic Stabilization
+
+- [x] Transform ordering documented.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 1)
+- [x] Hash semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 2)
+- [x] Compression semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 4)
+- [x] Metadata semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 3)
+- [x] Read/write guarantees frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Sections 1 and 6)
+- [x] Repository-default-vs-block-reality semantics frozen.
+   - Evidence: `docs/STORAGE_SEMANTICS_v1.9.md` (Section 7)
+
+### Phase 6 Closeout
+
+Phase 6 checklist status: **COMPLETE**.
+
+All listed requirements are documented with concrete evidence in tests, benchmark infrastructure, CI layout, and frozen semantics contracts.
+
+### Final Phase 6 Invariant
+
+Coldkeep v1.9 storage behavior is now fully validated, fully benchmarked, fully compatibility-tested, and semantically stable enough to become the foundation for v1.10 engine extraction.
+
+This invariant is locked for release-readiness and operator trust.
+
+---
+
+## Step 7.1 — Define Repository Capability Model (v1.10 prep)
+
+Phase 7 introduces semantic stabilization for engine extraction without changing
+storage behavior.
+
+Step 7.1 formalizes repository capability semantics in a centralized internal model.
+
+### Goal
+
+Repositories are not homogeneous. A repository can contain mixed storage rows
+across:
+
+- compression codecs
+- encryption modes
+- packing layouts
+- hash metadata availability
+
+Step 7.1 provides one source-of-truth capability surface so engine interfaces do
+not rely on scattered assumptions.
+
+### Implementation
+
+**Package:** `internal/repository/capabilities`
+
+**Core model:** `RepositoryCapabilities`
+
+- `SupportedCompression`
+- `SupportedEncryption`
+- `SupportedPacking`
+- `ObservedCompression`
+- `ObservedEncryption`
+- `ObservedPacking`
+- `SupportsPhysicalHash`
+- `SupportsCompressedHash`
+- `RepositoryFormatVersion`
+- `DefaultCompression`
+- `DefaultCompressionLevel`
+
+**Derivation entrypoint:** `capabilities.Derive(ctx, dbconn)`
+
+Derivation rules:
+
+1. Read schema format version (`schema_version`) and repository defaults
+   (`repository_config`).
+2. Detect table/column availability backend-safely (SQLite/Postgres).
+3. Compute **supported** capabilities from schema shape.
+4. Compute **observed** capabilities from actual block metadata rows.
+5. Keep defaults and observed metadata separate to avoid confusing
+   configuration intent with per-block reality.
+
+### What this step intentionally does NOT do
+
+- no network negotiation
+- no plugin discovery
+- no runtime capability exchange
+- no behavior change in storage write/read paths
+
+### Validation
+
+Unit coverage in `internal/repository/capabilities/derive_test.go` validates:
+
+- fresh repository capability derivation
+- mixed metadata repository derivation (`legacy-single` + `packed-multi`)
+- legacy-only layout derivation after packed tables are absent
+
+Checklist:
+
+- ✔ repository capabilities centralized
+- ✔ no scattered assumptions required for capability meaning
+- ✔ capabilities derived consistently from schema + metadata

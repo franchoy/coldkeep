@@ -85,15 +85,25 @@ type ChunkStats struct {
 }
 
 type BlockLayoutStats struct {
-	StorageBlocksCount    int64            `json:"storage_blocks_count"`
-	ChunkBlockRefsCount   int64            `json:"chunk_block_refs_count"`
-	AvgChunksPerBlock     float64          `json:"avg_chunks_per_block"`
-	AvgBlockPlaintextSize float64          `json:"avg_block_plaintext_size"`
-	AvgBlockStoredSize    float64          `json:"avg_block_stored_size"`
-	AvgBlockFillRatio     float64          `json:"avg_block_fill_ratio"`
-	LegacyBlockCount      int64            `json:"legacy_block_count"`
-	PackedBlockCount      int64            `json:"packed_block_count"`
-	CodecDistribution     map[string]int64 `json:"codec_distribution,omitempty"`
+	StorageBlocksCount        int64            `json:"storage_blocks_count"`
+	ChunkBlockRefsCount       int64            `json:"chunk_block_refs_count"`
+	AvgChunksPerBlock         float64          `json:"avg_chunks_per_block"`
+	AvgBlockPlaintextSize     float64          `json:"avg_block_plaintext_size"`
+	AvgBlockStoredSize        float64          `json:"avg_block_stored_size"`
+	LogicalBytes              int64            `json:"logical_bytes"`
+	CompressedBytes           int64            `json:"compressed_bytes"`
+	StoredBytes               int64            `json:"stored_bytes"`
+	CompressionSizeRatio      float64          `json:"compression_size_ratio"`
+	CompressionFactor         float64          `json:"compression_factor"`
+	PhysicalSizeRatio         float64          `json:"physical_size_ratio"`
+	PhysicalFactor            float64          `json:"physical_factor"`
+	CompressedBlocks          int64            `json:"compressed_blocks"`
+	UncompressedBlocks        int64            `json:"uncompressed_blocks"`
+	CompressionCodecBreakdown map[string]int64 `json:"compression_codec_breakdown,omitempty"`
+	AvgBlockFillRatio         float64          `json:"avg_block_fill_ratio"`
+	LegacyBlockCount          int64            `json:"legacy_block_count"`
+	PackedBlockCount          int64            `json:"packed_block_count"`
+	CodecDistribution         map[string]int64 `json:"codec_distribution,omitempty"`
 }
 
 type VersionStat struct {

@@ -59,36 +59,38 @@ const (
 var stdoutRedirectMu sync.Mutex
 
 var flagsWithValues = map[string]bool{
-	"codec":           true,
-	"destination":     true,
-	"filter":          true,
-	"input":           true,
-	"limit":           true,
-	"mode":            true,
-	"offset":          true,
-	"name":            true,
-	"id":              true,
-	"from":            true,
-	"label":           true,
-	"since":           true,
-	"type":            true,
-	"until":           true,
-	"min-size":        true,
-	"max-size":        true,
-	"output":          true,
-	"stored-path":     true,
-	"path":            true,
-	"prefix":          true,
-	"pattern":         true,
-	"regex":           true,
-	"delete-snapshot": true,
-	"modified-after":  true,
-	"modified-before": true,
-	"dataset":         true,
-	"repeat":          true,
-	"compare":         true,
-	"threshold":       true,
-	"workers":         true,
+	"codec":             true,
+	"compression":       true,
+	"compression-level": true,
+	"destination":       true,
+	"filter":            true,
+	"input":             true,
+	"limit":             true,
+	"mode":              true,
+	"offset":            true,
+	"name":              true,
+	"id":                true,
+	"from":              true,
+	"label":             true,
+	"since":             true,
+	"type":              true,
+	"until":             true,
+	"min-size":          true,
+	"max-size":          true,
+	"output":            true,
+	"stored-path":       true,
+	"path":              true,
+	"prefix":            true,
+	"pattern":           true,
+	"regex":             true,
+	"delete-snapshot":   true,
+	"modified-after":    true,
+	"modified-before":   true,
+	"dataset":           true,
+	"repeat":            true,
+	"compare":           true,
+	"threshold":         true,
+	"workers":           true,
 }
 
 type cliOutputMode string
@@ -102,6 +104,22 @@ type parsedCommandLine struct {
 	method      string
 	positionals []string
 	flags       map[string][]string
+}
+
+type verifyOutputSummary struct {
+	BlocksChecked           int64
+	PhysicalHashChecked     int64
+	CompressedHashChecked   int64
+	LogicalHashChecked      int64
+	CompressedBlocksChecked int64
+}
+
+type verifyFailureDetails struct {
+	Stage     string
+	Block     *int64
+	Container *int64
+	Offset    *int64
+	Reason    string
 }
 
 // doctorReport is the stable v1.0 JSON data payload for `coldkeep doctor --output json`.
@@ -352,7 +370,7 @@ func runCLI(args []string) int {
 
 	switch parsed.method {
 	case "init":
-		err = initCommand()
+		err = initCommand(parsed, outputMode)
 	case "config":
 		err = runConfigCommand(parsed, outputMode)
 	case "doctor":
@@ -519,6 +537,7 @@ func printCLIError(err error, mode cliOutputMode) int {
 	invariantCode, hasInvariantCode := invariants.Code(err)
 	recommendedAction := invariants.RecommendedActionForError(err)
 	dbHint := localDBSetupHint(err)
+	verifyDetails, hasVerifyDetails := extractVerifyFailureDetails(err)
 	if mode == outputModeJSON {
 		payload := map[string]any{
 			"status":      "error",
@@ -536,12 +555,39 @@ func printCLIError(err error, mode cliOutputMode) int {
 		if strings.TrimSpace(recommendedAction) != "" {
 			payload["recommended_action"] = recommendedAction
 		}
+		if code == exitVerify && hasVerifyDetails {
+			payload["stage"] = verifyDetails.Stage
+			if verifyDetails.Block != nil {
+				payload["block"] = *verifyDetails.Block
+			}
+			if verifyDetails.Container != nil {
+				payload["container"] = *verifyDetails.Container
+			}
+			if verifyDetails.Offset != nil {
+				payload["offset"] = *verifyDetails.Offset
+			}
+			payload["reason"] = verifyDetails.Reason
+		}
 		encoded, _ := json.Marshal(payload)
 		fmt.Fprintln(os.Stderr, string(encoded))
 		return code
 	}
 
 	fmt.Fprintf(os.Stderr, "ERROR[%s]: %s\n", exitErrorClassLabel(code), message)
+	if code == exitVerify && hasVerifyDetails {
+		fmt.Fprintln(os.Stderr, "verify failed")
+		fmt.Fprintf(os.Stderr, "stage: %s\n", verifyDetails.Stage)
+		if verifyDetails.Block != nil {
+			fmt.Fprintf(os.Stderr, "block: %d\n", *verifyDetails.Block)
+		}
+		if verifyDetails.Container != nil {
+			fmt.Fprintf(os.Stderr, "container: %d\n", *verifyDetails.Container)
+		}
+		if verifyDetails.Offset != nil {
+			fmt.Fprintf(os.Stderr, "offset: %d\n", *verifyDetails.Offset)
+		}
+		fmt.Fprintf(os.Stderr, "reason: %s\n", verifyDetails.Reason)
+	}
 	if hasInvariantCode {
 		fmt.Fprintf(os.Stderr, "INVARIANT_CODE: %s\n", invariantCode)
 	}
@@ -603,7 +649,7 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 	// These commands emit their own structured JSON payload.
 	// Keep this list in sync with TestPrintCLISuccessJSONCommandPolicy.
 	switch parsed.method {
-	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version":
+	case "store", "store-folder", "restore", "remove", "repair", "gc", "list", "search", "stats", "inspect", "simulate", "doctor", "snapshot", "config", "version", "-v", "--version", "verify":
 		return
 	}
 
@@ -623,6 +669,142 @@ func printCLISuccess(parsed parsedCommandLine, mode cliOutputMode) {
 
 	encoded, _ := json.Marshal(payload)
 	fmt.Println(string(encoded))
+}
+
+func verifyFailureReason(vf *verify.VerifyFailure) string {
+	if vf == nil {
+		return "verification failed"
+	}
+	switch strings.TrimSpace(vf.Category) {
+	case "physical_hash_mismatch":
+		return "physical hash mismatch"
+	case "compressed_hash_mismatch":
+		return "compressed hash mismatch"
+	case "block_hash_mismatch":
+		return "logical hash mismatch"
+	case "chunk_hash_mismatch":
+		return "chunk hash mismatch"
+	}
+	if strings.TrimSpace(vf.Detail) != "" {
+		return strings.TrimSpace(vf.Detail)
+	}
+	if strings.TrimSpace(vf.Category) != "" {
+		return strings.TrimSpace(vf.Category)
+	}
+	return "verification failed"
+}
+
+func extractVerifyFailureDetails(err error) (verifyFailureDetails, bool) {
+	var vf *verify.VerifyFailure
+	if !errors.As(err, &vf) || vf == nil {
+		return verifyFailureDetails{}, false
+	}
+
+	details := verifyFailureDetails{
+		Stage:  strings.TrimSpace(string(vf.Stage)),
+		Reason: verifyFailureReason(vf),
+	}
+	if vf.BlockID != nil {
+		v := *vf.BlockID
+		details.Block = &v
+	}
+	if vf.ContainerID != nil {
+		v := *vf.ContainerID
+		details.Container = &v
+	}
+	if vf.Offset != nil {
+		v := *vf.Offset
+		details.Offset = &v
+	}
+	return details, true
+}
+
+func countVerifySummaryForSystem(dbconn *sql.DB) (verifyOutputSummary, error) {
+	var s verifyOutputSummary
+
+	if err := dbconn.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN physical_hash IS NOT NULL AND length(physical_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN compressed_hash IS NOT NULL AND length(compressed_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN block_hash IS NOT NULL AND length(block_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0)
+		FROM storage_blocks sb
+		JOIN container c ON c.id = sb.container_id
+		WHERE c.quarantine = FALSE
+	`).Scan(&s.BlocksChecked, &s.PhysicalHashChecked, &s.CompressedHashChecked, &s.LogicalHashChecked, &s.CompressedBlocksChecked); err != nil {
+		return verifyOutputSummary{}, err
+	}
+
+	var legacyBlocks int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM blocks b
+		JOIN chunk c ON c.id = b.chunk_id
+		WHERE c.status = 'COMPLETED'
+		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = c.id)
+	`).Scan(&legacyBlocks); err != nil {
+		return verifyOutputSummary{}, err
+	}
+
+	s.BlocksChecked += legacyBlocks
+	return s, nil
+}
+
+func countVerifySummaryForFile(dbconn *sql.DB, fileID int64) (verifyOutputSummary, error) {
+	var s verifyOutputSummary
+
+	if err := dbconn.QueryRow(`
+		WITH target_blocks AS (
+			SELECT DISTINCT sb.id, sb.physical_hash, sb.compressed_hash, sb.block_hash, sb.compression_codec
+			FROM file_chunk fc
+			JOIN chunk_block_refs r ON r.chunk_id = fc.chunk_id
+			JOIN storage_blocks sb ON sb.id = r.block_id
+			JOIN container c ON c.id = sb.container_id
+			WHERE fc.logical_file_id = $1
+			  AND c.quarantine = FALSE
+		)
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN physical_hash IS NOT NULL AND length(physical_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN compressed_hash IS NOT NULL AND length(compressed_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN block_hash IS NOT NULL AND length(block_hash) > 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN lower(trim(COALESCE(compression_codec, 'none'))) != 'none' THEN 1 ELSE 0 END), 0)
+		FROM target_blocks
+	`, fileID).Scan(&s.BlocksChecked, &s.PhysicalHashChecked, &s.CompressedHashChecked, &s.LogicalHashChecked, &s.CompressedBlocksChecked); err != nil {
+		return verifyOutputSummary{}, err
+	}
+
+	var legacyBlocks int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM file_chunk fc
+		JOIN blocks b ON b.chunk_id = fc.chunk_id
+		WHERE fc.logical_file_id = $1
+		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id)
+	`, fileID).Scan(&legacyBlocks); err != nil {
+		return verifyOutputSummary{}, err
+	}
+
+	s.BlocksChecked += legacyBlocks
+	return s, nil
+}
+
+func collectVerifyOutputSummary(target string, fileID int64) (verifyOutputSummary, error) {
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		return verifyOutputSummary{}, err
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	switch target {
+	case "system":
+		return countVerifySummaryForSystem(dbconn)
+	case "file":
+		return countVerifySummaryForFile(dbconn, fileID)
+	default:
+		return verifyOutputSummary{}, fmt.Errorf("unknown verify target: %s", target)
+	}
 }
 
 func runVersionCommand(mode cliOutputMode) error {
@@ -666,12 +848,12 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return err
 	}
 	if len(parsed.positionals) < 2 {
-		return usageErrorf("Usage: coldkeep config <get|set> default-chunker [value]")
+		return usageErrorf("Usage: coldkeep config <get|set> <default-chunker|compression|compression-level> [value]")
 	}
 
 	subcommand := strings.TrimSpace(strings.ToLower(parsed.positionals[0]))
 	key := strings.TrimSpace(strings.ToLower(parsed.positionals[1]))
-	if key != "default-chunker" {
+	if key != "default-chunker" && key != "compression" && key != "compression-level" {
 		return usageErrorf("unknown config key: %s", parsed.positionals[1])
 	}
 
@@ -686,7 +868,51 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	switch subcommand {
 	case "get":
 		if len(parsed.positionals) != 2 {
-			return usageErrorf("Usage: coldkeep config get default-chunker")
+			return usageErrorf("Usage: coldkeep config get <default-chunker|compression|compression-level>")
+		}
+
+		switch key {
+		case "compression":
+			codec, err := repo.GetDefaultCompression(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config get",
+					"data": map[string]any{
+						"key":   "compression",
+						"value": codec,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintln(os.Stdout, codec)
+			return nil
+
+		case "compression-level":
+			level, err := repo.GetDefaultCompressionLevel(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config get",
+					"data": map[string]any{
+						"key":   "compression-level",
+						"value": level,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "%d\n", level)
+			return nil
 		}
 
 		v, err := repo.GetDefaultChunkerVersion()
@@ -713,7 +939,76 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 	case "set":
 		if len(parsed.positionals) != 3 {
-			return usageErrorf("Usage: coldkeep config set default-chunker <value>")
+			return usageErrorf("Usage: coldkeep config set <default-chunker|compression|compression-level> <value>")
+		}
+
+		switch key {
+		case "compression":
+			codec := strings.TrimSpace(parsed.positionals[2])
+			if !storage.IsRegisteredCompressionCodec(codec) {
+				return usageErrorf("invalid compression codec %q, must be 'none' or 'zstd'", codec)
+			}
+			previous, err := repo.GetDefaultCompression(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if err := repo.SetDefaultCompression(sgctx.DB, codec); err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config set",
+					"data": map[string]any{
+						"key":   "compression",
+						"value": codec,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "compression set to %s\n", codec)
+			if previous != codec {
+				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
+				_, _ = fmt.Fprintln(os.Stdout, "    Blocks remain readable according to their stored metadata.")
+			}
+			return nil
+
+		case "compression-level":
+			levelStr := strings.TrimSpace(parsed.positionals[2])
+			level, err := strconv.Atoi(levelStr)
+			if err != nil {
+				return usageErrorf("invalid compression-level %q, must be an integer 1-9", levelStr)
+			}
+			if level < 1 || level > 9 {
+				return usageErrorf("compression-level %d out of range, must be 1-9", level)
+			}
+			previous, err := repo.GetDefaultCompressionLevel(sgctx.DB)
+			if err != nil {
+				return err
+			}
+			if err := repo.SetDefaultCompressionLevel(sgctx.DB, level); err != nil {
+				return err
+			}
+			if outputMode == outputModeJSON {
+				payload := map[string]any{
+					"status":  "ok",
+					"command": "config set",
+					"data": map[string]any{
+						"key":   "compression-level",
+						"value": level,
+					},
+				}
+				encoded, _ := json.Marshal(payload)
+				fmt.Println(string(encoded))
+				return nil
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "compression-level set to %d\n", level)
+			if previous != level {
+				_, _ = fmt.Fprintln(os.Stdout, "ℹ️  This affects only NEW blocks. Existing blocks are not recompressed.")
+			}
+			return nil
 		}
 
 		v, err := validateConfigDefaultChunkerVersion(parsed.positionals[2])
@@ -2352,6 +2647,33 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
+		summary, err := collectVerifyOutputSummary(target, 0)
+		if err != nil {
+			return fmt.Errorf("collect verify summary: %w", err)
+		}
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":                    "ok",
+				"command":                   "verify",
+				"target":                    target,
+				"level":                     verifyLevelToString(verifyLevel),
+				"verify":                    "ok",
+				"blocks_checked":            summary.BlocksChecked,
+				"physical_hash_checked":     summary.PhysicalHashChecked,
+				"compressed_hash_checked":   summary.CompressedHashChecked,
+				"logical_hash_checked":      summary.LogicalHashChecked,
+				"compressed_blocks_checked": summary.CompressedBlocksChecked,
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+		fmt.Println("verify ok")
+		fmt.Printf("blocks_checked: %d\n", summary.BlocksChecked)
+		fmt.Printf("physical_hash_checked: %d\n", summary.PhysicalHashChecked)
+		fmt.Printf("compressed_hash_checked: %d\n", summary.CompressedHashChecked)
+		fmt.Printf("logical_hash_checked: %d\n", summary.LogicalHashChecked)
+		fmt.Printf("compressed_blocks_checked: %d\n", summary.CompressedBlocksChecked)
 		if outputMode == outputModeText {
 			fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		}
@@ -2370,6 +2692,34 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		if verifyErr != nil {
 			return verifyError(verifyErr)
 		}
+		summary, err := collectVerifyOutputSummary(target, fileID)
+		if err != nil {
+			return fmt.Errorf("collect verify summary: %w", err)
+		}
+		if outputMode == outputModeJSON {
+			payload := map[string]any{
+				"status":                    "ok",
+				"command":                   "verify",
+				"target":                    target,
+				"file_id":                   fileID,
+				"level":                     verifyLevelToString(verifyLevel),
+				"verify":                    "ok",
+				"blocks_checked":            summary.BlocksChecked,
+				"physical_hash_checked":     summary.PhysicalHashChecked,
+				"compressed_hash_checked":   summary.CompressedHashChecked,
+				"logical_hash_checked":      summary.LogicalHashChecked,
+				"compressed_blocks_checked": summary.CompressedBlocksChecked,
+			}
+			encoded, _ := json.Marshal(payload)
+			fmt.Println(string(encoded))
+			return nil
+		}
+		fmt.Println("verify ok")
+		fmt.Printf("blocks_checked: %d\n", summary.BlocksChecked)
+		fmt.Printf("physical_hash_checked: %d\n", summary.PhysicalHashChecked)
+		fmt.Printf("compressed_hash_checked: %d\n", summary.CompressedHashChecked)
+		fmt.Printf("logical_hash_checked: %d\n", summary.LogicalHashChecked)
+		fmt.Printf("compressed_blocks_checked: %d\n", summary.CompressedBlocksChecked)
 		if outputMode == outputModeText {
 			fmt.Printf("Hint: %s\n", doctorOperationalHint)
 		}
@@ -3151,6 +3501,8 @@ func runPresetAndCaptureStateInTemporaryDatabase(preset corebenchmark.DatasetPre
 
 	report, err := corebenchmark.RunPreset(preset, repeat, corebenchmark.ScenarioConfig{
 		ColdkeepExecutable: resolveSelfExecutable(),
+		Codec:              strings.TrimSpace(os.Getenv("COLDKEEP_CODEC")),
+		Compression:        strings.TrimSpace(os.Getenv("COLDKEEP_COMPRESSION")),
 		Execution:          opts,
 		ExtraEnv: map[string]string{
 			"DB_NAME":                       dbName,

@@ -2,7 +2,6 @@ package blocks
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -66,9 +65,10 @@ type ChunkEntry struct {
 // EncodedBlock is the in-memory representation of a decoded/constructed
 // plaintext block format payload in v1 layout.
 type EncodedBlock struct {
-	Header  BlockHeader
-	Entries []ChunkEntry
-	Payload []byte
+	Header   BlockHeader
+	Entries  []ChunkEntry
+	Payload  []byte
+	Metadata TransformMetadata
 }
 
 // GetChunk returns one chunk slice by table index from the payload.
@@ -159,9 +159,9 @@ func VerifyBlockHash(encoded []byte, expected []byte) error {
 // ComputeBlockHash returns block hash over plaintext encoded block bytes.
 //
 // IMPORTANT: hash target is encoded plaintext block bytes, before encryption.
+// Delegates to HashLogical — the canonical hash helper for the logical layer.
 func ComputeBlockHash(encoded []byte) []byte {
-	sum := sha256.Sum256(encoded)
-	return sum[:]
+	return HashLogical(encoded)
 }
 
 // HashPlaintextEncodedBlock remains as compatibility alias.

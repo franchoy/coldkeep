@@ -250,8 +250,14 @@ func verifyFileContainersAndOffsets(dbconn *sql.DB, fileID int, containersDir st
 	rows, err := dbconn.QueryContext(ctx, `
 		SELECT
 			c.id,
-			b.block_offset,
-			b.stored_size,
+			CASE
+				WHEN r.block_id IS NOT NULL THEN sb.container_offset
+				ELSE b.block_offset
+			END,
+			CASE
+				WHEN r.block_id IS NOT NULL THEN sb.stored_size
+				ELSE b.stored_size
+			END,
 			ctr.id,
 			ctr.filename,
 			ctr.current_size,
@@ -260,8 +266,10 @@ func verifyFileContainersAndOffsets(dbconn *sql.DB, fileID int, containersDir st
 			ctr.container_hash 
 		FROM file_chunk fc
 		JOIN chunk c ON c.id = fc.chunk_id
-		JOIN blocks b ON b.chunk_id = c.id
-		JOIN container ctr ON ctr.id = b.container_id
+		LEFT JOIN blocks b ON b.chunk_id = c.id
+		LEFT JOIN chunk_block_refs r ON r.chunk_id = c.id
+		LEFT JOIN storage_blocks sb ON sb.id = r.block_id
+		JOIN container ctr ON ctr.id = COALESCE(sb.container_id, b.container_id)
 		WHERE fc.logical_file_id = $1
 		ORDER BY fc.chunk_order
 	`, fileID)

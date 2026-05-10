@@ -39,7 +39,7 @@ filesystem identity rules. Most users do not need it for basic operation.
 ## Scope
 
 This policy applies to the current-state physical file layer (`physical_file`).
-It was introduced in v1.2 and remains the active policy in v1.8.
+It was introduced in v1.2 and remains the active policy in v1.9.
 Any future cross-platform case behavior changes are policy changes and must be versioned and migration-reviewed before implementation.
 
 ## Non-Goals

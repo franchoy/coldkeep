@@ -23,6 +23,15 @@ Block layout
   avg_chunks_per_block: 0.00
   avg_block_plaintext_size: 0 B
   avg_block_stored_size: 0 B
+  logical_bytes: 0 B
+  compressed_bytes: 0 B
+  stored_bytes: 0 B
+  compression_size_ratio: 0.000
+  compression_factor: 0.000
+  physical_size_ratio: 0.000
+  physical_factor: 0.000
+  compressed_blocks: 0
+  uncompressed_blocks: 0
   avg_block_fill_ratio: 0.000
   legacy_block_count: 0
   packed_block_count: 0

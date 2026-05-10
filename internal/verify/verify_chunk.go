@@ -287,8 +287,9 @@ func checkChunkOffsets(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Check that all chunks have physical location metadata consistent with their status.
-	// COMPLETED chunks may be legacy (blocks), packed (chunk_block_refs/storage_blocks), or both.
+	// Check that all chunks have physical location metadata consistent with their
+	// status across migration modes: legacy blocks, packed
+	// chunk_block_refs/storage_blocks, or companion rows during transition.
 
 	log.Printf("Checking chunk offsets consistency with status...")
 	var errorList []error

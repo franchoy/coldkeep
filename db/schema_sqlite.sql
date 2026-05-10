@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-UPDATE schema_version SET version = 12 WHERE version < 12;
-INSERT OR IGNORE INTO schema_version(version) VALUES (12);
+DELETE FROM schema_version WHERE version < 15;
+INSERT OR IGNORE INTO schema_version(version) VALUES (15);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS repository_config (
 INSERT OR IGNORE INTO repository_config(key, value)
 VALUES ('default_chunker', 'v2-fastcdc');
 
+INSERT OR IGNORE INTO repository_config(key, value)
+VALUES ('compression', 'none');
+
+INSERT OR IGNORE INTO repository_config(key, value)
+VALUES ('compression_level', '3');
+
 CREATE TABLE IF NOT EXISTS blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   chunk_id INTEGER NOT NULL UNIQUE
@@ -120,11 +126,23 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   format_version INTEGER NOT NULL CHECK (format_version > 0),
   codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
   plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+  compression_codec TEXT NOT NULL DEFAULT 'none' CHECK (compression_codec IN ('none', 'zstd')),
+  compression_level INTEGER,
+  compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size INTEGER NOT NULL CHECK (stored_size > 0),
   container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
   block_hash BLOB NOT NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  compression_ratio REAL DEFAULT 1.0,
+  -- DEPRECATED: lowercase-hex mirror of block_hash for compatibility/observability only.
+  payload_hash TEXT,
+  compressed_hash BLOB,
+  physical_hash BLOB,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (
+    (compression_codec = 'none' AND compression_level IS NULL) OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_storage_blocks_container_id ON storage_blocks(container_id);

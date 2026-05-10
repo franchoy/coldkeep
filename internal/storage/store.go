@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/execution"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
@@ -183,6 +185,7 @@ func commitPreparedChunksWithContext(
 	writer payloadStatefulWriter,
 	_ *blocks.Repository,
 	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
 	sgctx StorageContext,
 	commitInfo commitInfoForChunks,
 	preparedChunks []preparedChunk,
@@ -249,7 +252,7 @@ func commitPreparedChunksWithContext(
 				return err
 			}
 
-			persisted, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, builder)
+			persisted, err := storePackedBlockWithWriter(ctx, tx, writer, transformer, compression, builder)
 			if err != nil {
 				_ = tx.Rollback()
 				var brokenOpenErr *container.BrokenOpenContainerError
@@ -560,6 +563,7 @@ func commitPreparedFileWithContext(
 	writer payloadStatefulWriter,
 	blockRepo *blocks.Repository,
 	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
 	sgctx StorageContext,
 	prepared preparedFile,
 	fileID int64,
@@ -583,6 +587,7 @@ func commitPreparedFileWithContext(
 		writer,
 		blockRepo,
 		transformer,
+		compression,
 		sgctx,
 		commitInfo,
 		prepared.Chunks,
@@ -739,9 +744,17 @@ type StoreFileResult struct {
 // many file stores (for example StoreFolder with many small files).
 type storeFileRuntime struct {
 	transformer            blocks.Transformer
+	compression            storeRuntimeCompression
 	blockRepo              *blocks.Repository
 	storeService           *StoreService
 	validationContainerDir string
+}
+
+// storeRuntimeCompression groups the optional compression transform and its codec name.
+type storeRuntimeCompression struct {
+	compressor storagecompression.Compressor
+	codec      string
+	level      *int
 }
 
 func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFileRuntime, error) {
@@ -758,12 +771,89 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 		validationContainerDir = ""
 	}
 
+	tx, err := sgctx.DB.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx for compression defaults: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	repoCodec, repoCodecErr := GetDefaultCompression(tx)
+	if repoCodecErr != nil {
+		return nil, fmt.Errorf("load repository default compression codec: %w", repoCodecErr)
+	}
+
+	compressionCodec := strings.TrimSpace(strings.ToLower(repoCodec))
+	compressionLevel := defaultCompressionLevel
+
+	// Optional environment overrides remain available for tests/operators.
+	if rawCodec, ok := os.LookupEnv("COLDKEEP_COMPRESSION"); ok {
+		if trimmedCodec := strings.TrimSpace(strings.ToLower(rawCodec)); trimmedCodec != "" {
+			compressionCodec = trimmedCodec
+		}
+	}
+
+	// compression_level is only meaningful when effective compression is zstd.
+	if compressionCodec == storagecompression.CompressionZstd {
+		if strings.TrimSpace(strings.ToLower(repoCodec)) == storagecompression.CompressionZstd {
+			repoLevel, err := GetDefaultCompressionLevel(tx)
+			if err != nil {
+				return nil, fmt.Errorf("load repository default compression level for codec=%q: %w", compressionCodec, err)
+			}
+			compressionLevel = repoLevel
+		}
+
+		if rawLevel, ok := os.LookupEnv("COLDKEEP_COMPRESSION_LEVEL"); ok {
+			trimmedLevel := strings.TrimSpace(rawLevel)
+			if trimmedLevel != "" {
+				parsedLevel, parseErr := strconv.Atoi(trimmedLevel)
+				if parseErr != nil {
+					return nil, fmt.Errorf("parse COLDKEEP_COMPRESSION_LEVEL=%q: %w", rawLevel, parseErr)
+				}
+				compressionLevel = parsedLevel
+			}
+		}
+
+		if compressionLevel < minCompressionLevel || compressionLevel > maxCompressionLevel {
+			return nil, fmt.Errorf("compression level %d out of repository range [%d, %d] for codec=%q", compressionLevel, minCompressionLevel, maxCompressionLevel, compressionCodec)
+		}
+	}
+
+	compressionRuntime, err := loadCompressionRuntime(compressionCodec, compressionLevel)
+	if err != nil {
+		return nil, fmt.Errorf("initialize compression runtime codec=%q level=%d: %w", compressionCodec, compressionLevel, err)
+	}
+
 	return &storeFileRuntime{
 		transformer:            transformer,
+		compression:            compressionRuntime,
 		blockRepo:              &blocks.Repository{DB: sgctx.DB},
 		storeService:           NewStoreService(NewRepository(sgctx.DB), sgctx.Chunker),
 		validationContainerDir: validationContainerDir,
 	}, nil
+}
+
+func loadCompressionRuntime(codec string, level int) (storeRuntimeCompression, error) {
+	normalized := strings.TrimSpace(strings.ToLower(codec))
+	if normalized == "" {
+		normalized = storagecompression.CompressionNone
+	}
+
+	if normalized == storagecompression.CompressionZstd {
+		compressor, err := storagecompression.NewZstdCompressor(level)
+		if err != nil {
+			return storeRuntimeCompression{}, err
+		}
+		levelCopy := level
+		return storeRuntimeCompression{compressor: compressor, codec: normalized, level: &levelCopy}, nil
+	}
+
+	compressor, err := storagecompression.Lookup(normalized)
+	if err != nil {
+		return storeRuntimeCompression{}, err
+	}
+	return storeRuntimeCompression{compressor: compressor, codec: normalized, level: nil}, nil
 }
 
 func sealContainerWithWriter(tx db.DBTX, writer payloadStatefulWriter, containerID int64, filename string, containersDir string) error {
@@ -2289,7 +2379,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	}
 	validationContainerDir := runtime.validationContainerDir
 
-	// Phase 3 store flow pattern:
+	// Current store flow pattern:
 	//  1. resolve one active chunker for the whole operation
 	//  2. capture one active version from that chunker
 	//  3. claim/create the logical file recipe owner with that version
@@ -2375,6 +2465,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 		writer,
 		runtime.blockRepo,
 		runtime.transformer,
+		runtime.compression,
 		sgctx,
 		prepared,
 		fileID,
@@ -2820,61 +2911,129 @@ type packedChunkSegment struct {
 const packedStorageBlockCodecNone = "none"
 const packedStorageBlockAESGCMNonceSize = 12
 
-// storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
+// ---------------------------------------------------------------------------
+// Write pipeline — storage layer semantics
 //
-// Atomic order (single transaction boundary):
-//  1. Encode plaintext block bytes
-//  2. Compute mandatory block hash on plaintext encoded bytes
-//  3. Transform/encrypt encoded block bytes
-//  4. Append transformed bytes to container
-//  5. Insert storage_blocks row
-//  6. Insert chunk_block_refs rows
+// Layer 1 (logical block): canonical encoded plaintext block bytes.
+//   block_hash = sha256(logical block bytes) — computed in buildAndEncodePackedBlock.
+//   This hash is the dedup key and the restore integrity anchor. It is ALWAYS
+//   computed before any transform is applied and never changes.
 //
-// Invariant: no chunk_block_refs row is written before a successful storage_blocks
-// insert in the same transaction.
-func storePackedBlockWithWriter(
-	ctx context.Context,
-	tx *sql.Tx,
-	writer payloadStatefulWriter,
-	transformer blocks.Transformer,
-	builder *blocks.BlockBuilder,
-) (packedBlockPersistResult, error) {
-	if builder == nil || builder.Empty() {
-		return packedBlockPersistResult{}, fmt.Errorf("packed block flush requires non-empty builder")
-	}
+// Layer 2 (compressed payload): post-compression, pre-encryption bytes.
+//   Compression runs first (store-if-smaller). compressed_hash is computed
+//   over this layer when present. Layer 2 does NOT include encryption output.
+//
+// Layer 3 (persisted payload): bytes actually appended to the container.
+//   If codec=aes-gcm, Layer 3 = encrypt(Layer 2): nonce(12B) || ciphertext.
+//   physical_hash is computed over this exact byte sequence.
+// ---------------------------------------------------------------------------
 
-	// 1-2) Build block and compute mandatory hash over encoded plaintext bytes.
+// packedBlockEncoded holds the result of the build + encode + hash stage.
+type packedBlockEncoded struct {
+	encodedBlock     *blocks.EncodedBlock
+	plaintextEncoded []byte
+	blockHash        []byte
+	metadata         blocks.TransformMetadata
+}
+
+// packedBlockTransformed holds the result of the transform stage.
+type packedBlockTransformed struct {
+	storedPayload  []byte
+	storageCodec   string
+	legacyNonce    []byte
+	compressedSize int64
+	compressionLvl *int
+	compressedHash []byte // hash of post-compression, pre-encryption payload
+	physicalHash   []byte // hash of the exact persisted payload bytes
+	metadata       blocks.TransformMetadata
+}
+
+// buildAndEncodePackedBlock builds the block from the builder, serializes it to
+// binary, and computes the mandatory logical hash over the plaintext bytes.
+func buildAndEncodePackedBlock(builder *blocks.BlockBuilder) (packedBlockEncoded, error) {
 	encodedBlock, _, err := builder.Build()
 	if err != nil {
-		return packedBlockPersistResult{}, err
+		return packedBlockEncoded{}, err
 	}
 
 	plaintextEncoded, err := blocks.EncodeBlock(encodedBlock)
 	if err != nil {
-		return packedBlockPersistResult{}, err
+		return packedBlockEncoded{}, err
 	}
 
-	blockHash := blocks.ComputeBlockHash(plaintextEncoded)
+	blockHash := blocks.HashLogical(plaintextEncoded)
+	metadata := blocks.TransformMetadata{
+		PayloadHash:      hex.EncodeToString(blockHash),
+		CompressionCodec: packedStorageBlockCodecNone,
+		CompressionRatio: 1.0,
+	}
+	encodedBlock.Metadata = metadata
 
-	// 3) Transform/encrypt encoded bytes for physical storage.
+	return packedBlockEncoded{
+		encodedBlock:     encodedBlock,
+		plaintextEncoded: plaintextEncoded,
+		blockHash:        blockHash,
+		metadata:         metadata,
+	}, nil
+}
+
+// applyPackedBlockTransforms runs the transformer over the plaintext encoded bytes
+// and assembles the final stored payload (including nonce prefix for AES-GCM).
+func applyPackedBlockTransforms(
+	ctx context.Context,
+	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
+	enc packedBlockEncoded,
+) (packedBlockTransformed, error) {
+	// Stage 2a: Compress before encryption (if compression is active).
+	// Store-if-smaller policy: if compressed payload is not smaller than plaintext,
+	// store the block uncompressed. This handles expansion in tiny/random/already-compressed data.
+	compressedPayload := enc.plaintextEncoded
+	compressionCodec := packedStorageBlockCodecNone
+	compressionLevel := compression.level
+	if compression.compressor != nil {
+		compressed, err := compression.compressor.Compress(enc.plaintextEncoded)
+		if err != nil {
+			return packedBlockTransformed{}, fmt.Errorf("compress block: %w", err)
+		}
+		// Apply store-if-smaller policy: only use compressed if it's actually smaller.
+		if len(compressed) < len(enc.plaintextEncoded) {
+			compressedPayload = compressed
+			compressionCodec = compression.codec
+		} else {
+			// Compression expanded the data; store uncompressed instead.
+			compressionCodec = packedStorageBlockCodecNone
+			compressionLevel = nil
+		}
+		if compressionCodec == storagecompression.CompressionNone {
+			compressionLevel = nil
+		}
+	}
+
+	// Hash pre-encryption bytes at the transform boundary.
+	// With compression_codec=none, this equals logical block hash.
+	compressedHash := blocks.HashCompressed(compressedPayload)
+
+	// Stage 2b: Apply encryption transformer (or identity for plain codec).
 	transformed, err := transformer.Encode(ctx, blocks.EncodeInput{
 		ChunkID:   0,
-		ChunkHash: hex.EncodeToString(blockHash),
-		Plaintext: plaintextEncoded,
+		ChunkHash: hex.EncodeToString(enc.blockHash),
+		Plaintext: compressedPayload,
 	})
 	if err != nil {
-		return packedBlockPersistResult{}, err
+		return packedBlockTransformed{}, err
 	}
 
 	storageCodec := packedStorageBlockCodecNone
 	legacyNonce := []byte{}
 	storedPayload := transformed.Payload
+
 	switch transformed.Descriptor.Codec {
 	case blocks.CodecPlain:
 		// Keep legacy v1.8 metadata contract for plain payloads.
 	case blocks.CodecAESGCM:
 		if len(transformed.Descriptor.Nonce) != packedStorageBlockAESGCMNonceSize {
-			return packedBlockPersistResult{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
+			return packedBlockTransformed{}, fmt.Errorf("packed block aes-gcm nonce size mismatch: got %d want %d", len(transformed.Descriptor.Nonce), packedStorageBlockAESGCMNonceSize)
 		}
 		// storage_blocks has no nonce column, so prefix nonce into stored payload.
 		storedPayload = make([]byte, 0, len(transformed.Descriptor.Nonce)+len(transformed.Payload))
@@ -2883,39 +3042,86 @@ func storePackedBlockWithWriter(
 		storageCodec = string(blocks.CodecAESGCM)
 		legacyNonce = append(legacyNonce, transformed.Descriptor.Nonce...)
 	default:
-		return packedBlockPersistResult{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
+		return packedBlockTransformed{}, fmt.Errorf("unsupported packed block transform codec: %q", transformed.Descriptor.Codec)
 	}
 
-	// 4) Append transformed payload to container.
-	placement, err := writer.AppendPayload(tx, storedPayload)
-	if err != nil {
-		return packedBlockPersistResult{}, err
+	metadata := enc.metadata
+	metadata.CompressionCodec = compressionCodec
+	if len(enc.plaintextEncoded) > 0 {
+		metadata.CompressionRatio = float64(len(compressedPayload)) / float64(len(enc.plaintextEncoded))
 	}
 
-	// 5) Insert storage_blocks metadata row.
+	// Compute physical hash over the exact persisted payload bytes (post-encryption).
+	physicalHash := blocks.HashPhysical(storedPayload)
+
+	return packedBlockTransformed{
+		storedPayload:  storedPayload,
+		storageCodec:   storageCodec,
+		legacyNonce:    legacyNonce,
+		compressedSize: int64(len(compressedPayload)),
+		compressionLvl: compressionLevel,
+		compressedHash: compressedHash,
+		physicalHash:   physicalHash,
+		metadata:       metadata,
+	}, nil
+}
+
+// persistPackedBlockPayload appends the stored payload to the container and
+// returns the placement (container ID + offset).
+func persistPackedBlockPayload(
+	tx *sql.Tx,
+	writer payloadStatefulWriter,
+	tr packedBlockTransformed,
+) (container.LocalPlacement, error) {
+	return writer.AppendPayload(tx, tr.storedPayload)
+}
+
+// persistPackedBlockMetadata inserts the storage_blocks row and all
+// chunk_block_refs rows inside the already-open transaction.
+func persistPackedBlockMetadata(
+	ctx context.Context,
+	tx *sql.Tx,
+	enc packedBlockEncoded,
+	tr packedBlockTransformed,
+	placement container.LocalPlacement,
+) (int64, map[int64]packedChunkSegment, error) {
+	var compressionLevelValue any
+	if tr.compressionLvl != nil {
+		compressionLevelValue = int64(*tr.compressionLvl)
+	}
+
 	var blockID int64
 	if err := tx.QueryRowContext(
 		ctx,
 		`INSERT INTO storage_blocks (
 			format_version, codec, plaintext_size, stored_size,
-			container_id, container_offset, block_hash
-		 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			container_id, container_offset, block_hash,
+			compression_codec, compression_level, compressed_size, compression_ratio, payload_hash,
+			compressed_hash, physical_hash
+		 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		 RETURNING id`,
 		1,
-		storageCodec,
-		int64(len(plaintextEncoded)),
-		int64(len(storedPayload)),
+		tr.storageCodec,
+		int64(len(enc.plaintextEncoded)),
+		int64(len(tr.storedPayload)),
 		placement.ContainerID,
 		placement.Offset,
-		blockHash,
+		enc.blockHash,
+		tr.metadata.CompressionCodec,
+		compressionLevelValue,
+		tr.compressedSize,
+		tr.metadata.CompressionRatio,
+		// Legacy mirror only: lowercase-hex(block_hash). block_hash remains authoritative.
+		tr.metadata.PayloadHash,
+		tr.compressedHash,
+		tr.physicalHash,
 	).Scan(&blockID); err != nil {
-		return packedBlockPersistResult{}, err
+		return 0, nil, err
 	}
 
-	// 6) Insert chunk -> packed-block placement rows.
-	payloadPrefixBytes := int64(len(plaintextEncoded) - len(encodedBlock.Payload))
-	segments := make(map[int64]packedChunkSegment, len(encodedBlock.Entries))
-	for _, entry := range encodedBlock.Entries {
+	payloadPrefixBytes := int64(len(enc.plaintextEncoded) - len(enc.encodedBlock.Payload))
+	segments := make(map[int64]packedChunkSegment, len(enc.encodedBlock.Entries))
+	for _, entry := range enc.encodedBlock.Entries {
 		segments[int64(entry.ChunkID)] = packedChunkSegment{
 			Offset: payloadPrefixBytes + int64(entry.Offset),
 			Size:   int64(entry.Size),
@@ -2930,17 +3136,66 @@ func storePackedBlockWithWriter(
 			int64(entry.Offset),
 			int64(entry.Size),
 		); err != nil {
-			return packedBlockPersistResult{}, err
+			return 0, nil, err
 		}
+	}
+
+	return blockID, segments, nil
+}
+
+// storePackedBlockWithWriter persists one flushed packed block atomically inside tx.
+//
+// Atomic order (single transaction boundary):
+//  1. Build block and encode to plaintext bytes; compute logical hash
+//  2. Apply transforms (compress then encrypt when configured)
+//  3. Persist payload to container
+//  4. Persist storage_blocks + chunk_block_refs metadata
+//
+// Invariant: no chunk_block_refs row is written before a successful storage_blocks
+// insert in the same transaction.
+func storePackedBlockWithWriter(
+	ctx context.Context,
+	tx *sql.Tx,
+	writer payloadStatefulWriter,
+	transformer blocks.Transformer,
+	compression storeRuntimeCompression,
+	builder *blocks.BlockBuilder,
+) (packedBlockPersistResult, error) {
+	if builder == nil || builder.Empty() {
+		return packedBlockPersistResult{}, fmt.Errorf("packed block flush requires non-empty builder")
+	}
+
+	// Stage 1: Build block + encode + hash.
+	enc, err := buildAndEncodePackedBlock(builder)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// Stage 2: Apply transforms.
+	tr, err := applyPackedBlockTransforms(ctx, transformer, compression, enc)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// Stage 3: Persist payload to container.
+	placement, err := persistPackedBlockPayload(tx, writer, tr)
+	if err != nil {
+		return packedBlockPersistResult{}, err
+	}
+
+	// Stage 4: Persist metadata.
+	blockID, segments, err := persistPackedBlockMetadata(ctx, tx, enc, tr, placement)
+	if err != nil {
+		return packedBlockPersistResult{}, err
 	}
 
 	return packedBlockPersistResult{
 		BlockID:      blockID,
-		BlockHash:    blockHash,
-		StorageCodec: storageCodec,
-		LegacyNonce:  legacyNonce,
+		BlockHash:    enc.blockHash,
+		StorageCodec: tr.storageCodec,
+		LegacyNonce:  tr.legacyNonce,
 		Placement:    placement,
-		StoredSize:   int64(len(storedPayload)),
+		StoredSize:   int64(len(tr.storedPayload)),
 		Segments:     segments,
 	}, nil
 }

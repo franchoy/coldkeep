@@ -448,6 +448,14 @@ VALUES (
 )
 ON CONFLICT (key) DO NOTHING;
 
+INSERT INTO repository_config(key, value)
+VALUES ('compression', 'none')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO repository_config(key, value)
+VALUES ('compression_level', '3')
+ON CONFLICT (key) DO NOTHING;
+
 UPDATE schema_version SET version = 11 WHERE version < 11;
 
 -- Schema version 12: v1.8 block abstraction foundation tables.
@@ -456,10 +464,23 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   format_version INTEGER NOT NULL CHECK (format_version > 0),
   codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
   plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
+  compression_codec TEXT NOT NULL DEFAULT 'none',
+  CONSTRAINT storage_blocks_compression_codec_check CHECK (compression_codec IN ('none', 'zstd')),
+  compression_level INTEGER,
+  CONSTRAINT storage_blocks_compression_level_contract_check CHECK (
+    (compression_codec = 'none' AND compression_level IS NULL) OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  ),
+  compressed_size BIGINT CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size BIGINT NOT NULL CHECK (stored_size > 0),
   container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset BIGINT NOT NULL CHECK (container_offset >= 0),
   block_hash BYTEA NOT NULL,
+  compression_ratio REAL DEFAULT 1.0,
+  -- DEPRECATED: lowercase-hex mirror of block_hash for compatibility/observability only.
+  payload_hash TEXT,
+  compressed_hash BYTEA,
+  physical_hash BYTEA,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -475,5 +496,108 @@ CREATE TABLE IF NOT EXISTS chunk_block_refs (
 CREATE INDEX IF NOT EXISTS idx_chunk_block_refs_block_id ON chunk_block_refs(block_id);
 
 UPDATE schema_version SET version = 12 WHERE version < 12;
+
+-- Schema version 13: transform-aware packed-block metadata.
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_codec TEXT;
+UPDATE storage_blocks
+SET compression_codec = LOWER(BTRIM(compression_codec))
+WHERE compression_codec IS NOT NULL;
+UPDATE storage_blocks
+SET compression_codec = 'none'
+WHERE compression_codec IS NULL
+   OR BTRIM(compression_codec) = '';
+DO $$
+DECLARE
+  unsupported_count BIGINT;
+BEGIN
+  SELECT COUNT(*)
+  INTO unsupported_count
+  FROM storage_blocks
+  WHERE compression_codec IS NOT NULL
+    AND BTRIM(compression_codec) <> ''
+    AND compression_codec NOT IN ('none', 'zstd');
+
+  IF unsupported_count > 0 THEN
+    RAISE EXCEPTION 'unsupported non-empty storage_blocks.compression_codec values detected: % rows (expected none|zstd)', unsupported_count;
+  END IF;
+END
+$$;
+ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET DEFAULT 'none';
+ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'storage_blocks_compression_codec_check'
+      AND conrelid = 'storage_blocks'::regclass
+  ) THEN
+    ALTER TABLE storage_blocks
+      ADD CONSTRAINT storage_blocks_compression_codec_check
+      CHECK (compression_codec IN ('none', 'zstd'));
+  END IF;
+END
+$$;
+
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER;
+DO $$
+DECLARE
+  invalid_contract_count BIGINT;
+BEGIN
+  SELECT COUNT(*)
+  INTO invalid_contract_count
+  FROM storage_blocks
+  WHERE NOT (
+    (compression_codec = 'none' AND compression_level IS NULL)
+    OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  );
+
+  IF invalid_contract_count > 0 THEN
+    RAISE EXCEPTION 'invalid storage_blocks compression_level contract: % rows violate (none=>NULL, zstd=>1..9)', invalid_contract_count;
+  END IF;
+END
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'storage_blocks_compression_level_contract_check'
+      AND conrelid = 'storage_blocks'::regclass
+  ) THEN
+    ALTER TABLE storage_blocks
+      ADD CONSTRAINT storage_blocks_compression_level_contract_check
+      CHECK (
+        (compression_codec = 'none' AND compression_level IS NULL)
+        OR
+        (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+      );
+  END IF;
+END
+$$;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA;
+
+UPDATE schema_version SET version = 13 WHERE version < 13;
+
+-- Schema version 14: repository compression defaults in config table.
+INSERT INTO repository_config(key, value)
+VALUES ('compression', 'none')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO repository_config(key, value)
+VALUES ('compression_level', '3')
+ON CONFLICT (key) DO NOTHING;
+
+UPDATE schema_version SET version = 14 WHERE version < 14;
+
+-- Schema version 15: packed-block transform metadata columns.
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_ratio REAL DEFAULT 1.0;
+ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+COMMENT ON COLUMN storage_blocks.payload_hash IS 'DEPRECATED: lowercase-hex mirror of block_hash for compatibility/observability only; block_hash is authoritative.';
+
+UPDATE schema_version SET version = 15 WHERE version < 15;
 
 COMMIT;

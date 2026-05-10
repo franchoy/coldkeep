@@ -4,7 +4,7 @@ import "fmt"
 
 const (
 	Major = 1
-	Minor = 8
+	Minor = 9
 	Patch = 0
 )
 

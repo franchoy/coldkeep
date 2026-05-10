@@ -6,10 +6,20 @@ import (
 	"testing"
 )
 
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
+}
+
 func TestCoreScenariosReturnsExpectedNames(t *testing.T) {
 	scenarios := CoreScenarios(ScenarioConfig{})
-	if len(scenarios) != 8 {
-		t.Fatalf("expected 8 scenarios, got %d", len(scenarios))
+	if len(scenarios) != 9 {
+		t.Fatalf("expected 9 scenarios, got %d", len(scenarios))
 	}
 
 	want := []string{
@@ -21,6 +31,7 @@ func TestCoreScenariosReturnsExpectedNames(t *testing.T) {
 		"snapshot-creation",
 		"gc-after-churn",
 		"stats-inspect",
+		"verify-system-deep",
 	}
 	for i, name := range want {
 		if scenarios[i].Name != name {
@@ -117,6 +128,107 @@ func TestScenarioStatsInspectRunsBothCommands(t *testing.T) {
 		if !strings.HasPrefix(call.WorkingDir, filepath.Clean(call.WorkingDir)) {
 			t.Fatalf("unexpected working dir %q", call.WorkingDir)
 		}
+	}
+}
+
+func TestScenarioVerifySystemDeepRunsVerifyCommand(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:                runner.run,
+		ColdkeepExecutable:    "coldkeep",
+		MixedFileCount:        4,
+		MixedMinFileSizeBytes: 64,
+		MixedMaxFileSizeBytes: 128,
+	}
+	scenario := scenarioByName(t, CoreScenarios(cfg), "verify-system-deep")
+
+	if err := scenario.Run(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}); err != nil {
+		t.Fatalf("scenario run failed: %v", err)
+	}
+
+	joined := runner.joinedCommands()
+	if !containsCommand(joined, "store-folder") {
+		t.Fatalf("expected store-folder command, got=%v", joined)
+	}
+	if !containsCommand(joined, "verify system --deep") {
+		t.Fatalf("expected verify system --deep command, got=%v", joined)
+	}
+}
+
+func TestRunColdkeepSetsCompressionNoneByDefaultStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_COMPRESSION"); got != "none" {
+		t.Fatalf("expected COLDKEEP_COMPRESSION=none, got %q", got)
+	}
+}
+
+func TestRunColdkeepAllowsCompressionOverrideStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+		ExtraEnv: map[string]string{
+			"COLDKEEP_COMPRESSION": "zstd",
+		},
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_COMPRESSION"); got != "zstd" {
+		t.Fatalf("expected COLDKEEP_COMPRESSION override=zstd, got %q", got)
+	}
+}
+
+func TestRunColdkeepUsesConfiguredCompressionStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+		Compression:        "zstd",
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_COMPRESSION"); got != "zstd" {
+		t.Fatalf("expected configured COLDKEEP_COMPRESSION=zstd, got %q", got)
+	}
+}
+
+func TestRunColdkeepUsesConfiguredCodecStep37(t *testing.T) {
+	runner := &captureRunner{}
+	cfg := ScenarioConfig{
+		Runner:             runner.run,
+		ColdkeepExecutable: "coldkeep",
+		Codec:              "aes-gcm",
+	}
+
+	if err := runColdkeep(BenchmarkContext{RepoPath: t.TempDir(), DataPath: t.TempDir()}, cfg, "stats"); err != nil {
+		t.Fatalf("runColdkeep: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command call, got %d", len(runner.calls))
+	}
+	if got := envValue(runner.calls[0].Env, "COLDKEEP_CODEC"); got != "aes-gcm" {
+		t.Fatalf("expected configured COLDKEEP_CODEC=aes-gcm, got %q", got)
 	}
 }
 

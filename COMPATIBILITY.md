@@ -22,6 +22,50 @@ Migration philosophy:
 
 - coldkeep prefers non-destructive evolution over automatic optimization.
 
+## Legacy Repository Compatibility Guarantees (Frozen v1.9)
+
+This section defines the explicit contract for historical repositories.
+
+### Mandatory Guarantees
+
+- old repositories remain readable forever within the v1.x compatibility policy
+- historical data remains restorable through metadata replay semantics
+- mixed repositories (legacy + newer block metadata/layout) remain valid steady-state
+- mixed repositories are first-class operating mode, not migration edge case
+
+### Optional / Not Guaranteed
+
+- old repositories are not rewritten automatically
+- old repositories are not recompressed automatically
+- old repositories are not migrated eagerly in the background
+
+### Supported Upgrade Paths
+
+Readability and restore compatibility are guaranteed for the following paths:
+
+- v1.7 repository -> v1.8 runtime
+- v1.8 repository -> v1.9 runtime
+- v1.7 repository -> v1.9 runtime (sequential migrations applied at startup)
+
+Path semantics:
+
+- schema migration may be applied as required by runtime startup
+- payload/layout migration is additive only and never an eager rewrite requirement
+- newer defaults apply to future writes only
+
+### Migration Semantics (Explicit)
+
+- migration guarantees readability, not rewrite optimization
+- migration does not imply automatic re-chunking or recompression
+- migration does not imply eager conversion of historical block metadata/layout
+- any future rewrite tooling must be explicit, operator-invoked, and documented as opt-in
+
+Mixed-mode read semantics:
+
+- per-block metadata is authoritative for read/verify behavior
+- repository defaults are non-authoritative for reads
+- compatibility assumptions must not require homogeneous repository state
+
 ## Guarantee 1: Restore Correctness Across Chunker Versions
 
 Contract:
@@ -139,9 +183,9 @@ Why `storage_blocks` embeds the nonce in the payload (no dedicated column):
 
 - `storage_blocks` has no dedicated nonce column. The 12-byte AES-GCM nonce is prepended to the ciphertext when writing. The reader identifies the nonce boundary from the fixed nonce size and codec type before decryption.
 
-Forward-looking note:
+Current-state note:
 
-- v1.8 does not include block-level compression. v1.9 will extend the packed-block foundation with block-level compression.
+- v1.8 did not include block-level compression. v1.9 extends the packed-block foundation with block-level compression while preserving mixed-repository compatibility.
 
 Chunker evolution model:
 

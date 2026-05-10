@@ -426,7 +426,7 @@ func TestStep8RestoreCorruptedPackedBlockFailsCleanly(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected restore failure for corrupted packed block")
 	}
-	if !strings.Contains(err.Error(), "decode block") {
-		t.Fatalf("expected decode block failure, got: %v", err)
+	if !strings.Contains(err.Error(), "decode block") && !strings.Contains(err.Error(), "decode logical block") {
+		t.Fatalf("expected decode-stage failure, got: %v", err)
 	}
 }

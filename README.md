@@ -21,11 +21,11 @@ Coldkeep uses a visual identity based on an ice cube vault:
 ![CI](https://github.com/franchoy/coldkeep/actions/workflows/ci.yml/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.23+-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Status](https://img.shields.io/badge/status-v1.8%20block%20abstraction%20%26%20release%20hardening-brightgreen)
+![Status](https://img.shields.io/badge/status-v1.9%20transform%20architecture%20%26%20semantic%20freeze-brightgreen)
 ![Release](https://img.shields.io/github/v/release/franchoy/coldkeep?include_prereleases)
 
-> Status: v1.8 introduces packed storage blocks for new writes, with a compiled-in default packed block size of 1 MiB and an advanced write-time override via `COLDKEEP_BLOCK_TARGET_SIZE_MB`. Restore determinism, GC safety, and snapshot semantics remain preserved. Existing v1.7 repositories do not require data rewrite.
-> Migration note (v1.8): existing v1.7 payloads remain readable through the compatibility path. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v12 schema at startup.
+> Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
+> Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v15 schema at startup.
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
@@ -46,7 +46,7 @@ Unlike traditional backup tools, it emphasizes:
 
 The goal is confidence and recoverability over maximum throughput.
 
-v1.7 performance work followed the existing execution model: bounded worker-based commands under explicit safety constraints, without turning coldkeep into a fully concurrent daemon or changing on-disk format, chunk layout, or operator-visible schema compatibility. v1.8 built on this by introducing packed multi-chunk storage blocks and completing AES-GCM packed-block integration — all while preserving restore determinism, snapshot semantics, and GC safety.
+v1.7 performance work followed the existing execution model: bounded worker-based commands under explicit safety constraints, without turning coldkeep into a fully concurrent daemon or changing on-disk format, chunk layout, or operator-visible schema compatibility. v1.8 introduced packed multi-chunk storage blocks and completed AES-GCM packed-block integration. v1.9 builds on that foundation with formal transform-aware storage semantics, block-level compression, and explicit verification stages while preserving restore determinism, snapshot semantics, and GC safety.
 
 ## Features
 
@@ -61,7 +61,7 @@ v1.7 performance work followed the existing execution model: bounded worker-base
 
 ## Status
 
-Coldkeep has nine explicit correctness layers:
+Coldkeep has ten explicit correctness layers:
 
 - v1.0: storage correctness (restore determinism, integrity, recovery, GC safety)
 - v1.1: interaction correctness (CLI orchestration, machine-readable contracts, batch semantics)
@@ -72,23 +72,43 @@ Coldkeep has nine explicit correctness layers:
 - v1.6: observability and simulation contract hardening (read-only introspection, exact GC simulation parity, trace channel behavior)
 - v1.7: controlled-execution performance validation (benchmarking, deterministic comparison, and release-readiness safety proof without storage-format or schema-breaking change)
 - v1.8: packed block abstraction and AES-GCM packed-block integration (multi-chunk storage blocks, dual-compat read path, locked block-size defaults, configurable operator override, release hardening)
+- v1.9: transform-based storage architecture freeze (block-level compression, logical/compressed/physical hash semantics, metadata-driven read path, and explicit staged verification)
 
 Guarantees are enforced through automated validation and CI gates; see [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for guarantee-to-evidence mapping.
 
 If you are new to the project, start here, then continue to [ARCHITECTURE.md](ARCHITECTURE.md) for the internal model and [VALIDATION_MATRIX.md](VALIDATION_MATRIX.md) for the guarantee-to-evidence map.
 
-## v1.8 Storage Contract
+## v1.9 Storage Contract
 
-- v1.8 introduces packed storage blocks for new data.
+- v1.9 keeps packed storage blocks as the default write path for new data.
 - The default packed block size is 1 MiB.
-- `COLDKEEP_BLOCK_TARGET_SIZE_MB` exists as an advanced operator tuning override for new writes only. Valid values for v1.8: `1`, `2`, `3` (MiB). Other values log a warning and use the locked default. This override is retained for benchmarking and specialized operator tuning; production deployments should use the default.
+- `COLDKEEP_BLOCK_TARGET_SIZE_MB` exists as an advanced operator tuning override for new writes only. Valid values for v1.9: `1`, `2`, `3` (MiB). Other values log a warning and use the locked default. This override is retained for benchmarking and specialized operator tuning; production deployments should use the default.
 - `COLDKEEP_PACKED_BLOCK_SIZE_MIB` is a legacy fallback environment variable checked only if `COLDKEEP_BLOCK_TARGET_SIZE_MB` is not set. It is accepted for backward compatibility; new configurations should use `COLDKEEP_BLOCK_TARGET_SIZE_MB`.
-- v1.8 reads existing v1.7 repositories without rewriting historical data.
-- v1.8 writes packed blocks for new data through `storage_blocks` and `chunk_block_refs`.
-- Mixed repositories containing legacy v1.7 data and new v1.8 packed blocks are valid steady-state.
-- v1.7 is not guaranteed to read repositories that contain v1.8 packed-block data.
-- Both `plain` and `aes-gcm` codec settings work end-to-end with v1.8 packed-block writes. When `COLDKEEP_CODEC=aes-gcm`, the full encoded block is AES-GCM encrypted and `storage_blocks.codec` is set to `"aes-gcm"`; stored bytes are a 12-byte nonce prefix followed by the ciphertext. When `COLDKEEP_CODEC=plain`, `storage_blocks.codec` is `"none"` and stored bytes are the plaintext encoded block. The read path (`StorageBlockReader`) handles both layouts transparently using per-block metadata.
-- Full block-level encryption is fully shipped in v1.8. Block-level compression is planned for v1.9.
+- v1.9 reads existing v1.7/v1.8 repositories without rewriting historical data.
+- v1.9 writes packed blocks for new data through `storage_blocks` and `chunk_block_refs`.
+- Mixed repositories containing legacy v1.7/v1.8 data and new v1.9 compressed/encrypted blocks are valid steady-state.
+- v1.7 is not guaranteed to read repositories that contain v1.8/v1.9 packed-block data.
+- Both `plain` and `aes-gcm` codec settings work end-to-end with packed writes. When `COLDKEEP_CODEC=aes-gcm`, the full encoded block is AES-GCM encrypted and `storage_blocks.codec` is set to `"aes-gcm"`; stored bytes are a 12-byte nonce prefix followed by the ciphertext. When `COLDKEEP_CODEC=plain`, `storage_blocks.codec` is `"none"` and stored bytes are the plaintext encoded block. The read path (`StorageBlockReader`) handles both layouts transparently using per-block metadata.
+- Compression settings (`none` / `zstd`) affect future writes only and never rewrite historical blocks.
+
+## Compression and Integrity Contract (Pre-v1.10 Freeze)
+
+Compression behavior:
+
+- Compression is block-level.
+- Compression happens before encryption.
+- Compression configuration affects only newly written blocks.
+- Existing blocks are never recompressed automatically.
+- Reads and verify use per-block metadata, so mixed repositories (legacy + new transform metadata) are valid steady-state.
+- Compression is store-if-smaller: some zstd-configured blocks are intentionally stored uncompressed when compression would expand payload size.
+- Compression does not change dedup identity; dedup remains anchored to logical block content.
+
+Integrity checkpoints:
+
+- `logical_hash` (`block_hash`) verifies decoded logical block content.
+- `payload_hash` is a deprecated lowercase-hex mirror of `block_hash` retained for compatibility/observability only.
+- `compressed_hash` verifies pre-encryption compressed payload.
+- `physical_hash` verifies exact persisted bytes in container storage.
 
 ## Core Guarantees
 
@@ -133,6 +153,7 @@ Documentation is split into:
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflow, local CI guidance, and stats benchmark commands for observability-sensitive changes
 - [PRE_RELEASE_CHECKLIST.md](PRE_RELEASE_CHECKLIST.md) for release-gate execution
 - [SECURITY.md](SECURITY.md) for the threat model and security limits
+- [docs/internal/storage_compatibility_matrix.md](docs/internal/storage_compatibility_matrix.md) for the formal storage compatibility matrix and benchmark scope split
 - [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md) for current-state path identity policy
 - [CHANGELOG.md](CHANGELOG.md) for milestone history
 
@@ -189,6 +210,11 @@ For full guarantees, non-guarantees, and upgrade behavior details:
 
 - [COMPATIBILITY.md](COMPATIBILITY.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
+
+Legacy compatibility contract (v1.9):
+
+- mandatory: old repositories remain readable/restorable
+- not guaranteed: automatic rewrite, recompression, or eager migration of historical data
 
 ## When to use coldkeep
 
@@ -381,14 +407,14 @@ Observability command guarantees (v1.6):
 - `simulate gc` previews exact GC reclaimability using the shared GC planning layer (`gc.BuildPlan`), including fully-dead active containers; it is not legacy `gc --dry-run` behavior.
 - GC simulation does not mutate repository state (no database writes and no filesystem writes).
 - JSON output is intended for tooling/automation contracts.
-- `meta.version` is the CLI JSON contract version. It remains `v1.7` for additive, backward-compatible fields (including v1.8 `stats.block_layout` additions) and only bumps on breaking JSON contract changes.
+- `meta.version` is the CLI JSON contract version. It remains `v1.7` for additive, backward-compatible fields (including v1.8/v1.9 `stats.block_layout` additions) and only bumps on breaking JSON contract changes.
 - Deep inspect output can be large; use `--limit N` to bound traversal output for operators and CI.
 - `--trace` and `--trace-json` are diagnostics channels; traces are emitted to stderr so stdout data remains stable for piping.
-- v1.8 `stats` includes block-layout observability for packed storage: `storage_blocks_count`, `chunk_block_refs_count`, `avg_chunks_per_block`, `avg_block_plaintext_size`, `avg_block_stored_size`, `avg_block_fill_ratio`, `legacy_block_count`, `packed_block_count`, and `codec_distribution` when packed blocks are present.
+- v1.8/v1.9 `stats` includes block-layout observability for packed storage: `storage_blocks_count`, `chunk_block_refs_count`, `avg_chunks_per_block`, `avg_block_plaintext_size`, `avg_block_stored_size`, `avg_block_fill_ratio`, `legacy_block_count`, `packed_block_count`, and `codec_distribution` when packed blocks are present.
 
-Operator-facing v1.8 delta for common commands:
+Operator-facing v1.9 delta for common commands:
 
-- `coldkeep store`, `restore`, `verify system --standard`, `gc --dry-run`, `gc`, `stats --json`, and `inspect` keep their existing invocation shape; v1.8 does not add new required flags to these commands.
+- `coldkeep store`, `restore`, `verify system --standard`, `gc --dry-run`, `gc`, `stats --json`, and `inspect` keep their existing invocation shape; v1.9 does not add new required flags to these commands.
 - `stats` may include packed-block metrics in human and JSON output.
 - `verify` may surface packed-block integrity categories such as packed block hash or metadata corruption.
 - Block abstraction is documented, but remains a compatibility-layer change rather than a new mandatory operator workflow.
@@ -401,7 +427,7 @@ coldkeep benchmark run --dataset small --repeat 1 --output json
 scripts/run_phase8_blocksize_matrix.sh --list-missing
 ```
 
-v1.8 supports both CLI and scripted benchmark workflows.
+v1.9 supports both CLI and scripted benchmark workflows.
 
 - Use `coldkeep benchmark chunkers` and `coldkeep benchmark run` for operator-facing repeatable local measurements.
 - Use `scripts/run_phase8_*.sh` and `scripts/compare_phase8_*.py` for release matrix orchestration and historical comparison workflows.
@@ -720,6 +746,7 @@ Deleting a snapshot removes metadata only. Data remains retained when still refe
 
 `--dry-run` is read-only and reports impact details (lineage preview and file-count breakdown) without applying changes.
 Dry-run impact describes metadata/reference effects and does not guarantee disk-space reclamation.
+When both `--force` and `--dry-run` are passed, `--dry-run` takes precedence and the command remains read-only.
 
 `snapshot delete --dry-run` preview includes:
 
@@ -835,9 +862,10 @@ Verification checks are observational. In CLI flows, startup recovery may run be
 - Security reporting and threat guidance: [SECURITY.md](SECURITY.md)
 - Current-state path identity policy: [docs/PATH_IDENTITY.md](docs/PATH_IDENTITY.md)
 - Benchmark infrastructure and baseline policy: [docs/benchmarking.md](docs/benchmarking.md)
+- Frozen v1.9 benchmark baseline contract: [docs/internal/benchmark_baselines_v1_9.md](docs/internal/benchmark_baselines_v1_9.md)
 - Milestone history: [CHANGELOG.md](CHANGELOG.md)
 
-## Roadmap note (post-v1.7)
+## Roadmap note (post-v1.9)
 
 Current status:
 
@@ -847,8 +875,9 @@ Current status:
 - v1.6 read-only observability and exact GC simulation tooling are complete.
 - v1.7 controlled-execution performance validation and release-readiness hardening are complete.
 - v1.8 packed block abstraction, AES-GCM packed-block integration, and release hardening are complete.
+- v1.9 transform-based storage semantics, block-level compression, and staged verification are complete.
 
-Next focus is v1.9: block-level compression, building on the v1.8 packed-block encryption/storage foundation.
+Next focus is v1.10: architecture extraction on top of frozen v1.9 storage semantics.
 
 ## Contributing
 

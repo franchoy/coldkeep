@@ -246,6 +246,49 @@ func TestBuildPlanUnreachableChunkIsReclaimable(t *testing.T) {
 	}
 }
 
+func TestBuildPlanIgnoresTransformLayerHashesForIdentityStep74(t *testing.T) {
+	dbconn := openTestDB(t)
+
+	chunkID := insertChunk(t, dbconn, "step74-gc-orphan", 512, 0, 0)
+	containerID := insertContainer(t, dbconn, "step74-gc.bin", 512)
+	blockID := insertStorageBlockRef(t, dbconn, chunkID, containerID, 512, []byte{0x01, 0x02, 0x03, 0x04})
+
+	before, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan before hash tamper: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET compressed_hash = ?, physical_hash = ? WHERE id = ?`,
+		[]byte{0xAA, 0xBB, 0xCC, 0xDD},
+		[]byte{0x11, 0x22, 0x33, 0x44},
+		blockID,
+	); err != nil {
+		t.Fatalf("tamper storage_blocks transform-layer hashes: %v", err)
+	}
+
+	after, err := BuildPlan(context.Background(), dbconn, PlanOptions{})
+	if err != nil {
+		t.Fatalf("BuildPlan after hash tamper: %v", err)
+	}
+
+	if before.TotalChunks != after.TotalChunks {
+		t.Fatalf("total chunks changed after transform-hash tamper: before=%d after=%d", before.TotalChunks, after.TotalChunks)
+	}
+	if before.UnreachableChunks != after.UnreachableChunks {
+		t.Fatalf("unreachable chunks changed after transform-hash tamper: before=%d after=%d", before.UnreachableChunks, after.UnreachableChunks)
+	}
+	if before.ReclaimableBytes != after.ReclaimableBytes {
+		t.Fatalf("reclaimable bytes changed after transform-hash tamper: before=%d after=%d", before.ReclaimableBytes, after.ReclaimableBytes)
+	}
+	if before.PhysicallyReclaimableBytes != after.PhysicallyReclaimableBytes {
+		t.Fatalf("physical reclaimable bytes changed after transform-hash tamper: before=%d after=%d", before.PhysicallyReclaimableBytes, after.PhysicallyReclaimableBytes)
+	}
+	if len(before.AffectedContainers) != len(after.AffectedContainers) {
+		t.Fatalf("affected container count changed after transform-hash tamper: before=%d after=%d", len(before.AffectedContainers), len(after.AffectedContainers))
+	}
+}
+
 func TestBuildPlanPinnedChunkNotReclaimable(t *testing.T) {
 	dbconn := openTestDB(t)
 

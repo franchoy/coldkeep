@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/graph"
+	"github.com/franchoy/coldkeep/internal/maintenance"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -106,14 +107,29 @@ func (s *Service) inspectRepository(ctx context.Context, opts InspectOptions) (*
 		return nil, fmt.Errorf("inspect repository snapshot count: %w", err)
 	}
 
+	blockStats, err := maintenance.CollectBlockStats(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("inspect repository block compression stats: %w", err)
+	}
+
 	result := &InspectResult{
 		GeneratedAtUTC: s.now(),
 		EntityType:     EntityRepository,
 		EntityID:       "repository",
 		Summary: map[string]any{
-			"total_files":     logicalFiles,
-			"total_chunks":    chunks,
-			"total_snapshots": snapshots,
+			"total_files":                 logicalFiles,
+			"total_chunks":                chunks,
+			"total_snapshots":             snapshots,
+			"logical_bytes":               blockStats.LogicalBytes,
+			"compressed_bytes":            blockStats.CompressedBytes,
+			"stored_bytes":                blockStats.StoredBytes,
+			"compression_size_ratio":      blockStats.CompressionSizeRatio,
+			"compression_factor":          blockStats.CompressionFactor,
+			"physical_size_ratio":         blockStats.PhysicalSizeRatio,
+			"physical_factor":             blockStats.PhysicalFactor,
+			"compressed_blocks":           blockStats.CompressedBlocks,
+			"uncompressed_blocks":         blockStats.UncompressedBlocks,
+			"compression_codec_breakdown": blockStats.CompressionCodecBreakdown,
 		},
 	}
 
@@ -346,6 +362,14 @@ func (s *Service) inspectChunk(ctx context.Context, id string, opts InspectOptio
 		},
 	}
 
+	if inspectBlockMetadataRequested(opts) {
+		blocks, err := s.loadChunkBlockMetadata(ctx, chunkID, opts.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("inspect chunk %d block metadata: %w", chunkID, err)
+		}
+		result.Summary["blocks"] = blocks
+	}
+
 	if opts.Relations {
 		emitTrace(opts.Trace, TraceEvent{
 			Step:     "inspect.forward_relations.load",
@@ -430,6 +454,14 @@ func (s *Service) inspectContainer(ctx context.Context, id string, opts InspectO
 			"current_size": currentSize,
 			"max_size":     maxSize,
 		},
+	}
+
+	if inspectBlockMetadataRequested(opts) {
+		blocks, err := s.loadContainerBlockMetadata(ctx, containerID, opts.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("inspect container %d block metadata: %w", containerID, err)
+		}
+		result.Summary["blocks"] = blocks
 	}
 
 	if opts.Reverse {
@@ -736,6 +768,319 @@ func nullableInt64(v sql.NullInt64) any {
 		return nil
 	}
 	return v.Int64
+}
+
+func inspectBlockMetadataRequested(opts InspectOptions) bool {
+	return opts.Relations || opts.Deep
+}
+
+func blockMetadataFromLegacy(
+	blockID int64,
+	formatVersion int64,
+	plaintextSize int64,
+	storedSize int64,
+	encryptionCodec string,
+	containerID int64,
+	containerOffset int64,
+) map[string]any {
+	return map[string]any{
+		"block_id":            blockID,
+		"block_source":        "legacy",
+		"format_version":      formatVersion,
+		"compression_codec":   "none",
+		"compression_level":   nil,
+		"plaintext_size":      plaintextSize,
+		"compressed_size":     nil,
+		"stored_size":         storedSize,
+		"has_logical_hash":    false,
+		"has_compressed_hash": false,
+		"has_physical_hash":   false,
+		"encryption_codec":    strings.TrimSpace(encryptionCodec),
+		"container_id":        containerID,
+		"container_offset":    containerOffset,
+	}
+}
+
+func blockMetadataFromPacked(
+	blockID int64,
+	formatVersion int64,
+	compressionCodec string,
+	compressionLevel sql.NullInt64,
+	plaintextSize int64,
+	compressedSize sql.NullInt64,
+	storedSize int64,
+	hasLogicalHash bool,
+	hasCompressedHash bool,
+	hasPhysicalHash bool,
+	encryptionCodec string,
+	containerID int64,
+	containerOffset int64,
+) map[string]any {
+	compressionCodec = strings.ToLower(strings.TrimSpace(compressionCodec))
+	if compressionCodec == "" {
+		compressionCodec = "none"
+	}
+	encryptionCodec = strings.TrimSpace(encryptionCodec)
+
+	return map[string]any{
+		"block_id":            blockID,
+		"block_source":        "packed",
+		"format_version":      formatVersion,
+		"compression_codec":   compressionCodec,
+		"compression_level":   nullableInt64(compressionLevel),
+		"plaintext_size":      plaintextSize,
+		"compressed_size":     nullableInt64(compressedSize),
+		"stored_size":         storedSize,
+		"has_logical_hash":    hasLogicalHash,
+		"has_compressed_hash": hasCompressedHash,
+		"has_physical_hash":   hasPhysicalHash,
+		"encryption_codec":    encryptionCodec,
+		"container_id":        containerID,
+		"container_offset":    containerOffset,
+	}
+}
+
+func (s *Service) loadChunkBlockMetadata(ctx context.Context, chunkID int64, limit int) ([]map[string]any, error) {
+	if s == nil || s.db == nil || limit <= 0 {
+		return nil, nil
+	}
+
+	out := make([]map[string]any, 0)
+	remaining := limit
+
+	legacyRows, err := s.db.QueryContext(ctx, `
+		SELECT id, format_version, plaintext_size, stored_size, codec, container_id, block_offset
+		FROM blocks
+		WHERE chunk_id = $1
+		ORDER BY id
+		LIMIT $2
+	`, chunkID, remaining)
+	if err != nil {
+		return nil, fmt.Errorf("query legacy block metadata for chunk %d: %w", chunkID, err)
+	}
+	defer func() { _ = legacyRows.Close() }()
+
+	for legacyRows.Next() {
+		var blockID int64
+		var formatVersion int64
+		var plaintextSize int64
+		var storedSize int64
+		var encryptionCodec string
+		var containerID int64
+		var containerOffset int64
+		if err := legacyRows.Scan(&blockID, &formatVersion, &plaintextSize, &storedSize, &encryptionCodec, &containerID, &containerOffset); err != nil {
+			return nil, fmt.Errorf("scan legacy block metadata for chunk %d: %w", chunkID, err)
+		}
+		out = append(out, blockMetadataFromLegacy(blockID, formatVersion, plaintextSize, storedSize, encryptionCodec, containerID, containerOffset))
+		remaining--
+		if remaining == 0 {
+			return out, nil
+		}
+	}
+	if err := legacyRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy block metadata for chunk %d: %w", chunkID, err)
+	}
+
+	packedRows, err := s.db.QueryContext(ctx, `
+		SELECT
+			sb.id,
+			sb.format_version,
+			sb.compression_codec,
+			sb.compression_level,
+			sb.plaintext_size,
+			sb.compressed_size,
+			sb.stored_size,
+			CASE WHEN sb.block_hash IS NULL THEN 0 ELSE 1 END,
+			CASE WHEN sb.compressed_hash IS NULL THEN 0 ELSE 1 END,
+			CASE WHEN sb.physical_hash IS NULL THEN 0 ELSE 1 END,
+			sb.codec,
+			sb.container_id,
+			sb.container_offset
+		FROM chunk_block_refs cbr
+		JOIN storage_blocks sb ON sb.id = cbr.block_id
+		WHERE cbr.chunk_id = $1
+		ORDER BY sb.id
+		LIMIT $2
+	`, chunkID, remaining)
+	if err != nil {
+		return nil, fmt.Errorf("query packed block metadata for chunk %d: %w", chunkID, err)
+	}
+	defer func() { _ = packedRows.Close() }()
+
+	for packedRows.Next() {
+		var blockID int64
+		var formatVersion int64
+		var compressionCodec string
+		var compressionLevel sql.NullInt64
+		var plaintextSize int64
+		var compressedSize sql.NullInt64
+		var storedSize int64
+		var hasLogicalHashInt int64
+		var hasCompressedHashInt int64
+		var hasPhysicalHashInt int64
+		var encryptionCodec string
+		var containerID int64
+		var containerOffset int64
+		if err := packedRows.Scan(
+			&blockID,
+			&formatVersion,
+			&compressionCodec,
+			&compressionLevel,
+			&plaintextSize,
+			&compressedSize,
+			&storedSize,
+			&hasLogicalHashInt,
+			&hasCompressedHashInt,
+			&hasPhysicalHashInt,
+			&encryptionCodec,
+			&containerID,
+			&containerOffset,
+		); err != nil {
+			return nil, fmt.Errorf("scan packed block metadata for chunk %d: %w", chunkID, err)
+		}
+
+		out = append(out, blockMetadataFromPacked(
+			blockID,
+			formatVersion,
+			compressionCodec,
+			compressionLevel,
+			plaintextSize,
+			compressedSize,
+			storedSize,
+			hasLogicalHashInt != 0,
+			hasCompressedHashInt != 0,
+			hasPhysicalHashInt != 0,
+			encryptionCodec,
+			containerID,
+			containerOffset,
+		))
+	}
+	if err := packedRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate packed block metadata for chunk %d: %w", chunkID, err)
+	}
+
+	return out, nil
+}
+
+func (s *Service) loadContainerBlockMetadata(ctx context.Context, containerID int64, limit int) ([]map[string]any, error) {
+	if s == nil || s.db == nil || limit <= 0 {
+		return nil, nil
+	}
+
+	out := make([]map[string]any, 0)
+	remaining := limit
+
+	legacyRows, err := s.db.QueryContext(ctx, `
+		SELECT id, format_version, plaintext_size, stored_size, codec, container_id, block_offset
+		FROM blocks
+		WHERE container_id = $1
+		ORDER BY block_offset, id
+		LIMIT $2
+	`, containerID, remaining)
+	if err != nil {
+		return nil, fmt.Errorf("query legacy block metadata for container %d: %w", containerID, err)
+	}
+	defer func() { _ = legacyRows.Close() }()
+
+	for legacyRows.Next() {
+		var blockID int64
+		var formatVersion int64
+		var plaintextSize int64
+		var storedSize int64
+		var encryptionCodec string
+		var dbContainerID int64
+		var containerOffset int64
+		if err := legacyRows.Scan(&blockID, &formatVersion, &plaintextSize, &storedSize, &encryptionCodec, &dbContainerID, &containerOffset); err != nil {
+			return nil, fmt.Errorf("scan legacy block metadata for container %d: %w", containerID, err)
+		}
+		out = append(out, blockMetadataFromLegacy(blockID, formatVersion, plaintextSize, storedSize, encryptionCodec, dbContainerID, containerOffset))
+		remaining--
+		if remaining == 0 {
+			return out, nil
+		}
+	}
+	if err := legacyRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy block metadata for container %d: %w", containerID, err)
+	}
+
+	packedRows, err := s.db.QueryContext(ctx, `
+		SELECT
+			id,
+			format_version,
+			compression_codec,
+			compression_level,
+			plaintext_size,
+			compressed_size,
+			stored_size,
+			CASE WHEN block_hash IS NULL THEN 0 ELSE 1 END,
+			CASE WHEN compressed_hash IS NULL THEN 0 ELSE 1 END,
+			CASE WHEN physical_hash IS NULL THEN 0 ELSE 1 END,
+			codec,
+			container_id,
+			container_offset
+		FROM storage_blocks
+		WHERE container_id = $1
+		ORDER BY container_offset, id
+		LIMIT $2
+	`, containerID, remaining)
+	if err != nil {
+		return nil, fmt.Errorf("query packed block metadata for container %d: %w", containerID, err)
+	}
+	defer func() { _ = packedRows.Close() }()
+
+	for packedRows.Next() {
+		var blockID int64
+		var formatVersion int64
+		var compressionCodec string
+		var compressionLevel sql.NullInt64
+		var plaintextSize int64
+		var compressedSize sql.NullInt64
+		var storedSize int64
+		var hasLogicalHashInt int64
+		var hasCompressedHashInt int64
+		var hasPhysicalHashInt int64
+		var encryptionCodec string
+		var dbContainerID int64
+		var containerOffset int64
+		if err := packedRows.Scan(
+			&blockID,
+			&formatVersion,
+			&compressionCodec,
+			&compressionLevel,
+			&plaintextSize,
+			&compressedSize,
+			&storedSize,
+			&hasLogicalHashInt,
+			&hasCompressedHashInt,
+			&hasPhysicalHashInt,
+			&encryptionCodec,
+			&dbContainerID,
+			&containerOffset,
+		); err != nil {
+			return nil, fmt.Errorf("scan packed block metadata for container %d: %w", containerID, err)
+		}
+
+		out = append(out, blockMetadataFromPacked(
+			blockID,
+			formatVersion,
+			compressionCodec,
+			compressionLevel,
+			plaintextSize,
+			compressedSize,
+			storedSize,
+			hasLogicalHashInt != 0,
+			hasCompressedHashInt != 0,
+			hasPhysicalHashInt != 0,
+			encryptionCodec,
+			dbContainerID,
+			containerOffset,
+		))
+	}
+	if err := packedRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate packed block metadata for container %d: %w", containerID, err)
+	}
+
+	return out, nil
 }
 
 func (s *Service) loadSnapshotLogicalFileRefs(ctx context.Context, snapshotID string) ([]int64, error) {

@@ -141,10 +141,11 @@ func verifyInvariantConvergenceG8(t *testing.T, dbconn *sql.DB, repoRoot, binPat
 	if got := countInt64QueryG8(t, dbconn, `
 		SELECT COUNT(*)
 		FROM chunk c
-		LEFT JOIN blocks b ON b.chunk_id = c.id
-		WHERE c.status = 'COMPLETED' AND b.chunk_id IS NULL
+		WHERE c.status = 'COMPLETED'
+		  AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.chunk_id = c.id)
+		  AND NOT EXISTS (SELECT 1 FROM chunk_block_refs cbr WHERE cbr.chunk_id = c.id)
 	`); got != 0 {
-		t.Fatalf("expected no COMPLETED chunk without blocks row, got %d", got)
+		t.Fatalf("expected no COMPLETED chunk without location metadata row, got %d", got)
 	}
 	if got := countInt64QueryG8(t, dbconn, `
 		SELECT COUNT(*)

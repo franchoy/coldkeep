@@ -9,17 +9,15 @@ const (
 	VerifyDeep
 )
 
-func VerifyLevelString(v VerifyLevel) string {
-	switch v {
-	case VerifyFast:
-		return "fast"
-	case VerifyStandard:
-		return "standard"
-	case VerifyFull:
-		return "full"
-	case VerifyDeep:
-		return "deep"
-	default:
-		return "unknown"
-	}
-}
+type VerifyStage string
+
+const (
+	VerifyStagePhysicalPayload VerifyStage = "physical_payload"
+	VerifyStageDecrypt         VerifyStage = "decrypt"
+	VerifyStageCompressedHash  VerifyStage = "compressed_hash"
+	VerifyStageDecompress      VerifyStage = "decompress"
+	VerifyStageLogicalHash     VerifyStage = "logical_hash"
+	VerifyStageBlockDecode     VerifyStage = "block_decode"
+	VerifyStageChunkRefs       VerifyStage = "chunk_refs"
+	VerifyStageSnapshots       VerifyStage = "snapshots"
+)

@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -17,6 +18,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/invariants"
 	filestate "github.com/franchoy/coldkeep/internal/status"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -511,7 +513,7 @@ func TestVerifyChunkBlockRefsDetectsDuplicateChunkBlockRefs(t *testing.T) {
 	}
 }
 
-func packedFixtureBlockStorageMeta(t *testing.T, dbconn *sql.DB, blockID int64, containersDir string) (string, int64, int64, int64) {
+func packedFixtureBlockStorageMeta(t testing.TB, dbconn *sql.DB, blockID int64, containersDir string) (string, int64, int64, int64) {
 	t.Helper()
 
 	var filename string
@@ -531,7 +533,7 @@ func packedFixtureBlockStorageMeta(t *testing.T, dbconn *sql.DB, blockID int64, 
 	return path, containerOffset, storedSize, plaintextSize
 }
 
-func readPackedStoredBytesForTest(t *testing.T, path string, offset int64, size int64) []byte {
+func readPackedStoredBytesForTest(t testing.TB, path string, offset int64, size int64) []byte {
 	t.Helper()
 
 	f, err := os.Open(path)
@@ -551,7 +553,7 @@ func readPackedStoredBytesForTest(t *testing.T, path string, offset int64, size 
 	return buf
 }
 
-func overwritePackedStoredBytesForTest(t *testing.T, path string, offset int64, payload []byte) {
+func overwritePackedStoredBytesForTest(t testing.TB, path string, offset int64, payload []byte) {
 	t.Helper()
 
 	f, err := os.OpenFile(path, os.O_RDWR, 0644)
@@ -569,7 +571,7 @@ func overwritePackedStoredBytesForTest(t *testing.T, path string, offset int64, 
 	}
 }
 
-func setPackedBlockHashForBytes(t *testing.T, dbconn *sql.DB, blockID int64, payload []byte) {
+func setPackedBlockHashForBytes(t testing.TB, dbconn *sql.DB, blockID int64, payload []byte) {
 	t.Helper()
 
 	h := blocks.ComputeBlockHash(payload)
@@ -584,7 +586,128 @@ type verifyPackedRefSeed struct {
 	size    int64
 }
 
-func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, refs []verifyPackedRefSeed) (int64, []int64) {
+func seedVerifyCompressedPackedBlockFixture(t testing.TB, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, codec blocks.Codec, compressionCodec string) (int64, []int64) {
+	t.Helper()
+
+	storageCodec := "none"
+	if codec == blocks.CodecAESGCM {
+		storageCodec = string(blocks.CodecAESGCM)
+	}
+
+	chunkIDs := make([]int64, 0, len(chunkPayloads))
+	packedChunks := make([]blocks.PackedChunk, 0, len(chunkPayloads))
+	for _, payload := range chunkPayloads {
+		var chunkID int64
+		sum := sha256.Sum256(payload)
+		hash := hex.EncodeToString(sum[:])
+		if err := dbconn.QueryRow(
+			`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+			 VALUES ($1, $2, $3, 0, 0, 0, 'v1-simple-rolling')
+			 RETURNING id`,
+			hash,
+			int64(len(payload)),
+			filestate.ChunkAborted,
+		).Scan(&chunkID); err != nil {
+			t.Fatalf("insert verify compressed chunk: %v", err)
+		}
+		chunkIDs = append(chunkIDs, chunkID)
+		packedChunks = append(packedChunks, blocks.PackedChunk{ChunkID: uint64(chunkID), Data: payload})
+	}
+
+	encoded, err := blocks.EncodePackedBlockV1FromChunks(packedChunks)
+	if err != nil {
+		t.Fatalf("encode compressed packed block fixture: %v", err)
+	}
+
+	compressor, err := storagecompression.Lookup(compressionCodec)
+	if err != nil {
+		t.Fatalf("lookup compression codec %q: %v", compressionCodec, err)
+	}
+	compressedBytes, err := compressor.Compress(encoded.Bytes)
+	if err != nil {
+		t.Fatalf("compress packed block fixture: %v", err)
+	}
+
+	transformer, err := blocks.GetBlockTransformer(codec)
+	if err != nil {
+		t.Fatalf("get transformer for compressed fixture: %v", err)
+	}
+	transformed, err := transformer.Encode(context.Background(), blocks.EncodeInput{Plaintext: compressedBytes})
+	if err != nil {
+		t.Fatalf("transform compressed packed block fixture: %v", err)
+	}
+
+	storedBytes := append([]byte(nil), transformed.Payload...)
+	if codec == blocks.CodecAESGCM {
+		storedBytes = append(append([]byte(nil), transformed.Descriptor.Nonce...), transformed.Payload...)
+	}
+
+	writer := container.NewLocalWriterWithDirAndDB(containersDir, container.GetContainerMaxSize(), dbconn)
+	tx, err := dbconn.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin tx for compressed packed fixture: %v", err)
+	}
+	placement, err := writer.AppendPayload(tx, storedBytes)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("append compressed packed fixture payload: %v", err)
+	}
+	if err := container.UpdateContainerSize(tx, placement.ContainerID, placement.NewContainerSize); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("update container size for compressed packed fixture: %v", err)
+	}
+
+	var compressionLevel any
+	if compressionCodec == storagecompression.CompressionZstd {
+		compressionLevel = 3
+	}
+
+	var blockID int64
+	if err := tx.QueryRow(
+		`INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, stored_size, container_id, container_offset,
+			block_hash, compression_codec, compression_level, compressed_size, compressed_hash, physical_hash
+		 ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 RETURNING id`,
+		storageCodec,
+		int64(len(encoded.Bytes)),
+		int64(len(storedBytes)),
+		placement.ContainerID,
+		placement.Offset,
+		blocks.HashLogical(encoded.Bytes),
+		compressionCodec,
+		compressionLevel,
+		int64(len(compressedBytes)),
+		blocks.HashCompressed(compressedBytes),
+		blocks.HashPhysical(storedBytes),
+	).Scan(&blockID); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert compressed storage_blocks fixture: %v", err)
+	}
+
+	for i, entry := range encoded.Entries {
+		if _, err := tx.Exec(
+			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
+			 VALUES ($1, $2, $3, $4)`,
+			chunkIDs[i],
+			blockID,
+			int64(entry.Offset),
+			int64(entry.Size),
+		); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("insert compressed chunk_block_refs fixture: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("commit compressed packed fixture: %v", err)
+	}
+
+	return blockID, chunkIDs
+}
+
+func seedVerifyPackedBlockFixture(t testing.TB, dbconn *sql.DB, containersDir string, chunkPayloads [][]byte, refs []verifyPackedRefSeed) (int64, []int64) {
 	t.Helper()
 
 	chunkIDs := make([]int64, 0, len(chunkPayloads))
@@ -671,7 +794,7 @@ func seedVerifyPackedBlockFixture(t *testing.T, dbconn *sql.DB, containersDir st
 	return blockID, chunkIDs
 }
 
-func seedVerifyLegacyBlockFixture(t *testing.T, dbconn *sql.DB, containersDir string, payload []byte) int64 {
+func seedVerifyLegacyBlockFixture(t testing.TB, dbconn *sql.DB, containersDir string, payload []byte) int64 {
 	t.Helper()
 
 	sum := sha256.Sum256(payload)
@@ -775,6 +898,89 @@ func TestVerifyRepositorySupportsMixedRepo(t *testing.T) {
 
 	if err := VerifyRepository(dbconn, containersDir); err != nil {
 		t.Fatalf("expected VerifyRepository to pass for mixed repo, got: %v", err)
+	}
+}
+
+func TestVerifyRepositorySupportsMixedBlockTypeMatrixInSingleRun(t *testing.T) {
+	// Repository defaults are store-time hints and must not influence verify-time
+	// decoding for already persisted rows.
+	t.Setenv("COLDKEEP_CODEC", "plain")
+	t.Setenv("COLDKEEP_COMPRESSION_CODEC", "none")
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "1")
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+
+	// 1) legacy uncompressed block
+	_ = seedVerifyLegacyBlockFixture(t, dbconn, containersDir, []byte("matrix-legacy-uncompressed"))
+
+	// 2) new uncompressed block with all hashes present
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("matrix-new-uncompressed-with-hashes")}, blocks.CodecPlain, storagecompression.CompressionNone)
+
+	// 3) compressed unencrypted block
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("matrix-compressed-unencrypted")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	// 4) compressed encrypted block
+	_, _ = seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("matrix-compressed-encrypted")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	var legacyCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM blocks b
+		WHERE NOT EXISTS (
+			SELECT 1 FROM chunk_block_refs r WHERE r.chunk_id = b.chunk_id
+		)
+	`).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy blocks in matrix fixture: %v", err)
+	}
+	if legacyCount < 1 {
+		t.Fatalf("expected at least one legacy block in mixed matrix fixture")
+	}
+
+	var newUncompressedWithHashes int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE codec = 'none'
+		  AND lower(trim(compression_codec)) = 'none'
+		  AND compressed_hash IS NOT NULL AND length(compressed_hash) > 0
+		  AND physical_hash IS NOT NULL AND length(physical_hash) > 0
+	`).Scan(&newUncompressedWithHashes); err != nil {
+		t.Fatalf("count new uncompressed hashed blocks in matrix fixture: %v", err)
+	}
+	if newUncompressedWithHashes < 1 {
+		t.Fatalf("expected at least one new uncompressed block with all hashes in mixed matrix fixture")
+	}
+
+	var compressedUnencryptedCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE codec = 'none' AND lower(trim(compression_codec)) = 'zstd'
+	`).Scan(&compressedUnencryptedCount); err != nil {
+		t.Fatalf("count compressed unencrypted blocks in matrix fixture: %v", err)
+	}
+	if compressedUnencryptedCount < 1 {
+		t.Fatalf("expected at least one compressed unencrypted block in mixed matrix fixture")
+	}
+
+	var compressedEncryptedCount int64
+	if err := dbconn.QueryRow(`
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE codec = 'aes-gcm' AND lower(trim(compression_codec)) = 'zstd'
+	`).Scan(&compressedEncryptedCount); err != nil {
+		t.Fatalf("count compressed encrypted blocks in matrix fixture: %v", err)
+	}
+	if compressedEncryptedCount < 1 {
+		t.Fatalf("expected at least one compressed encrypted block in mixed matrix fixture")
+	}
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected one VerifyRepository run to handle mixed legacy/new/compressed/encrypted blocks, got: %v", err)
 	}
 }
 
@@ -893,7 +1099,7 @@ func TestVerifyBlockPayloadsDetectsBadBlockMagic(t *testing.T) {
 	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || !strings.Contains(err.Error(), "decode logical block") {
 		t.Fatalf("expected bad magic decode error, got: %v", err)
 	}
 }
@@ -912,7 +1118,7 @@ func TestVerifyBlockPayloadsDetectsUnsupportedBlockVersion(t *testing.T) {
 	setPackedBlockHashForBytes(t, dbconn, blockID, payload)
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || !strings.Contains(err.Error(), "decode logical block") {
 		t.Fatalf("expected unsupported version decode error, got: %v", err)
 	}
 }
@@ -938,7 +1144,7 @@ func TestVerifyBlockPayloadsDetectsTruncatedEncodedBlock(t *testing.T) {
 	setPackedBlockHashForBytes(t, dbconn, blockID, truncated)
 
 	err := verifyBlockPayloads(dbconn, containersDir)
-	if err == nil || !strings.Contains(err.Error(), "decode block") {
+	if err == nil || !strings.Contains(err.Error(), "decode logical block") {
 		t.Fatalf("expected truncated encoded block decode error, got: %v", err)
 	}
 }
@@ -959,6 +1165,257 @@ func TestVerifyBlockPayloadsDetectsCorruptedStoredBytes(t *testing.T) {
 	err := verifyBlockPayloads(dbconn, containersDir)
 	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
 		t.Fatalf("expected corrupted stored bytes chunk-hash mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsPassesWithPhase2HashesPresent(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	logical := blocks.HashLogical(payload)
+	compressed := blocks.HashCompressed(payload)
+	physical := blocks.HashPhysical(payload)
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET block_hash = $1, compressed_hash = $2, physical_hash = $3 WHERE id = $4`,
+		logical,
+		compressed,
+		physical,
+		blockID,
+	); err != nil {
+		t.Fatalf("set phase2 hash fields: %v", err)
+	}
+
+	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
+		t.Fatalf("expected verifyBlockPayloads to pass with phase2 hashes present, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsPhysicalHashMismatchStage(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	logical := blocks.HashLogical(payload)
+	compressed := blocks.HashCompressed(payload)
+	physical := blocks.HashPhysical(payload)
+	physical[0] ^= 0xFF
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET block_hash = $1, compressed_hash = $2, physical_hash = $3 WHERE id = $4`,
+		logical,
+		compressed,
+		physical,
+		blockID,
+	); err != nil {
+		t.Fatalf("set hash fields for physical mismatch test: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), verifyErrPhysicalHashMismatch) {
+		t.Fatalf("expected physical hash mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsCompressedHashMismatchStage(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("ABCD")}, nil)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	logical := blocks.HashLogical(payload)
+	compressed := blocks.HashCompressed(payload)
+	physical := blocks.HashPhysical(payload)
+	compressed[0] ^= 0xFF
+
+	if _, err := dbconn.Exec(
+		`UPDATE storage_blocks SET block_hash = $1, compressed_hash = $2, physical_hash = $3 WHERE id = $4`,
+		logical,
+		compressed,
+		physical,
+		blockID,
+	); err != nil {
+		t.Fatalf("set hash fields for compressed mismatch test: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), verifyErrCompressedHashMismatch) {
+		t.Fatalf("expected compressed hash mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsPhysicalHashMismatchStageOnCompressedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("compress-physical")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate physical_hash: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalHashMismatch+":") {
+		t.Fatalf("expected compressed-block physical hash mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsDecryptFailureWithLegacyNullPhysicalHashOnCompressedAESBlock(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", strings.Repeat("ab", 32))
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("compress-auth")}, blocks.CodecAESGCM, storagecompression.CompressionZstd)
+
+	path, offset, storedSize, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	payload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	payload[packedStorageBlockAESGCMNonceSize] ^= 0xFF
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = NULL WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set physical_hash null: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") {
+		t.Fatalf("expected metadata_invalid category for decrypt failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "decrypt/transform decode failed") || !strings.Contains(err.Error(), "cipher: message authentication failed") {
+		t.Fatalf("expected precise decrypt/auth diagnostic, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsCompressedHashMismatchStageOnCompressedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{bytes.Repeat([]byte("compress-hash-payload-"), 128)}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	path, offset, storedSize, plaintextSize := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	originalCompressed := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	defaultCompressor, err := storagecompression.NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("create default zstd compressor: %v", err)
+	}
+	logicalBytes, err := defaultCompressor.Decompress(originalCompressed, plaintextSize)
+	if err != nil {
+		t.Fatalf("decompress original compressed bytes: %v", err)
+	}
+	mid := len(logicalBytes) / 2
+	firstFrame, err := defaultCompressor.Compress(logicalBytes[:mid])
+	if err != nil {
+		t.Fatalf("compress first zstd frame: %v", err)
+	}
+	secondFrame, err := defaultCompressor.Compress(logicalBytes[mid:])
+	if err != nil {
+		t.Fatalf("compress second zstd frame: %v", err)
+	}
+	payload := append(append([]byte(nil), firstFrame...), secondFrame...)
+	if bytes.Equal(payload, originalCompressed) {
+		t.Fatal("expected alternate zstd stream to differ from original fixture bytes")
+	}
+	overwritePackedStoredBytesForTest(t, path, offset, payload)
+
+	if _, err := dbconn.Exec(`
+		UPDATE storage_blocks
+		SET stored_size = $1,
+		    compressed_size = $2,
+		    physical_hash = $3
+		WHERE id = $4
+	`, int64(len(payload)), int64(len(payload)), blocks.HashPhysical(payload), blockID); err != nil {
+		t.Fatalf("update physical_hash for compressed hash mismatch: %v", err)
+	}
+
+	err = verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrCompressedHashMismatch+":") {
+		t.Fatalf("expected compressed hash mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsDecompressionFailureOnCompressedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("compress-decompress")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	corruptedCompressed := []byte("not-a-valid-zstd-stream")
+	overwritePackedStoredBytesForTest(t, path, offset, corruptedCompressed)
+
+	if _, err := dbconn.Exec(`
+		UPDATE storage_blocks
+		SET stored_size = $1,
+		    compressed_size = $2,
+		    physical_hash = $3,
+		    compressed_hash = $4
+		WHERE id = $5
+	`, int64(len(corruptedCompressed)), int64(len(corruptedCompressed)), blocks.HashPhysical(corruptedCompressed), blocks.HashCompressed(corruptedCompressed), blockID); err != nil {
+		t.Fatalf("update metadata for decompression failure fixture: %v", err)
+	}
+
+	err := verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), "metadata_invalid:") {
+		t.Fatalf("expected metadata_invalid category for decompression failure, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "decompress codec=zstd") {
+		t.Fatalf("expected precise decompression diagnostic, got: %v", err)
+	}
+}
+
+func TestVerifyBlockPayloadsDetectsLogicalHashMismatchStageOnCompressedBlock(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("compress-logical")}, blocks.CodecPlain, storagecompression.CompressionZstd)
+
+	path, offset, storedSize, plaintextSize := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	storedPayload := readPackedStoredBytesForTest(t, path, offset, storedSize)
+	compressor, err := storagecompression.NewZstdCompressor(3)
+	if err != nil {
+		t.Fatalf("create zstd compressor: %v", err)
+	}
+	logicalBytes, err := compressor.Decompress(storedPayload, plaintextSize)
+	if err != nil {
+		t.Fatalf("decompress original compressed fixture: %v", err)
+	}
+	logicalBytes[0] ^= 0x01
+	recompressed, err := compressor.Compress(logicalBytes)
+	if err != nil {
+		t.Fatalf("recompress mutated logical fixture: %v", err)
+	}
+	overwritePackedStoredBytesForTest(t, path, offset, recompressed)
+
+	if _, err := dbconn.Exec(`
+		UPDATE storage_blocks
+		SET stored_size = $1,
+		    compressed_size = $2,
+		    physical_hash = $3,
+		    compressed_hash = $4
+		WHERE id = $5
+	`, int64(len(recompressed)), int64(len(recompressed)), blocks.HashPhysical(recompressed), blocks.HashCompressed(recompressed), blockID); err != nil {
+		t.Fatalf("update metadata for logical hash mismatch fixture: %v", err)
+	}
+
+	err = verifyBlockPayloads(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected logical block hash mismatch category, got: %v", err)
 	}
 }
 

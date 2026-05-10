@@ -38,6 +38,7 @@ type CommandRunner func(spec CommandSpec) error
 type ScenarioConfig struct {
 	ColdkeepExecutable     string
 	Codec                  string
+	Compression            string
 	Execution              execution.Options
 	Seed                   int64
 	LargeFileSizeBytes     int64
@@ -65,6 +66,7 @@ func CoreScenarios(cfg ScenarioConfig) []BenchmarkCase {
 		{Name: "snapshot-creation", Run: scenarioSnapshotCreation(cfg), Execution: cfg.Execution},
 		{Name: "gc-after-churn", Run: scenarioGCAfterChurn(cfg), Execution: cfg.Execution},
 		{Name: "stats-inspect", Run: scenarioStatsInspect(cfg), Execution: cfg.Execution},
+		{Name: "verify-system-deep", Run: scenarioVerifySystemDeep(cfg), Execution: cfg.Execution},
 	}
 }
 
@@ -74,6 +76,9 @@ func (c ScenarioConfig) withDefaults() ScenarioConfig {
 	}
 	if strings.TrimSpace(c.Codec) == "" {
 		c.Codec = "plain"
+	}
+	if strings.TrimSpace(c.Compression) == "" {
+		c.Compression = "none"
 	}
 	if c.Seed == 0 {
 		c.Seed = defaultSeed
@@ -288,6 +293,25 @@ func scenarioStatsInspect(cfg ScenarioConfig) func(ctx BenchmarkContext) error {
 	}
 }
 
+func scenarioVerifySystemDeep(cfg ScenarioConfig) func(ctx BenchmarkContext) error {
+	return func(ctx BenchmarkContext) error {
+		datasetDir := filepath.Join(ctx.DataPath, "verify")
+		paths, bytesTotal, err := createMixedSizeDataset(datasetDir, cfg.MixedFileCount, cfg.MixedMinFileSizeBytes, cfg.MixedMaxFileSizeBytes, cfg.Seed+91)
+		if err != nil {
+			return err
+		}
+		if err := runColdkeep(ctx, cfg, "store-folder", "--codec", cfg.Codec, datasetDir); err != nil {
+			return err
+		}
+		if err := runColdkeep(ctx, cfg, "verify", "system", "--deep"); err != nil {
+			return err
+		}
+
+		RecordProcessed(len(paths), bytesTotal)
+		return nil
+	}
+}
+
 func createUniformDataset(dir string, fileCount int, fileSize int, seed int64, pattern string) (int64, error) {
 	if err := GenerateDataset(dir, DatasetConfig{
 		NumFiles:      fileCount,
@@ -389,6 +413,7 @@ func writeDeterministicFile(path string, size int64, seed int64) error {
 }
 
 func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error {
+	cfg = cfg.withDefaults()
 	if strings.TrimSpace(cfg.ColdkeepExecutable) == "" {
 		return fmt.Errorf("coldkeep executable cannot be empty")
 	}
@@ -396,6 +421,7 @@ func runColdkeep(ctx BenchmarkContext, cfg ScenarioConfig, args ...string) error
 	env := withScenarioEnv(os.Environ(), map[string]string{
 		"COLDKEEP_STORAGE_DIR": filepath.Join(ctx.RepoPath, "storage", "containers"),
 		"COLDKEEP_CODEC":       cfg.Codec,
+		"COLDKEEP_COMPRESSION": cfg.Compression,
 	}, cfg.ExtraEnv)
 
 	spec := CommandSpec{
