@@ -2,6 +2,10 @@
 //
 // Frozen transform ordering contract (v1.9):
 //
+// Canonical implementation entrypoints (v1.9):
+//   - Write path transform application: applyPackedBlockTransforms (store.go)
+//   - Read/verify staged inverse pipeline: verify.VerifyStoredBlock
+//
 // Write path:
 //  1. logical encode
 //  2. logical hash

@@ -1,6 +1,17 @@
-// Package transforms defines the composable transform pipeline used during
-// block persistence and retrieval. Each Transform operates on raw bytes,
-// making stages independently testable and composable without side effects.
+// Package transforms defines composable transform primitives and a pipeline
+// abstraction used for testability and future runtime unification.
+//
+// Runtime wiring status (v1.9):
+//   - Canonical write path is implemented in internal/storage/store.go via
+//     applyPackedBlockTransforms.
+//   - Canonical read/verify path is implemented in internal/verify via
+//     VerifyStoredBlock.
+//
+// TransformPipeline remains an internal preparation abstraction and is not the
+// authoritative runtime entrypoint for repository semantics in v1.9.
+//
+// Each Transform operates on raw bytes, making stages independently testable
+// and composable without side effects.
 //
 // # Three-layer storage model
 //
