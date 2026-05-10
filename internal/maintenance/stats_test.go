@@ -505,12 +505,19 @@ func TestCollectBlockStatsAndRunStatsExposure(t *testing.T) {
 	if blockStats.StoredBytes != 480 {
 		t.Fatalf("stored bytes mismatch: got=%d want=480", blockStats.StoredBytes)
 	}
-	if math.Abs(blockStats.CompressionRatio-1.0) > 1e-9 {
-		t.Fatalf("compression ratio mismatch for compression=none: got=%.9f want=1.000000000", blockStats.CompressionRatio)
+	if math.Abs(blockStats.CompressionSizeRatio-1.0) > 1e-9 {
+		t.Fatalf("compression size ratio mismatch for compression=none: got=%.9f want=1.000000000", blockStats.CompressionSizeRatio)
 	}
-	wantPhysicalRatio := float64(512) / float64(480)
-	if math.Abs(blockStats.PhysicalRatio-wantPhysicalRatio) > 1e-9 {
-		t.Fatalf("physical ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalRatio, wantPhysicalRatio)
+	if math.Abs(blockStats.CompressionFactor-1.0) > 1e-9 {
+		t.Fatalf("compression factor mismatch for compression=none: got=%.9f want=1.000000000", blockStats.CompressionFactor)
+	}
+	wantPhysicalSizeRatio := float64(480) / float64(512)
+	if math.Abs(blockStats.PhysicalSizeRatio-wantPhysicalSizeRatio) > 1e-9 {
+		t.Fatalf("physical size ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalSizeRatio, wantPhysicalSizeRatio)
+	}
+	wantPhysicalFactor := float64(512) / float64(480)
+	if math.Abs(blockStats.PhysicalFactor-wantPhysicalFactor) > 1e-9 {
+		t.Fatalf("physical factor mismatch: got=%.9f want=%.9f", blockStats.PhysicalFactor, wantPhysicalFactor)
 	}
 	wantFillRatio := float64(512) / float64(2*1024*1024)
 	if math.Abs(blockStats.FillRatio-wantFillRatio) > 1e-9 {
@@ -586,16 +593,24 @@ func TestCollectBlockStatsCompressionAggregatesMixedRepository(t *testing.T) {
 	if got := blockStats.CompressionCodecBreakdown["zstd"]; got != 1 {
 		t.Fatalf("compression codec breakdown mismatch for zstd: got=%d want=1", got)
 	}
-	if blockStats.CompressionRatio <= 1.0 {
-		t.Fatalf("expected compression ratio > 1.0 for repetitive zstd data, got=%.4f", blockStats.CompressionRatio)
+	if blockStats.CompressionFactor <= 1.0 {
+		t.Fatalf("expected compression factor > 1.0 for repetitive zstd data, got=%.4f", blockStats.CompressionFactor)
 	}
-	wantCompressionRatio := float64(1100) / float64(400)
-	if math.Abs(blockStats.CompressionRatio-wantCompressionRatio) > 1e-9 {
-		t.Fatalf("compression ratio mismatch: got=%.9f want=%.9f", blockStats.CompressionRatio, wantCompressionRatio)
+	wantCompressionSizeRatio := float64(400) / float64(1100)
+	if math.Abs(blockStats.CompressionSizeRatio-wantCompressionSizeRatio) > 1e-9 {
+		t.Fatalf("compression size ratio mismatch: got=%.9f want=%.9f", blockStats.CompressionSizeRatio, wantCompressionSizeRatio)
 	}
-	wantPhysicalRatio := float64(1100) / float64(450)
-	if math.Abs(blockStats.PhysicalRatio-wantPhysicalRatio) > 1e-9 {
-		t.Fatalf("physical ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalRatio, wantPhysicalRatio)
+	wantCompressionFactor := float64(1100) / float64(400)
+	if math.Abs(blockStats.CompressionFactor-wantCompressionFactor) > 1e-9 {
+		t.Fatalf("compression factor mismatch: got=%.9f want=%.9f", blockStats.CompressionFactor, wantCompressionFactor)
+	}
+	wantPhysicalSizeRatio := float64(450) / float64(1100)
+	if math.Abs(blockStats.PhysicalSizeRatio-wantPhysicalSizeRatio) > 1e-9 {
+		t.Fatalf("physical size ratio mismatch: got=%.9f want=%.9f", blockStats.PhysicalSizeRatio, wantPhysicalSizeRatio)
+	}
+	wantPhysicalFactor := float64(1100) / float64(450)
+	if math.Abs(blockStats.PhysicalFactor-wantPhysicalFactor) > 1e-9 {
+		t.Fatalf("physical factor mismatch: got=%.9f want=%.9f", blockStats.PhysicalFactor, wantPhysicalFactor)
 	}
 
 	stats, err := runStatsResultWithDB(ctx, dbconn)

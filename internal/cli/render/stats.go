@@ -149,10 +149,16 @@ func (HumanRenderer) RenderStats(w io.Writer, r *StatsResult) error {
 	if _, err := fmt.Fprintf(w, "  stored_bytes: %s\n", formatIECBytes(r.BlockLayout.StoredBytes)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  compression_ratio: %.3f\n", r.BlockLayout.CompressionRatio); err != nil {
+	if _, err := fmt.Fprintf(w, "  compression_size_ratio: %.3f\n", r.BlockLayout.CompressionSizeRatio); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  physical_ratio: %.3f\n", r.BlockLayout.PhysicalRatio); err != nil {
+	if _, err := fmt.Fprintf(w, "  compression_factor: %.3f\n", r.BlockLayout.CompressionFactor); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  physical_size_ratio: %.3f\n", r.BlockLayout.PhysicalSizeRatio); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  physical_factor: %.3f\n", r.BlockLayout.PhysicalFactor); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  compressed_blocks: %s\n", formatIntGrouped(r.BlockLayout.CompressedBlocks)); err != nil {

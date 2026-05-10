@@ -1278,7 +1278,7 @@ and handle edge cases (mixed repositories, legacy nulls, encryption).
 - `compressed_bytes = SUM(compressed_size or plaintext_size if compression_codec=none)`
 - `stored_bytes = SUM(stored_size)` (includes all overhead)
 - `compression_factor = logical_bytes / compressed_bytes`
-- `physical_ratio = logical_bytes / stored_bytes`
+- `physical_factor = logical_bytes / stored_bytes`
 
 **Repository types tested:**
 - Pure uncompressed (v1.8 legacy state)

@@ -49,8 +49,10 @@ type BlockStats struct {
 	LogicalBytes              int64            `json:"logical_bytes"`
 	CompressedBytes           int64            `json:"compressed_bytes"`
 	StoredBytes               int64            `json:"stored_bytes"`
-	CompressionRatio          float64          `json:"compression_ratio"`
-	PhysicalRatio             float64          `json:"physical_ratio"`
+	CompressionSizeRatio      float64          `json:"compression_size_ratio"`
+	CompressionFactor         float64          `json:"compression_factor"`
+	PhysicalSizeRatio         float64          `json:"physical_size_ratio"`
+	PhysicalFactor            float64          `json:"physical_factor"`
 	CompressedBlocks          int64            `json:"compressed_blocks"`
 	UncompressedBlocks        int64            `json:"uncompressed_blocks"`
 	FillRatio                 float64          `json:"avg_block_fill_ratio"`
@@ -448,11 +450,15 @@ func CollectBlockStats(ctx context.Context, dbconn *sql.DB) (BlockStats, error) 
 	`).Scan(&out.CompressedBlocks, &out.UncompressedBlocks); err != nil {
 		return BlockStats{}, fmt.Errorf("aggregate compressed/uncompressed block counts: %w", err)
 	}
+	if out.LogicalBytes > 0 {
+		out.CompressionSizeRatio = float64(out.CompressedBytes) / float64(out.LogicalBytes)
+		out.PhysicalSizeRatio = float64(out.StoredBytes) / float64(out.LogicalBytes)
+	}
 	if out.CompressedBytes > 0 {
-		out.CompressionRatio = float64(out.LogicalBytes) / float64(out.CompressedBytes)
+		out.CompressionFactor = float64(out.LogicalBytes) / float64(out.CompressedBytes)
 	}
 	if out.StoredBytes > 0 {
-		out.PhysicalRatio = float64(out.LogicalBytes) / float64(out.StoredBytes)
+		out.PhysicalFactor = float64(out.LogicalBytes) / float64(out.StoredBytes)
 	}
 
 	if out.StorageBlocks > 0 {

@@ -93,8 +93,10 @@ type BlockLayoutStats struct {
 	LogicalBytes              int64            `json:"logical_bytes"`
 	CompressedBytes           int64            `json:"compressed_bytes"`
 	StoredBytes               int64            `json:"stored_bytes"`
-	CompressionRatio          float64          `json:"compression_ratio"`
-	PhysicalRatio             float64          `json:"physical_ratio"`
+	CompressionSizeRatio      float64          `json:"compression_size_ratio"`
+	CompressionFactor         float64          `json:"compression_factor"`
+	PhysicalSizeRatio         float64          `json:"physical_size_ratio"`
+	PhysicalFactor            float64          `json:"physical_factor"`
 	CompressedBlocks          int64            `json:"compressed_blocks"`
 	UncompressedBlocks        int64            `json:"uncompressed_blocks"`
 	CompressionCodecBreakdown map[string]int64 `json:"compression_codec_breakdown,omitempty"`

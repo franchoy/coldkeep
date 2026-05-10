@@ -82,8 +82,10 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 			LogicalBytes:              3600,
 			CompressedBytes:           2800,
 			StoredBytes:               3440,
-			CompressionRatio:          1.2857142857,
-			PhysicalRatio:             1.0465116279,
+			CompressionSizeRatio:      0.7777777778,
+			CompressionFactor:         1.2857142857,
+			PhysicalSizeRatio:         0.9555555556,
+			PhysicalFactor:            1.0465116279,
 			CompressedBlocks:          3,
 			UncompressedBlocks:        1,
 			FillRatio:                 0.88,
@@ -130,8 +132,10 @@ func TestMapStatsResultMapsMaintenanceResultToStableModel(t *testing.T) {
 	if result.BlockLayout.CompressedBlocks != 3 || result.BlockLayout.UncompressedBlocks != 1 {
 		t.Fatalf("unexpected block layout compressed/uncompressed counts: %+v", result.BlockLayout)
 	}
-	assertFloatApprox(t, result.BlockLayout.CompressionRatio, 1.2857142857, 1e-9, "block layout compression_ratio")
-	assertFloatApprox(t, result.BlockLayout.PhysicalRatio, 1.0465116279, 1e-9, "block layout physical_ratio")
+	assertFloatApprox(t, result.BlockLayout.CompressionSizeRatio, 0.7777777778, 1e-9, "block layout compression_size_ratio")
+	assertFloatApprox(t, result.BlockLayout.CompressionFactor, 1.2857142857, 1e-9, "block layout compression_factor")
+	assertFloatApprox(t, result.BlockLayout.PhysicalSizeRatio, 0.9555555556, 1e-9, "block layout physical_size_ratio")
+	assertFloatApprox(t, result.BlockLayout.PhysicalFactor, 1.0465116279, 1e-9, "block layout physical_factor")
 	if got := result.BlockLayout.CodecDistribution["none"]; got != 4 {
 		t.Fatalf("unexpected block layout codec distribution: %+v", result.BlockLayout.CodecDistribution)
 	}
