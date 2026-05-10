@@ -354,7 +354,7 @@ func StoreScenarioWithMetrics(ctx BenchmarkContext) error {
 
 ### Planned Enhancements
 
-1. **Compression Codec Metrics**: Track gzip vs zstd-specific metrics
+1. **Compression Codec Metrics**: Track none vs zstd-specific metrics (v1.9-supported codecs)
 2. **Block-Level Analysis**: Detailed metrics per block for optimization
 3. **Historical Trending**: Compare metrics across release versions
 4. **Anomaly Detection**: Alert on regression in compression ratios

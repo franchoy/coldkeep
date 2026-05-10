@@ -219,7 +219,7 @@ type Result struct {
 ### Ready for Integration
 1. **Scenario Integration** — Use RecordStorage/CPU/Memory in scenarios
 2. **Report Generation** — Include metrics in benchmark reports
-3. **Compression Codec Metrics** — Track gzip vs zstd differences
+3. **Compression Codec Metrics** — Track none vs zstd differences (v1.9-supported codecs)
 4. **Historical Trending** — Compare across releases
 
 ### Future Enhancements
