@@ -198,7 +198,12 @@ not redefine logical identity.
 **Transform State (v1.9 semantics):**
 - `codec` (none | aes-gcm): Persisted encryption transform state for each storage block
 - `compression_codec` (none | zstd): Compression applied during write
+- `compression_level` (INTEGER | NULL): Compression level used when `compression_codec=zstd`; NULL for `compression_codec=none`
 - `compressed_size` (bytes): Size after compression stage (for v1.9+ writes, always populated; equals `plaintext_size` when compression_codec=none; legacy rows may be NULL)
+- `compression_ratio` (REAL | NULL): Persisted per-block compression size ratio, defined as `compressed_size / plaintext_size`
+   - `1.0` means no size change at compression stage
+   - `< 1.0` means compression reduced payload size
+   - Distinct from user-facing `CompressionFactor = LogicalBytes / CompressedBytes`
 - `stored_size` (bytes): Final on-disk bytes in container (including encryption overhead)
 - `plaintext_size` (bytes): Encoded logical block payload size (pre-compression, pre-encryption)
 
@@ -206,6 +211,7 @@ not redefine logical identity.
 - `logical_hash` = `block_hash`: Content hash before any transforms
 - `compressed_hash` (SHA256 | NULL): Compression-stage integrity (legacy blocks may be NULL; v1.9+ writes set this even when compression_codec=none)
 - `physical_hash` (SHA256 | NULL): On-disk state after all transforms (v1.9+ writes set this for both none and aes-gcm; legacy rows may be NULL)
+- `payload_hash` (TEXT | NULL): **DEPRECATED** lowercase-hex mirror of `block_hash` for compatibility/observability only; never authoritative for identity
 
 **Container Location:**
 - `container_id`: Foreign key to `container` table

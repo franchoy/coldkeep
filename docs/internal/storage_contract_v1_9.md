@@ -97,6 +97,19 @@ hash fields, sizes, placement metadata) to determine behavior for each block.
 
 Historical metadata is immutable interpretation truth.
 
+Explicit `storage_blocks` field semantics in v1.9:
+
+- `compression_level`: populated for `compression_codec='zstd'`; NULL for `compression_codec='none'`.
+- `compression_ratio`: persisted per-block size ratio defined as
+	`compressed_size / plaintext_size`.
+- `payload_hash`: **deprecated** lowercase-hex mirror of `block_hash` kept for
+	compatibility/observability only and never authoritative.
+
+Ratio/factor distinction (frozen):
+
+- persisted per-block `compression_ratio` = `compressed_size / plaintext_size`
+- user-facing compression factor = `logical / compressed`
+
 ## 6. Compression Semantics (Frozen)
 
 Compression contract:

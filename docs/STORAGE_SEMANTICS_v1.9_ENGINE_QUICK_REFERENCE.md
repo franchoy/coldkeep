@@ -75,7 +75,10 @@ type StoredBlock struct {
     // Transform state (IMMUTABLE after write)
     Codec          string         // "none" | "aes-gcm"
     CompressionCodec string       // "none" | "zstd"
+    CompressionLevel *int         // set when compression_codec="zstd", nil for "none"
     CompressedSize int64          // Bytes after compression stage (v1.9+ writes always populate; equals PlaintextSize if compression_codec=none; legacy rows may be null)
+    CompressionRatio float64      // compressed_size / plaintext_size (persisted per-block size ratio)
+                    // Distinct from user-facing CompressionFactor (logical / compressed)
     StoredSize     int64          // On-disk bytes
     PlaintextSize  int64          // Encoded logical block payload (pre-compression)
     
@@ -83,6 +86,7 @@ type StoredBlock struct {
     LogicalHash    []byte         // Encoded block (required)
     CompressedHash []byte         // After compression stage (legacy blocks may be null)
     PhysicalHash   []byte         // Persisted-byte hash (legacy blocks may be null)
+    PayloadHash    string         // DEPRECATED mirror of block_hash (observability/compat only)
     
     // Location
     ContainerID    int64
@@ -92,6 +96,9 @@ type StoredBlock struct {
     ChunkRefs      []ChunkRef      // [{chunk_id, offset_in_block, size_in_block}]
 }
 ```
+
+`storage_blocks.payload_hash` is a deprecated lowercase-hex mirror of
+`storage_blocks.block_hash` and is not an identity authority field.
 
 **Engine Rule:** Read `codec` + `compression_codec` fields; ignore repository config.
 

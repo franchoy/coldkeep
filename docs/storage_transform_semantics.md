@@ -146,6 +146,36 @@ For v1.9+ writes, `compressed_size` is always populated.
 When `compression_codec=none`, `compressed_size = plaintext_size`.
 Only legacy rows may have `compressed_size = NULL`.
 
+### `compression_level`
+
+`compression_level` records the zstd level used for the block when
+`compression_codec=zstd`.
+
+Meaning:
+
+- persisted per-block compression parameter for reproducibility/observability
+- NULL when `compression_codec=none`
+
+### `compression_ratio`
+
+`compression_ratio` is the persisted per-block size ratio:
+
+`compressed_size / plaintext_size`
+
+Meaning:
+
+- ratio view of per-block compression outcome (`<1.0` means reduced size)
+- distinct from user-facing compression factor (`logical / compressed`)
+
+### `payload_hash` (deprecated)
+
+`payload_hash` is a deprecated lowercase-hex mirror of `block_hash`.
+
+Meaning:
+
+- compatibility/observability mirror only
+- never authoritative for identity; `block_hash` remains canonical
+
 ### `stored_size`
 
 `stored_size` is the size in bytes of the physical payload.
