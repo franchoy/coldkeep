@@ -30,10 +30,11 @@ import (
 // is always fatal. This anchors restore correctness to the logical layer regardless
 // of which transforms are active.
 //
-// Compression insertion point (Phase 3):
+// v1.9 reverse transform behavior:
 //
-//	reverseTransforms will apply decompression after decryption.
-//	verifyLogicalHash and decodeLogicalBlock require no changes.
+//	verify physical_hash (if present) -> decrypt (if aes-gcm)
+//	-> verify compressed_hash (if present) -> decompress (if zstd)
+//	-> verify block_hash -> decode logical block.
 type StorageBlockReader struct {
 	db            *sql.DB
 	containersDir string
@@ -92,12 +93,12 @@ func (e *HashMismatchError) Unwrap() error {
 	}
 }
 
-// NewStorageBlockReader creates a BlockReader for v1.8 block-based storage.
+// NewStorageBlockReader creates a BlockReader for storage_blocks-based block storage.
 func NewStorageBlockReader(db *sql.DB, containersDir string) *StorageBlockReader {
 	return &StorageBlockReader{
 		db:            db,
 		containersDir: containersDir,
-		verifyHash:    true, // mandatory verification in Phase 3+
+		verifyHash:    true, // fail-closed logical hash verification is mandatory
 	}
 }
 
@@ -106,7 +107,7 @@ func NewStorageBlockReader(db *sql.DB, containersDir string) *StorageBlockReader
 // Read pipeline (reverse of write):
 //  1. Load block metadata from storage_blocks
 //  2. Read stored bytes from container
-//  3. Reverse transforms (decrypt and/or future stages)
+//  3. Reverse transforms (verify/decrypt/decompress per block metadata)
 //  4. Verify logical hash (mandatory, fail-closed)
 //  5. Decode block to reconstruct EncodedBlock
 func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blocks.EncodedBlock, error) {

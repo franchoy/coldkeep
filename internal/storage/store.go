@@ -2359,7 +2359,7 @@ func storeFileWithStorageContextAndRuntimeResultWithPolicy(
 	}
 	validationContainerDir := runtime.validationContainerDir
 
-	// Phase 3 store flow pattern:
+	// Current store flow pattern:
 	//  1. resolve one active chunker for the whole operation
 	//  2. capture one active version from that chunker
 	//  3. claim/create the logical file recipe owner with that version
@@ -2900,15 +2900,11 @@ const packedStorageBlockAESGCMNonceSize = 12
 //   computed before any transform is applied and never changes.
 //
 // Layer 2 (transformed payload): output of applyPackedBlockTransforms.
-//   Currently: AES-GCM ciphertext. Future: compressed + encrypted bytes.
+//   Compression runs first (store-if-smaller), then encryption if codec=aes-gcm.
 //   Wire format for AES-GCM: nonce(12B) || ciphertext.
 //
 // Layer 3 (persisted payload): bytes actually appended to the container.
-//   Currently identical to Layer 2. Future physical_hash would apply here.
-//
-// Compression insertion point (Phase 3):
-//   Add a compression stage inside applyPackedBlockTransforms before encryption.
-//   No changes to block_hash, DB schema, or restore logic required.
+//   physical_hash is computed over this exact byte sequence.
 // ---------------------------------------------------------------------------
 
 // packedBlockEncoded holds the result of the build + encode + hash stage.
@@ -2994,7 +2990,7 @@ func applyPackedBlockTransforms(
 	}
 
 	// Hash pre-encryption bytes at the transform boundary.
-	// With codec=none in Phase 2, this equals logical block hash.
+	// With compression_codec=none, this equals logical block hash.
 	compressedHash := blocks.HashCompressed(compressedPayload)
 
 	// Stage 2b: Apply encryption transformer (or identity for plain codec).
@@ -3130,7 +3126,7 @@ func persistPackedBlockMetadata(
 //
 // Atomic order (single transaction boundary):
 //  1. Build block and encode to plaintext bytes; compute logical hash
-//  2. Apply transforms (encrypt and/or future stages)
+//  2. Apply transforms (compress then encrypt when configured)
 //  3. Persist payload to container
 //  4. Persist storage_blocks + chunk_block_refs metadata
 //

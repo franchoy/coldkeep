@@ -11,21 +11,21 @@ type Transformer interface {
 
 // TransformMetadata carries explicit transformation information through the persistence pipeline.
 // It threads compression metadata, payload information, and hash data from encode stage
-// through transform stage to final persistence, enabling future phases to activate
-// compression and validation without invasive refactoring.
+// through transform stage to final persistence for the current v1.9 write/read contract.
 type TransformMetadata struct {
-	// PayloadHash is the SHA256 hex digest of the plaintext block bytes
-	// (before any compression or encryption). Used for incremental validation
-	// and future deduplication.
+	// PayloadHash is a compatibility/observability mirror of the logical block hash
+	// (lowercase-hex SHA256 of encoded plaintext block bytes before transforms).
+	// storage_blocks.block_hash remains the authoritative logical identity.
 	PayloadHash string
 
-	// CompressionCodec identifies the compression algorithm applied.
-	// Current values: 'none' (no compression)
-	// Future values: 'gzip', 'zstd', etc.
+	// CompressionCodec identifies the compression stage outcome persisted per block.
+	// v1.9 values are 'none' and 'zstd'. Store-if-smaller may keep 'none' even when
+	// zstd is configured for the repository.
 	CompressionCodec string
 
-	// CompressionRatio is the ratio of stored_size to plaintext_size.
-	// Typically 1.0 when no compression is used.
-	// Values < 1.0 indicate compression achieved, > 1.0 indicate expansion.
+	// CompressionRatio is compressed_payload_size / encoded_plaintext_size
+	// for the pre-encryption compression stage.
+	// 1.0 indicates no effective compression (including store-if-smaller fallback),
+	// values < 1.0 indicate successful size reduction.
 	CompressionRatio float64
 }
