@@ -138,7 +138,11 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   payload_hash TEXT,
   compressed_hash BLOB,
   physical_hash BLOB,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (
+    (compression_codec = 'none' AND compression_level IS NULL) OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_storage_blocks_container_id ON storage_blocks(container_id);

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
@@ -425,6 +426,50 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "check (compression_codec in ('none', 'zstd'))") {
 		t.Fatalf("expected storage_blocks DDL to constrain compression_codec to none/zstd, got %q", bootstrapCompressionCodec)
+	}
+	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "compression_codec = 'none' and compression_level is null") {
+		t.Fatalf("expected storage_blocks DDL to enforce none=>NULL compression_level contract, got %q", bootstrapCompressionCodec)
+	}
+	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "compression_codec = 'zstd' and compression_level between 1 and 9") {
+		t.Fatalf("expected storage_blocks DDL to enforce zstd=>[1..9] compression_level contract, got %q", bootstrapCompressionCodec)
+	}
+}
+
+func TestRunSQLiteStorageTransformMetadataMigrationRejectsInvalidCompressionLevelContract(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable sqlite foreign_keys: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create schema_version: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		CREATE TABLE storage_blocks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			compression_codec TEXT,
+			compression_level INTEGER
+		)
+	`); err != nil {
+		t.Fatalf("create storage_blocks: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO storage_blocks (compression_codec, compression_level) VALUES ('none', 3)`); err != nil {
+		t.Fatalf("seed invalid storage_blocks row: %v", err)
+	}
+
+	err = runSQLiteStorageTransformMetadataMigration(dbconn, context.Background())
+	if err == nil {
+		t.Fatal("expected compression_level contract validation failure")
+	}
+	if !strings.Contains(err.Error(), "invalid storage_blocks compression_level contract") {
+		t.Fatalf("expected compression_level contract error, got: %v", err)
 	}
 }
 

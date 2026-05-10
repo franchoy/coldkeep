@@ -467,6 +467,10 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   compression_codec TEXT NOT NULL DEFAULT 'none',
   CONSTRAINT storage_blocks_compression_codec_check CHECK (compression_codec IN ('none', 'zstd')),
   compression_level INTEGER,
+  CONSTRAINT storage_blocks_compression_level_contract_check CHECK (
+    (compression_codec = 'none' AND compression_level IS NULL) OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  ),
   compressed_size BIGINT CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size BIGINT NOT NULL CHECK (stored_size > 0),
   container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
@@ -536,6 +540,42 @@ END
 $$;
 
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER;
+DO $$
+DECLARE
+  invalid_contract_count BIGINT;
+BEGIN
+  SELECT COUNT(*)
+  INTO invalid_contract_count
+  FROM storage_blocks
+  WHERE NOT (
+    (compression_codec = 'none' AND compression_level IS NULL)
+    OR
+    (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+  );
+
+  IF invalid_contract_count > 0 THEN
+    RAISE EXCEPTION 'invalid storage_blocks compression_level contract: % rows violate (none=>NULL, zstd=>1..9)', invalid_contract_count;
+  END IF;
+END
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'storage_blocks_compression_level_contract_check'
+      AND conrelid = 'storage_blocks'::regclass
+  ) THEN
+    ALTER TABLE storage_blocks
+      ADD CONSTRAINT storage_blocks_compression_level_contract_check
+      CHECK (
+        (compression_codec = 'none' AND compression_level IS NULL)
+        OR
+        (compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+      );
+  END IF;
+END
+$$;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA;

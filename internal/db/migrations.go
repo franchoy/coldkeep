@@ -597,7 +597,12 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 			block_hash BLOB NOT NULL,
 			compressed_hash BLOB,
 			physical_hash BLOB,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CHECK (
+				(compression_codec = 'none' AND compression_level IS NULL)
+				OR
+				(compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+			)
 		)
 	`); err != nil {
 		return fmt.Errorf("create storage_blocks table: %w", err)
@@ -700,6 +705,25 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 		}
 		if unsupportedCount > 0 {
 			return fmt.Errorf("unsupported non-empty storage_blocks.compression_codec values detected: %d rows (expected none|zstd)", unsupportedCount)
+		}
+
+		// SQLite cannot add a new CHECK constraint to an existing table with
+		// ALTER TABLE, so enforce the v1.9 compression_level contract here for
+		// upgraded repositories and fail fast on invalid legacy rows.
+		var invalidContractCount int64
+		if err := dbconn.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM storage_blocks
+			WHERE NOT (
+				(compression_codec = 'none' AND compression_level IS NULL)
+				OR
+				(compression_codec = 'zstd' AND compression_level BETWEEN 1 AND 9)
+			)
+		`).Scan(&invalidContractCount); err != nil {
+			return fmt.Errorf("validate storage_blocks compression_level contract: %w", err)
+		}
+		if invalidContractCount > 0 {
+			return fmt.Errorf("invalid storage_blocks compression_level contract: %d rows violate (none=>NULL, zstd=>1..9)", invalidContractCount)
 		}
 	}
 

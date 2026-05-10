@@ -75,7 +75,7 @@ type StoredBlock struct {
     // Transform state (IMMUTABLE after write)
     Codec          string         // "none" | "aes-gcm"
     CompressionCodec string       // "none" | "zstd"
-    CompressionLevel *int         // set when compression_codec="zstd", nil for "none"
+    CompressionLevel *int         // MUST be nil when compression_codec="none"; MUST be [1..9] when "zstd"
     CompressedSize int64          // Bytes after compression stage (v1.9+ writes always populate; equals PlaintextSize if compression_codec=none; legacy rows may be null)
     CompressionRatio float64      // compressed_size / plaintext_size (persisted per-block size ratio)
                     // Distinct from user-facing CompressionFactor (logical / compressed)
@@ -101,6 +101,10 @@ type StoredBlock struct {
 `storage_blocks.block_hash` and is not an identity authority field.
 
 **Engine Rule:** Read `codec` + `compression_codec` fields; ignore repository config.
+
+**Frozen DB contract:** `compression_codec='none'` requires
+`compression_level IS NULL`; `compression_codec='zstd'` requires
+`compression_level BETWEEN 1 AND 9`.
 
 ---
 

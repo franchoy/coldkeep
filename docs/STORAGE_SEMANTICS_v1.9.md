@@ -199,6 +199,7 @@ not redefine logical identity.
 - `codec` (none | aes-gcm): Persisted encryption transform state for each storage block
 - `compression_codec` (none | zstd): Compression applied during write
 - `compression_level` (INTEGER | NULL): Compression level used when `compression_codec=zstd`; NULL for `compression_codec=none`
+- **Frozen validity contract:** `compression_codec=none` => `compression_level IS NULL`; `compression_codec=zstd` => `compression_level` in `[1,9]`
 - `compressed_size` (bytes): Size after compression stage (for v1.9+ writes, always populated; equals `plaintext_size` when compression_codec=none; legacy rows may be NULL)
 - `compression_ratio` (REAL | NULL): Persisted per-block compression size ratio, defined as `compressed_size / plaintext_size`
    - `1.0` means no size change at compression stage
@@ -223,6 +224,7 @@ not redefine logical identity.
 - Transform stages match write-path ordering (Section 1.1)
 - Hash verification follows read-path ordering (Section 1.2)
 - **Metadata reflects reality at write time:** for v1.9+ writes with compression_codec=none, compressed_hash equals logical_hash and compressed_size equals plaintext_size; legacy blocks may keep NULL metadata fields.
+- **Metadata is schema-validated:** rows violating the `compression_codec`/`compression_level` contract are invalid and rejected by migration/schema checks.
 
 ### 3.2 Chunk (chunk table)
 
