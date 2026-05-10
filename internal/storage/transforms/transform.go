@@ -14,12 +14,12 @@
 //	├─────────────────────────────────────────────────────────────────┤
 //	│ Layer 2 — Transformed payload                                   │
 //	│   output of the transform pipeline (e.g. compressed, encrypted) │
-//	│   → future: compressed_hash = sha256(post-compression bytes)    │
+//	│   → compressed_hash = sha256(post-compression bytes)             │
 //	│   → not a dedup key; diagnostic / repair checkpoint only        │
 //	├─────────────────────────────────────────────────────────────────┤
 //	│ Layer 3 — Persisted payload                                     │
 //	│   exact bytes written to the container file                     │
-//	│   → future: physical_hash = sha256(persisted bytes)             │
+//	│   → physical_hash = sha256(persisted bytes)                     │
 //	│   → corruption detection, transfer validation                   │
 //	└─────────────────────────────────────────────────────────────────┘
 //
@@ -30,9 +30,9 @@
 // regardless of which transforms are active. Dedup, GC, and restore
 // all operate against this hash.
 //
-// Future hashes (compressed_hash, physical_hash) will be computed at
-// their respective layer boundaries and stored in separate columns.
-// They carry no dedup semantics.
+// compressed_hash and physical_hash are computed at their respective
+// layer boundaries and stored in separate columns. They carry no dedup
+// semantics.
 //
 // # Transform ordering invariant (frozen v1.9)
 //
@@ -60,10 +60,10 @@
 // transform stages. Changing stage order changes repository semantics and is
 // intentionally considered a new major storage contract.
 //
-// # Future compression insertion point
+// # Compression insertion point (v1.9)
 //
-// When compression is introduced (Phase 3), it will be inserted as transform[0]
-// (before encryption), so the write path becomes:
+// Compression is inserted as transform[0] (before encryption), so the
+// write path is:
 //
 //	logical block → compress → encrypt → persisted payload
 //
