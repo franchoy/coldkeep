@@ -184,14 +184,14 @@ PhysicalRatio = LogicalBytes / StoredBytes  // Always ≤ 1.0
 ```
 Standard Verify:
   1. Load block metadata
-  2. Open container; read bytes at block_offset...block_offset+stored_size
+  2. Open container; read bytes at container_offset...container_offset+stored_size
   3. IF physical_hash present: SHA256(persisted_bytes) must match
   4. IF codec=aes-gcm: Decrypt (auth failure = corruption)
   5. IF compressed_hash present: SHA256(compressed_bytes) must match
   6. IF compression_codec=zstd: Decompress
   7. SHA256(logical_bytes) must == logical_hash
-  8. Decode packed block structure (magic, version, chunk_count, offsets)
-  9. Validate chunk_block_map references (contiguous, all chunks exist)
+  8. Decode logical block structure (magic, version, chunk_count, offsets)
+  9. Validate chunk_block_refs references (contiguous, all chunks exist)
 ```
 
 **Engine Implication:** All stages are required. Missing hashes are skipped gracefully (legacy). No stages can be reordered.

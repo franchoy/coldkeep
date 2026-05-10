@@ -43,7 +43,7 @@ compute_logical_hash (SHA256 of encoded block before transformation)
   Write to container file at current_offset
   fsync to disk
   Update block metadata in DB:
-    - block_offset (position in container)
+      - container_offset (position in container; storage_blocks.container_offset)
     - stored_size (bytes written to disk)
       - plaintext_size (encoded logical block payload size)
     - logical_hash (input to transformations)
@@ -61,7 +61,7 @@ compute_logical_hash (SHA256 of encoded block before transformation)
 All verify and restore operations traverse transforms in reverse:
 
 ```
-persisted_bytes (container file at block_offset...block_offset+stored_size)
+persisted_bytes (container file at container_offset...container_offset+stored_size)
     ↓
 [verify physical_hash IF present]
    Check: SHA256(persisted_payload_bytes) == physical_hash
@@ -192,8 +192,7 @@ not redefine logical identity.
 ### 3.1 Storage Block (storage_blocks table)
 
 **Core Identity:**
-- `block_id` (PK): Unique identifier
-- `packed_json` (NULLABLE): Legacy v1.6-v1.8 packed block structure (deprecated read-only)
+- `id` (PK): Unique storage block identifier
 - `block_hash` (REQUIRED): SHA256 of logical block contents (before compression/encryption)
 
 **Transform State (v1.9 semantics):**
@@ -210,8 +209,8 @@ not redefine logical identity.
 
 **Container Location:**
 - `container_id`: Foreign key to `container` table
-- `block_offset`: Byte offset in container file
-- `chunk_block_map`: JSON array of `{chunk_id, offset_in_block, size_in_block}`
+- `container_offset`: Byte offset in container file
+- Chunk placement mapping is stored in `chunk_block_refs` rows keyed by `block_id`
 
 **Semantics (FROZEN):**
 - A block is an immutable collection of chunk payloads encoded, optionally compressed, optionally encrypted
@@ -219,10 +218,10 @@ not redefine logical identity.
 - Hash verification follows read-path ordering (Section 1.2)
 - **Metadata reflects reality at write time:** for v1.9+ writes with compression_codec=none, compressed_hash equals logical_hash and compressed_size equals plaintext_size; legacy blocks may keep NULL metadata fields.
 
-### 3.2 Chunk (chunks table)
+### 3.2 Chunk (chunk table)
 
 **Identity:**
-- `chunk_id` (PK): Unique per logical file position
+- `id` (PK): Unique chunk identifier
 - `chunk_hash` (SHA256): Content-based dedup key (plaintext chunk before encoding)
 
 **Status:**
@@ -231,8 +230,8 @@ not redefine logical identity.
 - `pin_count`: Restore operations holding chunk in memory (temporary pins)
 
 **Containment:**
-- One `blocks` row references this chunk via `chunk_block_map`
-- `blocks` row location determines container location
+- One `chunk_block_refs` row references this chunk via `chunk_id`
+- `chunk_block_refs.block_id -> storage_blocks.id` determines container placement and in-block slice metadata
 
 **Semantics (FROZEN):**
 - Chunks are immutable content fragments identified by plaintext hash
@@ -243,14 +242,11 @@ not redefine logical identity.
 ### 3.3 Chunk-Block Mapping
 
 **Structure:**
-- `chunk_block_map` JSON field in `blocks` row:
-  ```json
-  [
-    { "chunk_id": 1, "offset_in_block": 0, "size_in_block": 1048576 },
-    { "chunk_id": 2, "offset_in_block": 1048576, "size_in_block": 2097152 },
-    ...
-  ]
-  ```
+- `chunk_block_refs` table row (one row per chunk):
+   - `chunk_id` (PK, FK -> chunk.id)
+   - `block_id` (FK -> storage_blocks.id)
+   - `offset_in_block` (byte offset in decoded logical block payload)
+   - `size_in_block` (chunk payload length)
 
 **Semantics (FROZEN):**
 - One block can contain multiple chunks (packing optimization)
@@ -473,11 +469,11 @@ FOR each block in repository:
    3. Verify physical_hash IF present
    4. Verify compressed_hash IF present (expected for v1.9+ writes, including compression_codec=none)
    5. Decode block structure
-   6. Validate chunk_block_map references
+   6. Validate chunk_block_refs references
    7. Check all referenced chunks exist and are COMPLETED
    
 Success: Block is readable and chunks are valid
-Failure: Report error with block_id, container_id, failure reason
+Failure: Report error with storage_blocks.id, container_id, failure reason
 ```
 
 **Deep Verify (FROZEN):**
