@@ -145,14 +145,17 @@ func TestStep613StatsRatiosMathematicallyCorrect(t *testing.T) {
 		t.Errorf("StoredBytes: expected %d, got %d", expectedStored, stats.StoredBytes)
 	}
 
-	ratio := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
-	if math.Abs(ratio-1.0) > 0.001 {
-		t.Errorf("Uncompressed CompressionRatio should be ~1.0, got %.3f", ratio)
+	// compressionFactor = logical/compressed (factor ≥1.0 when effective compression;
+	// distinct from benchmark CompressionRatio = compressed/logical, 0-1 size fraction).
+	compressionFactor := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
+	if math.Abs(compressionFactor-1.0) > 0.001 {
+		t.Errorf("uncompressed: compressionFactor (logical/compressed) should be ~1.0, got %.3f", compressionFactor)
 	}
 
-	physicalRatio := float64(stats.LogicalBytes) / float64(stats.StoredBytes)
-	if physicalRatio <= 0 || physicalRatio > 1.0 {
-		t.Errorf("PhysicalRatio out of bounds (0,1.0]: %.3f", physicalRatio)
+	// physicalFactor = logical/stored (≤1.0 because stored includes block format overhead).
+	physicalFactor := float64(stats.LogicalBytes) / float64(stats.StoredBytes)
+	if physicalFactor <= 0 || physicalFactor > 1.0 {
+		t.Errorf("physicalFactor (logical/stored) out of bounds (0,1.0]: %.3f", physicalFactor)
 	}
 
 	if stats.UncompressedBlocks != expectedUncompressedBlocks {
@@ -190,9 +193,10 @@ func TestStep613StatsCompressedBytesRatio(t *testing.T) {
 		t.Errorf("CompressedBytes should be < LogicalBytes for compressible data")
 	}
 
-	ratio := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
-	if ratio <= 1.0 {
-		t.Errorf("CompressionRatio should be > 1.0 for compressed data, got %.3f", ratio)
+	// compressionFactor = logical/compressed; > 1.0 means compression reduced size.
+	compressionFactor := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
+	if compressionFactor <= 1.0 {
+		t.Errorf("compressionFactor (logical/compressed) should be > 1.0 for compressed data, got %.3f", compressionFactor)
 	}
 
 	if stats.CompressedBlocks != expectedCompressedBlocks {
@@ -338,17 +342,19 @@ func TestStep613StatsRatioBoundaries(t *testing.T) {
 		t.Errorf("All byte counts should be positive: L=%d C=%d S=%d", stats.LogicalBytes, stats.CompressedBytes, stats.StoredBytes)
 	}
 
-	compressionRatio := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
-	physicalRatio := float64(stats.LogicalBytes) / float64(stats.StoredBytes)
+	// compressionFactor = logical/compressed (≥1.0 with any effective compression).
+	// physicalFactor = logical/stored (≤compressionFactor because stored includes overhead beyond compression).
+	compressionFactor := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
+	physicalFactor := float64(stats.LogicalBytes) / float64(stats.StoredBytes)
 
-	if compressionRatio < 1.0 {
-		t.Errorf("CompressionRatio should be >= 1.0, got %.3f", compressionRatio)
+	if compressionFactor < 1.0 {
+		t.Errorf("compressionFactor (logical/compressed) should be >= 1.0, got %.3f", compressionFactor)
 	}
-	if physicalRatio <= 0 {
-		t.Errorf("PhysicalRatio should be > 0, got %.3f", physicalRatio)
+	if physicalFactor <= 0 {
+		t.Errorf("physicalFactor (logical/stored) should be > 0, got %.3f", physicalFactor)
 	}
-	if physicalRatio > compressionRatio {
-		t.Errorf("PhysicalRatio (%.3f) should be <= CompressionRatio (%.3f)", physicalRatio, compressionRatio)
+	if physicalFactor > compressionFactor {
+		t.Errorf("physicalFactor (%.3f) should be <= compressionFactor (%.3f): stored includes transform overhead", physicalFactor, compressionFactor)
 	}
 }
 
@@ -392,10 +398,11 @@ func TestStep613StatsByteAccountingConsistency(t *testing.T) {
 	}
 
 	if sumLogical > 0 && sumCompressed > 0 {
-		ratioFormula := float64(sumLogical) / float64(sumCompressed)
-		ratioStats := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
-		if math.Abs(ratioFormula-ratioStats) > 0.001 {
-			t.Errorf("Ratio mismatch: direct=%.3f, stats=%.3f", ratioFormula, ratioStats)
+		// compressionFactor (logical/compressed) from direct query vs CollectBlockStats must agree.
+		factorFormula := float64(sumLogical) / float64(sumCompressed)
+		factorStats := float64(stats.LogicalBytes) / float64(stats.CompressedBytes)
+		if math.Abs(factorFormula-factorStats) > 0.001 {
+			t.Errorf("compressionFactor mismatch: direct=%.3f, stats=%.3f", factorFormula, factorStats)
 		}
 	}
 }
