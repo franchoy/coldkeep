@@ -54,6 +54,7 @@ func TestV110S0ChunkReuseBoundsStabilizationHarness(t *testing.T) {
 			if err := os.MkdirAll(pathsDir, 0o755); err != nil {
 				t.Fatalf("mkdir input dir: %v", err)
 			}
+			runToken := fmt.Sprintf("%d", time.Now().UnixNano())
 
 			storedIDs := make([]int64, 0, 256)
 			snapshotIDs := make([]string, 0, 32)
@@ -93,8 +94,12 @@ func TestV110S0ChunkReuseBoundsStabilizationHarness(t *testing.T) {
 				if round%7 == 6 && len(storedIDs) > 8 {
 					victim := storedIDs[rng.Intn(len(storedIDs)-4)]
 					if remErr := storage.RemoveFileWithDB(dbconn, victim); remErr != nil {
-						writeFailureArtifactV110S0(t, dbconn, codec, round, "remove_file", remErr)
-						t.Fatalf("remove file round=%d file_id=%d: %v", round, victim, remErr)
+						if strings.Contains(remErr.Error(), "retained by one or more snapshots") {
+							t.Logf("round=%d file_id=%d remove skipped: %v", round, victim, remErr)
+						} else {
+							writeFailureArtifactV110S0(t, dbconn, codec, round, "remove_file", remErr)
+							t.Fatalf("remove file round=%d file_id=%d: %v", round, victim, remErr)
+						}
 					}
 				}
 
@@ -110,7 +115,7 @@ func TestV110S0ChunkReuseBoundsStabilizationHarness(t *testing.T) {
 				}
 
 				if round%11 == 10 {
-					snapID := fmt.Sprintf("v110-s0-%s-%03d", strings.ToLower(string(codec)), round)
+					snapID := fmt.Sprintf("v110-s0-%s-%s-%03d", strings.ToLower(string(codec)), runToken, round)
 					if err := snapshot.CreateSnapshotWithOptions(context.Background(), dbconn, snapshot.SnapshotCreateOptions{
 						ID:   snapID,
 						Type: "full",
@@ -446,7 +451,7 @@ func collectChunkRefsV110S0(t *testing.T, dbconn *sql.DB) []chunkRefV110S0 {
 	rows, err := dbconn.Query(`
 		SELECT logical_file_id, chunk_id, chunk_order
 		FROM file_chunk
-		ORDER BY id DESC
+		ORDER BY logical_file_id DESC, chunk_order DESC
 		LIMIT 256
 	`)
 	if err != nil {
