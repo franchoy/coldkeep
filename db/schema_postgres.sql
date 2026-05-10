@@ -449,10 +449,6 @@ VALUES (
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO repository_config(key, value)
-VALUES ('default_block_compression', 'none')
-ON CONFLICT (key) DO NOTHING;
-
-INSERT INTO repository_config(key, value)
 VALUES ('compression', 'none')
 ON CONFLICT (key) DO NOTHING;
 
@@ -543,10 +539,6 @@ ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS physical_hash BYTEA;
-
-INSERT INTO repository_config(key, value)
-VALUES ('default_block_compression', 'none')
-ON CONFLICT (key) DO NOTHING;
 
 UPDATE schema_version SET version = 13 WHERE version < 13;
 

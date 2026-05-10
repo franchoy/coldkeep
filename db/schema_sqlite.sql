@@ -97,9 +97,6 @@ INSERT OR IGNORE INTO repository_config(key, value)
 VALUES ('default_chunker', 'v2-fastcdc');
 
 INSERT OR IGNORE INTO repository_config(key, value)
-VALUES ('default_block_compression', 'none');
-
-INSERT OR IGNORE INTO repository_config(key, value)
 VALUES ('compression', 'none');
 
 INSERT OR IGNORE INTO repository_config(key, value)

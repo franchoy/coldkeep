@@ -713,13 +713,6 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 	}
 
 	if _, err := dbconn.ExecContext(ctx, `
-		INSERT OR IGNORE INTO repository_config(key, value)
-		VALUES ('default_block_compression', 'none')
-	`); err != nil {
-		return fmt.Errorf("seed repository_config.default_block_compression: %w", err)
-	}
-
-	if _, err := dbconn.ExecContext(ctx, `
 		DELETE FROM schema_version WHERE version < 13
 	`); err != nil {
 		return fmt.Errorf("clean sqlite schema_version before 13: %w", err)

@@ -201,12 +201,20 @@ func TestRunMigrationsCreatesSnapshotSchemaVersionEight(t *testing.T) {
 		t.Fatalf("expected repository default chunker=v2-fastcdc on fresh install, got %q", configuredDefaultChunker)
 	}
 
-	var configuredDefaultCompression string
-	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
-		t.Fatalf("read repository default block compression: %v", err)
+	var configuredCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression'`).Scan(&configuredCompression); err != nil {
+		t.Fatalf("read repository compression default: %v", err)
 	}
-	if configuredDefaultCompression != "none" {
-		t.Fatalf("expected repository default block compression=none on fresh install, got %q", configuredDefaultCompression)
+	if configuredCompression != "none" {
+		t.Fatalf("expected repository compression=none on fresh install, got %q", configuredCompression)
+	}
+
+	var configuredCompressionLevel string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression_level'`).Scan(&configuredCompressionLevel); err != nil {
+		t.Fatalf("read repository compression_level default: %v", err)
+	}
+	if configuredCompressionLevel != "3" {
+		t.Fatalf("expected repository compression_level=3 on fresh install, got %q", configuredCompressionLevel)
 	}
 
 	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash", "compression_ratio", "payload_hash"} {
@@ -295,7 +303,8 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"UPDATE schema_version SET version = 15 WHERE version < 15",
 		"ALTER TABLE chunk ADD COLUMN IF NOT EXISTS chunker_version TEXT",
 		"CREATE TABLE IF NOT EXISTS repository_config",
-		"VALUES ('default_block_compression', 'none')",
+		"VALUES ('compression', 'none')",
+		"VALUES ('compression_level', '3')",
 		"ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS parent_id",
 		"ON DELETE SET NULL",
 		"CREATE TABLE IF NOT EXISTS snapshot_path",
@@ -385,12 +394,20 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 		t.Fatalf("expected direct sqlite bootstrap default_chunker=v2-fastcdc, got %q", configuredDefaultChunker)
 	}
 
-	var configuredDefaultCompression string
-	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
-		t.Fatalf("read repository default block compression in direct sqlite bootstrap: %v", err)
+	var configuredCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression'`).Scan(&configuredCompression); err != nil {
+		t.Fatalf("read repository compression in direct sqlite bootstrap: %v", err)
 	}
-	if configuredDefaultCompression != "none" {
-		t.Fatalf("expected direct sqlite bootstrap default_block_compression=none, got %q", configuredDefaultCompression)
+	if configuredCompression != "none" {
+		t.Fatalf("expected direct sqlite bootstrap compression=none, got %q", configuredCompression)
+	}
+
+	var configuredCompressionLevel string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression_level'`).Scan(&configuredCompressionLevel); err != nil {
+		t.Fatalf("read repository compression_level in direct sqlite bootstrap: %v", err)
+	}
+	if configuredCompressionLevel != "3" {
+		t.Fatalf("expected direct sqlite bootstrap compression_level=3, got %q", configuredCompressionLevel)
 	}
 
 	for _, columnName := range []string{"compression_codec", "compression_level", "compressed_size", "compressed_hash", "physical_hash", "compression_ratio", "payload_hash"} {
@@ -577,12 +594,20 @@ func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) 
 		t.Fatalf("expected repository default chunker=v1-simple-rolling after migration, got %q", configuredDefaultChunker)
 	}
 
-	var configuredDefaultCompression string
-	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
-		t.Fatalf("read repository default block compression after migration: %v", err)
+	var configuredCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression'`).Scan(&configuredCompression); err != nil {
+		t.Fatalf("read repository compression after migration: %v", err)
 	}
-	if configuredDefaultCompression != "none" {
-		t.Fatalf("expected repository default block compression=none after migration, got %q", configuredDefaultCompression)
+	if configuredCompression != "none" {
+		t.Fatalf("expected repository compression=none after migration, got %q", configuredCompression)
+	}
+
+	var configuredCompressionLevel string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression_level'`).Scan(&configuredCompressionLevel); err != nil {
+		t.Fatalf("read repository compression_level after migration: %v", err)
+	}
+	if configuredCompressionLevel != "3" {
+		t.Fatalf("expected repository compression_level=3 after migration, got %q", configuredCompressionLevel)
 	}
 
 	if !sqliteTestTableHasColumn(t, dbconn, "snapshot", "parent_id") {
@@ -849,12 +874,20 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 		}
 	}
 
-	var configuredDefaultCompression string
-	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
-		t.Fatalf("read repository default block compression after v12 migration: %v", err)
+	var configuredCompression string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression'`).Scan(&configuredCompression); err != nil {
+		t.Fatalf("read repository compression after v12 migration: %v", err)
 	}
-	if configuredDefaultCompression != "none" {
-		t.Fatalf("expected repository default block compression=none after v12 migration, got %q", configuredDefaultCompression)
+	if configuredCompression != "none" {
+		t.Fatalf("expected repository compression=none after v12 migration, got %q", configuredCompression)
+	}
+
+	var configuredCompressionLevel string
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression_level'`).Scan(&configuredCompressionLevel); err != nil {
+		t.Fatalf("read repository compression_level after v12 migration: %v", err)
+	}
+	if configuredCompressionLevel != "3" {
+		t.Fatalf("expected repository compression_level=3 after v12 migration, got %q", configuredCompressionLevel)
 	}
 
 	var migrated struct {
@@ -900,19 +933,19 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 		t.Fatalf("expected migrated physical_hash to remain NULL, got %x", migrated.physicalHash)
 	}
 
-	if _, err := dbconn.Exec(`UPDATE repository_config SET value = 'zstd' WHERE key = 'default_block_compression'`); err != nil {
-		t.Fatalf("update repository default block compression before rerun: %v", err)
+	if _, err := dbconn.Exec(`UPDATE repository_config SET value = 'zstd' WHERE key = 'compression'`); err != nil {
+		t.Fatalf("update repository compression before rerun: %v", err)
 	}
 
 	if err := RunMigrations(dbconn); err != nil {
 		t.Fatalf("rerun migrations for idempotency: %v", err)
 	}
 
-	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'default_block_compression'`).Scan(&configuredDefaultCompression); err != nil {
-		t.Fatalf("read repository default block compression after rerun: %v", err)
+	if err := dbconn.QueryRow(`SELECT value FROM repository_config WHERE key = 'compression'`).Scan(&configuredCompression); err != nil {
+		t.Fatalf("read repository compression after rerun: %v", err)
 	}
-	if configuredDefaultCompression != "zstd" {
-		t.Fatalf("expected existing repository default block compression to remain unchanged, got %q", configuredDefaultCompression)
+	if configuredCompression != "zstd" {
+		t.Fatalf("expected existing repository compression to remain unchanged, got %q", configuredCompression)
 	}
 }
 
