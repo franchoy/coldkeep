@@ -1473,7 +1473,10 @@ persisted_bytes → physical_hash (if present) → decrypt (if AES-GCM) →
 - Repository config is guidance; block metadata is authority
 - Read path ignores config; uses per-block codec and compression_codec fields
 - Config changes don't retroactively alter existing blocks
-- Future codecs/compression algorithms must register in CodecRegistry before use
+- v1.9 persisted metadata contract is explicit and closed:
+   - storage codec: `none` | `aes-gcm`
+   - compression codec: `none` | `zstd`
+   - unsupported metadata is rejected by schema/migration/read/verify paths
 
 ### Implementation evidence
 

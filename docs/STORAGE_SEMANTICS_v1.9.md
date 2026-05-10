@@ -304,7 +304,7 @@ future engine semantics.
 
 **Lifecycle:**
 1. **Repository init:** Writes compression=none, level=3 by default
-2. **Schema validation (v1.9 startup):** `ValidateRepositoryCompressionConfig(tx)` checks codec registered and level in bounds
+2. **Schema validation (v1.9 startup):** `ValidateRepositoryCompressionConfig(tx)` enforces codec in {`none`,`zstd`} and level in bounds
 3. **Write-path read:** `buildStoreFileRuntime` loads compression from DB
 4. **Block encoding:** `applyPackedBlockTransforms` applies compression if config ≠ none
 5. **Read/Verify:** Each block's `compression_codec` field determines decompression; config is read-only reference
@@ -386,14 +386,20 @@ FOR each block in repository:
    
 Read operation succeeds IFF:
    - All required codec keys are available
-   - Codec is registered in `blocks.CodecRegistry`
+   - Block metadata codecs are supported by the v1.9 contract:
+     storage codec in {`none`,`aes-gcm`}, compression codec in {`none`,`zstd`}
 ```
 
 **Migration Guarantee (FROZEN):**
 ```
 Repository codec cannot be retroactively changed for existing blocks.
 New writes use current repository default codec (set at write time).
-Reads support any registered codec in `blocks.CodecRegistry`.
+Reads/verify support only v1.9 contract codecs:
+- storage codec: `none` | `aes-gcm`
+- compression codec: `none` | `zstd`
+Unknown/unsupported persisted metadata is rejected explicitly by
+schema/migration validation and by read/verify paths; no fallback/default
+interpretation is allowed.
 
 Implication: Codec mismatch (none blocks in aes-gcm-requiring environment)
 must be caught at verify/restore time with clear error.
@@ -518,8 +524,8 @@ Negotiation algorithm:
 ```
 FOR each block:
    1. Read persisted block metadata fields (codec, compression_codec, hash columns).
-   2. Resolve transform handlers from registered capability sets (codec registry,
-      compression registry).
+   2. Resolve transform handlers for v1.9-supported codecs only:
+      storage codec {none,aes-gcm}, compression codec {none,zstd}.
    3. Execute strict inverse transform pipeline for that block only.
    4. Validate integrity at each stage using that block's metadata.
 
