@@ -3,7 +3,6 @@ package verify
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"log"
 
@@ -20,7 +19,7 @@ type verifyBlockLocation struct {
 // the three verification stages.
 type blockStagePayloads struct {
 	storedBytes      []byte // Layer 3: raw on-disk bytes
-	compressedBytes  []byte // Layer 2: future compressed payload (nil today)
+	compressedBytes  []byte // Layer 2: post-decrypt, pre-decompress bytes
 	plaintextEncoded []byte // Layer 1: decrypted/decoded plaintext block bytes
 	hashes           blocks.BlockHashes
 }
@@ -72,7 +71,7 @@ func verifyCompressedPayloadStage(_ context.Context, loc verifyBlockLocation, pa
 }
 
 // verifyLogicalPayloadStage is Stage 3 of the block verification pipeline.
-// This is the currently active hash check: sha256(plaintextEncoded) == block_hash.
+// It validates sha256(plaintextEncoded) == block_hash after decrypt/decompress.
 func verifyLogicalPayloadStage(_ context.Context, loc verifyBlockLocation, expectedHash []byte, payloads blockStagePayloads) error {
 	if err := blocks.VerifyBlockHash(payloads.plaintextEncoded, expectedHash); err != nil {
 		meta := verifyBlockFailureMeta(VerifyStageLogicalHash, loc.blockID, loc.containerID, loc.offset)
@@ -81,21 +80,5 @@ func verifyLogicalPayloadStage(_ context.Context, loc verifyBlockLocation, expec
 		return verifyStageError(verifyErrBlockHashMismatch, meta,
 			"verifyBlockPayloads: logical block hash mismatch", err)
 	}
-	return nil
-}
-
-// runBlockVerifyStages executes all three verification stages in order.
-// Stages 1 and 2 are no-ops today. Only Stage 3 (logical) is active.
-func runBlockVerifyStages(ctx context.Context, dbconn *sql.DB, loc verifyBlockLocation, expectedHash []byte, payloads blockStagePayloads) error {
-	if err := verifyPhysicalPayloadStage(ctx, loc, payloads); err != nil {
-		return err
-	}
-	if err := verifyCompressedPayloadStage(ctx, loc, payloads); err != nil {
-		return err
-	}
-	if err := verifyLogicalPayloadStage(ctx, loc, expectedHash, payloads); err != nil {
-		return err
-	}
-	_ = dbconn
 	return nil
 }

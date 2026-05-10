@@ -121,32 +121,3 @@ func TestVerifyLogicalPayloadStageFailsOnHashMismatch(t *testing.T) {
 		t.Fatal("expected logical stage to fail on hash mismatch, got nil")
 	}
 }
-
-func TestRunBlockVerifyStagesPassesEndToEnd(t *testing.T) {
-	encoded := buildTestEncodedBytes(t, []byte("end-to-end-stage-test"))
-	sum := sha256.Sum256(encoded)
-	p := blockStagePayloads{
-		storedBytes:      encoded,
-		compressedBytes:  encoded,
-		plaintextEncoded: encoded,
-		hashes: blocks.BlockHashes{
-			LogicalHash:    sum[:],
-			CompressedHash: blocks.HashCompressed(encoded),
-			PhysicalHash:   blocks.HashPhysical(encoded),
-		},
-	}
-	loc := verifyBlockLocation{blockID: 1, containerID: 1, offset: 0}
-	if err := runBlockVerifyStages(context.Background(), nil, loc, sum[:], p); err != nil {
-		t.Fatalf("expected runBlockVerifyStages to pass, got: %v", err)
-	}
-}
-
-func TestRunBlockVerifyStagesFailsWhenLogicalHashMismatches(t *testing.T) {
-	encoded := buildTestEncodedBytes(t, []byte("mismatch-test"))
-	wrongHash := make([]byte, 32)
-	p := blockStagePayloads{storedBytes: encoded, plaintextEncoded: encoded}
-	loc := verifyBlockLocation{blockID: 1, containerID: 1, offset: 0}
-	if err := runBlockVerifyStages(context.Background(), nil, loc, wrongHash, p); err == nil {
-		t.Fatal("expected runBlockVerifyStages to fail on logical hash mismatch, got nil")
-	}
-}
