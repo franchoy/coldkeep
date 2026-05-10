@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );
 
-   	UPDATE schema_version SET version = 15 WHERE version < 15;
-   	INSERT OR IGNORE INTO schema_version(version) VALUES (15);
+DELETE FROM schema_version WHERE version < 15;
+INSERT OR IGNORE INTO schema_version(version) VALUES (15);
 
 CREATE TABLE IF NOT EXISTS container (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

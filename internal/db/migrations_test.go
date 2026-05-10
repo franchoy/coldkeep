@@ -403,6 +403,51 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	}
 }
 
+func TestLoadSQLiteSchemaNormalizesLegacySchemaVersionHistory(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable sqlite foreign_keys: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create preexisting schema_version: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`INSERT INTO schema_version(version) VALUES (8), (9), (10)`); err != nil {
+		t.Fatalf("seed historical schema_version rows: %v", err)
+	}
+
+	schemaSQL, err := loadSQLiteSchema()
+	if err != nil {
+		t.Fatalf("load sqlite schema: %v", err)
+	}
+
+	if _, err := dbconn.Exec(schemaSQL); err != nil {
+		t.Fatalf("apply sqlite schema with historical schema_version rows: %v", err)
+	}
+
+	var maxVersion int
+	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&maxVersion); err != nil {
+		t.Fatalf("read max schema_version after normalization: %v", err)
+	}
+	if maxVersion != 15 {
+		t.Fatalf("expected max schema_version=15 after normalization, got %d", maxVersion)
+	}
+
+	var rowCount int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM schema_version`).Scan(&rowCount); err != nil {
+		t.Fatalf("count schema_version rows after normalization: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("expected schema_version history to normalize to one row, got %d", rowCount)
+	}
+}
+
 func TestRunMigrationsMigratesLegacySnapshotV7ToV8WithoutDataLoss(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
