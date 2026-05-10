@@ -668,24 +668,38 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 			}
 		}
 
-		// Normalize historical codec values to the v1.9 supported set.
-		// SQLite cannot add a new CHECK constraint to an existing column via
-		// ALTER TABLE, so legacy tables are normalized here while fresh schemas
-		// enforce CHECK(compression_codec IN ('none','zstd')) at DDL time.
-		if _, err := dbconn.ExecContext(ctx, `
-			UPDATE storage_blocks
-			SET compression_codec = 'none'
-			WHERE compression_codec IS NULL
-			   OR LOWER(TRIM(compression_codec)) NOT IN ('none', 'zstd')
-		`); err != nil {
-			return fmt.Errorf("normalize storage_blocks.compression_codec unsupported values: %w", err)
-		}
+		// Canonicalize known historical values and fail fast on unsupported
+		// non-empty codecs. SQLite cannot add a new CHECK constraint to an
+		// existing column via ALTER TABLE, so this explicit validation protects
+		// per-block transform metadata semantics during migration.
 		if _, err := dbconn.ExecContext(ctx, `
 			UPDATE storage_blocks
 			SET compression_codec = LOWER(TRIM(compression_codec))
 			WHERE compression_codec IS NOT NULL
 		`); err != nil {
-			return fmt.Errorf("normalize storage_blocks.compression_codec casing: %w", err)
+			return fmt.Errorf("canonicalize storage_blocks.compression_codec casing: %w", err)
+		}
+		if _, err := dbconn.ExecContext(ctx, `
+			UPDATE storage_blocks
+			SET compression_codec = 'none'
+			WHERE compression_codec IS NULL
+			   OR TRIM(compression_codec) = ''
+		`); err != nil {
+			return fmt.Errorf("normalize storage_blocks.compression_codec null/empty values: %w", err)
+		}
+
+		var unsupportedCount int64
+		if err := dbconn.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM storage_blocks
+			WHERE compression_codec IS NOT NULL
+			  AND TRIM(compression_codec) <> ''
+			  AND compression_codec NOT IN ('none', 'zstd')
+		`).Scan(&unsupportedCount); err != nil {
+			return fmt.Errorf("validate storage_blocks.compression_codec values: %w", err)
+		}
+		if unsupportedCount > 0 {
+			return fmt.Errorf("unsupported non-empty storage_blocks.compression_codec values detected: %d rows (expected none|zstd)", unsupportedCount)
 		}
 	}
 

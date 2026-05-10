@@ -500,12 +500,28 @@ UPDATE schema_version SET version = 12 WHERE version < 12;
 -- Schema version 13: transform-aware packed-block metadata.
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_codec TEXT;
 UPDATE storage_blocks
-SET compression_codec = 'none'
-WHERE compression_codec IS NULL
-   OR LOWER(BTRIM(compression_codec)) NOT IN ('none', 'zstd');
-UPDATE storage_blocks
 SET compression_codec = LOWER(BTRIM(compression_codec))
 WHERE compression_codec IS NOT NULL;
+UPDATE storage_blocks
+SET compression_codec = 'none'
+WHERE compression_codec IS NULL
+   OR BTRIM(compression_codec) = '';
+DO $$
+DECLARE
+  unsupported_count BIGINT;
+BEGIN
+  SELECT COUNT(*)
+  INTO unsupported_count
+  FROM storage_blocks
+  WHERE compression_codec IS NOT NULL
+    AND BTRIM(compression_codec) <> ''
+    AND compression_codec NOT IN ('none', 'zstd');
+
+  IF unsupported_count > 0 THEN
+    RAISE EXCEPTION 'unsupported non-empty storage_blocks.compression_codec values detected: % rows (expected none|zstd)', unsupported_count;
+  END IF;
+END
+$$;
 ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET DEFAULT 'none';
 ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET NOT NULL;
 DO $$

@@ -306,6 +306,7 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_codec TEXT",
 		"ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET DEFAULT 'none'",
 		"ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET NOT NULL",
+		"unsupported non-empty storage_blocks.compression_codec values detected",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT",
 		"ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_hash BYTEA",
@@ -318,6 +319,10 @@ func TestLoadPostgresSchemaIncludesPhaseOneV8Foundation(t *testing.T) {
 		if !strings.Contains(schemaSQL, check) {
 			t.Fatalf("expected postgres schema to contain %q", check)
 		}
+	}
+
+	if strings.Contains(schemaSQL, "OR LOWER(BTRIM(compression_codec)) NOT IN ('none', 'zstd')") {
+		t.Fatalf("expected postgres schema to avoid silently normalizing unsupported compression_codec values")
 	}
 }
 
@@ -911,7 +916,7 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	}
 }
 
-func TestRunMigrationsNormalizesLegacyUnsupportedStorageBlockCompressionCodec(t *testing.T) {
+func TestRunMigrationsFailsOnLegacyUnsupportedStorageBlockCompressionCodec(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -982,16 +987,12 @@ func TestRunMigrationsNormalizesLegacyUnsupportedStorageBlockCompressionCodec(t 
 		t.Fatalf("insert storage block with unsupported compression_codec: %v", err)
 	}
 
-	if err := RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations v13->current: %v", err)
+	err = RunMigrations(dbconn)
+	if err == nil {
+		t.Fatalf("expected migration to fail on unsupported non-empty compression_codec")
 	}
-
-	var normalizedCodec string
-	if err := dbconn.QueryRow(`SELECT compression_codec FROM storage_blocks LIMIT 1`).Scan(&normalizedCodec); err != nil {
-		t.Fatalf("read normalized compression_codec: %v", err)
-	}
-	if normalizedCodec != "none" {
-		t.Fatalf("expected unsupported compression_codec to normalize to none, got %q", normalizedCodec)
+	if !strings.Contains(err.Error(), "unsupported non-empty storage_blocks.compression_codec values detected") {
+		t.Fatalf("expected unsupported compression_codec migration error, got: %v", err)
 	}
 }
 
