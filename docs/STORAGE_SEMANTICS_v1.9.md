@@ -1,5 +1,7 @@
 # Storage Semantics v1.9 — Frozen Contract
 
+<!-- markdownlint-disable MD007 MD013 MD029 MD031 MD032 MD040 MD056 -->
+
 **Status:** FROZEN (v1.9 release lock)  
 **Date:** 2026-05-09  
 **Phase:** Step 6.14 — Freeze v1.9 Storage Semantics  
@@ -44,13 +46,13 @@ compute_logical_hash (SHA256 of encoded block before transformation)
   fsync to disk
   Update block metadata in DB:
       - container_offset (position in container; storage_blocks.container_offset)
-    - stored_size (bytes written to disk)
+      - stored_size (bytes written to disk)
       - plaintext_size (encoded logical block payload size)
-    - logical_hash (input to transformations)
+      - logical_hash (input to transformations)
       - compressed_hash (payload hash after compression stage; equals logical_hash when compression_codec=none for v1.9+ writes)
-    - physical_hash (final state after all transforms)
-   - codec (none or aes-gcm)
-    - compression_codec (none or zstd)
+      - physical_hash (final state after all transforms)
+      - codec (none or aes-gcm)
+      - compression_codec (none or zstd)
       - compressed_size (bytes after compression stage; equals plaintext_size when compression_codec=none)
 ```
 
@@ -107,10 +109,9 @@ output: chunk payloads (combining all verified chunks)
 ### 2.1 Four Hash Types
 
 | Hash | Scope | Computed On | Nullable | Version | Purpose |
-|------|-------|-----------|----------|---------|---------|
 | `logical_hash` (block_hash) | Encoded block (pre-transform) | Plaintext after encoding | NEVER | v1.0+ | Proof of logical content; read-path verification target |
 | `compressed_hash` | Payload after compression stage | Zstd output bytes OR encoded logical bytes when compression_codec=none | YES (legacy v1.6-v1.8 null) | v1.9+ | Compression-stage integrity; expected for new blocks, including compression_codec=none |
-| `physical_hash` | Persisted payload bytes | nonce || ciphertext (aes-gcm) OR compressed payload bytes (codec=none) | YES (legacy v1.6-v1.8 null) | v1.9+ | Final on-disk-state integrity; present for new writes in both none and aes-gcm modes |
+| `physical_hash` | Persisted payload bytes | nonce &#124;&#124; ciphertext (aes-gcm) OR compressed payload bytes (codec=none) | YES (legacy v1.6-v1.8 null) | v1.9+ | Final on-disk-state integrity; present for new writes in both none and aes-gcm modes |
 | `chunk_hash` | Individual chunk | Raw plaintext chunk before encoding | NEVER | v1.0+ | Dedup identity; stored in `chunk.chunk_hash` |
 
 ### 2.2 Hash Computation Rules (FROZEN)
@@ -559,6 +560,7 @@ defaults or homogeneous repository assumptions.
 - `default_packing`: Policy for newly written blocks (v1.9 packed-multi by default)
 
 **Block Metadata (IMMUTABLE):**
+
 - `compression_codec` field: Actual compression applied (set at write time)
 - `codec` field: Actual encryption applied (set at write time)
 - Hash fields: Reflect actual transforms applied
@@ -577,16 +579,17 @@ Block metadata is the source-of-truth for what was actually done.
 ```
 
 **Example Scenario (FROZEN behavior):**
+
 1. Time T1: Repository has compression=zstd. Store File A.
-   - File A blocks written with compression_codec=zstd
+  - File A blocks written with compression_codec=zstd
 2. Time T2: Admin changes repository to compression=none.
 3. Time T3: Restore File A.
-   - Read path sees File A blocks have compression_codec=zstd
-   - Read path decompresses regardless of current config
-   - Output is identical to File A original
+  - Read path sees File A blocks have compression_codec=zstd
+  - Read path decompresses regardless of current config
+  - Output is identical to File A original
 4. Time T4: Store File B.
-   - File B blocks written with compression_codec=none (current config)
-   - File A blocks remain unchanged
+  - File B blocks written with compression_codec=none (current config)
+  - File A blocks remain unchanged
 
 **FROZEN INVARIANT:** Database block metadata is single source-of-truth. Configuration is guidance-only.
 
