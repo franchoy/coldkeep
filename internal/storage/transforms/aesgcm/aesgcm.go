@@ -5,6 +5,13 @@
 //
 // This layout is identical to the v1.8 wire format for storage_blocks rows
 // with codec "aes-gcm", so repositories written by v1.8 are fully compatible.
+//
+// # NOT the canonical runtime path
+//
+// This subpackage is part of the non-runtime transforms abstraction (see the
+// parent package doc). It duplicates AES-GCM behavior for testability and
+// v1.10 engine extraction preparation. The canonical production AES-GCM
+// encrypt/decrypt path remains in internal/blocks (GetBlockTransformer).
 package aesgcm
 
 import (

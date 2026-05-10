@@ -1,14 +1,20 @@
 // Package transforms defines composable transform primitives and a pipeline
-// abstraction used for testability and future runtime unification.
+// abstraction used for testability and v1.10 engine extraction preparation.
+//
+// # NOT the canonical runtime path
+//
+// This package is NOT imported by any production write or read path in v1.9.
+// It is a non-runtime, experimental abstraction. Do not treat it as authoritative
+// for repository semantics, and do not wire it into production code without a
+// deliberate migration decision in v1.10.
 //
 // Runtime wiring status (v1.9):
-//   - Canonical write path is implemented in internal/storage/store.go via
-//     applyPackedBlockTransforms.
-//   - Canonical read/verify path is implemented in internal/verify via
-//     VerifyStoredBlock.
+//   - Canonical write path: internal/storage/store.go → applyPackedBlockTransforms
+//   - Canonical read/verify path: internal/verify → VerifyStoredBlock
 //
-// TransformPipeline remains an internal preparation abstraction and is not the
-// authoritative runtime entrypoint for repository semantics in v1.9.
+// TransformPipeline remains a preparation abstraction intentionally kept separate
+// from the runtime to allow independent testability and staged engine migration.
+// It will be considered for runtime promotion during v1.10 engine extraction.
 //
 // Each Transform operates on raw bytes, making stages independently testable
 // and composable without side effects.
