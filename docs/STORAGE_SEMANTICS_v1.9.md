@@ -464,13 +464,15 @@ If restore crashes mid-operation:
 **Standard Verify (FROZEN):**
 ```
 FOR each block in repository:
-   1. Check block_hash (logical) — required
-   2. Load container; read persisted bytes
-   3. Verify physical_hash IF present
+   1. Load container; read persisted bytes
+   2. Verify physical_hash IF present
+   3. Decrypt IF codec=aes-gcm
    4. Verify compressed_hash IF present (expected for v1.9+ writes, including compression_codec=none)
-   5. Decode block structure
-   6. Validate chunk_block_refs references
-   7. Check all referenced chunks exist and are COMPLETED
+   5. Decompress IF compression_codec=zstd
+   6. Verify logical_hash (SHA256(logical_bytes) == block_hash)
+   7. Decode logical block structure
+   8. Validate chunk_block_refs references
+   9. Check all referenced chunks exist and are COMPLETED
    
 Success: Block is readable and chunks are valid
 Failure: Report error with storage_blocks.id, container_id, failure reason
