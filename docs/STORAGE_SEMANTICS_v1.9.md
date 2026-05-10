@@ -28,7 +28,7 @@ compute_logical_hash (SHA256 of encoded block before transformation)
     compute_compressed_hash (SHA256 of compressed bytes)
   ELSE compression = "none":
     skip compression stage
-    compressed_hash = NULL
+      compressed_hash = logical_hash (same bytes at this stage)
     compressed_size = logical_hash's payload size
     ↓
 [encryption stage: IF encryption enabled]
@@ -45,13 +45,13 @@ compute_logical_hash (SHA256 of encoded block before transformation)
   Update block metadata in DB:
     - block_offset (position in container)
     - stored_size (bytes written to disk)
-    - plaintext_size (original chunk payload size)
+      - plaintext_size (encoded logical block payload size)
     - logical_hash (input to transformations)
-    - compressed_hash (if compression applied; NULL if skipped)
+      - compressed_hash (payload hash after compression stage; equals logical_hash when compression_codec=none for v1.9+ writes)
     - physical_hash (final state after all transforms)
     - codec (plain or aes-gcm)
     - compression_codec (none or zstd)
-    - compressed_size (if compression applied; NULL if skipped)
+      - compressed_size (bytes after compression stage; equals plaintext_size when compression_codec=none)
 ```
 
 **FROZEN INVARIANT:** This ordering is immutable. Reordering stages requires v2.0.
@@ -108,7 +108,7 @@ output: chunk payloads (combining all verified chunks)
 | Hash | Scope | Computed On | Nullable | Version | Purpose |
 |------|-------|-----------|----------|---------|---------|
 | `logical_hash` (block_hash) | Encoded block (pre-transform) | Plaintext after encoding | NEVER | v1.0+ | Proof of logical content; read-path verification target |
-| `compressed_hash` | Payload after compression | Zstd output bytes | YES (legacy v1.6-v1.8 null) | v1.9+ | Compression integrity; skipped if compression=none |
+| `compressed_hash` | Payload after compression stage | Zstd output bytes OR encoded logical bytes when compression_codec=none | YES (legacy v1.6-v1.8 null) | v1.9+ | Compression-stage integrity; expected for new blocks, including compression_codec=none |
 | `physical_hash` | Payload after encryption | AES-GCM output || NULL | YES (legacy null for plain codec) | v1.9+ | Final on-disk state; skipped if codec=plain and no physical tracking |
 | `chunk_hash` | Individual chunk | Raw plaintext chunk before encoding | NEVER | v1.0+ | Dedup identity; stored in `chunk.chunk_hash` |
 
@@ -116,19 +116,19 @@ output: chunk payloads (combining all verified chunks)
 
 ```
 IF plaintext_payload → encode → logical_hash(encoded_block)
-   result stored as blocks.block_hash
+   result stored as storage_blocks.block_hash
 
 IF compression_codec = "zstd":
    compressed_hash = SHA256(zstd_compressed(logical_payload))
 
 IF compression_codec = "none":
-   compressed_hash = NULL (skipped, not computed)
+   compressed_hash = logical_hash (same bytes at compression stage)
 
 IF codec = "aes-gcm":
    physical_hash = SHA256(aes_gcm_ciphertext || nonce)
 
 IF codec = "plain":
-   physical_hash = NULL (legacy) OR = logical_hash (new blocks with v1.9 writer)
+   physical_hash = NULL (legacy) OR = compressed_hash (new blocks with v1.9 writer)
    
 RESTORE/VERIFY: Must validate in reverse order
    1. physical_hash (if present) — proves on-disk bytes untouched
@@ -147,12 +147,12 @@ Legacy blocks (v1.6-v1.8) may have NULL `compressed_hash` / `physical_hash`. Ver
 
 ```
 For uncompressed+plain blocks:
-   logical_hash = physical_hash (if physical_hash computed)
-   compressed_hash = NULL
+   logical_hash = compressed_hash
+   physical_hash = NULL (legacy) OR = compressed_hash (v1.9+)
 
 For uncompressed+aes-gcm blocks:
+   logical_hash = compressed_hash
    logical_hash ≠ physical_hash (encryption changes bytes)
-   compressed_hash = NULL
 
 For compressed+plain blocks:
    logical_hash ≠ compressed_hash (compression changes size/content)
@@ -188,7 +188,7 @@ not redefine logical identity.
 
 ## 3. Metadata Meanings
 
-### 3.1 Storage Block (blocks table)
+### 3.1 Storage Block (storage_blocks table)
 
 **Core Identity:**
 - `block_id` (PK): Unique identifier
@@ -198,13 +198,13 @@ not redefine logical identity.
 **Transform State (v1.9 semantics):**
 - `codec` (plain | aes-gcm): Encryption applied during write
 - `compression_codec` (none | zstd): Compression applied during write
-- `compressed_size` (bytes): Size after compression (NULL if compression_codec=none)
+- `compressed_size` (bytes): Size after compression stage (equals `plaintext_size` if compression_codec=none)
 - `stored_size` (bytes): Final on-disk bytes in container (including encryption overhead)
-- `plaintext_size` (bytes): Original chunk payload size
+- `plaintext_size` (bytes): Encoded logical block payload size (pre-compression, pre-encryption)
 
 **Hash State:**
 - `logical_hash` = `block_hash`: Content hash before any transforms
-- `compressed_hash` (SHA256 | NULL): Compression layer integrity (NULL if codec=none)
+- `compressed_hash` (SHA256 | NULL): Compression-stage integrity (legacy blocks may be NULL; v1.9+ writes set this even when compression_codec=none)
 - `physical_hash` (SHA256 | NULL): On-disk state after all transforms (NULL if plain/legacy)
 
 **Container Location:**
@@ -216,7 +216,7 @@ not redefine logical identity.
 - A block is an immutable collection of chunk payloads encoded, optionally compressed, optionally encrypted
 - Transform stages match write-path ordering (Section 1.1)
 - Hash verification follows read-path ordering (Section 1.2)
-- **Metadata reflects reality at write time:** if compression_codec=none, compressed_hash is NULL regardless of repository default later
+- **Metadata reflects reality at write time:** for v1.9+ writes with compression_codec=none, compressed_hash equals logical_hash; legacy blocks may keep NULL
 
 ### 3.2 Chunk (chunks table)
 
@@ -470,7 +470,7 @@ FOR each block in repository:
    1. Check block_hash (logical) — required
    2. Load container; read persisted bytes
    3. Verify physical_hash IF present
-   4. Verify compressed_hash IF compression_codec ≠ none
+   4. Verify compressed_hash IF present (expected for v1.9+ writes, including compression_codec=none)
    5. Decode block structure
    6. Validate chunk_block_map references
    7. Check all referenced chunks exist and are COMPLETED

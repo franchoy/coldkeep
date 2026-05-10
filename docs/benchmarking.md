@@ -1274,8 +1274,8 @@ and handle edge cases (mixed repositories, legacy nulls, encryption).
 ### Validation scope
 
 **Stats formulas must be mathematically correct:**
-- `logical_bytes = SUM(plaintext_size)` across all blocks
-- `compressed_bytes = SUM(compressed_size or plaintext_size if codec=none)`
+- `logical_bytes = SUM(plaintext_size)` across all blocks (`plaintext_size` is encoded logical block size)
+- `compressed_bytes = SUM(compressed_size or plaintext_size if compression_codec=none)`
 - `stored_bytes = SUM(stored_size)` (includes all overhead)
 - `compression_ratio = logical_bytes / compressed_bytes`
 - `physical_ratio = logical_bytes / stored_bytes`
@@ -1326,12 +1326,12 @@ and handle edge cases (mixed repositories, legacy nulls, encryption).
 
 ✔ **Mixed repos handled correctly:**
 - Old blocks (v1.8 uncompressed) counted separately from new blocks
-- CompressedBytes includes fallback (plaintext_size for 'none' codec)
+- CompressedBytes includes fallback (plaintext_size for `compression_codec=none` blocks)
 - CompressionRatio accurately reflects mixed state (weighted by compression efficacy)
 - No double-counting of logical bytes across codec transitions
 
 ✔ **Fallback blocks counted correctly:**
-- For codec='none' blocks: compressed_size = plaintext_size
+- For `compression_codec='none'` blocks: compressed_size = plaintext_size
 - StorageBlocks query returns aggregated count with correct fallback
 - Byte sums match direct SQL query pattern
 - Stats API output matches source-of-truth query
@@ -1411,21 +1411,22 @@ Sections:
 
 **Transform Pipeline (IMMUTABLE):**
 ```
-plaintext → encode → logical_hash → compress (if config) → compressed_hash (if compression)
+plaintext → encode → logical_hash → compress (if configured)
+   → compressed_hash (compression stage output; equals logical_hash when compression_codec=none)
     → encrypt (if AES-GCM) → physical_hash → persist
 ```
 
 **Verify Pipeline (FIXED):**
 ```
 persisted_bytes → physical_hash (if present) → decrypt (if AES-GCM) → 
-    compressed_hash (if compression) → decompress → logical_hash → 
+   compressed_hash (if present; expected for v1.9+ blocks) → decompress (if zstd) → logical_hash → 
     decode block structure → verify chunk references
 ```
 
 **Four Hash Types (FROZEN):**
-- `logical_hash` (block_hash): Encoded block content (required, never null)
-- `compressed_hash`: After compression (nullable if codec=none)
-- `physical_hash`: After encryption (nullable only for legacy plain blocks)
+- `logical_hash` (`storage_blocks.block_hash`): Encoded block content (required, never null)
+- `compressed_hash` (`storage_blocks.compressed_hash`): Compression-stage output hash (legacy blocks may be null; v1.9+ writes populate this for compression_codec=none and zstd)
+- `physical_hash` (`storage_blocks.physical_hash`): After encryption (nullable only for legacy plain blocks)
 - `chunk_hash`: Plaintext chunk for dedup (required, never null)
 
 **Mixed Repository Invariants (LOCKED):**

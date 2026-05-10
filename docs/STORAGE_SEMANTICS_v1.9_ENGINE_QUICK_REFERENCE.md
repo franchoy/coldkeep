@@ -14,7 +14,8 @@
 ```
 plaintext → encode(block+metadata) 
     → compute logical_hash (SHA256)
-    → [IF compression enabled] compress(zstd) → compute compressed_hash
+  → [IF compression_codec=zstd] compress(zstd) → compute compressed_hash
+  → [IF compression_codec=none] skip compression; set compressed_hash=logical_hash
     → [IF AES-GCM enabled] encrypt(key+nonce) → compute physical_hash
     → persist_to_container
     → update_block_metadata(hashes, sizes, codec, compression_codec)
@@ -41,9 +42,9 @@ container_bytes
 
 | Hash | Field | Scope | Nullable | Used By |
 |------|-------|-------|----------|---------|
-| logical_hash | `blocks.block_hash` | Encoded block (pre-transform) | ✗ NEVER | Verify logical content |
-| compressed_hash | `blocks.compressed_hash` | After zstd (if applied) | ✓ if codec=none | Verify compression layer |
-| physical_hash | `blocks.physical_hash` | After encryption (if applied) | ✓ if plain/legacy | Verify on-disk bytes |
+| logical_hash | `storage_blocks.block_hash` | Encoded block (pre-transform) | ✗ NEVER | Verify logical content |
+| compressed_hash | `storage_blocks.compressed_hash` | After compression stage (zstd bytes or logical bytes for compression_codec=none) | ✓ legacy only | Verify compression layer |
+| physical_hash | `storage_blocks.physical_hash` | After encryption (if applied) | ✓ if plain/legacy | Verify on-disk bytes |
 | chunk_hash | `chunks.chunk_hash` | Plaintext chunk (dedup key) | ✗ NEVER | Dedup identity |
 
 **Engine Rule:** Trust per-block metadata. Verify skips missing hashes (legacy support).
@@ -74,13 +75,13 @@ type StoredBlock struct {
     // Transform state (IMMUTABLE after write)
     Codec          string         // "plain" | "aes-gcm"
     CompressionCodec string       // "none" | "zstd"
-    CompressedSize int64          // (null if codec=none)
+    CompressedSize int64          // Bytes after compression stage (equals PlaintextSize if codec=none)
     StoredSize     int64          // On-disk bytes
-    PlaintextSize  int64          // Original chunk payload
+    PlaintextSize  int64          // Encoded logical block payload (pre-compression)
     
     // Hashes (IMMUTABLE after write)
     LogicalHash    []byte         // Encoded block (required)
-    CompressedHash []byte         // After compression (null if codec=none)
+    CompressedHash []byte         // After compression stage (legacy blocks may be null)
     PhysicalHash   []byte         // After encryption (null if plain/legacy)
     
     // Location
