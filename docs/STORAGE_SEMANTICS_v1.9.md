@@ -137,10 +137,10 @@ RESTORE/VERIFY: Must validate in reverse order
    3. logical_hash (always) — proves logical content
 ```
 
-**CRITICAL:** Hash presence/absence is determined by:
-- Repository default compression setting (at write time)
-- Repository default codec setting (at write time)
-- Block's actual `compression_codec` and `codec` fields in DB
+**CRITICAL:** Hash values are computed from the block's actual persisted metadata.
+For v1.9+ writes, `compressed_hash` and `physical_hash` are expected regardless
+of `compression_codec=none` or `codec=none`; missing values are tolerated only
+for legacy rows.
 
 Legacy blocks (v1.6-v1.8) may have NULL `compressed_hash` / `physical_hash`. Verify skips missing hashes with debug logging.
 
