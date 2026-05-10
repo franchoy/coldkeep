@@ -666,7 +666,7 @@ func TestCorruptionFixtureCodecMetadataFailuresArePrecise(t *testing.T) {
 		value       string
 		containsAny []string
 	}{
-		{name: "compression codec metadata", field: "compression_codec", value: "broken-compressor", containsAny: []string{"resolve compression codec"}},
+		{name: "compression codec metadata", field: "compression_codec", value: "broken-compressor", containsAny: []string{"invalid compression metadata contract", "unsupported compression_codec"}},
 		{name: "encryption codec metadata", field: "codec", value: "aes-gcm", containsAny: []string{"load transformer", "decrypt payload"}},
 	}
 
