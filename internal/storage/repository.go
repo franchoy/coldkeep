@@ -7,8 +7,8 @@ import (
 )
 
 // Repository is the storage-layer persistence handle used by StoreService.
-// Phase 3 keeps it intentionally small: it provides one place to hang future
-// store-path repository methods without changing the service shape again.
+// It is the single point of DB access for store-path repository operations,
+// keeping the service shape stable across the v1.9 frozen storage contract.
 type Repository struct {
 	db *sql.DB
 }
