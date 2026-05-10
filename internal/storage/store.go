@@ -3130,7 +3130,8 @@ func persistPackedBlockMetadata(
 		if _, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO chunk_block_refs (chunk_id, block_id, offset_in_block, size_in_block)
-			 VALUES ($1, $2, $3, $4)`,
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (chunk_id) DO NOTHING`,
 			int64(entry.ChunkID),
 			blockID,
 			int64(entry.Offset),
