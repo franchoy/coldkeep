@@ -58,8 +58,8 @@ func TestDefaultRepositoryCapabilitiesBaseline(t *testing.T) {
 	if caps.DefaultCompressionLevel != 3 {
 		t.Fatalf("expected default compression level 3, got %d", caps.DefaultCompressionLevel)
 	}
-	if caps.DefaultEncryption != EncryptionNone {
-		t.Fatalf("expected default encryption %q, got %q", EncryptionNone, caps.DefaultEncryption)
+	if caps.RepositoryEncryptionBaseline != EncryptionNone {
+		t.Fatalf("expected repository encryption baseline %q, got %q", EncryptionNone, caps.RepositoryEncryptionBaseline)
 	}
 	if caps.DefaultPacking != PackingPackedMulti {
 		t.Fatalf("expected default packing %q, got %q", PackingPackedMulti, caps.DefaultPacking)

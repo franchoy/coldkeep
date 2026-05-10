@@ -24,8 +24,11 @@ type RepositoryCapabilities struct {
 
 	DefaultCompression      string `json:"default_compression"`
 	DefaultCompressionLevel int    `json:"default_compression_level"`
-	DefaultEncryption       string `json:"default_encryption"`
-	DefaultPacking          string `json:"default_packing"`
+	// RepositoryEncryptionBaseline is a repository-compat baseline for
+	// capability reporting only. It is not the write-path default, which is
+	// resolved at runtime (for example via COLDKEEP_CODEC).
+	RepositoryEncryptionBaseline string `json:"repository_encryption_baseline"`
+	DefaultPacking               string `json:"default_packing"`
 
 	// Read semantics are intentionally metadata-driven forever: repository
 	// defaults are write policy for future blocks only.
@@ -36,11 +39,11 @@ type RepositoryCapabilities struct {
 // repository connection is unavailable or introspection fails.
 func DefaultRepositoryCapabilities() RepositoryCapabilities {
 	return RepositoryCapabilities{
-		DefaultCompression:      CompressionNone,
-		DefaultCompressionLevel: 3,
-		DefaultEncryption:       EncryptionNone,
-		DefaultPacking:          PackingPackedMulti,
-		ReadPathMetadataDriven:  true,
+		DefaultCompression:           CompressionNone,
+		DefaultCompressionLevel:      3,
+		RepositoryEncryptionBaseline: EncryptionNone,
+		DefaultPacking:               PackingPackedMulti,
+		ReadPathMetadataDriven:       true,
 	}
 }
 

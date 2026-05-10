@@ -106,7 +106,8 @@ repository_config table:
   - default_compression_level: int [1..9] (v1.9 public repository contract)
     Note: compression library supports zstd levels [1..22]; repository defaults
     are intentionally constrained to [1..9] for stable operator-facing semantics.
-  - default_encryption: "none" by default (write path may opt into aes-gcm)
+  - write-path encryption default: runtime `COLDKEEP_CODEC` (default: `aes-gcm`)
+  - capability baseline encryption: `repository_encryption_baseline="none"` (compatibility reporting only; not a write default)
   - default_packing: "packed-multi" in v1.9
 ```
 

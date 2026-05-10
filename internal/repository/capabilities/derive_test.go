@@ -49,8 +49,8 @@ func TestDeriveFreshSQLiteRepositoryCapabilities(t *testing.T) {
 	if caps.DefaultCompressionLevel != 3 {
 		t.Fatalf("expected default compression level 3, got %d", caps.DefaultCompressionLevel)
 	}
-	if caps.DefaultEncryption != "none" {
-		t.Fatalf("expected default encryption none, got %q", caps.DefaultEncryption)
+	if caps.RepositoryEncryptionBaseline != "none" {
+		t.Fatalf("expected repository encryption baseline none, got %q", caps.RepositoryEncryptionBaseline)
 	}
 	if caps.DefaultPacking != "packed-multi" {
 		t.Fatalf("expected default packing packed-multi, got %q", caps.DefaultPacking)

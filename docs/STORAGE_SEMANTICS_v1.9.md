@@ -540,7 +540,8 @@ defaults or homogeneous repository assumptions.
 **Repository Configuration (READ AT WRITE TIME):**
 - `default_compression`: Policy for newly written blocks
 - `default_compression_level`: Policy for newly written blocks (if zstd)
-- `default_encryption`: Policy for newly written blocks (none unless write path opts into aes-gcm)
+- Write-path encryption default is resolved from runtime `COLDKEEP_CODEC` (default `aes-gcm`)
+- Capability-model baseline encryption (`repository_encryption_baseline`) is `none` for compatibility reporting and is not a write-policy source
 - `default_packing`: Policy for newly written blocks (v1.9 packed-multi by default)
 
 **Block Metadata (IMMUTABLE):**
