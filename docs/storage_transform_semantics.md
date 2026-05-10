@@ -234,10 +234,8 @@ Compression canonical rule: `store-if-smaller` is frozen behavior for v1.9.
 The following semantic invariants are locked for v1.9 and later:
 
 1. Logical identity is always defined at the logical payload layer.
-2. Compression metadata, when introduced, is additive and never redefines
-   logical identity.
-3. Physical integrity metadata, when introduced, is additive and never redefines
-   dedup identity.
+2. Compression metadata is additive and never redefines logical identity.
+3. Physical integrity metadata is additive and never redefines dedup identity.
 4. Transform ordering must remain reversible in strict inverse order on reads.
 5. Verify checks may evaluate logical, compressed, and physical layers
    separately, but failure at one layer must not reinterpret the meaning of the
