@@ -2919,11 +2919,12 @@ const packedStorageBlockAESGCMNonceSize = 12
 //   This hash is the dedup key and the restore integrity anchor. It is ALWAYS
 //   computed before any transform is applied and never changes.
 //
-// Layer 2 (transformed payload): output of applyPackedBlockTransforms.
-//   Compression runs first (store-if-smaller), then encryption if codec=aes-gcm.
-//   Wire format for AES-GCM: nonce(12B) || ciphertext.
+// Layer 2 (compressed payload): post-compression, pre-encryption bytes.
+//   Compression runs first (store-if-smaller). compressed_hash is computed
+//   over this layer when present. Layer 2 does NOT include encryption output.
 //
 // Layer 3 (persisted payload): bytes actually appended to the container.
+//   If codec=aes-gcm, Layer 3 = encrypt(Layer 2): nonce(12B) || ciphertext.
 //   physical_hash is computed over this exact byte sequence.
 // ---------------------------------------------------------------------------
 
