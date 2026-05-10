@@ -42,3 +42,18 @@ func TestGetBlockTransformerReturnsAESGCMTransformerWhenKeyIsSet(t *testing.T) {
 		t.Fatalf("expected *AESGCMTransformer, got %T", transformer)
 	}
 }
+
+func TestGetBlockTransformerFailsForAESGCMWhenKeyIsMalformed(t *testing.T) {
+	t.Setenv("COLDKEEP_KEY", "1234")
+
+	_, err := GetBlockTransformer(CodecAESGCM)
+	if err == nil {
+		t.Fatal("expected malformed key error, got nil")
+	}
+	if !strings.Contains(err.Error(), "aes-gcm requires COLDKEEP_KEY") {
+		t.Fatalf("expected top-level key-required guidance, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "key must be 32 bytes (AES-256)") {
+		t.Fatalf("expected underlying malformed-key detail, got: %v", err)
+	}
+}
