@@ -192,14 +192,15 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with impossible container ranges=%d", impossibleLocationRows), nil)
 	}
 
-	// Step 1.6 metadata awareness: record how many rows have transform metadata columns populated.
-	// This is informational only; missing values are not errors until Phase 3 activates compression
-	// (compressed_hash) or Phase 4 activates physical integrity (physical_hash).
+	// Step 1.6 metadata awareness: record how many rows have payload_hash populated.
+	// payload_hash is a deprecated lowercase-hex mirror of block_hash retained
+	// for compatibility/observability only. Presence is informational and never
+	// an integrity requirement.
 	var payloadHashPresentRows int64
 	if err := dbconn.QueryRowContext(ctx, `SELECT COUNT(*) FROM storage_blocks WHERE payload_hash IS NOT NULL AND payload_hash != ''`).Scan(&payloadHashPresentRows); err != nil {
 		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query payload_hash presence", err)
 	}
-	log.Printf("  storage_blocks transform metadata: payload_hash present in %d rows", payloadHashPresentRows)
+	log.Printf("  storage_blocks legacy metadata: payload_hash (deprecated mirror) present in %d rows", payloadHashPresentRows)
 
 	log.Println(" SUCCESS ")
 	return nil

@@ -136,8 +136,9 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
   block_hash BLOB NOT NULL,
-   compression_ratio REAL DEFAULT 1.0,
-   payload_hash TEXT,
+  compression_ratio REAL DEFAULT 1.0,
+  -- DEPRECATED: lowercase-hex mirror of block_hash for compatibility/observability only.
+  payload_hash TEXT,
   compressed_hash BLOB,
   physical_hash BLOB,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

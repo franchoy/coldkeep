@@ -106,6 +106,7 @@ Compression behavior:
 Integrity checkpoints:
 
 - `logical_hash` (`block_hash`) verifies decoded logical block content.
+- `payload_hash` is a deprecated lowercase-hex mirror of `block_hash` retained for compatibility/observability only.
 - `compressed_hash` verifies pre-encryption compressed payload.
 - `physical_hash` verifies exact persisted bytes in container storage.
 

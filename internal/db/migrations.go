@@ -742,7 +742,8 @@ func loadSQLiteSchema() (string, error) {
 
 func runSQLiteStorageBlocksCompressionMetadataMigration(dbconn sqliteContextExecutor, ctx context.Context) error {
 	// Add compression_ratio and payload_hash columns to storage_blocks table.
-	// This enables explicit threading of compression metadata through persistence pipeline.
+	// payload_hash is a deprecated lowercase-hex mirror of block_hash retained
+	// for compatibility and observability only.
 	// Migration is idempotent: columns added with defaults.
 
 	hasRatioCol, err := sqliteTableHasColumn(dbconn, ctx, "storage_blocks", "compression_ratio")

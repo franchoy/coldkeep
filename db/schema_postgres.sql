@@ -475,8 +475,9 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   container_id BIGINT NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
   container_offset BIGINT NOT NULL CHECK (container_offset >= 0),
   block_hash BYTEA NOT NULL,
-   compression_ratio REAL DEFAULT 1.0,
-   payload_hash TEXT,
+  compression_ratio REAL DEFAULT 1.0,
+  -- DEPRECATED: lowercase-hex mirror of block_hash for compatibility/observability only.
+  payload_hash TEXT,
   compressed_hash BYTEA,
   physical_hash BYTEA,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -526,6 +527,7 @@ UPDATE schema_version SET version = 14 WHERE version < 14;
 -- Schema version 15: packed-block transform metadata columns.
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_ratio REAL DEFAULT 1.0;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS payload_hash TEXT;
+COMMENT ON COLUMN storage_blocks.payload_hash IS 'DEPRECATED: lowercase-hex mirror of block_hash for compatibility/observability only; block_hash is authoritative.';
 
 UPDATE schema_version SET version = 15 WHERE version < 15;
 

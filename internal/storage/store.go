@@ -3094,6 +3094,7 @@ func persistPackedBlockMetadata(
 		compressionLevelValue,
 		tr.compressedSize,
 		tr.metadata.CompressionRatio,
+		// Legacy mirror only: lowercase-hex(block_hash). block_hash remains authoritative.
 		tr.metadata.PayloadHash,
 		tr.compressedHash,
 		tr.physicalHash,

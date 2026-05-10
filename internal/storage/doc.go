@@ -34,11 +34,14 @@
 //
 // Frozen hash layer semantics (v1.9):
 //   - block_hash: canonical logical block identity.
+//   - payload_hash: deprecated lowercase-hex mirror of block_hash for
+//     compatibility/observability only.
 //   - compressed_hash: transform-stage integrity checkpoint.
 //   - physical_hash: persisted payload integrity checkpoint.
 //
 // Identity authority is intentionally limited:
 //   - Only block_hash participates in logical correctness and restore identity.
+//   - payload_hash must not be used as a source of truth for identity.
 //   - Dedup, GC identity, snapshot identity, and restore graph semantics must
 //     not be derived from compressed_hash or physical_hash.
 package storage

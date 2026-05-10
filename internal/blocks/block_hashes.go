@@ -23,8 +23,9 @@ type BlockHashes struct {
 }
 
 // HashLogical returns the SHA-256 digest of the encoded plaintext block bytes.
-// This is the canonical logical hash (block_hash / payload_hash) and is
-// identical to the v1.8 block_hash contract.
+// This is the canonical logical hash (block_hash) and is identical to the
+// v1.8 block_hash contract. payload_hash is a deprecated lowercase-hex mirror
+// retained for compatibility and observability only.
 func HashLogical(encodedPlaintext []byte) []byte {
 	sum := sha256.Sum256(encodedPlaintext)
 	return sum[:]
