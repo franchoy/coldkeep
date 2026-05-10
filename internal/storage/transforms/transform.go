@@ -106,7 +106,7 @@ import "fmt"
 // metadata to reverse the operation without any external state.
 type Transform interface {
 	// Name returns a stable, lowercase identifier for this transform stage.
-	// Used for metadata, diagnostics, and future capability negotiation.
+	// Used for metadata, diagnostics, and repository capability modeling.
 	Name() string
 
 	// Encode transforms input bytes into the stored representation.
