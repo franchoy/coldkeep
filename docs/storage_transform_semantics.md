@@ -44,7 +44,7 @@ Properties:
 
 - transform-stage artifact, not a user-visible identity
 - decompression integrity checkpoint
-- diagnostic and verification boundary for future transform-aware audits
+- diagnostic and verification boundary used by staged transform-aware audits (deep verify, restore)
 
 Compression is active for new writes when configured.
 
