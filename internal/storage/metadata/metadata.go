@@ -17,7 +17,8 @@ type HashMetadata struct {
 }
 
 // PayloadMetadata captures the logical, compressed, and stored sizes for a
-// single block payload. CompressedSize is nil when compression is inactive.
+// single block payload. v1.9+ writes always populate CompressedSize (equal to
+// PlaintextSize when compression codec is none); nil is legacy-row only.
 type PayloadMetadata struct {
 	PlaintextSize  int64
 	CompressedSize *int64

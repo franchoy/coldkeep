@@ -142,7 +142,9 @@ Meaning:
 - transform-stage observability value
 - useful for compression ratio and decompression integrity reporting
 
-`compressed_size` is nullable for blocks that are stored uncompressed.
+For v1.9+ writes, `compressed_size` is always populated.
+When `compression_codec=none`, `compressed_size = plaintext_size`.
+Only legacy rows may have `compressed_size = NULL`.
 
 ### `stored_size`
 

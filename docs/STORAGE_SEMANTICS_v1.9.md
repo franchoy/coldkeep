@@ -29,7 +29,7 @@ compute_logical_hash (SHA256 of encoded block before transformation)
   ELSE compression = "none":
     skip compression stage
       compressed_hash = logical_hash (same bytes at this stage)
-    compressed_size = logical_hash's payload size
+      compressed_size = plaintext_size (encoded logical payload size)
     ↓
 [encryption stage: IF encryption enabled]
   IF codec = "aes-gcm":
@@ -199,7 +199,7 @@ not redefine logical identity.
 **Transform State (v1.9 semantics):**
 - `codec` (none | aes-gcm): Persisted encryption transform state for each storage block
 - `compression_codec` (none | zstd): Compression applied during write
-- `compressed_size` (bytes): Size after compression stage (equals `plaintext_size` if compression_codec=none)
+- `compressed_size` (bytes): Size after compression stage (for v1.9+ writes, always populated; equals `plaintext_size` when compression_codec=none; legacy rows may be NULL)
 - `stored_size` (bytes): Final on-disk bytes in container (including encryption overhead)
 - `plaintext_size` (bytes): Encoded logical block payload size (pre-compression, pre-encryption)
 
@@ -217,7 +217,7 @@ not redefine logical identity.
 - A block is an immutable collection of chunk payloads encoded, optionally compressed, optionally encrypted
 - Transform stages match write-path ordering (Section 1.1)
 - Hash verification follows read-path ordering (Section 1.2)
-- **Metadata reflects reality at write time:** for v1.9+ writes with compression_codec=none, compressed_hash equals logical_hash; legacy blocks may keep NULL
+- **Metadata reflects reality at write time:** for v1.9+ writes with compression_codec=none, compressed_hash equals logical_hash and compressed_size equals plaintext_size; legacy blocks may keep NULL metadata fields.
 
 ### 3.2 Chunk (chunks table)
 

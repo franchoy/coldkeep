@@ -75,7 +75,7 @@ type StoredBlock struct {
     // Transform state (IMMUTABLE after write)
     Codec          string         // "none" | "aes-gcm"
     CompressionCodec string       // "none" | "zstd"
-    CompressedSize int64          // Bytes after compression stage (equals PlaintextSize if codec=none)
+    CompressedSize int64          // Bytes after compression stage (v1.9+ writes always populate; equals PlaintextSize if compression_codec=none; legacy rows may be null)
     StoredSize     int64          // On-disk bytes
     PlaintextSize  int64          // Encoded logical block payload (pre-compression)
     
