@@ -116,28 +116,6 @@ func TestNewStorageBlockReader(t *testing.T) {
 	if reader.containersDir != "/containers" {
 		t.Fatalf("expected containersDir to be set")
 	}
-	if !reader.verifyHash {
-		t.Fatalf("expected verifyHash to be true by default")
-	}
-}
-
-// TestStorageBlockReaderDisableHashVerification validates the disable flag.
-func TestStorageBlockReaderDisableHashVerification(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dbconn.Close()
-
-	reader := NewStorageBlockReader(dbconn, "/tmp")
-	if !reader.verifyHash {
-		t.Fatalf("expected verifyHash=true initially")
-	}
-
-	reader.DisableHashVerification()
-	if reader.verifyHash {
-		t.Fatalf("expected verifyHash=false after disable")
-	}
 }
 
 // TestStorageBlockReaderLogBlockRead validates logging (no-op if no error).

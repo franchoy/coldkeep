@@ -40,7 +40,6 @@ import (
 type StorageBlockReader struct {
 	db            *sql.DB
 	containersDir string
-	verifyHash    bool
 }
 
 type hashLayer string
@@ -100,7 +99,6 @@ func NewStorageBlockReader(db *sql.DB, containersDir string) *StorageBlockReader
 	return &StorageBlockReader{
 		db:            db,
 		containersDir: containersDir,
-		verifyHash:    true, // fail-closed logical hash verification is mandatory
 	}
 }
 
@@ -122,10 +120,9 @@ func (r *StorageBlockReader) ReadBlock(ctx context.Context, blockID int64) (*blo
 	if err != nil {
 		return nil, fmt.Errorf("load block %d metadata: %w", blockID, err)
 	}
-	if r.verifyHash && len(metadata.Metadata.Hashes.LogicalHash) == 0 {
+	if len(metadata.Metadata.Hashes.LogicalHash) == 0 {
 		return nil, fmt.Errorf("block %d has empty block_hash; fail-closed hash verification requires non-empty block_hash", blockID)
 	}
-
 	verified, err := verify.VerifyStoredBlock(ctx, toVerifyBlockStorageMetadata(metadata), storageVerifyContainerReader{reader: r})
 	if err != nil {
 		return nil, r.mapVerifyPipelineFailure(err)
@@ -375,11 +372,6 @@ func (r *StorageBlockReader) readStoredPayload(meta *blockMetadata) ([]byte, err
 	}
 
 	return payload, nil
-}
-
-// DisableHashVerification turns off mandatory hash verification (only for testing).
-func (r *StorageBlockReader) DisableHashVerification() {
-	r.verifyHash = false
 }
 
 // LogBlockRead logs block read operation for debugging.
