@@ -174,17 +174,23 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 		return err
 	}
 
-	// blocks.container_id present ↔ chunk.status = COMPLETED.
+	// Legacy-path consistency check: blocks.container_id present ↔
+	// chunk.status = COMPLETED. Packed-path presence/structure is validated via
+	// chunk_block_refs/storage_blocks checks in repository verification.
 	if err = checkChunkContainerConsistency(dbconn); err != nil {
 		return err
 	}
 
-	// COMPLETED chunks have a blocks row with valid container_id and block_offset.
+	// Chunk location metadata consistency across migration states:
+	// legacy blocks row (container_id/block_offset), packed refs
+	// (chunk_block_refs->storage_blocks), or migration companion state (both).
 	if err = checkChunkOffsets(dbconn); err != nil {
 		return err
 	}
 
-	// block_offset + stored_size does not exceed container current_size.
+	// Container-bound checks for persisted byte ranges. This applies to legacy
+	// blocks offsets and packed storage_blocks offsets through their respective
+	// verification paths.
 	if err = checkChunkOffsetValidity(dbconn); err != nil {
 		return err
 	}
@@ -202,10 +208,10 @@ func VerifySystemFullWithContainersDir(dbconn *sql.DB, containersDir string) err
 func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) error {
 	// deep = full checks + byte-level physical integrity.
 	//
-	// For every container: open the file, read each block in offset order,
-	// decode with the stored codec, and SHA-256 the plaintext against the
-	// stored chunk_hash. No chunker algorithm is invoked at any point — the
-	// hash comparison is against the value written at ingest time.
+	// For every container with packed block data: open the file and verify each
+	// storage_blocks entry in container_offset order. Verification is stage-aware
+	// (physical/compressed/logical) using per-block metadata and hashes; it does
+	// not re-chunk data and does not infer state from legacy blocks comments.
 	log.Printf("Starting Deep system verification...")
 
 	var err error
@@ -285,7 +291,7 @@ func VerifySystemDeepWithContainersDir(dbconn *sql.DB, containersDir string) err
 		fileSize := currentSize
 
 		processContainerErr := func() (retErr error) {
-			//fetch chunks ordered by offset
+			// Fetch packed storage_blocks ordered by container_offset.
 			chunks, err := dbconn.QueryContext(ctx, `SELECT 
 									sb.id,
 									sb.container_offset,

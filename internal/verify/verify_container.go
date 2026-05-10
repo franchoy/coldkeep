@@ -46,8 +46,9 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Check that all containers have their files present on disk
-	// and that the file sizes match the DB records
+	// Check that container files exist and sizes match DB metadata for containers
+	// that currently have at least one COMPLETED legacy blocks mapping.
+	// Packed-path byte integrity is validated by deep verify over storage_blocks.
 	log.Printf("Checking container file existence and size consistency...")
 	var errorList []error
 	var errorCount int
@@ -140,8 +141,9 @@ func checkChunkContainerConsistency(dbconn *sql.DB) error {
 	ctx, cancel := db.NewOperationContext(context.Background())
 	defer cancel()
 
-	// Check that all chunks are correctly associated with their containers
-	// if blocks.container_id exists for a chunk → chunk.status must be COMPLETED
+	// Legacy mapping consistency check: if blocks.container_id exists for a
+	// chunk, chunk.status must be COMPLETED. Packed mappings are validated via
+	// chunk_block_refs/storage_blocks checks.
 	log.Printf("Checking chunk-container consistency...")
 	var errorList []error
 	var errorCount int
