@@ -44,7 +44,7 @@ container_bytes
 |------|-------|-------|----------|---------|
 | logical_hash | `storage_blocks.block_hash` | Encoded block (pre-transform) | ✗ NEVER | Verify logical content |
 | compressed_hash | `storage_blocks.compressed_hash` | After compression stage (zstd bytes or logical bytes for compression_codec=none) | ✓ legacy only | Verify compression layer |
-| physical_hash | `storage_blocks.physical_hash` | After encryption (if applied) | ✓ if plain/legacy | Verify on-disk bytes |
+| physical_hash | `storage_blocks.physical_hash` | After encryption (if applied) | ✓ if none/legacy | Verify on-disk bytes |
 | chunk_hash | `chunks.chunk_hash` | Plaintext chunk (dedup key) | ✗ NEVER | Dedup identity |
 
 **Engine Rule:** Trust per-block metadata. Verify skips missing hashes (legacy support).
@@ -73,7 +73,7 @@ type StoredBlock struct {
     BlockHash      []byte         // logical_hash (required)
     
     // Transform state (IMMUTABLE after write)
-    Codec          string         // "plain" | "aes-gcm"
+    Codec          string         // "none" | "aes-gcm"
     CompressionCodec string       // "none" | "zstd"
     CompressedSize int64          // Bytes after compression stage (equals PlaintextSize if codec=none)
     StoredSize     int64          // On-disk bytes
@@ -82,7 +82,7 @@ type StoredBlock struct {
     // Hashes (IMMUTABLE after write)
     LogicalHash    []byte         // Encoded block (required)
     CompressedHash []byte         // After compression stage (legacy blocks may be null)
-    PhysicalHash   []byte         // After encryption (null if plain/legacy)
+    PhysicalHash   []byte         // After encryption (null if none/legacy)
     
     // Location
     ContainerID    int64
@@ -160,7 +160,7 @@ Example valid repository state:
 | C | `zstd` | `aes-gcm` | `packed-multi` |
 
 **One repository can contain:**
-- Plain (`codec=plain`) + AES-GCM (`codec=aes-gcm`) blocks simultaneously
+- Unencrypted (`codec=none`) + AES-GCM (`codec=aes-gcm`) blocks simultaneously
 - Uncompressed (`compression_codec=none`) + Zstd (`compression_codec=zstd`) blocks simultaneously
 
 **Read Path:** Per-block metadata determines action. Repository defaults are non-authoritative for reads.
@@ -310,7 +310,7 @@ A: Yes. Each block has compression_codec field. Decompress IF = "zstd", else ski
 **Q: Can I change hash algorithms?**  
 A: No. SHA256 is locked for logical/compressed/physical hashes. Requires v2.0.
 
-**Q: Must I support both plain and aes-gcm in one repo?**  
+**Q: Must I support both none and aes-gcm in one repo?**  
 A: Yes. Mixed repos are guaranteed. Per-block codec field handles routing.
 
 ---

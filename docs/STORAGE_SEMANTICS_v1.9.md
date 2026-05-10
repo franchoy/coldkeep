@@ -49,7 +49,7 @@ compute_logical_hash (SHA256 of encoded block before transformation)
     - logical_hash (input to transformations)
       - compressed_hash (payload hash after compression stage; equals logical_hash when compression_codec=none for v1.9+ writes)
     - physical_hash (final state after all transforms)
-    - codec (plain or aes-gcm)
+   - codec (none or aes-gcm)
     - compression_codec (none or zstd)
       - compressed_size (bytes after compression stage; equals plaintext_size when compression_codec=none)
 ```
@@ -109,7 +109,7 @@ output: chunk payloads (combining all verified chunks)
 |------|-------|-----------|----------|---------|---------|
 | `logical_hash` (block_hash) | Encoded block (pre-transform) | Plaintext after encoding | NEVER | v1.0+ | Proof of logical content; read-path verification target |
 | `compressed_hash` | Payload after compression stage | Zstd output bytes OR encoded logical bytes when compression_codec=none | YES (legacy v1.6-v1.8 null) | v1.9+ | Compression-stage integrity; expected for new blocks, including compression_codec=none |
-| `physical_hash` | Payload after encryption | AES-GCM output || NULL | YES (legacy null for plain codec) | v1.9+ | Final on-disk state; skipped if codec=plain and no physical tracking |
+| `physical_hash` | Payload after encryption | AES-GCM output || NULL | YES (legacy null for none codec) | v1.9+ | Final on-disk state; skipped if codec=none and no physical tracking |
 | `chunk_hash` | Individual chunk | Raw plaintext chunk before encoding | NEVER | v1.0+ | Dedup identity; stored in `chunk.chunk_hash` |
 
 ### 2.2 Hash Computation Rules (FROZEN)
@@ -127,7 +127,7 @@ IF compression_codec = "none":
 IF codec = "aes-gcm":
    physical_hash = SHA256(aes_gcm_ciphertext || nonce)
 
-IF codec = "plain":
+IF codec = "none":
    physical_hash = NULL (legacy) OR = compressed_hash (new blocks with v1.9 writer)
    
 RESTORE/VERIFY: Must validate in reverse order
@@ -146,7 +146,7 @@ Legacy blocks (v1.6-v1.8) may have NULL `compressed_hash` / `physical_hash`. Ver
 ### 2.3 Hash Equality Invariants (FROZEN)
 
 ```
-For uncompressed+plain blocks:
+For uncompressed+none blocks:
    logical_hash = compressed_hash
    physical_hash = NULL (legacy) OR = compressed_hash (v1.9+)
 
@@ -154,7 +154,7 @@ For uncompressed+aes-gcm blocks:
    logical_hash = compressed_hash
    logical_hash ≠ physical_hash (encryption changes bytes)
 
-For compressed+plain blocks:
+For compressed+none blocks:
    logical_hash ≠ compressed_hash (compression changes size/content)
    physical_hash = compressed_hash (no encryption)
 
@@ -196,7 +196,7 @@ not redefine logical identity.
 - `block_hash` (REQUIRED): SHA256 of logical block contents (before compression/encryption)
 
 **Transform State (v1.9 semantics):**
-- `codec` (plain | aes-gcm): Encryption applied during write
+- `codec` (none | aes-gcm): Persisted encryption transform state for each storage block
 - `compression_codec` (none | zstd): Compression applied during write
 - `compressed_size` (bytes): Size after compression stage (equals `plaintext_size` if compression_codec=none)
 - `stored_size` (bytes): Final on-disk bytes in container (including encryption overhead)
@@ -205,7 +205,7 @@ not redefine logical identity.
 **Hash State:**
 - `logical_hash` = `block_hash`: Content hash before any transforms
 - `compressed_hash` (SHA256 | NULL): Compression-stage integrity (legacy blocks may be NULL; v1.9+ writes set this even when compression_codec=none)
-- `physical_hash` (SHA256 | NULL): On-disk state after all transforms (NULL if plain/legacy)
+- `physical_hash` (SHA256 | NULL): On-disk state after all transforms (NULL if none/legacy)
 
 **Container Location:**
 - `container_id`: Foreign key to `container` table
@@ -367,7 +367,7 @@ transition error.
 ### 5.1 Mixed Codec State
 
 A single repository can contain:
-- **Plain:** `codec=plain` blocks (unencrypted)
+- **Unencrypted:** `codec=none` blocks
 - **AES-GCM:** `codec=aes-gcm` blocks (encrypted with COLDKEEP_KEY)
 
 **Read-Path Guarantee (FROZEN):**
@@ -376,7 +376,7 @@ FOR each block in repository:
    IF codec = "aes-gcm":
       require COLDKEEP_KEY set and valid (non-empty, hex, 32 bytes)
       decrypt using key + stored nonce
-   IF codec = "plain":
+   IF codec = "none":
       use plaintext directly (no decryption)
    
 Read operation succeeds IFF:
@@ -390,7 +390,7 @@ Repository codec cannot be retroactively changed for existing blocks.
 New writes use current repository default codec (set at write time).
 Reads support any registered codec in `blocks.CodecRegistry`.
 
-Implication: Codec mismatch (plain blocks in aes-gcm-requiring environment)
+Implication: Codec mismatch (none blocks in aes-gcm-requiring environment)
 must be caught at verify/restore time with clear error.
 ```
 

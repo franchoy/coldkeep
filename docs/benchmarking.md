@@ -1426,11 +1426,11 @@ persisted_bytes → physical_hash (if present) → decrypt (if AES-GCM) →
 **Four Hash Types (FROZEN):**
 - `logical_hash` (`storage_blocks.block_hash`): Encoded block content (required, never null)
 - `compressed_hash` (`storage_blocks.compressed_hash`): Compression-stage output hash (legacy blocks may be null; v1.9+ writes populate this for compression_codec=none and zstd)
-- `physical_hash` (`storage_blocks.physical_hash`): After encryption (nullable only for legacy plain blocks)
+- `physical_hash` (`storage_blocks.physical_hash`): After encryption (nullable only for legacy none blocks)
 - `chunk_hash`: Plaintext chunk for dedup (required, never null)
 
 **Mixed Repository Invariants (LOCKED):**
-- Codec per block; one repo can have plain + aes-gcm coexisting
+- Codec per block; one repo can have none + aes-gcm coexisting
 - Compression per block; one repo can have none + zstd coexisting
 - Config determines defaults at write time; doesn't affect reads
 - Stats reflect actual block metadata; configuration-independent
