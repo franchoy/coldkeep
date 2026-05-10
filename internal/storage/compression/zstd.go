@@ -17,6 +17,9 @@ type zstdCompressor struct {
 
 // NewZstdCompressor returns a Compressor configured for zstd at the provided
 // compression level. Supported levels are 1..22.
+// Repository-level configuration in v1.9 intentionally constrains defaults to
+// 1..9; this constructor exposes the broader codec capability for lower-level
+// and test contexts.
 func NewZstdCompressor(level int) (Compressor, error) {
 	if level < zstdLevelMin || level > zstdLevelMax {
 		return nil, fmt.Errorf("%w: zstd level=%d supported=[%d..%d]", ErrInvalidCompressionLevel, level, zstdLevelMin, zstdLevelMax)

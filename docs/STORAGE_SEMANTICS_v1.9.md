@@ -295,6 +295,7 @@ future engine semantics.
 **Storage (repository_config table):**
 - Key `compression`: Value = `"none"` (default) | `"zstd"`
 - Key `compression_level`: Value = integer in [1, 9] (ignored if compression=none; default 3)
+- Compression library capability: zstd levels [1, 22] are supported by the low-level compressor API; repository_config intentionally constrains public defaults to [1, 9] in v1.9.
 
 **Lifecycle:**
 1. **Repository init:** Writes compression=none, level=3 by default

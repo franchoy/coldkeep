@@ -90,8 +90,10 @@ const (
 	repositoryDefaultCompressionLevelKey = "compression_level"
 	defaultCompressionCodec              = storagecompression.CompressionNone
 	defaultCompressionLevel              = 3
-	// Phase 5.1: zstd levels initially 1-9 to avoid overly aggressive or minimal tuning.
-	// Range [0, 11] preserves zstd capability; [1, 9] is initial contract boundary.
+	// Repository-level public contract (v1.9): zstd levels are constrained to [1, 9].
+	// Note: lower-level compression library support is broader ([1, 22]) via
+	// compression.NewZstdCompressor, but repository_config intentionally remains
+	// narrower for stable operator-facing semantics.
 	minCompressionLevel = 1
 	maxCompressionLevel = 9
 )
@@ -227,11 +229,13 @@ func SetDefaultCompressionLevel(tx *sql.Tx, level int) error {
 // repository open/init.
 //
 // Contract (Phase 5.1):
-// - compression codec must be "none" or "zstd"
-// - compression_level is only relevant for "zstd" codec
-// - compression_level must be in range [1, 9] when set
-// - missing compression config defaults to "none" (no compression)
-// - missing compression_level defaults to 3 (when compression is not "none")
+//   - compression codec must be "none" or "zstd"
+//   - compression_level is only relevant for "zstd" codec
+//   - compression_level must be in range [1, 9] when set
+//   - missing compression config defaults to "none" (no compression)
+//   - missing compression_level defaults to 3 (when compression is not "none")
+//   - repository-level range [1, 9] is intentionally narrower than the
+//     compression library range [1, 22]
 func ValidateRepositoryCompressionConfig(tx *sql.Tx) error {
 	if tx == nil {
 		return errors.New("nil transaction")
