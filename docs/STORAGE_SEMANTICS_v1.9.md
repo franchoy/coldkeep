@@ -37,7 +37,7 @@ compute_logical_hash (SHA256 of encoded block before transformation)
       compute_physical_hash (SHA256 of persisted bytes: nonce || ciphertext)
    ELSE codec = "none":
     skip encryption stage
-    physical_hash = NULL (legacy) OR physical_hash = compressed_hash (v1.9+)
+    physical_hash = compressed_hash
     ↓
 [persist to container]
   Write to container file at current_offset
