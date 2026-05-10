@@ -34,8 +34,8 @@ compute_logical_hash (SHA256 of encoded block before transformation)
 [encryption stage: IF encryption enabled]
   IF codec = "aes-gcm":
     encrypt_payload (AES-256-GCM, nonce = random 12 bytes per block)
-    compute_physical_hash (SHA256 of encrypted bytes + nonce)
-  ELSE codec = "plain":
+      compute_physical_hash (SHA256 of persisted bytes: nonce || ciphertext)
+   ELSE codec = "none":
     skip encryption stage
     physical_hash = NULL (legacy) OR physical_hash = compressed_hash (v1.9+)
     ↓
@@ -64,7 +64,8 @@ All verify and restore operations traverse transforms in reverse:
 persisted_bytes (container file at block_offset...block_offset+stored_size)
     ↓
 [verify physical_hash IF present]
-  Check: SHA256(encrypted_payload || nonce) == physical_hash
+   Check: SHA256(persisted_payload_bytes) == physical_hash
+     (aes-gcm persisted bytes are nonce || ciphertext)
   If fails: ABORT (physical integrity broken)
     ↓
 [decrypt IF codec=aes-gcm]
@@ -109,7 +110,7 @@ output: chunk payloads (combining all verified chunks)
 |------|-------|-----------|----------|---------|---------|
 | `logical_hash` (block_hash) | Encoded block (pre-transform) | Plaintext after encoding | NEVER | v1.0+ | Proof of logical content; read-path verification target |
 | `compressed_hash` | Payload after compression stage | Zstd output bytes OR encoded logical bytes when compression_codec=none | YES (legacy v1.6-v1.8 null) | v1.9+ | Compression-stage integrity; expected for new blocks, including compression_codec=none |
-| `physical_hash` | Payload after encryption | AES-GCM output || NULL | YES (legacy null for none codec) | v1.9+ | Final on-disk state; skipped if codec=none and no physical tracking |
+| `physical_hash` | Persisted payload bytes | nonce || ciphertext (aes-gcm) OR compressed payload bytes (codec=none) | YES (legacy v1.6-v1.8 null) | v1.9+ | Final on-disk-state integrity; present for new writes in both none and aes-gcm modes |
 | `chunk_hash` | Individual chunk | Raw plaintext chunk before encoding | NEVER | v1.0+ | Dedup identity; stored in `chunk.chunk_hash` |
 
 ### 2.2 Hash Computation Rules (FROZEN)
@@ -125,10 +126,10 @@ IF compression_codec = "none":
    compressed_hash = logical_hash (same bytes at compression stage)
 
 IF codec = "aes-gcm":
-   physical_hash = SHA256(aes_gcm_ciphertext || nonce)
+   physical_hash = SHA256(nonce || aes_gcm_ciphertext)
 
 IF codec = "none":
-   physical_hash = NULL (legacy) OR = compressed_hash (new blocks with v1.9 writer)
+   physical_hash = compressed_hash for v1.9+ writes; legacy rows may be NULL
    
 RESTORE/VERIFY: Must validate in reverse order
    1. physical_hash (if present) — proves on-disk bytes untouched
@@ -148,7 +149,7 @@ Legacy blocks (v1.6-v1.8) may have NULL `compressed_hash` / `physical_hash`. Ver
 ```
 For uncompressed+none blocks:
    logical_hash = compressed_hash
-   physical_hash = NULL (legacy) OR = compressed_hash (v1.9+)
+   physical_hash = compressed_hash (v1.9+); legacy rows may be NULL
 
 For uncompressed+aes-gcm blocks:
    logical_hash = compressed_hash
@@ -205,7 +206,7 @@ not redefine logical identity.
 **Hash State:**
 - `logical_hash` = `block_hash`: Content hash before any transforms
 - `compressed_hash` (SHA256 | NULL): Compression-stage integrity (legacy blocks may be NULL; v1.9+ writes set this even when compression_codec=none)
-- `physical_hash` (SHA256 | NULL): On-disk state after all transforms (NULL if none/legacy)
+- `physical_hash` (SHA256 | NULL): On-disk state after all transforms (v1.9+ writes set this for both none and aes-gcm; legacy rows may be NULL)
 
 **Container Location:**
 - `container_id`: Foreign key to `container` table

@@ -1426,7 +1426,7 @@ persisted_bytes → physical_hash (if present) → decrypt (if AES-GCM) →
 **Four Hash Types (FROZEN):**
 - `logical_hash` (`storage_blocks.block_hash`): Encoded block content (required, never null)
 - `compressed_hash` (`storage_blocks.compressed_hash`): Compression-stage output hash (legacy blocks may be null; v1.9+ writes populate this for compression_codec=none and zstd)
-- `physical_hash` (`storage_blocks.physical_hash`): After encryption (nullable only for legacy none blocks)
+- `physical_hash` (`storage_blocks.physical_hash`): Persisted-byte hash (v1.9+ writes populate this for both `codec=none` and `codec=aes-gcm`; nullable only for legacy rows). For `aes-gcm`, persisted bytes are `nonce || ciphertext`, so `physical_hash = SHA256(nonce || ciphertext)`.
 - `chunk_hash`: Plaintext chunk for dedup (required, never null)
 
 **Mixed Repository Invariants (LOCKED):**

@@ -44,7 +44,7 @@ container_bytes
 |------|-------|-------|----------|---------|
 | logical_hash | `storage_blocks.block_hash` | Encoded block (pre-transform) | ✗ NEVER | Verify logical content |
 | compressed_hash | `storage_blocks.compressed_hash` | After compression stage (zstd bytes or logical bytes for compression_codec=none) | ✓ legacy only | Verify compression layer |
-| physical_hash | `storage_blocks.physical_hash` | After encryption (if applied) | ✓ if none/legacy | Verify on-disk bytes |
+| physical_hash | `storage_blocks.physical_hash` | Persisted bytes (nonce||ciphertext for aes-gcm; compressed payload bytes for codec=none) | ✓ legacy only | Verify on-disk bytes |
 | chunk_hash | `chunks.chunk_hash` | Plaintext chunk (dedup key) | ✗ NEVER | Dedup identity |
 
 **Engine Rule:** Trust per-block metadata. Verify skips missing hashes (legacy support).
@@ -82,7 +82,7 @@ type StoredBlock struct {
     // Hashes (IMMUTABLE after write)
     LogicalHash    []byte         // Encoded block (required)
     CompressedHash []byte         // After compression stage (legacy blocks may be null)
-    PhysicalHash   []byte         // After encryption (null if none/legacy)
+    PhysicalHash   []byte         // Persisted-byte hash (legacy blocks may be null)
     
     // Location
     ContainerID    int64
@@ -184,7 +184,7 @@ PhysicalRatio = LogicalBytes / StoredBytes  // Always ≤ 1.0
 Standard Verify:
   1. Load block metadata
   2. Open container; read bytes at block_offset...block_offset+stored_size
-  3. IF physical_hash present: SHA256(bytes+nonce) must match
+  3. IF physical_hash present: SHA256(persisted_bytes) must match
   4. IF codec=aes-gcm: Decrypt (auth failure = corruption)
   5. IF compressed_hash present: SHA256(compressed_bytes) must match
   6. IF compression_codec=zstd: Decompress
