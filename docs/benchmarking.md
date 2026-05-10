@@ -214,17 +214,27 @@ COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
 To detect regressions against each baseline:
 
 ```bash
-# Uncompressed production path regression check
+# Uncompressed production path regression checks (w1 and w4)
 COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
   coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
   --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json \
   --threshold 20
 
-# Compressed production path regression check
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 \
+   --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json \
+   --threshold 20
+
+# Compressed production path regression checks (w1 and w4)
 COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
   coldkeep benchmark run --dataset small --repeat 1 --workers 1 \
   --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json \
   --threshold 20
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 \
+   --compare benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json \
+   --threshold 20
 ```
 
 For one-command capture + validation, use:
@@ -1599,9 +1609,9 @@ This checklist is the release-readiness closeout for Phase 6.
 ### Baselines
 
 - [x] Uncompressed baseline established.
-   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
+   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`, `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json`
 - [x] Compressed baseline established.
-   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
+   - Evidence: `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`, `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json`
 - [x] Same corpora used across baselines.
    - Evidence: `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json` (`same_dataset=true`, same totals)
 - [x] Regression thresholds documented.
