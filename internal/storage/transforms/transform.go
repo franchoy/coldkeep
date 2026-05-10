@@ -30,12 +30,12 @@
 //	│   → this is the dedup key and the restore integrity anchor      │
 //	├─────────────────────────────────────────────────────────────────┤
 //	│ Layer 2 — Transformed payload                                   │
-//	│   output of the transform pipeline (e.g. compressed, encrypted) │
+//	│   post-compression / pre-encryption payload                     │
 //	│   → compressed_hash = sha256(post-compression bytes)             │
 //	│   → not a dedup key; diagnostic / repair checkpoint only        │
 //	├─────────────────────────────────────────────────────────────────┤
 //	│ Layer 3 — Persisted payload                                     │
-//	│   exact bytes written to the container file                     │
+//	│   exact bytes written to the container file (encryption applied)│
 //	│   → physical_hash = sha256(persisted bytes)                     │
 //	│   → corruption detection, transfer validation                   │
 //	└─────────────────────────────────────────────────────────────────┘
