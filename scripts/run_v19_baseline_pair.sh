@@ -8,6 +8,7 @@ DATASET="small"
 WORKERS="1"
 REPEAT="1"
 THRESHOLD="20"
+MANIFEST_PATH=""
 
 usage() {
   cat <<'USAGE'
@@ -24,6 +25,7 @@ Options:
   --workers N        benchmark worker count (default: 1)
   --repeat N         benchmark repeat count (default: 1)
   --threshold PCT    compare threshold percentage (default: 20)
+  --manifest PATH    output manifest path (default: worker-specific file in out-dir)
   -h, --help         show this help text
 
 Environment prerequisites:
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --threshold)
       THRESHOLD="$2"
+      shift 2
+      ;;
+    --manifest)
+      MANIFEST_PATH="$2"
       shift 2
       ;;
     -h|--help)
@@ -91,7 +97,11 @@ mkdir -p "$OUT_DIR"
 
 BASE_A="$OUT_DIR/benchmark-baseline-v1.9-packed-aes-gcm-none-${DATASET}-w${WORKERS}-r${REPEAT}.json"
 BASE_B="$OUT_DIR/benchmark-baseline-v1.9-packed-aes-gcm-zstd-${DATASET}-w${WORKERS}-r${REPEAT}.json"
-MANIFEST="$OUT_DIR/baseline-manifest-v1.9.json"
+if [[ -z "$MANIFEST_PATH" ]]; then
+  MANIFEST="$OUT_DIR/baseline-manifest-v1.9-${DATASET}-w${WORKERS}-r${REPEAT}.json"
+else
+  MANIFEST="$MANIFEST_PATH"
+fi
 
 echo "capturing Baseline A (packed + aes-gcm + none)"
 COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
