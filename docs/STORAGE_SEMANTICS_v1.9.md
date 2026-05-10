@@ -537,10 +537,11 @@ defaults or homogeneous repository assumptions.
 ### 7.1 The Separation Contract (FROZEN)
 
 **Repository Configuration (READ AT WRITE TIME):**
-- `default_compression`: Policy for newly written blocks
-- `default_compression_level`: Policy for newly written blocks (if zstd)
+- `compression`: Policy for newly written blocks
+- `compression_level`: Policy for newly written blocks (if zstd)
 - Write-path encryption default is resolved from runtime `COLDKEEP_CODEC` (default `aes-gcm`)
 - Capability-model baseline encryption (`repository_encryption_baseline`) is `none` for compatibility reporting and is not a write-policy source
+- Capability-model fields `DefaultCompression` / `DefaultCompressionLevel` are reporting fields in repository capabilities, not repository_config DB keys
 - `default_packing`: Policy for newly written blocks (v1.9 packed-multi by default)
 
 **Block Metadata (IMMUTABLE):**

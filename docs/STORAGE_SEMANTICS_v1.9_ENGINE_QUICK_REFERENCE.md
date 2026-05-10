@@ -102,12 +102,13 @@ type StoredBlock struct {
 **Repository Defaults (write policy only):**
 ```
 repository_config table:
-  - default_compression: "none" (default) | "zstd"
-  - default_compression_level: int [1..9] (v1.9 public repository contract)
+  - compression: "none" (default) | "zstd"
+  - compression_level: int [1..9] (v1.9 public repository contract)
     Note: compression library supports zstd levels [1..22]; repository defaults
     are intentionally constrained to [1..9] for stable operator-facing semantics.
   - write-path encryption default: runtime `COLDKEEP_CODEC` (default: `aes-gcm`)
   - capability baseline encryption: `repository_encryption_baseline="none"` (compatibility reporting only; not a write default)
+  - capability-model fields `DefaultCompression` / `DefaultCompressionLevel` are reporting fields, not repository_config keys
   - default_packing: "packed-multi" in v1.9
 ```
 
