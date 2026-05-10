@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   format_version INTEGER NOT NULL CHECK (format_version > 0),
   codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
   plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
-  compression_codec TEXT NOT NULL DEFAULT 'none',
+  compression_codec TEXT NOT NULL DEFAULT 'none' CHECK (compression_codec IN ('none', 'zstd')),
   compression_level INTEGER,
   compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size INTEGER NOT NULL CHECK (stored_size > 0),

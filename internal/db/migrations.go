@@ -588,7 +588,7 @@ func runSQLiteBlockAbstractionFoundationMigration(dbconn sqliteContextExecutor, 
 			format_version INTEGER NOT NULL CHECK (format_version > 0),
 			codec TEXT NOT NULL,
 			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
-			compression_codec TEXT NOT NULL DEFAULT 'none',
+			compression_codec TEXT NOT NULL DEFAULT 'none' CHECK (compression_codec IN ('none', 'zstd')),
 			compression_level INTEGER,
 			compressed_size INTEGER CHECK (compressed_size IS NULL OR compressed_size > 0),
 			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
@@ -666,6 +666,26 @@ func runSQLiteStorageTransformMetadataMigration(dbconn sqliteContextExecutor, ct
 					return fmt.Errorf("add storage_blocks.%s: %w", columnSpec.name, err)
 				}
 			}
+		}
+
+		// Normalize historical codec values to the v1.9 supported set.
+		// SQLite cannot add a new CHECK constraint to an existing column via
+		// ALTER TABLE, so legacy tables are normalized here while fresh schemas
+		// enforce CHECK(compression_codec IN ('none','zstd')) at DDL time.
+		if _, err := dbconn.ExecContext(ctx, `
+			UPDATE storage_blocks
+			SET compression_codec = 'none'
+			WHERE compression_codec IS NULL
+			   OR LOWER(TRIM(compression_codec)) NOT IN ('none', 'zstd')
+		`); err != nil {
+			return fmt.Errorf("normalize storage_blocks.compression_codec unsupported values: %w", err)
+		}
+		if _, err := dbconn.ExecContext(ctx, `
+			UPDATE storage_blocks
+			SET compression_codec = LOWER(TRIM(compression_codec))
+			WHERE compression_codec IS NOT NULL
+		`); err != nil {
+			return fmt.Errorf("normalize storage_blocks.compression_codec casing: %w", err)
 		}
 	}
 

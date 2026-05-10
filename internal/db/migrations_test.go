@@ -401,6 +401,9 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "compression_codec text not null default 'none'") {
 		t.Fatalf("expected storage_blocks DDL to include compression_codec default none, got %q", bootstrapCompressionCodec)
 	}
+	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "check (compression_codec in ('none', 'zstd'))") {
+		t.Fatalf("expected storage_blocks DDL to constrain compression_codec to none/zstd, got %q", bootstrapCompressionCodec)
+	}
 }
 
 func TestLoadSQLiteSchemaNormalizesLegacySchemaVersionHistory(t *testing.T) {
@@ -905,6 +908,90 @@ func TestRunMigrationsAddsTransformAwareStorageBlockMetadataToV12Repositories(t 
 	}
 	if configuredDefaultCompression != "zstd" {
 		t.Fatalf("expected existing repository default block compression to remain unchanged, got %q", configuredDefaultCompression)
+	}
+}
+
+func TestRunMigrationsNormalizesLegacyUnsupportedStorageBlockCompressionCodec(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	legacySchema := `
+		PRAGMA foreign_keys = ON;
+		CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+		INSERT INTO schema_version(version) VALUES (13);
+
+		CREATE TABLE repository_config (
+			key TEXT PRIMARY KEY CHECK (key != ''),
+			value TEXT NOT NULL CHECK (value != '')
+		);
+		INSERT INTO repository_config(key, value) VALUES ('default_chunker', 'v1-simple-rolling');
+
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			filename TEXT NOT NULL UNIQUE,
+			sealed INTEGER NOT NULL DEFAULT 0,
+			sealing INTEGER NOT NULL DEFAULT 0,
+			container_hash TEXT DEFAULT NULL,
+			quarantine INTEGER NOT NULL DEFAULT 0,
+			current_size INTEGER NOT NULL DEFAULT 0 CHECK (current_size >= 0),
+			max_size INTEGER NOT NULL CHECK (max_size > 0),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE storage_blocks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			format_version INTEGER NOT NULL CHECK (format_version > 0),
+			codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
+			plaintext_size INTEGER NOT NULL CHECK (plaintext_size > 0),
+			compression_codec TEXT NOT NULL DEFAULT 'none',
+			compression_level INTEGER,
+			compressed_size INTEGER,
+			stored_size INTEGER NOT NULL CHECK (stored_size > 0),
+			container_id INTEGER NOT NULL REFERENCES container(id) ON DELETE RESTRICT,
+			container_offset INTEGER NOT NULL CHECK (container_offset >= 0),
+			block_hash BLOB NOT NULL,
+			compressed_hash BLOB,
+			physical_hash BLOB,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+	`
+	if _, err := dbconn.Exec(legacySchema); err != nil {
+		t.Fatalf("create v13 legacy schema: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, sealed, current_size, max_size) VALUES (?, 1, ?, ?) RETURNING id`,
+		"legacy-codec-normalization.bin",
+		256,
+		1048576,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO storage_blocks (
+			format_version, codec, plaintext_size, compression_codec, stored_size, container_id, container_offset, block_hash
+		 ) VALUES (1, 'none', 64, 'gzip', 64, ?, 0, x'01020304')`,
+		containerID,
+	); err != nil {
+		t.Fatalf("insert storage block with unsupported compression_codec: %v", err)
+	}
+
+	if err := RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations v13->current: %v", err)
+	}
+
+	var normalizedCodec string
+	if err := dbconn.QueryRow(`SELECT compression_codec FROM storage_blocks LIMIT 1`).Scan(&normalizedCodec); err != nil {
+		t.Fatalf("read normalized compression_codec: %v", err)
+	}
+	if normalizedCodec != "none" {
+		t.Fatalf("expected unsupported compression_codec to normalize to none, got %q", normalizedCodec)
 	}
 }
 

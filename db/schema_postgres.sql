@@ -469,6 +469,7 @@ CREATE TABLE IF NOT EXISTS storage_blocks (
   codec TEXT NOT NULL CHECK (codec IN ('none', 'aes-gcm')),
   plaintext_size BIGINT NOT NULL CHECK (plaintext_size > 0),
   compression_codec TEXT NOT NULL DEFAULT 'none',
+  CONSTRAINT storage_blocks_compression_codec_check CHECK (compression_codec IN ('none', 'zstd')),
   compression_level INTEGER,
   compressed_size BIGINT CHECK (compressed_size IS NULL OR compressed_size > 0),
   stored_size BIGINT NOT NULL CHECK (stored_size > 0),
@@ -498,9 +499,29 @@ UPDATE schema_version SET version = 12 WHERE version < 12;
 
 -- Schema version 13: transform-aware packed-block metadata.
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_codec TEXT;
-UPDATE storage_blocks SET compression_codec = 'none' WHERE compression_codec IS NULL;
+UPDATE storage_blocks
+SET compression_codec = 'none'
+WHERE compression_codec IS NULL
+   OR LOWER(BTRIM(compression_codec)) NOT IN ('none', 'zstd');
+UPDATE storage_blocks
+SET compression_codec = LOWER(BTRIM(compression_codec))
+WHERE compression_codec IS NOT NULL;
 ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET DEFAULT 'none';
 ALTER TABLE storage_blocks ALTER COLUMN compression_codec SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'storage_blocks_compression_codec_check'
+      AND conrelid = 'storage_blocks'::regclass
+  ) THEN
+    ALTER TABLE storage_blocks
+      ADD CONSTRAINT storage_blocks_compression_codec_check
+      CHECK (compression_codec IN ('none', 'zstd'));
+  END IF;
+END
+$$;
 
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compression_level INTEGER;
 ALTER TABLE storage_blocks ADD COLUMN IF NOT EXISTS compressed_size BIGINT;

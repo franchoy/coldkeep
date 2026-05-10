@@ -675,6 +675,15 @@ func TestCorruptionFixtureCodecMetadataFailuresArePrecise(t *testing.T) {
 			dbconn := openVerifyTestDB(t)
 			defer func() { _ = dbconn.Close() }()
 
+			if tc.field == "compression_codec" {
+				if _, err := dbconn.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+					t.Fatalf("enable sqlite ignore_check_constraints for corruption fixture: %v", err)
+				}
+				defer func() {
+					_, _ = dbconn.Exec(`PRAGMA ignore_check_constraints = OFF`)
+				}()
+			}
+
 			repo := verifyCorruptionRepo{dbconn: dbconn, containersDir: t.TempDir()}
 			blockID, _ := seedVerifyCompressedPackedBlockFixture(t, dbconn, repo.containersDir, [][]byte{[]byte("fixture-codec-metadata")}, blocks.CodecPlain, storagecompression.CompressionZstd)
 			UpdateStorageBlockField(t, repo, blockID, tc.field, tc.value)
