@@ -7,6 +7,31 @@
     "v1.11",
     "v1.12"
   ],
+  "manifest_role": "ci_active_profile",
+  "active_profile": "small-w4-r1",
+  "official_baseline_set": {
+    "compression_modes": [
+      "none",
+      "zstd"
+    ],
+    "worker_profiles": [
+      "w1",
+      "w4"
+    ],
+    "contract": "none/zstd x w1/w4",
+    "artifacts": {
+      "small_w1_r1": {
+        "none": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json",
+        "zstd": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json",
+        "manifest": "benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w1-r1.json"
+      },
+      "small_w4_r1": {
+        "none": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json",
+        "zstd": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json",
+        "manifest": "benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w4-r1.json"
+      }
+    }
+  },
   "baseline_modes": {
     "baseline_a_uncompressed": {
       "label": "packed + aes-gcm + none",

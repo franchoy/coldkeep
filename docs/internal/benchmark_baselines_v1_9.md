@@ -20,18 +20,24 @@ These baselines are the reference for:
 
 ## Official Baseline Artifacts
 
-The official v1.9 baseline pair is:
+The official v1.9 baseline set is:
+
+- compression modes: `none`, `zstd`
+- worker profiles: `w1`, `w4`
+- contract shape: `none/zstd × w1/w4`
+
+Official baseline JSON files:
 
 - `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
-  - uncompressed production baseline
-  - mode: `packed + aes-gcm + none`
 - `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
-  - compressed production baseline
-  - mode: `packed + aes-gcm + zstd`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json`
 
-The machine-readable manifest is:
+Machine-readable manifests:
 
-- `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json`
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json` (CI-active profile pointer; currently `w4`)
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w1-r1.json` (frozen `w1` profile)
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w4-r1.json` (frozen `w4` profile)
 
 The authoritative regression-threshold policy is:
 
@@ -50,7 +56,7 @@ Frozen corpus expectations:
 - deterministic content generation
 - stable corpus versions
 - same dataset preset across baseline comparisons
-- same logical totals across the two official baseline modes
+- same logical totals across all official baseline profiles
 
 ## Methodology Contract
 
@@ -58,11 +64,11 @@ The official v1.9 baselines were captured under this locked methodology:
 
 - dataset preset: `small`
 - repeat count: `1`
-- worker count: `1`
+- worker count: `1` and `4` (each pair compared within same worker profile)
 - deterministic benchmark mode enabled
-- same benchmark case set across both baselines
+- same benchmark case set across all baseline profiles
 
-The baseline manifest must continue to prove:
+Each baseline manifest must continue to prove:
 
 - same dataset
 - same repeat
@@ -98,7 +104,7 @@ Requirements:
 - baseline JSON content must remain committed to the repository
 - threshold policy must remain committed and human-reviewable
 - legacy root-level baseline files remain historical context only; they are not
-  the official v1.9 reference pair
+  the official v1.9 reference set
 
 ## Freeze Statement
 

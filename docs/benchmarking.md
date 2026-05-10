@@ -137,36 +137,55 @@ JSON output exposes both per-case worker usage and an aggregate
 
 ## Current baseline
 
-The repository now maintains two official v1.9 baseline artifacts for the
+The repository now maintains an official v1.9 baseline set for the
 recommended packed production family (`aes-gcm` encryption):
+
+- compression modes: `none`, `zstd`
+- worker profiles: `w1`, `w4`
+- contract shape: `none/zstd × w1/w4` (four baseline JSON artifacts total)
 
 These artifacts are now the frozen performance reference point for v1.10+
 architectural work. Future releases may reorganize benchmark runners or CI
-gates, but they must compare against this baseline pair unless an explicit
+gates, but they must compare against this frozen set unless an explicit
 baseline-refresh decision is documented.
 
-- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
-  - Baseline A (uncompressed): `packed + aes-gcm + none`
-   - Purpose: protect v1.9 behavior and detect non-compression regressions.
-- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
-  - Baseline B (compressed): `packed + aes-gcm + zstd`
-  - Purpose: measure compression tradeoffs and detect compression regressions.
+Official v1.9 baseline files:
 
-Comparability contract for these baselines:
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json`
+- `benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json`
+
+Profile intent:
+
+- `w1`: canonical single-worker anchor used for deterministic, low-contention
+   reference comparisons.
+- `w4`: canonical CI throughput profile used by active CI regression gates.
+
+Comparability contract for each worker profile baseline pair:
 
 - same dataset preset (`small`)
 - same repeat count (`1`)
-- same execution profile (`workers=1`, deterministic mode)
+- same execution profile within each pair (`workers=1` or `workers=4`, deterministic mode)
 - same benchmark case set
 - same logical totals (`total_files`, `total_bytes`)
 
-The machine-readable manifest is stored at:
+The machine-readable manifests are stored at:
 
 - `benchmarks/v1.9/baselines/baseline-manifest-v1.9.json`
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w1-r1.json`
+- `benchmarks/v1.9/baselines/baseline-manifest-v1.9-small-w4-r1.json`
 
-It records file checksums, comparability validation, and per-case compressed vs
-uncompressed deltas. Manifest file references are repository-relative so the
-artifact remains portable and version-stable across machines.
+Manifest role contract:
+
+- `baseline-manifest-v1.9.json`: CI-active manifest pointer (currently `w4`).
+- `baseline-manifest-v1.9-small-w1-r1.json`: frozen `w1` profile manifest.
+- `baseline-manifest-v1.9-small-w4-r1.json`: frozen `w4` profile manifest.
+
+Each manifest records file checksums, comparability validation, and per-case
+compressed vs uncompressed deltas. Manifest file references are
+repository-relative so artifacts remain portable and version-stable across
+machines.
 
 The formal internal freeze document is:
 
@@ -182,6 +201,14 @@ COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
 COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
   coldkeep benchmark run --dataset small --repeat 1 --workers 1 --output json \
   > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=none \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 --output json \
+   > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w4-r1.json
+
+COLDKEEP_CODEC=aes-gcm COLDKEEP_COMPRESSION=zstd \
+   coldkeep benchmark run --dataset small --repeat 1 --workers 4 --output json \
+   > benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w4-r1.json
 ```
 
 To detect regressions against each baseline:
@@ -242,7 +269,7 @@ sensitivity with normal run-to-run variance.
 **Official policy:** See [benchmarks/v1.9/regression-thresholds.yaml](../benchmarks/v1.9/regression-thresholds.yaml)
 for the authoritative threshold definition.
 
-These thresholds are frozen for the v1.9 baseline pair and are the reference
+These thresholds are frozen for the v1.9 baseline set and are the reference
 policy for v1.10+ regression detection until an explicit threshold-refresh
 decision is approved.
 
