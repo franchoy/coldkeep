@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -774,19 +775,17 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 	if err != nil {
 		return nil, fmt.Errorf("begin tx for compression defaults: %w", err)
 	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
 	repoCodec, repoCodecErr := GetDefaultCompression(tx)
-	repoLevel, repoLevelErr := GetDefaultCompressionLevel(tx)
-	if rbErr := tx.Rollback(); rbErr != nil {
-		return nil, fmt.Errorf("rollback tx for compression defaults: %w", rbErr)
-	}
 	if repoCodecErr != nil {
 		return nil, fmt.Errorf("load repository default compression codec: %w", repoCodecErr)
 	}
-	if repoLevelErr != nil {
-		return nil, fmt.Errorf("load repository default compression level: %w", repoLevelErr)
-	}
+
 	compressionCodec := strings.TrimSpace(strings.ToLower(repoCodec))
-	compressionLevel := repoLevel
+	compressionLevel := defaultCompressionLevel
 
 	// Optional environment overrides remain available for tests/operators.
 	if rawCodec, ok := os.LookupEnv("COLDKEEP_COMPRESSION"); ok {
@@ -794,9 +793,30 @@ func buildStoreFileRuntime(sgctx StorageContext, codec blocks.Codec) (*storeFile
 			compressionCodec = trimmedCodec
 		}
 	}
-	if rawLevel, ok := os.LookupEnv("COLDKEEP_COMPRESSION_LEVEL"); ok {
-		if strings.TrimSpace(rawLevel) != "" {
-			compressionLevel = int(utils_env.GetenvOrDefaultInt64("COLDKEEP_COMPRESSION_LEVEL", int64(storagecompression.DefaultCompressionLevel)))
+
+	// compression_level is only meaningful when effective compression is zstd.
+	if compressionCodec == storagecompression.CompressionZstd {
+		if strings.TrimSpace(strings.ToLower(repoCodec)) == storagecompression.CompressionZstd {
+			repoLevel, err := GetDefaultCompressionLevel(tx)
+			if err != nil {
+				return nil, fmt.Errorf("load repository default compression level for codec=%q: %w", compressionCodec, err)
+			}
+			compressionLevel = repoLevel
+		}
+
+		if rawLevel, ok := os.LookupEnv("COLDKEEP_COMPRESSION_LEVEL"); ok {
+			trimmedLevel := strings.TrimSpace(rawLevel)
+			if trimmedLevel != "" {
+				parsedLevel, parseErr := strconv.Atoi(trimmedLevel)
+				if parseErr != nil {
+					return nil, fmt.Errorf("parse COLDKEEP_COMPRESSION_LEVEL=%q: %w", rawLevel, parseErr)
+				}
+				compressionLevel = parsedLevel
+			}
+		}
+
+		if compressionLevel < minCompressionLevel || compressionLevel > maxCompressionLevel {
+			return nil, fmt.Errorf("compression level %d out of repository range [%d, %d] for codec=%q", compressionLevel, minCompressionLevel, maxCompressionLevel, compressionCodec)
 		}
 	}
 

@@ -191,6 +191,103 @@ func TestStoreFileDefaultsToNoCompressionWhenRepoCompressionConfigMissingStep37(
 	}
 }
 
+func TestStoreFileIgnoresCompressionLevelWhenEffectiveCompressionNoneStep37A(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.Exec(`
+		INSERT INTO repository_config(key, value)
+		VALUES ('compression', 'none')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`); err != nil {
+		t.Fatalf("set repository compression=none: %v", err)
+	}
+	if _, err := dbconn.Exec(`
+		INSERT INTO repository_config(key, value)
+		VALUES ('compression_level', 'legacy-invalid-level')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+	`); err != nil {
+		t.Fatalf("set malformed repository compression_level: %v", err)
+	}
+
+	t.Setenv("COLDKEEP_COMPRESSION", "none")
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "not-an-int")
+
+	workDir := t.TempDir()
+	payload := bytes.Repeat([]byte("step37a-effective-none-"), 32)
+	inPath := filepath.Join(workDir, "step37a-effective-none.txt")
+	if err := os.WriteFile(inPath, payload, 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	result, err := StoreFileWithStorageContextAndCodecResult(StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+	}, inPath, blocks.CodecPlain)
+	if err != nil {
+		t.Fatalf("store file with effective compression=none should not fail on malformed compression_level: %v", err)
+	}
+
+	var (
+		storedCodec string
+		storedLevel sql.NullInt64
+	)
+	if err := dbconn.QueryRow(`SELECT compression_codec, compression_level FROM storage_blocks ORDER BY id DESC LIMIT 1`).Scan(&storedCodec, &storedLevel); err != nil {
+		t.Fatalf("read persisted compression metadata: %v", err)
+	}
+	if storedCodec != storagecompression.CompressionNone {
+		t.Fatalf("expected compression_codec=%q, got %q", storagecompression.CompressionNone, storedCodec)
+	}
+	if storedLevel.Valid {
+		t.Fatalf("expected NULL compression_level for codec=%q, got %d", storedCodec, storedLevel.Int64)
+	}
+
+	if got := restoreFileBytesForTest(t, dbconn, result.FileID, workDir, "step37a-effective-none.restore"); !bytes.Equal(got, payload) {
+		t.Fatalf("restored payload mismatch")
+	}
+}
+
+func TestStoreFileRejectsEnvCompressionLevelOutsideRepositoryRangeStep37B(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	t.Setenv("COLDKEEP_COMPRESSION", storagecompression.CompressionZstd)
+	t.Setenv("COLDKEEP_COMPRESSION_LEVEL", "22")
+
+	workDir := t.TempDir()
+	inPath := filepath.Join(workDir, "step37b-env-level-out-of-range.txt")
+	if err := os.WriteFile(inPath, []byte("step37b-payload"), 0o600); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	_, err = StoreFileWithStorageContextAndCodecResult(StorageContext{
+		DB:           dbconn,
+		Writer:       container.NewLocalWriterWithDirAndDB(workDir, container.GetContainerMaxSize(), dbconn),
+		ContainerDir: workDir,
+	}, inPath, blocks.CodecPlain)
+	if err == nil {
+		t.Fatal("expected error for COLDKEEP_COMPRESSION_LEVEL=22 with zstd")
+	}
+	if !strings.Contains(err.Error(), "out of repository range [1, 9]") {
+		t.Fatalf("expected repository range validation error, got: %v", err)
+	}
+}
+
 func (w *syncFailWriter) FinalizeContainer() error {
 	return nil
 }
