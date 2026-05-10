@@ -172,7 +172,8 @@ LogicalBytes = SUM(plaintext_size)  // All blocks
 CompressedBytes = SUM(compressed_size if compression_codec=zstd else plaintext_size)
 StoredBytes = SUM(stored_size)  // All blocks
 CompressionFactor = LogicalBytes / CompressedBytes  // Always ≥ 1.0
-PhysicalRatio = LogicalBytes / StoredBytes  // Always ≤ 1.0
+PhysicalSizeRatio = StoredBytes / LogicalBytes
+PhysicalFactor = LogicalBytes / StoredBytes
 ```
 
 **Engine Implication:** Must handle mixed codecs in single restore/verify operation.

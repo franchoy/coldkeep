@@ -1319,7 +1319,8 @@ and handle edge cases (mixed repositories, legacy nulls, encryption).
 
 ✔ **Ratios mathematically correct:**
 - CompressionFactor = LogicalBytes / CompressedBytes (always ≥ 1.0)
-- PhysicalRatio = LogicalBytes / StoredBytes (always ≤ 1.0, < CompressionFactor)
+- PhysicalSizeRatio = StoredBytes / LogicalBytes
+- PhysicalFactor = LogicalBytes / StoredBytes
 - Uncompressed files → CompressionFactor ≈ 1.0
 - Highly compressible files → CompressionFactor > 1.0
 - All formulas verified across accumulation and multi-chunk scenarios
@@ -1552,8 +1553,8 @@ This checklist is the release-readiness closeout for Phase 6.
    - Evidence: `internal/benchmark/metrics.go` (`LogicalBytes`, `CompressedBytes`, `StoredBytes`)
 - [x] Compression ratio tracked.
    - Evidence: `internal/benchmark/metrics.go` (`CompressionRatio`)
-- [x] Physical ratio tracked.
-   - Evidence: `internal/benchmark/metrics.go` (`PhysicalRatio`)
+- [x] Physical size ratio and physical factor tracked.
+   - Evidence: `internal/benchmark/metrics.go` (`PhysicalRatio`; size ratio), and `PhysicalFactor` as its inverse (`LogicalBytes / StoredBytes`).
 - [x] Store throughput tracked.
    - Evidence: `internal/benchmark/metrics.go` (`StoreMBps`)
 - [x] Restore throughput tracked.

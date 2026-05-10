@@ -416,7 +416,8 @@ Mixed-repo stats (BlockStats):
    - CompressedBytes = SUM(compressed_size) for zstd blocks + SUM(plaintext_size) for none blocks
    - StoredBytes = SUM(stored_size) across ALL blocks
    - CompressionFactor = LogicalBytes / CompressedBytes
-   - PhysicalRatio = LogicalBytes / StoredBytes
+   - PhysicalSizeRatio = StoredBytes / LogicalBytes
+   - PhysicalFactor = LogicalBytes / StoredBytes
    
 Stats reflect current repository state, not configuration defaults.
 ```
