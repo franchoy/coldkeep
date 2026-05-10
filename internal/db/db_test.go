@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -252,6 +253,83 @@ func TestDefaultTimeoutAccessorsReflectCurrentGlobals(t *testing.T) {
 	}
 	if got := DefaultStatementTimeout(); got != 34*time.Second {
 		t.Fatalf("expected DefaultStatementTimeout=34s, got %v", got)
+	}
+}
+
+func TestDBEnvOrDefaultUsesFallbackForUnsetOrBlank(t *testing.T) {
+	t.Setenv("DB_TEST_FALLBACK", "")
+	if got := dbEnvOrDefault("DB_TEST_FALLBACK", "fallback"); got != "fallback" {
+		t.Fatalf("expected fallback for blank env, got %q", got)
+	}
+
+	t.Setenv("DB_TEST_FALLBACK", "   ")
+	if got := dbEnvOrDefault("DB_TEST_FALLBACK", "fallback"); got != "fallback" {
+		t.Fatalf("expected fallback for whitespace env, got %q", got)
+	}
+
+	t.Setenv("DB_TEST_FALLBACK", "value")
+	if got := dbEnvOrDefault("DB_TEST_FALLBACK", "fallback"); got != "value" {
+		t.Fatalf("expected explicit value, got %q", got)
+	}
+}
+
+func TestBuildPostgresConnStringAppliesDefaultsForBlankCoreFields(t *testing.T) {
+	originalConnectTimeout := connectTimeout
+	t.Cleanup(func() { connectTimeout = originalConnectTimeout })
+	connectTimeout = 5 * time.Second
+
+	t.Setenv("DB_HOST", "")
+	t.Setenv("DB_PORT", "")
+	t.Setenv("DB_USER", "")
+	t.Setenv("DB_NAME", "")
+	t.Setenv("DB_SSLMODE", "")
+	t.Setenv("DB_PASSWORD", "")
+
+	connStr := buildPostgresConnString()
+	for _, want := range []string{
+		"host=127.0.0.1",
+		"port=5432",
+		"user=coldkeep",
+		"dbname=coldkeep",
+		"sslmode=disable",
+		"connect_timeout=5",
+	} {
+		if !strings.Contains(connStr, want) {
+			t.Fatalf("expected conn string to include %q, got: %s", want, connStr)
+		}
+	}
+
+	if strings.Contains(connStr, "port= ") || strings.Contains(connStr, "port=") && strings.Contains(connStr, "port= user") {
+		t.Fatalf("connection string should not contain an empty port token: %s", connStr)
+	}
+}
+
+func TestBuildPostgresConnStringUsesExplicitOverrides(t *testing.T) {
+	originalConnectTimeout := connectTimeout
+	t.Cleanup(func() { connectTimeout = originalConnectTimeout })
+	connectTimeout = 9 * time.Second
+
+	t.Setenv("DB_HOST", "10.0.0.5")
+	t.Setenv("DB_PORT", "6432")
+	t.Setenv("DB_USER", "operator")
+	t.Setenv("DB_NAME", "archive")
+	t.Setenv("DB_SSLMODE", "require")
+	t.Setenv("DB_PASSWORD", "secret")
+
+	connStr := buildPostgresConnString()
+	for _, want := range []string{
+		"host=10.0.0.5",
+		"port=6432",
+		"user=operator",
+		"password=secret",
+		"dbname=archive",
+		"sslmode=require",
+		"connect_timeout=9",
+		fmt.Sprintf("options='%s'", buildConnectionOptions()),
+	} {
+		if !strings.Contains(connStr, want) {
+			t.Fatalf("expected conn string to include %q, got: %s", want, connStr)
+		}
 	}
 }
 

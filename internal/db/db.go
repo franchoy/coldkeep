@@ -133,15 +133,27 @@ func buildConnectionOptions() string {
 	}, " ")
 }
 
-func ConnectDB() (*sql.DB, error) {
-	connStr := "host=" + os.Getenv("DB_HOST") +
-		" port=" + os.Getenv("DB_PORT") +
-		" user=" + os.Getenv("DB_USER") +
+func dbEnvOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func buildPostgresConnString() string {
+	return "host=" + dbEnvOrDefault("DB_HOST", "127.0.0.1") +
+		" port=" + dbEnvOrDefault("DB_PORT", "5432") +
+		" user=" + dbEnvOrDefault("DB_USER", "coldkeep") +
 		" password=" + os.Getenv("DB_PASSWORD") +
-		" dbname=" + os.Getenv("DB_NAME") +
-		" sslmode=" + utils_env.GetenvOrDefault("DB_SSLMODE", "disable") +
+		" dbname=" + dbEnvOrDefault("DB_NAME", "coldkeep") +
+		" sslmode=" + dbEnvOrDefault("DB_SSLMODE", "disable") +
 		fmt.Sprintf(" connect_timeout=%d", max(1, int(connectTimeout/time.Second))) +
 		fmt.Sprintf(" options='%s'", buildConnectionOptions())
+}
+
+func ConnectDB() (*sql.DB, error) {
+	connStr := buildPostgresConnString()
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
