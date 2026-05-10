@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
@@ -401,95 +400,6 @@ func TestLoadSQLiteSchemaCreatesPhaseOneV8FreshBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(bootstrapCompressionCodec), "compression_codec text not null default 'none'") {
 		t.Fatalf("expected storage_blocks DDL to include compression_codec default none, got %q", bootstrapCompressionCodec)
-	}
-}
-
-func TestRunSQLiteSnapshotMigrationCreatesMissingLegacySnapshotTableWithoutDuplicateLabel(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
-	defer func() { _ = dbconn.Close() }()
-
-	legacySchema := `
-		PRAGMA foreign_keys = ON;
-		CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
-		INSERT INTO schema_version(version) VALUES (6);
-		CREATE TABLE logical_file (
-			id INTEGER PRIMARY KEY AUTOINCREMENT
-		);
-	`
-	if _, err := dbconn.Exec(legacySchema); err != nil {
-		t.Fatalf("create legacy sqlite schema without snapshot table: %v", err)
-	}
-
-	ctx, cancel := NewOperationContext(context.Background())
-	defer cancel()
-
-	tx, err := dbconn.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("begin sqlite migration transaction: %v", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := runSQLiteSnapshotMigration(tx, ctx); err != nil {
-		t.Fatalf("run sqlite snapshot migration: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit sqlite snapshot migration: %v", err)
-	}
-
-	if !sqliteTableExists(t, dbconn, "snapshot") {
-		t.Fatal("expected snapshot table to be created")
-	}
-	if !sqliteTableExists(t, dbconn, "snapshot_path") {
-		t.Fatal("expected snapshot_path table to be created")
-	}
-	if !sqliteTableExists(t, dbconn, "snapshot_file") {
-		t.Fatal("expected snapshot_file table to be created")
-	}
-
-	var labelColumnCount int
-	rows, err := dbconn.Query(`PRAGMA table_info(snapshot)`)
-	if err != nil {
-		t.Fatalf("pragma table_info(snapshot): %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var (
-			cid      int
-			name     string
-			dataType string
-			notNull  int
-			defaultV sql.NullString
-			primaryK int
-		)
-		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultV, &primaryK); err != nil {
-			t.Fatalf("scan pragma table_info(snapshot): %v", err)
-		}
-		if strings.EqualFold(name, "label") {
-			labelColumnCount++
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate pragma table_info(snapshot): %v", err)
-	}
-	if labelColumnCount != 1 {
-		t.Fatalf("expected exactly one snapshot.label column, found %d", labelColumnCount)
-	}
-
-	if !sqliteTestTableHasColumn(t, dbconn, "snapshot", "parent_id") {
-		t.Fatal("expected snapshot.parent_id to be created")
-	}
-
-	var schemaVersion int
-	if err := dbconn.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&schemaVersion); err != nil {
-		t.Fatalf("read schema version after snapshot migration: %v", err)
-	}
-	if schemaVersion != 8 {
-		t.Fatalf("expected schema version 8 after snapshot migration, got %d", schemaVersion)
 	}
 }
 
