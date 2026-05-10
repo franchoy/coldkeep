@@ -142,7 +142,7 @@ restore(file_id, same_repo_state)
     → output file is byte-identical every time
 ```
 
-**No Randomness:** Nonce is stored in DB; same block always uses same nonce.
+**No Randomness:** For packed AES-GCM blocks, nonce is persisted as a payload prefix (`nonce || ciphertext`), not as a DB column.
 
 **Engine Implication:** Engine restore is deterministic; no randomization.
 
