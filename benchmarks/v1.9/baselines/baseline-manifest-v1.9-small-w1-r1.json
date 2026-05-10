@@ -1,0 +1,133 @@
+{
+  "version": "v1.9",
+  "status": "frozen",
+  "generated_at_utc": "2026-05-10T07:24:37Z",
+  "reference_for_releases": [
+    "v1.10",
+    "v1.11",
+    "v1.12"
+  ],
+  "baseline_modes": {
+    "baseline_a_uncompressed": {
+      "label": "packed + aes-gcm + none",
+      "file": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-none-small-w1-r1.json",
+      "sha256": "a995f868dffa34e5843ae28216586fa22b4c011bf2b81a7b43f47fbe7b9019ce",
+      "dataset": "small",
+      "repeat": 1,
+      "execution": {
+        "store_folder_workers": 1,
+        "pipeline_depth": 1,
+        "deterministic": true
+      },
+      "total_files": 382,
+      "total_bytes": 43935313
+    },
+    "baseline_b_compressed": {
+      "label": "packed + aes-gcm + zstd",
+      "file": "benchmarks/v1.9/baselines/benchmark-baseline-v1.9-packed-aes-gcm-zstd-small-w1-r1.json",
+      "sha256": "a46704165db35942b24f78c9b3608ad283f0a86132f04a4c3b3c10180aaa1906",
+      "dataset": "small",
+      "repeat": 1,
+      "execution": {
+        "store_folder_workers": 1,
+        "pipeline_depth": 1,
+        "deterministic": true
+      },
+      "total_files": 382,
+      "total_bytes": 43935313
+    }
+  },
+  "comparability_validation": {
+    "same_dataset": true,
+    "same_repeat": true,
+    "same_execution_profile": true,
+    "same_logical_totals": {
+      "total_files_equal": true,
+      "total_bytes_equal": true
+    },
+    "same_case_set": true
+  },
+  "case_comparison": [
+    {
+      "case": "gc-after-churn",
+      "duration_ms_none": 3503,
+      "duration_ms_zstd": 3633,
+      "duration_delta_pct_zstd_vs_none": 3.711104767342278,
+      "throughput_mbps_none": 0.027877890379674565,
+      "throughput_mbps_zstd": 0.02688033305807872,
+      "throughput_delta_pct_zstd_vs_none": -3.578309936691445
+    },
+    {
+      "case": "restore-large-file",
+      "duration_ms_none": 1959,
+      "duration_ms_zstd": 2097,
+      "duration_delta_pct_zstd_vs_none": 7.044410413476264,
+      "throughput_mbps_none": 8.16743236345074,
+      "throughput_mbps_zstd": 7.629947544110634,
+      "throughput_delta_pct_zstd_vs_none": -6.580829756795413
+    },
+    {
+      "case": "restore-many-files",
+      "duration_ms_none": 7145,
+      "duration_ms_zstd": 7152,
+      "duration_delta_pct_zstd_vs_none": 0.0979706088173548,
+      "throughput_mbps_none": 0.013667774667599721,
+      "throughput_mbps_zstd": 0.013654397371364653,
+      "throughput_delta_pct_zstd_vs_none": -0.09787472035794963
+    },
+    {
+      "case": "snapshot-creation",
+      "duration_ms_none": 737,
+      "duration_ms_zstd": 853,
+      "duration_delta_pct_zstd_vs_none": 15.739484396200815,
+      "throughput_mbps_none": 3.1930258348483083,
+      "throughput_mbps_zstd": 2.7588042676239195,
+      "throughput_delta_pct_zstd_vs_none": -13.599062133645951
+    },
+    {
+      "case": "stats-inspect",
+      "duration_ms_none": 1088,
+      "duration_ms_zstd": 1235,
+      "duration_delta_pct_zstd_vs_none": 13.511029411764705,
+      "throughput_mbps_none": 2.3902663413216083,
+      "throughput_mbps_zstd": 2.10575690636268,
+      "throughput_delta_pct_zstd_vs_none": -11.902834008097168
+    },
+    {
+      "case": "store-large-file",
+      "duration_ms_none": 1615,
+      "duration_ms_zstd": 1824,
+      "duration_delta_pct_zstd_vs_none": 12.941176470588237,
+      "throughput_mbps_none": 9.907120743034056,
+      "throughput_mbps_zstd": 8.771929824561402,
+      "throughput_delta_pct_zstd_vs_none": -11.458333333333352
+    },
+    {
+      "case": "store-many-small-files",
+      "duration_ms_none": 2047,
+      "duration_ms_zstd": 2166,
+      "duration_delta_pct_zstd_vs_none": 5.813385442110405,
+      "throughput_mbps_none": 0.04770701025891548,
+      "throughput_mbps_zstd": 0.04508598799630656,
+      "throughput_delta_pct_zstd_vs_none": -5.493998153277914
+    },
+    {
+      "case": "store-mixed-dataset",
+      "duration_ms_none": 612,
+      "duration_ms_zstd": 773,
+      "duration_delta_pct_zstd_vs_none": 26.307189542483663,
+      "throughput_mbps_none": 4.040964288649216,
+      "throughput_mbps_zstd": 3.1993145467701427,
+      "throughput_delta_pct_zstd_vs_none": -20.82794307891333
+    },
+    {
+      "case": "verify-system-deep",
+      "duration_ms_none": 2123,
+      "duration_ms_zstd": 2185,
+      "duration_delta_pct_zstd_vs_none": 2.920395666509656,
+      "throughput_mbps_none": 1.0268821842087588,
+      "throughput_mbps_zstd": 0.9977441085012335,
+      "throughput_delta_pct_zstd_vs_none": -2.8375286041189764
+    }
+  ]
+}
