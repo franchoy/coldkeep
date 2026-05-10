@@ -285,6 +285,68 @@ func TestStorageBlockReaderLoadBlockMetadataIncludesTransformAwareFields(t *test
 	}
 }
 
+func TestStorageBlockReaderLoadBlockMetadataRejectsInvalidCompressionContract(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbconn.Close()
+
+	// Build a minimal schema without compression contract checks so we can assert
+	// read-path validation behavior on legacy/corrupt metadata.
+	if _, err := dbconn.ExecContext(context.Background(), `
+		CREATE TABLE container (
+			id INTEGER PRIMARY KEY,
+			filename TEXT NOT NULL
+		);
+	`); err != nil {
+		t.Fatalf("create container table: %v", err)
+	}
+	if _, err := dbconn.ExecContext(context.Background(), `
+		CREATE TABLE storage_blocks (
+			id INTEGER PRIMARY KEY,
+			format_version INTEGER NOT NULL,
+			codec TEXT NOT NULL,
+			plaintext_size INTEGER NOT NULL,
+			compression_codec TEXT,
+			compression_level INTEGER,
+			compressed_size INTEGER,
+			stored_size INTEGER NOT NULL,
+			container_id INTEGER NOT NULL,
+			container_offset INTEGER NOT NULL,
+			block_hash BLOB NOT NULL,
+			compressed_hash BLOB,
+			physical_hash BLOB
+		);
+	`); err != nil {
+		t.Fatalf("create storage_blocks table: %v", err)
+	}
+
+	if _, err := dbconn.ExecContext(context.Background(), `INSERT INTO container (id, filename) VALUES (1, 'test.bin')`); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+	if _, err := dbconn.ExecContext(context.Background(), `
+		INSERT INTO storage_blocks (
+			id, format_version, codec, plaintext_size,
+			compression_codec, compression_level, compressed_size,
+			stored_size, container_id, container_offset,
+			block_hash, compressed_hash, physical_hash
+		)
+		VALUES (1, 1, 'none', 100, 'zstd', NULL, 80, 120, 1, 0, x'01', x'02', x'03')
+	`); err != nil {
+		t.Fatalf("insert invalid storage_blocks row: %v", err)
+	}
+
+	reader := NewStorageBlockReader(dbconn, "/tmp")
+	_, err = reader.loadBlockMetadata(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected invalid compression metadata error")
+	}
+	if !strings.Contains(err.Error(), "invalid compression metadata") {
+		t.Fatalf("expected invalid compression metadata error, got: %v", err)
+	}
+}
+
 func setupStoredBlockForReaderCorruption(t *testing.T, codec blocks.Codec) (*sql.DB, string, int64, string, int64, int64) {
 	_, dbconn, workDir, blockID, containerFilename, offset, storedSize := setupStoredBlockFixtureForReaderCorruption(t, codec, storagecompression.CompressionNone)
 	return dbconn, workDir, blockID, containerFilename, offset, storedSize

@@ -64,6 +64,11 @@ type VerifiedBlock struct {
 	Metadata       BlockStorageMetadata
 }
 
+const (
+	verifyBlockMinCompressionLevel = 1
+	verifyBlockMaxCompressionLevel = 9
+)
+
 // VerifyStoredBlock executes the packed-block verification pipeline in stage
 // order and returns the decoded logical block on success.
 func VerifyStoredBlock(ctx context.Context, meta BlockStorageMetadata, reader ContainerReader) (*VerifiedBlock, error) {
@@ -152,13 +157,14 @@ func VerifyStoredBlock(ctx context.Context, meta BlockStorageMetadata, reader Co
 	if compressionCodec == "" {
 		compressionCodec = storagecompression.CompressionNone
 	}
+	if err := validateVerifyBlockCompressionMetadata(compressionCodec, meta.CompressionLevel); err != nil {
+		metaErr := verifyBlockFailureMeta(VerifyStageDecompress, meta.BlockID, meta.ContainerID, meta.ContainerOffset)
+		return nil, verifyStageError(verifyErrMetadataInvalid, metaErr, "verifyBlockPayloads: invalid compression metadata contract", err)
+	}
 
 	var compressor storagecompression.Compressor
 	if compressionCodec == storagecompression.CompressionZstd {
-		level := storagecompression.DefaultCompressionLevel
-		if meta.CompressionLevel != nil {
-			level = *meta.CompressionLevel
-		}
+		level := *meta.CompressionLevel
 		comp, err := storagecompression.NewZstdCompressor(level)
 		if err != nil {
 			metaErr := verifyBlockFailureMeta(VerifyStageDecompress, meta.BlockID, meta.ContainerID, meta.ContainerOffset)
@@ -242,4 +248,24 @@ func validateDecodedChunkLayout(decoded *blocks.EncodedBlock) error {
 	}
 
 	return nil
+}
+
+func validateVerifyBlockCompressionMetadata(codec string, level *int) error {
+	switch codec {
+	case storagecompression.CompressionNone:
+		if level != nil {
+			return fmt.Errorf("compression_codec=%s requires compression_level=NULL", storagecompression.CompressionNone)
+		}
+		return nil
+	case storagecompression.CompressionZstd:
+		if level == nil {
+			return fmt.Errorf("compression_codec=%s requires compression_level in [%d,%d]", storagecompression.CompressionZstd, verifyBlockMinCompressionLevel, verifyBlockMaxCompressionLevel)
+		}
+		if *level < verifyBlockMinCompressionLevel || *level > verifyBlockMaxCompressionLevel {
+			return fmt.Errorf("compression_codec=%s has invalid compression_level=%d (expected [%d,%d])", storagecompression.CompressionZstd, *level, verifyBlockMinCompressionLevel, verifyBlockMaxCompressionLevel)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported compression_codec=%q (expected %q or %q)", codec, storagecompression.CompressionNone, storagecompression.CompressionZstd)
+	}
 }

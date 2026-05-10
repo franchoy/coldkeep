@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/iodebug"
+	storagecompression "github.com/franchoy/coldkeep/internal/storage/compression"
 	storagemetadata "github.com/franchoy/coldkeep/internal/storage/metadata"
 	"github.com/franchoy/coldkeep/internal/verify"
 )
@@ -321,7 +323,32 @@ func (r *StorageBlockReader) loadBlockMetadata(ctx context.Context, blockID int6
 		return nil, fmt.Errorf("block %d has invalid container_offset: %d", blockID, meta.ContainerOffset)
 	}
 
+	if err := validateStorageBlockCompressionMetadata(meta.Metadata.Compression.Codec, meta.Metadata.Compression.Level); err != nil {
+		return nil, fmt.Errorf("block %d has invalid compression metadata: %w", blockID, err)
+	}
+
 	return &meta, nil
+}
+
+func validateStorageBlockCompressionMetadata(codec string, level *int) error {
+	normalizedCodec := strings.TrimSpace(strings.ToLower(codec))
+	switch normalizedCodec {
+	case storagecompression.CompressionNone:
+		if level != nil {
+			return fmt.Errorf("compression_codec=%s requires compression_level=NULL", storagecompression.CompressionNone)
+		}
+		return nil
+	case storagecompression.CompressionZstd:
+		if level == nil {
+			return fmt.Errorf("compression_codec=%s requires compression_level in [%d,%d]", storagecompression.CompressionZstd, minCompressionLevel, maxCompressionLevel)
+		}
+		if *level < minCompressionLevel || *level > maxCompressionLevel {
+			return fmt.Errorf("compression_codec=%s has invalid compression_level=%d (expected [%d,%d])", storagecompression.CompressionZstd, *level, minCompressionLevel, maxCompressionLevel)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported compression_codec=%q (expected %q or %q)", codec, storagecompression.CompressionNone, storagecompression.CompressionZstd)
+	}
 }
 
 // readStoredPayload reads the raw stored bytes for a block from its container file.
