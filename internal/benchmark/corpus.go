@@ -47,9 +47,11 @@ type CorpusFile struct {
 
 // CorpusContent describes how to generate file content.
 type CorpusContent struct {
-	Type             string // "json", "logs", "source", "binary", "jpeg_sim", "zip_sim", "random", "encrypted"
-	Seed             int64
-	CompressionRatio float64 // estimated: > 0.7 = highly compressible, 0.3-0.7 = mixed, < 0.3 = already compressed
+	Type string // "json", "logs", "source", "binary", "jpeg_sim", "zip_sim", "random", "encrypted"
+	Seed int64
+	// CompressionRatio is estimated compressed_size / original_size for benchmark corpus shaping.
+	// Typical interpretation: < 0.5 highly compressible, 0.5-0.8 mixed, > 0.95 already compressed.
+	CompressionRatio float64
 
 	// JSON-specific
 	JSONObjects int64
@@ -337,7 +339,7 @@ func (cb *CorpusBuilder) generateManifest(def CorpusDefinition, corpusDir string
 		buf.WriteString(fmt.Sprintf("    Size: %d bytes\n", file.Size))
 		buf.WriteString(fmt.Sprintf("    SHA256: %s\n", fileSHA256))
 		buf.WriteString(fmt.Sprintf("    Content Type: %s\n", file.Content.Type))
-		buf.WriteString(fmt.Sprintf("    Compression Ratio: %.2f\n", file.Content.CompressionRatio))
+		buf.WriteString(fmt.Sprintf("    Compression Size Ratio (compressed/original): %.2f\n", file.Content.CompressionRatio))
 		totalSize += file.Size
 	}
 

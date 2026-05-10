@@ -1277,7 +1277,7 @@ and handle edge cases (mixed repositories, legacy nulls, encryption).
 - `logical_bytes = SUM(plaintext_size)` across all blocks (`plaintext_size` is encoded logical block size)
 - `compressed_bytes = SUM(compressed_size or plaintext_size if compression_codec=none)`
 - `stored_bytes = SUM(stored_size)` (includes all overhead)
-- `compression_ratio = logical_bytes / compressed_bytes`
+- `compression_factor = logical_bytes / compressed_bytes`
 - `physical_ratio = logical_bytes / stored_bytes`
 
 **Repository types tested:**
@@ -1318,16 +1318,16 @@ and handle edge cases (mixed repositories, legacy nulls, encryption).
 ### Validation checklist
 
 ✔ **Ratios mathematically correct:**
-- CompressionRatio = LogicalBytes / CompressedBytes (always ≥ 1.0)
-- PhysicalRatio = LogicalBytes / StoredBytes (always ≤ 1.0, < CompressionRatio)
-- Uncompressed files → CompressionRatio ≈ 1.0
-- Highly compressible files → CompressionRatio > 1.0
+- CompressionFactor = LogicalBytes / CompressedBytes (always ≥ 1.0)
+- PhysicalRatio = LogicalBytes / StoredBytes (always ≤ 1.0, < CompressionFactor)
+- Uncompressed files → CompressionFactor ≈ 1.0
+- Highly compressible files → CompressionFactor > 1.0
 - All formulas verified across accumulation and multi-chunk scenarios
 
 ✔ **Mixed repos handled correctly:**
 - Old blocks (v1.8 uncompressed) counted separately from new blocks
 - CompressedBytes includes fallback (plaintext_size for `compression_codec=none` blocks)
-- CompressionRatio accurately reflects mixed state (weighted by compression efficacy)
+- CompressionFactor accurately reflects mixed state (weighted by compression efficacy)
 - No double-counting of logical bytes across codec transitions
 
 ✔ **Fallback blocks counted correctly:**

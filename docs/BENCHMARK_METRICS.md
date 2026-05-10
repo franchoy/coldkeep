@@ -8,6 +8,12 @@ The benchmark metrics system tracks storage efficiency, CPU tradeoffs, and trans
 
 ## Five Metric Categories
 
+### Naming Convention Lock
+
+- `CompressionRatio` in benchmark metrics is the size fraction `CompressedBytes / LogicalBytes`.
+- `CompressionFactor` in storage/read-path stats is the inverse `LogicalBytes / CompressedBytes`.
+- These names are intentionally distinct to avoid opposite-meaning collisions.
+
 ### 1. Storage Metrics
 
 Track logical input data size through each transformation stage, enabling analysis of compression effectiveness and storage transform overhead.
@@ -153,6 +159,11 @@ StoredBytes = 31 MB (with overhead)
 CompressionRatio = 0.30 (30% of original)
 PhysicalRatio = 0.31 (31% of original)
 Overhead = PhysicalRatio - CompressionRatio = 0.01 (1%)
+```
+
+Inverse representation used by storage stats:
+```
+CompressionFactor = LogicalBytes / CompressedBytes = 3.33x
 ```
 
 ### ✔ Metrics Work for Mixed Repositories

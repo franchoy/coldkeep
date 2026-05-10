@@ -170,7 +170,7 @@ Example valid repository state:
 LogicalBytes = SUM(plaintext_size)  // All blocks
 CompressedBytes = SUM(compressed_size if compression_codec=zstd else plaintext_size)
 StoredBytes = SUM(stored_size)  // All blocks
-CompressionRatio = LogicalBytes / CompressedBytes  // Always ≥ 1.0
+CompressionFactor = LogicalBytes / CompressedBytes  // Always ≥ 1.0
 PhysicalRatio = LogicalBytes / StoredBytes  // Always ≤ 1.0
 ```
 

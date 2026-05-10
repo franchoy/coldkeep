@@ -17,6 +17,10 @@ Extended the benchmark metrics from basic counters to comprehensive measurement 
 - `CompressionRatio` — `CompressedBytes / LogicalBytes` (stable 0.0-1.0)
 - `PhysicalRatio` — `StoredBytes / LogicalBytes` (includes all overhead)
 
+Naming lock:
+- Benchmark `CompressionRatio` uses `CompressedBytes / LogicalBytes`.
+- Storage/read-path observability uses `CompressionFactor = LogicalBytes / CompressedBytes`.
+
 #### 2. Throughput Metrics (3 metrics)
 - `StoreMBps` — store operation throughput  
 - `RestoreMBps` — restore/decompression throughput

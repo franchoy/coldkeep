@@ -30,10 +30,13 @@ type Metrics struct {
 	ThroughputMBps float64
 
 	// Storage Metrics: distinguish logical vs physical data sizes
-	LogicalBytes     int64   // input data size (uncompressed)
-	CompressedBytes  int64   // size after compression (before storage overhead)
-	StoredBytes      int64   // final data on disk (storage + encryption + overhead)
-	CompressionRatio float64 // CompressedBytes / LogicalBytes, stable across runs
+	LogicalBytes    int64 // input data size (uncompressed)
+	CompressedBytes int64 // size after compression (before storage overhead)
+	StoredBytes     int64 // final data on disk (storage + encryption + overhead)
+	// CompressionRatio is the size fraction CompressedBytes / LogicalBytes.
+	// This benchmark metric is intentionally <= 1.0 for compressible data.
+	// Storage/read-path docs use the inverse term CompressionFactor.
+	CompressionRatio float64
 	PhysicalRatio    float64 // StoredBytes / LogicalBytes, includes all overhead
 
 	// Throughput Metrics: operation-specific throughput
@@ -217,7 +220,8 @@ func RecordStorage(logicalBytes, compressedBytes, storedBytes int64) {
 		acc.storedBytes.Add(storedBytes)
 	}
 
-	// Compute and update ratios
+	// Compute and update benchmark size fractions.
+	// CompressionRatio = CompressedBytes / LogicalBytes.
 	totalLogical := acc.logicalBytes.Load()
 	if totalLogical > 0 {
 		totalCompressed := acc.compressedBytes.Load()
