@@ -33,7 +33,7 @@ Coldkeep is entering the v1.10 reliability freeze.
 
 The v1.10.x train focuses on correctness burn-down, CI hardening, Codacy/audit triage, restore/recovery safety, GC correctness, packed-storage consistency, validation, and release-gate discipline before engine-boundary work begins in v1.11.
 
-v1.10 is not a feature-expansion train. See [docs/release/v1.10/](docs/release/v1.10/).
+v1.10 is not a feature-expansion train. See [docs/release/v1.10/README.md](docs/release/v1.10/README.md).
 
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.

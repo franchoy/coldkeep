@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.10.0 — Baseline & Freeze Declaration
+## v1.10.0 - 2026-05-14 — Baseline & Freeze Declaration
 
 ### Status
 
