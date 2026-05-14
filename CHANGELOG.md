@@ -20,6 +20,42 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.0 — Baseline & Freeze Declaration
+
+### Status
+
+Reliability freeze and stabilization baseline.
+
+### Summary
+
+v1.10.0 declares the v1.10 reliability freeze. This release does not introduce new product features. It establishes the documentation and scope-control baseline for the v1.10.x correctness burn-down, CI hardening, Codacy baseline classification, external audit inventory, remediation matrix, and release-gate process.
+
+### Scope
+
+Included:
+
+- v1.10 feature freeze declaration
+- v1.10 stabilization-train documentation
+- release scope boundaries
+- allowed/forbidden change classes
+- v1.10.x release train outline
+- initial v1.10.0 validation checklist
+
+Excluded:
+
+- engine extraction
+- new product features
+- storage format expansion
+- broad refactors
+- Codacy style-only burn-down
+- remediation implementation for known issues
+
+### Next
+
+v1.10.1 begins CLI correctness and contract stabilization.
+
+------------------------------------------------------------------------
+
 ## [1.9.0] - 2026-05-09
 
 ### Added (v1.9 transform architecture freeze)
