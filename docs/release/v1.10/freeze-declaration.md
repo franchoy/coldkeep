@@ -104,6 +104,7 @@ The following work must not be performed in v1.10.0:
 - new product commands
 - new storage backends
 - new cloud features
+- new distributed features
 - new UI features
 - new encryption/compression features
 - broad rewrites
