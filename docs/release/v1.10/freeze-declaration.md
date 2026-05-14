@@ -43,7 +43,33 @@ During v1.10, the following are frozen unless directly required to fix correctne
 - cosmetic refactors
 - style-only cleanup as release-blocking work
 
-## 4. Explicitly Allowed Work
+## 4. Change Classification During v1.10
+
+| Change type | Allowed in v1.10.0? | Allowed later in v1.10.x? | Notes |
+|---|---:|---:|---|
+| Documentation for freeze/baseline | Yes | Yes | Main purpose of v1.10.0 |
+| Issue tracker/remediation matrix | Yes | Yes | Phase 1+ |
+| Regression tests | Yes, if baseline-safe | Yes | Prefer with fixes |
+| CLI correctness fixes | No, unless blocking baseline | Yes, v1.10.1 | Main remediation starts later |
+| Validation/security fixes | No, unless urgent | Yes, v1.10.2 | Includes path/security hardening |
+| Packed storage fixes | No | Yes, v1.10.3 | Later phase |
+| GC correctness fixes | No | Yes, v1.10.4 | Later phase |
+| Restore/recovery fixes | No | Yes, v1.10.5 | Later phase |
+| CI passive documentation | Yes | Yes | Active enforcement later |
+| Codacy passive setup | Maybe | Yes, v1.10.6 | Do not block style |
+| Critical-path coverage gates | No | Yes, v1.10.7 | Later phase |
+| Filesystem abstraction | No | Yes, v1.10.8 | Later phase |
+| Fault injection | No | Yes, v1.10.9 | Later phase |
+| Engine extraction | No | No | Deferred to v1.11 |
+| New user-facing features | No | No | Out of train scope |
+| Broad refactor | No | No, unless required by fix | Avoid churn |
+| Style-only cleanup | No | Only opportunistic | Must not block release |
+
+Practical decision rule:
+
+When in doubt, the change is out of scope unless it prevents data loss, corruption, unsafe restore, false verification, unsafe deletion, validation bypass, or CI false success.
+
+## 5. Explicitly Allowed Work
 
 The following work is allowed in v1.10:
 
@@ -68,7 +94,7 @@ The following work is allowed in v1.10:
 - deferred-issue documentation
 - release-gate documentation
 
-## 5. Explicitly Forbidden Work
+## 6. Explicitly Forbidden Work
 
 The following work must not be performed in v1.10.0:
 
@@ -84,7 +110,7 @@ The following work must not be performed in v1.10.0:
 - style-only Codacy burn-down
 - CodeRabbit or aggressive AI review gate introduction
 
-## 6. Exception Rule
+## 7. Exception Rule
 
 A frozen change may be allowed only if it satisfies all of the following:
 
@@ -94,7 +120,7 @@ A frozen change may be allowed only if it satisfies all of the following:
 4. It does not start engine extraction.
 5. It does not introduce unrelated feature behavior.
 
-## 7. Release Discipline
+## 8. Release Discipline
 
 Every v1.10.x release must:
 
@@ -107,7 +133,7 @@ Every v1.10.x release must:
 - avoid Codacy style-only blocking
 - prioritize correctness over maintainability scoring
 
-## 8. Exit Condition For The v1.10 Train
+## 9. Exit Condition For The v1.10 Train
 
 The v1.10 train is complete when:
 
