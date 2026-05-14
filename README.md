@@ -27,6 +27,14 @@ Coldkeep uses a visual identity based on an ice cube vault:
 > Status: v1.9 formalizes transform-based storage semantics (logical/compressed/physical layers) with block-level compression and explicit staged verification, while preserving deterministic restore, GC safety, snapshot semantics, and mixed-repository compatibility.
 > Migration note (v1.9): existing v1.7/v1.8 payloads remain readable through compatibility paths with no forced rewrite or recompression. Missing PostgreSQL schema requires manual schema application or `COLDKEEP_DB_AUTO_BOOTSTRAP=true`. Existing older schemas are auto-upgraded to the required v15 schema at startup.
 
+## Current Release Focus
+
+Coldkeep is entering the v1.10 reliability freeze.
+
+The v1.10.x train focuses on correctness burn-down, CI hardening, Codacy/audit triage, restore/recovery safety, GC correctness, packed-storage consistency, validation, and release-gate discipline before engine-boundary work begins in v1.11.
+
+v1.10 is not a feature-expansion train. See [docs/release/v1.10/README.md](docs/release/v1.10/README.md).
+
 coldkeep is a local-first content-addressed storage engine focused on deterministic restore,
 explicit integrity verification, and safe lifecycle behavior under failure scenarios.
 
