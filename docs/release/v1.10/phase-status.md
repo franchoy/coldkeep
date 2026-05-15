@@ -10,7 +10,7 @@ Status: In progress
 | 0 | Freeze Declaration & Scope Lock | Complete | `freeze-declaration.md` |
 | 1 | Release Documentation Skeleton | Complete | v1.10 documentation structure |
 | 2 | Source Inventory & Evidence Freeze | Complete | `evidence/MANIFEST.md`, `evidence/SHA256SUMS` |
-| 3 | Severity Model Adoption | Pending | `labels.md` |
+| 3 | Severity Model Adoption | Complete | `labels.md` |
 | 4 | Issue Tracking Schema Freeze | Pending | `issue-triage-schema.md` |
 | 5 | Codacy Baseline Import | Pending | `codacy-baseline.md`, `issue-tracker.csv` |
 | 6 | External Audit Import | Pending | `external-audit-inventory.md`, `issue-tracker.csv` |
@@ -34,6 +34,6 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 3 — Severity Model Adoption
+Phase 4 — Issue Tracking Schema Freeze
 
 Phase 1 completion recorded.
