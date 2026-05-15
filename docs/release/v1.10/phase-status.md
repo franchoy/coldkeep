@@ -17,7 +17,7 @@ Status: In progress
 | 7 | Remediation Matrix Construction | Complete | `remediation-matrix.csv`, `remediation-matrix-summary.md`, linked `issue-tracker.csv` |
 | 8 | CI Baseline Capture | Complete | `ci-baseline.md`, `ci-evolution.md`, `ci-gap-inventory.csv`, `ci-baseline-summary.csv`, `local-validation-baseline.md` |
 | 9 | Release Gate Definition | Complete | `release-gates.md`, `release-gate-summary.csv` |
-| 10 | Dependency & Toolchain Vulnerability Plan | Pending | `toolchain-vulnerability-plan.md` |
+| 10 | Dependency & Toolchain Vulnerability Plan | Complete | `toolchain-vulnerability-plan.md`, toolchain/dependency decision |
 | 11 | Codacy Policy Baseline | Pending | `codacy-policy.md` |
 | 12 | Initial S0/S1 Candidate Review | Pending | `known-s0-s1.md` |
 | 13 | v1.10.0 Checklist & Release Candidate | Pending | `v1.10.0-checklist.md` |
@@ -34,6 +34,6 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 10 — Dependency & Toolchain Vulnerability Plan
+Phase 11 — Codacy Policy Baseline
 
 Phase 9 completion recorded.

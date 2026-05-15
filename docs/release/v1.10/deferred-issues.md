@@ -26,6 +26,14 @@ Every deferred issue must include:
 
 ## Current Deferred Issues
 
-No deferred issues recorded during Phase 7 unless manual matrix review explicitly retargeted a row.
+## Phase 10 Note
 
-Most deferral decisions should occur during release-specific remediation phases.
+No formal deferred issue was created for the Go/toolchain vulnerability findings because the target release is v1.10.2 by design.
+
+The findings remain active and triaged in:
+
+- `issue-tracker.csv`
+- `remediation-matrix.csv`
+- `toolchain-vulnerability-plan.md`
+
+A formal deferral record is required only if the v1.10.2 target is later moved.

@@ -31,3 +31,17 @@ Every accepted risk must include:
 No accepted risks recorded during Phase 7.
 
 Phase 7 constructs the matrix. Acceptance decisions should normally occur during later remediation phases or Phase 12 S0/S1 review.
+
+## Phase 10 Note
+
+No accepted risk was created for the Go/toolchain vulnerability findings during Phase 10.
+
+The findings are not accepted as safe.
+
+They are triaged and assigned to v1.10.2 for validation/security hardening.
+
+Only create an accepted-risk record if:
+
+- you decide not to upgrade,
+- you decide the risk is real,
+- and you intentionally tolerate it for a defined period.
