@@ -1,3 +1,17 @@
 # Issue Row Template
 
-Phase 1 skeleton placeholder.
+```csv
+ck_id,title,source,source_id,source_file,source_line,source_rule,source_severity,release_target,status,severity,domain,root_invariant,duplicate_of,breaking_risk,data_loss_risk,security_risk,determinism_risk,recovery_risk,requires_regression_test,requires_ci_gate,production_code,test_code,docs_only,owner,decision,decision_rationale,planned_fix,validation_command,notes
+```
+
+Required for every imported issue:
+
+- ck_id
+- title
+- source
+- release_target
+- status
+- severity
+- domain
+- root_invariant
+- decision or planned_fix
