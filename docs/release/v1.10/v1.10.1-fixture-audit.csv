@@ -1,0 +1,9 @@
+audit_category,finding,count,recommendation
+Test Functions,236 test functions in main_test.go,236,Baseline established for CLI parsing tests
+Helper Functions,9 unique helpers,9,"Reuse existing helpers for M028, M030, M033 tests"
+Execution Model,Uses exec.Command to invoke binary,0,Integration testing approach; safe for CLI validation
+Temp Directories,Test isolation using temp directories,14,Safe fixture cleanup; can be reused for new tests
+JSON Output,Tests validate JSON schema and format,60,Reuse JSON validation patterns for new error tests
+Test Classes Available,Baseline tests for args/flags,2+6,"Can construct M028, M030, M033 test classes using same patterns"
+Fixture Type,Command execution with captured output,primary,Safe and repeatable; suitable for all 5 matrix rows
+Helper Reusability,Run*Command functions wrap binary invocation,high,"Create wrapper helpers for M028, M030, M033 tests"

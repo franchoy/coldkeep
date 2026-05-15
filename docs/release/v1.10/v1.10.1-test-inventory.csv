@@ -1,0 +1,12 @@
+matrix_id,test_class,test_identifier,test_file_location,test_type,coverage_status,fixture_category,command_scope
+CK-110-M029,unexpected-positional-args,TestRunRemoveCommandStoredPathRejectsPositionals,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M029,unexpected-positional-args,TestRunRestoreCommandStoredPathRejectsPositionals,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M086,flag-value-validation,TestResolveTraceOptionsRejectsConflictingTraceFlags,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M086,flag-value-validation,TestValidateNonNegativeIntegerFlagUsesLastValue,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M086,flag-value-validation,TestValidateNonNegativeIntegerFlagRejectsLimitAboveMaximum,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M086,flag-value-validation,TestRunSnapshotCommandRestoreRejectsInvalidQueryFlagValues,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M086,flag-value-validation,TestRunSnapshotCommandShowRejectsInvalidQueryFlagValues,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M086,flag-value-validation,TestRunSnapshotCommandDiffRejectsInvalidQueryFlagValues,cmd/coldkeep/main_test.go,CLI Integration,existing,CLI parsing & flag validation,multi-command
+CK-110-M028,boolean-explicit-false,(none found),(needs creation),CLI Unit/Integration,missing,CLI parsing & flag validation,multi-command
+CK-110-M030,duplicate-singleton-flags,(none found),(needs creation),CLI Unit/Integration,missing,CLI parsing & flag validation,multi-command
+CK-110-M033,pre-stateful-validation,(none found),(needs creation),CLI Unit/Integration,missing,CLI parsing & flag validation,multi-command
