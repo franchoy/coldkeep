@@ -1,0 +1,3086 @@
+New issues found:
+
+1. **`inspect repository extra` accepts extra positional args**
+
+   * Extra args after a valid inspect target are ignored instead of rejected.
+
+2. **`inspect snapshot <id> extra` also ignores trailing args**
+
+   * Same positional validation gap in snapshot inspect mode.
+
+3. **`verify system extra` ignores extra positional args**
+
+   * Additional tokens after verification mode are silently accepted.
+
+4. **`verify file 123 fast extra` ignores trailing args**
+
+   * Positional verify-level parsing stops early and leaves garbage unvalidated.
+
+5. **`snapshot stats extra` ignores trailing args**
+
+   * Command accepts positional noise after the subcommand.
+
+6. **`simulate store file1 extra` ignores trailing args**
+
+   * Only the first file is used; remaining args are discarded silently.
+
+7. **`config get compression-level extra` loads repository before rejecting**
+
+   * Extra-arg validation happens after repository/storage initialization work.
+
+8. **`repair ref-counts extra` ignores trailing args**
+
+   * Additional positional args are accepted and unused.
+
+
+New issues found:
+
+1. **`search --path ""` becomes an unfiltered search**
+
+   * Empty path filters are accepted instead of rejected.
+
+2. **`snapshot list --path ""` also becomes unfiltered**
+
+   * Same empty-filter issue in snapshot listing.
+
+3. **`remove --path ""` can broaden deletion scope**
+
+   * Empty path filters are treated as absent filters rather than invalid input.
+
+4. **`benchmark compare` does not validate case-name uniqueness across files**
+
+   * Duplicate case names in either file silently overwrite map entries during comparison.
+
+5. **`benchmark compare` can compare mismatched benchmark types**
+
+   * Throughput, dedup, chunker, and restore reports with compatible row shapes are not rejected early.
+
+6. **`summarize_phase8_blocksize.py` writes `Infinity`/`NaN` into JSON**
+
+   * Uses Python’s permissive encoder, producing non-RFC-compliant JSON artifacts.
+
+7. **`run_phase8_restore_sequence.sh` appends results without schema/version marker**
+
+   * Mixed runs with different columns/scripts become indistinguishable in one CSV.
+
+8. **`scripts/compare_phase8_dedup_results.py` accepts duplicate dataset labels**
+
+   * Duplicate keys overwrite earlier rows silently during comparison aggregation.
+
+
+New issues found:
+
+1. **`snapshot create --tag " a "` preserves surrounding whitespace**
+
+   * Tags are not consistently trimmed before storage/comparison.
+
+2. **`snapshot list --tag "a "` fails to match stored `"a"`**
+
+   * Tag filtering is whitespace-sensitive due to missing normalization.
+
+3. **`search --name " "` becomes broad wildcard search**
+
+   * Whitespace-only values are treated as valid filters.
+
+4. **`inspect file --limit 0` is accepted**
+
+   * Produces empty success output instead of validation error.
+
+5. **`benchmark compare` allows duplicate current-case rows**
+
+   * Duplicate `case` names in current results overwrite previous comparisons silently.
+
+6. **`benchmark compare` does not validate numeric finiteness in input rows**
+
+   * JSON rows containing `NaN`/`Inf` metrics can propagate into reports.
+
+7. **`compare_phase8_dedup_results.py` accepts `--max-delta-ratio inf`**
+
+   * Infinity bypasses threshold intent entirely.
+
+8. **`scripts/run_phase8_restore_sequence.sh` can append duplicate CSV headers**
+
+   * Re-running against an existing output file appends another header row instead of detecting/replacing.
+
+
+New issues found:
+
+1. **`search --extension ""` matches everything**
+
+   * Empty extension becomes a no-op filter instead of validation error.
+
+2. **`search --extension .TXT` is case-sensitive**
+
+   * Extension filtering does not normalize case consistently with other text filters.
+
+3. **`list --sort size --reverse=false` still reverses**
+
+   * Boolean-value parser bug affects list ordering behavior directly.
+
+4. **`snapshot list --reverse=false` still reverses**
+
+   * Same issue in snapshot listing.
+
+5. **`benchmark compare` accepts negative ratios inside JSON**
+
+   * Baseline/current rows with negative throughput/ratio values are not validated before comparison math.
+
+6. **`summarize_phase8_blocksize.py` can divide by zero**
+
+   * If baseline throughput is zero, percentage delta calculations explode to inf/NaN.
+
+7. **`compare_phase8_dedup_results.py` trusts CSV headers exactly**
+
+   * Duplicate/malformed headers are not validated and can silently map wrong columns.
+
+8. **`snapshot create --tag a,,b` stores empty tag entries**
+
+   * Consecutive commas are not normalized out consistently.
+
+
+New issues found:
+
+1. **`list --json` is rejected**
+
+   * `resolveOutputMode()` supports `--json`, but `runListCommand()` only allows `--output`.
+
+2. **`search --json` is rejected**
+
+   * Same issue as `list`.
+
+3. **`remove --json` is rejected**
+
+   * `outputSupportedCommands` includes `remove`, but `runRemoveCommand()` does not allow `json`.
+
+4. **`gc --json` likely rejected**
+
+   * Startup inference supports it, but `runGCCommand()` flag allowlist does not include `json`.
+
+5. **`repair --json` likely rejected**
+
+   * Same mismatch: output-mode layer supports JSON shorthand, command allowlist does not.
+
+6. **`config get --json` likely rejected**
+
+   * `config` supports JSON output internally, but allowlist only includes `output`.
+
+7. **`list --limit 0` is accepted**
+
+   * Produces empty success output; likely should reject as invalid or document zero-limit semantics.
+
+8. **`run_snapshot_release_gate.sh` does not export `DB_SSLMODE`**
+
+   * Other Postgres paths set it. This script omits it, so it can fail in environments where default sslmode is unsuitable.
+
+
+New issues found:
+
+1. **`init` accepts extra positional args**
+
+   * `coldkeep init garbage` still runs init.
+
+2. **`version` accepts extra positional args**
+
+   * `coldkeep version garbage` still prints version.
+
+3. **`help` accepts extra positional args**
+
+   * `coldkeep help garbage` still prints help.
+
+4. **`snapshot list` has duplicate unreachable return**
+
+   * `runSnapshotListCommand()` has the same `return clirender.RenderSnapshotListHuman(...)` twice.
+
+5. **`benchmark compare` silently overwrites duplicate baseline cases**
+
+   * Duplicate `case` rows in baseline JSON are not rejected; last one wins.
+
+6. **`benchmark compare` does not validate baseline envelope status/command**
+
+   * A JSON file from another command with a `data.rows` shape can be accepted.
+
+7. **`scripts/summarize_phase8_blocksize.py --json-output` can emit non-standard JSON**
+
+   * Missing 1 MiB baseline creates `math.nan`; Python `json.dumps` writes `NaN`.
+
+8. **`scripts/compare_phase8_dedup_results.py --max-delta-ratio nan` passes validation**
+
+   * `NaN < 0` is false, so the threshold becomes unusable.
+
+
+New issues found:
+
+1. **`repair ref-counts --batch --input ""` is accepted**
+
+   * Empty input path is not rejected before batch processing starts.
+
+2. **`repair ref-counts --batch --input missing.json` errors late**
+
+   * File existence is not validated before DB/repository initialization work begins.
+
+3. **`benchmark compare` accepts identical file paths**
+
+   * Comparing a benchmark file against itself succeeds and reports zero regressions instead of rejecting the misuse.
+
+4. **`benchmark compare --threshold 0` rejects, but `--threshold 0.0` path differs**
+
+   * Validation/error formatting is inconsistent between integer-looking and float-looking zero values.
+
+5. **`benchmark compare --threshold nan` is accepted**
+
+   * Same NaN acceptance issue exists in compare flow, not just benchmark run.
+
+6. **`benchmark compare --threshold inf` is accepted**
+
+   * Infinity also passes comparison threshold validation.
+
+7. **`snapshot create --from self` can recurse logically**
+
+   * No early guard against using the same snapshot ID as both source and destination intent.
+
+8. **`snapshot delete` accepts duplicate IDs silently**
+
+   * Duplicate snapshot IDs in a single command are processed repeatedly instead of deduplicated/rejected.
+
+
+New issues found:
+
+1. **`restore` accepts and ignores `--mode` without `--stored-path`**
+
+   * Example:
+
+     ```bash
+     coldkeep restore 1 out --mode override
+     ```
+   * `--mode` is allowed but only used in stored-path restore.
+
+2. **`restore` accepts and ignores `--destination` without `--stored-path`**
+
+   * Example:
+
+     ```bash
+     coldkeep restore 1 out --destination other
+     ```
+   * The destination flag is silently ignored.
+
+3. **`remove --stored-path "" 123` can fall through to ID removal mode**
+
+   * Empty `--stored-path` is treated as “not present”.
+   * That can make a malformed stored-path command operate on positional file IDs instead.
+
+4. **`restore --stored-path "" ...` has the same empty-flag fallthrough**
+
+   * Empty stored-path should be rejected immediately.
+
+5. **`repair ref-counts --input file` accepts and ignores `--input`**
+
+   * `--input` only makes sense with `--batch`, but it is allowed for non-batch repair.
+
+6. **`repair ref-counts --fail-fast` accepts and ignores `--fail-fast`**
+
+   * Same issue: only batch mode uses it.
+
+7. **Benchmark comparison ignores missing baseline cases**
+
+   * `compareWithBaseline()` only loops over current rows.
+   * If a baseline case disappears from the current benchmark, comparison still passes.
+
+8. **Benchmark comparison accepts an empty/invalid baseline envelope**
+
+   * A baseline JSON with no rows can produce no regressions and pass.
+
+
+New issues found:
+
+1. **Value flags accept another flag as their value**
+
+   * Example:
+
+     ```bash
+     coldkeep search --name --limit 10
+     ```
+   * `--name` becomes `"--limit"` and `10` is then silently ignored/treated oddly.
+
+2. **Same parser bug affects `--output`**
+
+   * Example:
+
+     ```bash
+     coldkeep list --output --limit 10
+     ```
+   * `--output` receives `"--limit"` instead of reporting “missing value”.
+
+3. **`search` still does not validate positional args**
+
+   * Combined with #1, malformed commands can silently become broad/incorrect searches.
+
+4. **`snapshot create --id ""` silently generates a new ID**
+
+   * Empty explicit ID should be rejected, not replaced.
+
+5. **`snapshot create --from <missing>` loads DB and only fails later**
+
+   * No early validation that the parent snapshot exists before starting create flow.
+
+6. **`snapshot delete --force=false` deletes**
+
+   * Because boolean values are ignored and presence means true.
+
+7. **`snapshot delete --dry-run=false` still dry-runs**
+
+   * Same boolean parser bug, but opposite operational effect.
+
+8. **`inferOutputModeFromArgs()` scans flags after `--`**
+
+   * Positional data after `--` can influence startup JSON/log behavior even though it should no longer be parsed as flags.
+
+
+New issues found:
+
+1. **`simulate store` ignores extra positional args**
+
+   * `coldkeep simulate store file1 file2`
+   * Only `file1` is used; `file2` is silently ignored.
+
+2. **`simulate gc` ignores extra positional args**
+
+   * `coldkeep simulate gc garbage`
+   * Extra arg is accepted instead of rejected.
+
+3. **`simulate --help --bad-flag` accepts unknown flags**
+
+   * Help path returns before `ensureAllowedFlags`.
+
+4. **`simulate gc --delete-snapshot ""` is accepted**
+
+   * Empty snapshot IDs are passed into simulation assumptions without validation.
+
+5. **`snapshot stats --json` is rejected**
+
+   * Help says snapshot commands support JSON shorthand elsewhere, but stats only allows `--output`.
+
+6. **`snapshot list --limit 0` is accepted**
+
+   * Produces an empty list success; likely should reject or document zero-limit semantics.
+
+7. **`verify system fast` is accepted but undocumented**
+
+   * Usage shows flag style `--fast`; positional level support is hidden and inconsistent.
+
+8. **`simulate store --codec plain --output json` can emit warning to stderr**
+
+   * Same non-JSON side-channel issue as real store paths.
+
+New issues found:
+
+1. **`verify file 0` / `verify file -1` are accepted**
+
+   * `runVerifyCommand` parses the ID but does not require `fileID > 0`.
+
+2. **`search --name ""` returns everything**
+
+   * Empty name is not rejected, so SQL becomes `LIKE '%%'`.
+
+3. **`list/search/snapshot --limit " 10 "` reject whitespace**
+
+   * `validateNonNegativeIntegerFlag()` does not trim before parsing, unlike other command parsers.
+
+4. **`snapshot` paths allow Windows drive paths**
+
+   * `NormalizeSnapshotPath("C:\\foo")` becomes `C:/foo` and is accepted instead of rejected as absolute/drive-qualified.
+
+5. **`snapshot create --id` accepts IDs with path separators**
+
+   * IDs like `a/b` are accepted at CLI level; risky if later reused in filenames/log paths.
+
+6. **`verify file 123 extra` treats `extra` as a verify level**
+
+   * This is intentional-ish internally, but contradicts displayed usage `verify file <fileID> [--fast|...]`.
+
+7. **`store --codec plain` warns to stderr even in JSON mode**
+
+   * `coldkeep store --codec plain --output json` emits non-JSON warning on stderr, which can break strict automation expecting JSON-only streams.
+
+8. **`store-folder --codec plain --output json` has same stderr warning behavior**
+
+
+New issues found:
+
+1. **`list --sort foo` falls back silently instead of rejecting**
+
+   * Invalid sort keys are ignored and default ordering is used.
+
+2. **`search --sort foo` has the same silent fallback**
+
+   * Makes automation/scripts dangerous because typos are not detected.
+
+3. **`restore --workers -1` is parsed without consistent validation**
+
+   * Some command paths clamp/validate workers; others pass negative values deeper.
+
+4. **`snapshot restore --workers 0` behaves differently from normal restore**
+
+   * Inconsistent worker validation between restore implementations.
+
+5. **`benchmark run --workers 0` validation differs from operational commands**
+
+   * Benchmarks reject zero; restore/verify paths do not consistently do so.
+
+6. **`snapshot create --tag ""` silently stores empty tag entries**
+
+   * Empty comma-separated values are not normalized consistently.
+
+7. **`config set compression-level 0` error text says `[1,9]` even when compression is `none`**
+
+   * Misleading because compression-level is irrelevant when compression is disabled.
+
+8. **`search --extension txt` does exact suffix matching without normalizing leading dot**
+
+   * `.txt` and `txt` behave differently in some paths.
+
+
+New issues found:
+
+1. **`restore --limit 0` is accepted**
+
+   * The code validates parse success but not positive range in one restore path.
+   * Result: confusing “restored 0 files” success instead of usage error.
+
+2. **`snapshot restore --limit 0` behaves inconsistently**
+
+   * Snapshot restore validates differently from normal restore.
+   * Same flag, different semantics.
+
+3. **`search --limit -1` and `inspect --limit -1` are not consistently rejected**
+
+   * Some commands enforce `>0`, others only parse integers.
+
+4. **`remove --limit` is parsed but unused**
+
+   * Accepted in parser plumbing but removal code never applies it.
+
+5. **`verify --workers 0` can deadlock/no-op**
+
+   * Worker count validation is inconsistent between benchmark and operational commands.
+
+6. **`doctor` accepts unrelated flags silently**
+
+   * Example:
+
+     ```bash
+     coldkeep doctor --compression zstd
+     ```
+   * Accepted and ignored.
+
+7. **`inspect file --id <snapshot-id>` can produce misleading “not found”**
+
+   * Entity-specific validation happens too late; wrong-ID-type mistakes are not distinguished.
+
+8. **`snapshot list --path ../x` accepts traversal filter**
+
+   * Same normalization weakness affects listing/filtering APIs, not only restore.
+
+
+New issues found:
+
+1. **`coldkeep search report` from README does not work as implied**
+
+   * README shows `coldkeep search report`.
+   * Code ignores positional search terms; only `--name report` is used.
+
+2. **`search` does not reject extra positional args**
+
+   * `runSearchCommand()` never checks `len(parsed.positionals)`.
+   * So typos like `coldkeep search foo bar` are silently ignored.
+
+3. **`search --min-size 100 --max-size 10` is not rejected**
+
+   * Snapshot query validates min/max ordering.
+   * Normal search does not.
+
+4. **`inspect --output json` is missing from startup JSON inference**
+
+   * `inspect` is absent from `outputSupportedCommands`.
+   * JSON mode may still emit startup/recovery noise before JSON.
+
+5. **README omits supported `inspect repository`**
+
+   * Code supports `coldkeep inspect repository`.
+   * README supported entity list omits `repository`.
+
+6. **`inspect --limit " 10 "` fails**
+
+   * Uses `strconv.Atoi(limitStr)` without `strings.TrimSpace`, unlike several other CLI parsers.
+
+
+New issues found:
+
+1. **`--json` shorthand is only partially implemented**
+
+   * `resolveOutputMode()` supports `--json`, but most commands reject it in `ensureAllowedFlags`.
+   * Affected examples: `store`, `restore`, `list`, `search`, `verify`, `snapshot`, `config`, `doctor`.
+
+2. **`snapshot delete --force --dry-run` is accepted**
+
+   * Usage says `(--force|--dry-run)`, but both together silently run dry-run.
+   * Should reject as mutually exclusive.
+
+3. **`benchmark` is missing from `outputSupportedCommands`**
+
+   * JSON-mode error handling/log suppression is inconsistent for:
+
+     ```bash
+     coldkeep benchmark run --output json ...
+     ```
+
+4. **`version` is also missing from `outputSupportedCommands`**
+
+   * `version --output json` exists, but startup JSON inference does not recognize it.
+
+5. **`config --json` fails despite global JSON parser support**
+
+   * Same root cause as #1, but important because `config get` is automation-oriented.
+
+6. **`snapshot stats --json` fails despite snapshot commands supporting JSON via `--output json`**
+
+   * `runSnapshotStatsCommand` only allows `output`, not `json`.
+
+7. **`snapshot delete --dryRun` alias is accepted but not documented**
+
+   * Code accepts both `--dry-run` and `--dryRun`; help/usage only shows `--dry-run`.
+
+8. **`remove --dryRun` and `--failFast` aliases are accepted but not documented**
+
+   * Same hidden alias issue; scripts/users can depend on undocumented spellings accidentally.
+
+
+New issues found:
+
+1. **`benchmark --output json` emits duplicate JSON**
+
+   * `printCLISuccess()` excludes self-emitting commands, but not `benchmark`.
+   * Result: benchmark JSON + generic success JSON on stdout.
+
+2. **`benchmark run --compare` emits success before comparison failure**
+
+   * `runBenchmarkRunCommand()` prints the report first, then runs `compareWithBaseline`.
+   * If comparison fails, stdout already contains `"status":"ok"`.
+
+3. **`init --output json` is not JSON**
+
+   * `initCommand()` ignores `outputMode` and prints human text, then generic JSON success is appended.
+
+4. **`help --output json` is also mixed output**
+
+   * Prints human help, then generic success JSON.
+
+5. **`init --json` is accepted but ignored**
+
+   * Same root cause: `initCommand()` never handles JSON mode.
+
+6. **`runSnapshotCreateCommand` allows empty snapshot IDs via whitespace around `--id`?**
+
+   * It trims and generates a new ID when empty.
+   * `--id ""` should probably be rejected, not silently replaced.
+
+7. **`config get compression extra` opens DB before usage rejection**
+
+   * Arity validation happens inside the switch after DB load.
+   * Same for malformed `config set ...` argument counts.
+
+8. **Correction to my earlier list**
+
+   * I previously said `benchmark run --compare` was ignored. That was wrong; it is used, but too late in the command flow.
+
+
+New issues found:
+
+1. **`benchmark run --threshold Inf` is accepted**
+
+   * `strconv.ParseFloat("Inf", 64)` succeeds.
+   * Validation only checks `<= 0`, so infinity passes.
+
+2. **Container quarantine/recovery paths trust DB filenames**
+
+   * `internal/recovery/system_recovery.go`
+   * A filename like `../../outside.bin` can escape quarantine/recovery dirs via `filepath.Join`.
+
+3. **GC orphan scan can traverse outside container dir**
+
+   * `internal/maintenance/gc.go`
+   * Stored filenames are joined directly before existence/removal checks.
+
+4. **`snapshot restore --mode override` can overwrite symlink targets**
+
+   * Destination existence checks don’t defend against symlink replacement attacks.
+
+5. **Benchmark matrix scripts can report success with zero benchmark output**
+
+   * Due to swallowed errors plus incorrect result discovery logic.
+
+6. **`config set compression zstd ` fails**
+
+   * Trailing spaces are trimmed inconsistently across config/env parsing paths.
+
+7. **`parseCommandLine` boolean parsing is incompatible with standard CLI expectations**
+
+   * `--flag=false`
+   * `--flag=0`
+   * `--flag=no`
+   * all become `true`.
+
+8. **Container filename trust issue affects multiple subsystems simultaneously**
+
+   * Store
+   * GC
+   * Recovery
+   * Rollback
+   * Restore
+   * Quarantine
+   * No central filename validation exists before filesystem joins.
+
+
+New issues found:
+
+1. **`benchmark run --threshold NaN` is accepted**
+
+   * `strconv.ParseFloat("NaN", 64)` succeeds.
+   * The check `v <= 0` does not reject NaN.
+
+2. **GC deletion trusts DB container filenames**
+
+   * `internal/maintenance/gc.go`
+   * Bad DB filename like `../x` can make GC delete outside container dir.
+
+3. **Recovery also trusts DB container filenames**
+
+   * `internal/recovery/system_recovery.go`
+   * Uses `filepath.Join(containersDir, filename)` for stat/quarantine checks without validating filename.
+
+4. **Restore non-overwrite mode has TOCTOU overwrite race**
+
+   * It checks destination does not exist, then later `os.Rename` can overwrite a file created between check and rename.
+
+5. **`config bad <valid-key>` opens DB before rejecting subcommand**
+
+   * Example: `coldkeep config bad compression`
+   * Should reject usage before loading storage context.
+
+6. **`config set compression ZSTD` rejects while env path accepts lowercase-normalized values**
+
+   * Store env normalizes compression to lowercase.
+   * Config command trims but does not lowercase, causing inconsistent behavior.
+
+
+New issues found:
+
+1. **`benchmark run` accepts but ignores `--compare`**
+
+   * `cmd/coldkeep/main.go:2981`
+   * Flag is allowed globally, but `runBenchmarkRunCommand` never reads it.
+
+2. **`benchmark run` accepts but ignores `--threshold`**
+
+   * Same path. Parsed/allowed, but unused.
+
+3. **`benchmark chunkers` accepts unrelated benchmark flags**
+
+   * Example:
+
+     ```bash
+     coldkeep benchmark chunkers --dataset small --workers 8 --repeat 3
+     ```
+   * These are accepted but ignored.
+
+4. **Container filenames from DB are joined without validation**
+
+   * `internal/container/container.go:416`
+   * If DB contains a bad `container.filename` like `../x`, `filepath.Join(containersDir, filename)` can escape the storage dir.
+
+5. **Rollback path has the same container filename trust issue**
+
+   * `internal/container/local_writer.go:530,542`
+   * Uses stored filename directly in `filepath.Join(w.dir, filename)`.
+
+6. **DB timeout env vars accept malformed partial integers**
+
+   * `internal/db/db.go:27,36,60,69,78,87,95`
+   * They use `utils_env.GetenvOrDefaultInt64`, which accepts `123bad` as `123`.
+
+7. **`benchmark chunkers --output json` works, but `--output` is validated only at parent level**
+
+   * Not fatal, but subcommand-specific flag validation is missing; this is why ignored flags slip through.
+
+8. **`parseCommandLine` accepts values for boolean flags**
+
+   * Beyond `=false`, even:
+
+     ```bash
+     --overwrite=definitely-not-a-bool
+     ```
+
+     is accepted as true.
+
+
+New issues found:
+
+1. **Boolean flags accept `=false` as true**
+
+   * Parser treats presence as true.
+   * Examples affected:
+
+     * `--dry-run=false`
+     * `--force=false`
+     * `--overwrite=false`
+     * `--summary=false`
+   * These still enable the flag.
+
+2. **`snapshot restore --mode override` checks raw path before normalization**
+
+   * A Windows-style directory path ending in `\` can bypass the directory-suffix check before normalization.
+
+3. **`check_smart_quotes.sh` silently passes if `grep -P` is unsupported**
+
+   * BSD/macOS `grep` lacks `-P`.
+   * Script prints “ok” even though it did not actually scan.
+
+4. **`clean_test_storage.sh` can delete non-test dirs**
+
+   * Pattern `/tmp/coldkeep*` is too broad.
+   * It can remove unrelated dirs like `/tmp/coldkeep-prod-backup`.
+
+5. **Postgres `options='...'` DSN can break if timeout options contain quotes**
+
+   * Connection string builds raw `options='%s'` without escaping.
+
+6. **`config get compression-level` can return a level even when compression is `none`**
+
+   * It exposes a setting that is documented as only relevant for `zstd`, which can mislead scripts checking active compression behavior.
+
+
+New issues found:
+
+1. **Postgres DSN breaks with spaces/quotes in env values**
+
+   * `internal/db/db.go`
+   * `DB_PASSWORD`, `DB_USER`, etc. are concatenated into the connection string without escaping.
+
+2. **`config` opens DB before validating subcommand**
+
+   * `cmd/coldkeep/main.go`
+   * `coldkeep config bad compression` can fail with DB errors instead of usage error.
+
+3. **`snapshot create missing_dir/` can succeed as empty partial snapshot**
+
+   * Exact missing paths error, but unmatched directory prefixes do not.
+
+4. **`COLDKEEP_KEY` is not trimmed**
+
+   * `internal/blocks/key.go`
+   * A key with accidental whitespace fails hex decoding.
+
+5. **Top-level `help --bad-flag` ignores unknown flags**
+
+   * Same issue family as `init/version`, but separate command path.
+
+6. **`generateJSON` can ignore requested object count by padding**
+
+   * `internal/benchmark/corpus.go`
+   * With small `JSONObjects`, it stops early then fills remaining bytes with newlines, so corpus semantics don’t match the requested object count/size intent.
+
+
+New issues found:
+
+1. **`coldkeep init` ignores unknown flags**
+
+   * `coldkeep init --bad-flag` is accepted.
+   * `cmd/coldkeep/init.go` never calls `ensureAllowedFlags`.
+
+2. **`coldkeep version --bad-flag` also ignores unknown flags**
+
+   * `runVersionCommand` gets only `outputMode`, not parsed flags.
+
+3. **Stats block-size target can disagree with store behavior**
+
+   * Store accepts only block target sizes `1,2,3`.
+   * Stats accepts any positive `COLDKEEP_BLOCK_TARGET_SIZE_MB`.
+   * So `COLDKEEP_BLOCK_TARGET_SIZE_MB=4` reports stats using 4 MiB while writes actually fall back to 1 MiB.
+
+4. **`ParseCodec` error message can print blank/whitespace unclearly**
+
+   * `unsupported codec:   ` is hard to diagnose.
+   * It also does not quote the bad value.
+
+5. **Docs say codec is derived from `COLDKEEP_KEY`**
+
+   * `docs/benchmarking.md:1441`
+   * Actual codec selection is from `COLDKEEP_CODEC`; key only matters when AES-GCM is selected.
+
+6. **`init --compression-level` still accepts plus-prefixed integers**
+
+   * `+3` is accepted by `strconv.Atoi`.
+   * Other user-facing config paths normalize to plain numeric strings, so this is inconsistent CLI validation.
+
+
+New issues found:
+
+1. **`init --compression-level "3 "` rejects valid-looking input**
+
+   * `cmd/coldkeep/init.go:48-49`
+   * Uses `strconv.Atoi(levelFlag)` without `strings.TrimSpace`.
+
+2. **Phase 8 restore script has missing-value crashes**
+
+   * `scripts/run_phase8_restore_sequence.sh:74-92`
+   * Flags like `--dataset-label`, `--output-dir`, `--bin`, `--random-seed` read `$2` without checking it exists.
+
+3. **Phase 8 store script has same missing-value bug**
+
+   * `scripts/run_phase8_store_sequence.sh:66-72`
+   * `--output-dir` or `--bin` without a value exits with shell “unbound variable”.
+
+4. **Phase 8 dedup script has same missing-value bug**
+
+   * `scripts/run_phase8_dedup_sequence.sh:69+`
+   * Several options read `$2` directly.
+
+5. **Stored-path restore prefix mode still permits traversal**
+
+   * `internal/storage/restore.go:865-874`
+   * It strips leading `/` and volume names, but `../evil` remains and escapes the restore prefix.
+
+6. **`RestoreDestinationOriginal` returns raw stored path**
+
+   * `internal/storage/restore.go:853-854`
+   * If DB contains absolute or traversal paths, original-mode restore can write outside the intended working area.
+
+7. **`init --compression-level` accepts `+3`**
+
+   * Same parser path. Repository config later emits plain integer strings, but CLI accepts plus-prefixed values inconsistently.
+
+8. **`init --compression-level` error message omits accepted range unless parse succeeds**
+
+   * For `"3x"` it says parse error, not the required `[1,9]` contract. This is minor, but it is a CLI validation defect.
+
+
+New issues I found:
+
+1. **`ParseCodec` does not trim whitespace**
+
+   * `COLDKEEP_CODEC=" aes-gcm "` fails even though other config parsing trims values.
+
+2. **`NormalizeSnapshotPath(".")` is accepted**
+
+   * This can produce ambiguous snapshot-relative paths. It should reject `"."` and probably `".."` components.
+
+3. **Snapshot path tests miss traversal cases**
+
+   * `internal/snapshot/snapshot_test.go` invalid cases do not include:
+
+     * `..`
+     * `../x`
+     * `a/../../x`
+     * `.`
+   * That leaves the traversal bug unguarded.
+
+4. **Phase 8 block-size script option parsing can crash with unbound `$2`**
+
+   * `scripts/run_phase8_blocksize_matrix.sh`
+   * Running `--dataset` without a value exits with shell error, not clean usage.
+
+5. **Same missing-value option bug exists in `run_v19_baseline_pair.sh`**
+
+   * Flags like `--bin`, `--dataset`, `--repeat`, etc. read `$2` without checking it exists.
+
+6. **Docker smoke command installs `jq` only**
+
+   * It still can hit smoke paths requiring `psql`, but the container command does not install `postgresql-client`.
+
+7. **Docker runtime image copies `scripts/` but not `db/`**
+
+   * `scripts/smoke.sh` can reference `db/schema_postgres.sql`; inside the image it is absent.
+
+8. **`README.md` Docker smoke command uses `sh -lc`, but smoke is bash**
+
+   * It executes `scripts/smoke.sh` by shebang, so usually okay, but if permissions are lost or copied differently, `sh` would not be enough. Better command should explicitly use `bash scripts/smoke.sh`.
+
+
+New issues found:
+
+1. **`run_phase8_matrix.sh` creates misleading success summaries**
+
+   * `scripts/run_phase8_matrix.sh`
+   * Because failures are swallowed with `|| true`, the final “completed” summary can report benchmark directories even when benchmark execution failed.
+
+2. **Integration tests assume GNU `tar` behavior**
+
+   * `tests/integration/integration_test.go`
+   * Uses:
+
+     ```go
+     exec.Command("tar", "-czf", ...)
+     ```
+   * BSD/macOS tar differences can break metadata handling and reproducibility assumptions.
+
+3. **Windows-incompatible path assumptions**
+
+   * Multiple tests/scripts hardcode `/tmp/...`
+   * Examples:
+
+     * `tests/integration/integration_test.go`
+     * `scripts/*.sh`
+   * Makes portions of the repo fail on Windows despite Go code itself being mostly portable.
+
+4. **`NormalizeSnapshotPath()` allows empty normalized components**
+
+   * Paths like:
+
+     ```
+     a//b///c
+     ```
+
+     normalize inconsistently depending on caller path cleaning.
+   * Some restore/list codepaths clean twice, others don’t.
+
+5. **Repository config parser accepts partial booleans**
+
+   * `internal/storage/repository_config.go`
+   * Boolean parsing accepts values after trimming/lowercasing but does not reject trailing junk consistently in some fields.
+
+6. **Benchmark corpora generation can produce non-deterministic output**
+
+   * `internal/benchmark/corpus.go`
+   * Uses current timestamps/randomized content without stable seeding in some generators.
+   * Repeated benchmark runs are not comparable despite benchmark naming implying reproducibility.
+
+7. **`scripts/smoke.sh` uses `mktemp -d` without cleanup trap**
+
+   * If interrupted, temp repos/workdirs are leaked.
+
+8. **Potential nil dereference risk in benchmark reporting**
+
+   * Benchmark result aggregation assumes populated metric structs before formatting summaries.
+   * Failure paths can leave partially initialized entries.
+
+9. **Restore path sanitization differs between snapshot restore and storage restore**
+
+   * Two separate implementations sanitize differently.
+   * Security fixes applied to one path can easily miss the other.
+
+10. **README benchmark commands reference outputs that scripts don’t always generate**
+
+* Some docs imply CSV/JSON artifacts always exist, but scripts only emit them conditionally.
+
+
+More issues:
+
+1. **`.env.example` is broken as a usable example**
+
+   * `.env.example:1-2`
+   * It sets `COLDKEEP_CODEC="aes-gcm"` but leaves `COLDKEEP_KEY=` empty. AES-GCM paths require a 64-hex-char key, so copying/sourcing this file fails.
+
+2. **Phase 8 scripts use invalid default AES keys**
+
+   * `scripts/run_phase8_store_sequence.sh:125` uses **96 hex chars**.
+   * `scripts/run_phase8_dedup_sequence.sh:153` and `scripts/run_phase8_gc_sequence.sh:148` use **128 hex chars**.
+   * Coldkeep expects **64 hex chars** for AES-256-GCM. Currently hidden because scripts force `COLDKEEP_CODEC=plain`, but wrong if reused.
+
+3. **`utils_env.GetenvOrDefaultInt64` accepts malformed numbers**
+
+   * `internal/utils_env/env.go:18`
+   * `fmt.Sscanf("123abc", "%d", &result)` succeeds and returns `123`.
+   * So env vars like `COLDKEEP_BLOCK_TARGET_SIZE_MB=1bad` are silently accepted.
+
+4. **Repository compression level parsing has same malformed-number bug**
+
+   * `internal/storage/repository_config.go:193`
+   * Stored config value `"3junk"` is accepted as level `3`.
+
+5. **`scripts/run_phase8_gc_sequence.sh` validates neither `--remove-ratio` range nor numeric parse**
+
+   * Python later does `float(remove_ratio_raw)`.
+   * Bad input crashes with traceback; values like `-1` or `2` are accepted into selection logic.
+
+6. **`Dockerfile` runtime copies `scripts/` but not sample/schema files**
+
+   * Smoke docs run `scripts/smoke.sh` inside the image.
+   * The script can need `db/schema_postgres.sql`, but Dockerfile does not copy `db/` into runtime.
+
+
+More concrete defects:
+
+1. **Phase 8 matrix script masks all child failures**
+
+   * `scripts/run_phase8_matrix.sh:23-44`
+   * Every benchmark command is piped to `grep ... || true`, so the matrix can exit success even when store/restore/dedup/GC scripts fail.
+
+2. **Phase 8 matrix result count path is wrong**
+
+   * `scripts/run_phase8_matrix.sh:49-50`
+   * Logs `tmp/bench_phase8_*/` but runs:
+   * `find tmp/bench_phase8_/ ...`
+   * Missing `*`, so it counts nothing/useful output is wrong.
+
+3. **Invalid test command inside integration test comments**
+
+   * `tests/integration/integration_test.go:58`
+   * Says `go test ./tests -run ...`
+   * That package has no Go files. Should be `./tests/integration/...`.
+
+4. **Snapshot query path traversal also affects listing/diff filters**
+
+   * `NormalizeSnapshotPath("../x")` is accepted.
+   * This is not just restore; `--path ../x` / internal query objects can match bad stored snapshot rows instead of rejecting invalid snapshot-relative paths.
+
+5. **Docs understate smoke dependencies**
+
+   * `README.md:352` says smoke requires `jq` and `coldkeep`.
+   * But `scripts/smoke.sh` also uses `sha256sum`, `find`, and conditionally `psql`.
+   * The `psql` caveat exists elsewhere, but this line is incomplete/wrong as a requirements statement.
+
+6. **Docker image is not sqlite-capable despite sqlite support in project**
+
+   * `Dockerfile:19` uses `CGO_ENABLED=0`.
+   * `go-sqlite3` requires CGO for real sqlite operation.
+   * So a Docker user trying sqlite mode gets a broken binary path. This is a real packaging/runtime error, not style.
+
+Still blocked from full `go test ./...` because external modules cannot be downloaded here.
+
+
+More concrete issues found:
+
+1. **Generated benchmark `.go` files are invalid Go**
+
+   * `internal/benchmark/corpus.go:440-445`
+   * Templates contain raw `%s`, and the generated file is named `source_code_1.go`.
+
+2. **Benchmark log generator produces corrupt fmt text**
+
+   * `internal/benchmark/corpus.go:504,512`
+   * Output includes `%!s(int64=0)` because `%s` receives an integer.
+
+3. **JPEG corpus generator panics on size 1**
+
+   * `internal/benchmark/corpus.go:546-548`
+   * Writes `buf[1]` without checking length.
+
+4. **Docs contain commands that fail**
+
+   * `CONTRIBUTING.md:404` and `:410`
+   * `go test ./tests ...` fails because `/tests` has no Go files.
+   * Should be `go test ./tests/integration ...`.
+
+5. **Docker runtime image lacks tools required by documented smoke flow**
+
+   * `Dockerfile` installs `bash` only.
+   * README says smoke needs `jq`; `scripts/smoke.sh` can also need `psql`.
+   * So the documented container smoke command can fail unless those are installed ad hoc.
+
+6. **Snapshot path traversal issue remains real**
+
+   * `NormalizeSnapshotPath` rejects absolute paths but not `..`.
+   * A stored snapshot path like `../x` can escape restore prefix via `filepath.Join`.
+
+I’d prioritize fixes for **1, 2, 3, 4, and path traversal**.
+
+
+Dug deeper. New concrete errors:
+
+1. **Benchmark log corpus generates broken fmt output**
+
+   * File: `internal/benchmark/corpus.go:502-513`
+   * `%s` formats receive `int64`, producing strings like:
+   * `%!s(int64=0)`
+   * Fix: use matching args, e.g. `fmt.Sprintf("[DEBUG] Cache hit for key: key_%d\n", i%1000)`.
+
+2. **Benchmark source corpus leaves raw `%s` placeholders**
+
+   * File: `internal/benchmark/corpus.go:439-457`
+   * Templates like `func %s()` and `type %s struct` are copied without formatting.
+   * Generated “source” corpus contains invalid/unexpanded source text.
+
+3. **`jpeg_sim` corpus can panic for tiny sizes**
+
+   * File: `internal/benchmark/corpus.go:545-548`
+   * It writes `buf[0]` and `buf[1]` without checking `len(buf) >= 2`.
+   * `generateCorpusContent(..., size=1)` panics.
+
+4. **Snapshot path normalization allows `..`**
+
+   * File: `internal/snapshot/snapshot.go:295-327`
+   * `NormalizeSnapshotPath("../x")` is accepted.
+   * Later prefix restore joins it directly:
+
+     * `internal/snapshot/snapshot.go:1160-1166`
+   * This can escape the restore destination if a bad/corrupt snapshot path exists.
+
+5. **Stored-path prefix restore has similar `..` escape risk**
+
+   * File: `internal/storage/restore.go:865-874`
+   * It strips leading slashes but does not reject/clean parent traversal before `filepath.Join`.
+
+Correction from my earlier pass: the Docker smoke command likely **does inherit DB env vars** from the compose `coldkeep` service, so that specific DB-env claim is not a valid bug.
+
+
+Found a few concrete errors/likely breakages:
+
+1. **Docker smoke command is missing DB env vars**
+
+   * README Docker smoke command passes only `COLDKEEP_KEY` and `COLDKEEP_CODEC`, but `coldkeep` defaults to DB host `127.0.0.1` inside the container, not `coldkeep_postgres`.
+   * Fix README lines 314–319 by also passing `DB_HOST=coldkeep_postgres`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSLMODE=disable`.
+
+2. **Docker smoke command installs `jq` but not `psql`**
+
+   * `scripts/smoke.sh` can require `psql` when `COLDKEEP_TEST_DB` or schema gate paths are enabled.
+   * Fix README or Dockerfile: install `postgresql-client` in the smoke command or image.
+
+3. **Docker image is built with `CGO_ENABLED=0` while project imports `mattn/go-sqlite3`**
+
+   * `Dockerfile:19` builds with CGO disabled.
+   * `go.mod:7` and `internal/db/backend.go:7` depend on `mattn/go-sqlite3`.
+   * This may compile using sqlite stub behavior, but sqlite-backed paths will fail at runtime in the container. Since the README mentions sqlite/cgo warnings, this is at least a real operational footgun.
+
+4. **I could not fully run `go test ./...`**
+
+   * This environment blocks module downloads from `proxy.golang.org`, so full test execution failed before compiling all packages.
+   * I did run targeted no-external-dependency tests successfully for `internal/chunk`, `internal/chunk/fastcdc`, `internal/chunk/simplecdc`, `internal/utils_hash`, and `internal/blocks`.
+
+I did not find obvious formatting or shell syntax errors.
+
+
+I checked the uploaded consolidated issue list and found a few additional issues that do **not** appear in that file yet. 
+
+1. **`verify file` accepts non-numeric verification modes as positional args**
+
+   * Example:
+
+     ```bash
+     coldkeep verify file 123 potato
+     ```
+   * Extra positional tokens are interpreted as verification level candidates instead of being rejected immediately.
+
+2. **`snapshot create --tag ","` produces effectively empty metadata**
+
+   * A tag string composed only of separators creates meaningless empty tag entries instead of rejecting invalid input.
+
+3. **`search --extension "."` behaves as wildcard-ish suffix matching**
+
+   * A single dot is treated as a valid extension filter even though it is not a meaningful extension.
+
+4. **`benchmark compare` lacks schema-version compatibility checks**
+
+   * Reports generated by different benchmark schema versions can still be compared if they contain compatible-looking row structures.
+
+5. **`run_phase8_matrix.sh` summary can claim completion even when no benchmark artifacts were produced**
+
+   * Not just child-failure masking; the final reporting logic does not verify that any benchmark result files actually exist.
+
+6. **`inspect repository --limit` is accepted even though repository inspect is singleton data**
+
+   * Limit flag is meaningless there but not rejected.
+
+7. **`snapshot delete --dry-run --output json` can still emit human-readable informational lines**
+
+   * Output mode handling is inconsistent in dry-run paths.
+
+8. **`search --min-size -1` parse path differs from other numeric validations**
+
+   * Some negative numeric filters are rejected during parse, others later during query construction, producing inconsistent error surfaces.
+
+9. **`snapshot create --from missing --output json` may emit partial human-readable initialization output before failure**
+
+   * JSON mode is not consistently enforced during early snapshot initialization errors.
+
+10. **`config get` and `config set` help text do not fully match accepted aliases**
+
+* Parser accepts more forms than the documented CLI contract, creating hidden API surface area for scripts.
+
+
+I compared against your uploaded consolidated list and found these additional issues not already listed there. 
+
+1. **Batch JSON commands can emit two JSON objects on failure**
+
+   * `emitBatchCommandReport()` prints the batch JSON report, then returns an error.
+   * `runCLI()` then prints a second JSON error object.
+   * Affects failed/partial JSON runs for `restore`, `remove`, `repair`.
+
+2. **`--codec=` is silently ignored**
+
+   * Examples:
+
+     ```bash
+     coldkeep store --codec= file.txt
+     coldkeep store-folder --codec= dir
+     coldkeep simulate store --codec= file.txt
+     ```
+   * Empty explicit codec falls back to default codec instead of erroring.
+
+3. **`--mode=` silently becomes `original`**
+
+   * Example:
+
+     ```bash
+     coldkeep restore --stored-path x --mode=
+     ```
+   * Empty explicit restore mode should be rejected.
+
+4. **`--output=` silently becomes text mode**
+
+   * Example:
+
+     ```bash
+     coldkeep stats --output=
+     ```
+   * Empty explicit output mode should be rejected.
+
+5. **Subcommand help ignores JSON mode**
+
+   * Examples:
+
+     ```bash
+     coldkeep stats --help --output json
+     coldkeep inspect --help --output json
+     coldkeep simulate --help --output json
+     ```
+   * They print human help, not JSON.
+
+6. **`snapshot show --limit 0` is accepted**
+
+   * Similar to earlier zero-limit issues, but this specific path was not in the list.
+   * Produces an empty successful show result.
+
+7. **`snapshot list --tree --limit N` can render a misleading tree**
+
+   * The tree is built after applying `limit`, so children/parents outside the limited set disappear and remaining nodes can look like roots.
+
+8. **`coldkeep init` prints a generated encryption key before validating options**
+
+   * Example:
+
+     ```bash
+     coldkeep init --compression-level bad
+     ```
+   * It prints a real key, then fails validation.
+
+9. **`restore --input ""` is treated as no input file**
+
+   * Explicit empty input should fail.
+   * Instead it falls back to positional restore behavior.
+
+10. **`remove --input ""` is treated as no input file**
+
+* Same empty-input fallthrough as restore.
+
+11. **`simulate store-folder dir extra` ignores trailing args**
+
+* Earlier list included `simulate store`; `store-folder` has the same issue.
+
+12. **`validate_regression_thresholds.py` usage text is wrong**
+
+* Header documents:
+
+  ```bash
+  --validate
+  --check
+  ```
+* Actual argparse commands are:
+
+  ```bash
+  validate
+  check
+  ```
+
+13. **`validate_regression_thresholds.py` ignores missing benchmark cases**
+
+* It compares only `common_cases`.
+* If a case disappears from result or baseline, no failure is produced.
+
+14. **`validate_regression_thresholds.py` silently overwrites duplicate case rows**
+
+* `extract_rows()` keys by case name and last row wins.
+
+15. **`compare_phase8_gc_results.py` accepts unknown options**
+
+* It only checks whether `--output-json` appears in argv.
+* Extra flags are silently ignored.
+
+16. **`compare_phase8_gc_results.py` can compare unrelated datasets**
+
+* It only requires one 1 MiB result and one 2 MiB result.
+* It does not verify matching dataset/run identity.
+
+
+I compared against the attached issue file and found these additional issues that do **not** appear to be listed there yet. 
+
+1. **Benchmark temporary DB cleanup is broken**
+
+   * `createTemporaryBenchmarkDatabase()` defers `adminDB.Close()` before returning a cleanup closure that later uses `adminDB`.
+   * Result: cleanup runs on a closed DB handle, so benchmark temp databases can be leaked.
+
+2. **Duplicate unreachable return in benchmark DB helper**
+
+   * `createTemporaryBenchmarkDatabase()` has two identical:
+
+     ```go
+     return name, cleanup, nil
+     ```
+   * The second one is unreachable dead code.
+
+3. **Snapshot restore can restore to the wrong path when the planned output already exists as a directory**
+
+   * Snapshot restore plans exact output paths, but then calls normal file restore.
+   * Normal restore treats an existing output directory as “restore inside this directory using originalName”.
+   * So a snapshot path like `docs` can unexpectedly restore to `docs/<originalName>`.
+
+4. **Snapshot `--mode override` can also restore inside a directory**
+
+   * If `--destination ./out` exists and is a directory, override mode may restore into `./out/<originalName>` instead of treating `./out` as the exact override target.
+
+5. **Snapshot restore collision detection can be bypassed by directory reinterpretation**
+
+   * Collision detection is done on planned paths before normal restore rewrites directory destinations.
+   * If two planned outputs later get rewritten through existing directories, the collision check may not reflect actual final outputs.
+
+6. **Docs describe a benchmark corpus CLI that does not exist**
+
+   * `docs/BENCHMARK_CORPORA.md` documents:
+
+     ```bash
+     coldkeep benchmark corpus ensure ~/.coldkeep/corpora
+     ```
+   * Actual CLI supports only:
+
+     ```bash
+     coldkeep benchmark chunkers
+     coldkeep benchmark run
+     ```
+
+7. **Docs describe unsupported `benchmark run --corpus`**
+
+   * `docs/BENCHMARK_CORPORA.md` shows:
+
+     ```bash
+     coldkeep benchmark run --corpus highly_compressible
+     ```
+   * `--corpus` is not in the CLI flag allowlist.
+
+8. **Pre-release checklist contradicts README on stored-path restore**
+
+   * README documents `restore --stored-path`.
+   * `PRE_RELEASE_CHECKLIST.md` says restore-by-stored-path is not currently part of the CLI contract.
+   * One of these is wrong.
+
+9. **New container file creation uses `O_TRUNC` without `O_EXCL`**
+
+   * New container creation opens:
+
+     ```go
+     os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+     ```
+   * If a file/symlink already exists at the generated path, it can be truncated instead of rejected.
+
+10. **Benchmark determinism validation can leak temp DBs on early failure**
+
+* Because the cleanup closure itself is broken, failures during determinism runs leave `coldkeep_bench_*` databases behind.
+
+I compared against the attached issue file and found these additional issues that do **not** appear to be listed there yet. 
+
+1. **Batch human output prints some skipped items twice**
+
+   * In `printBatchHumanReport()`, the `ResultSkipped` branch with no ID/raw value prints:
+
+     ```go
+     fmt.Printf("↷ skipped %s\n", item.Message)
+     fmt.Printf("↷ skipped %s\n", item.Message)
+     ```
+   * This creates duplicate human output for that skipped-result shape.
+
+2. **`snapshot restore --path <file> --mode override` is rejected even when exactly one file matches**
+
+   * Override mode only checks positional requested paths.
+   * Example likely fails:
+
+     ```bash
+     coldkeep snapshot restore snap1 --path docs/a.txt --mode override --destination ./a.txt
+     ```
+   * But `--path` is an exact-path selector, so a single exact match should behave like positional exact restore.
+
+3. **`snapshot restore snap missing_dir/` can succeed with 0 restored files**
+
+   * Exact missing paths are rejected, but unmatched directory-prefix selections are not.
+   * A directory prefix that matches nothing returns successful “empty snapshot selection” instead of an error.
+
+4. **Duplicate singleton snapshot query flags silently override earlier values**
+
+   * These use only `lastFlagValue()`:
+
+     * `--pattern`
+     * `--regex`
+     * `--min-size`
+     * `--max-size`
+     * `--modified-after`
+     * `--modified-before`
+   * Example:
+
+     ```bash
+     coldkeep snapshot show snap --regex a --regex b
+     ```
+   * Only `b` is used; `a` is silently ignored.
+
+5. **`inspect repository` computes container count but omits it from summary**
+
+   * `inspectRepository()` queries:
+
+     ```go
+     SELECT COUNT(*) FROM container
+     ```
+   * But the returned summary includes files/chunks/snapshots and block stats, not `total_containers`.
+
+6. **Simulated storage can leak its temp DB file if closing the freshly-created temp file fails**
+
+   * In `ParseStorageContext("simulated")`, after `os.CreateTemp`, if `tempDBFile.Close()` fails, the function returns without removing the temp file.
+
+7. **`COLDKEEP_CONTAINER_MAX_SIZE_MB=0` or negative values are accepted until later failure**
+
+   * `containerMaxSize` is computed directly from env:
+
+     ```go
+     GetenvOrDefaultInt64(...) * 1024 * 1024
+     ```
+   * There is no early validation that the final max size is positive and at least header-sized.
+
+8. **Huge `COLDKEEP_CONTAINER_MAX_SIZE_MB` can overflow**
+
+   * The MB value is multiplied by `1024*1024` without overflow checks.
+   * A very large env value can wrap into a negative or invalid container max size.
+
+9. **Container header max size is not compared with DB `max_size` when opening existing containers**
+
+   * `readAndValidateContainerHeader()` returns `Header.MaxSize`, but `openExistingContainer()` ignores it and trusts the DB-provided `maxSize`.
+   * A DB/header mismatch can go undetected.
+
+10. **`simulate store-folder --codec plain --output json` emits non-JSON warning on stderr**
+
+* The attached list mentions real store paths and `simulate store`; the `simulate store-folder` path has the same JSON side-channel issue.
+
+11. **Very large DB/storage timeout env vars can overflow `time.Duration`**
+
+* Several loaders do:
+
+  ```go
+  time.Duration(valueMs) * time.Millisecond
+  ```
+* No upper-bound/overflow check is applied.
+
+12. **`snapshot diff snap snap` is allowed**
+
+* Comparing a snapshot to itself returns an empty diff instead of rejecting likely user error.
+
+I compared against the attached issue file and found these additional issues that do **not** appear to be listed there yet. 
+
+1. **`benchmark run --workers N` can be overridden by env**
+
+   * `runBenchmarkRunCommand()` parses `--workers`, then calls `execution.FromEnv(opts)`.
+   * If `COLDKEEP_STORE_FOLDER_WORKERS` is set, it overrides the CLI value.
+   * `store-folder` does this in the opposite order, so behavior is inconsistent.
+
+2. **Benchmark compare does not verify dataset compatibility**
+
+   * A baseline from `--dataset small` can be compared against current `--dataset medium`.
+   * Only case names are matched.
+
+3. **Benchmark compare does not verify repeat compatibility**
+
+   * Baseline `repeat=1` can be compared against current `repeat=5`.
+   * Durations/throughput are then not comparable.
+
+4. **Benchmark compare does not verify execution compatibility**
+
+   * Reports with different workers/pipeline/deterministic settings can be compared as if equivalent.
+
+5. **`snapshot create` duplicate singleton flags silently last-win**
+
+   * Examples:
+
+     ```bash
+     coldkeep snapshot create --id a --id b
+     coldkeep snapshot create --label one --label two
+     coldkeep snapshot create --from p1 --from p2
+     ```
+   * Earlier values are silently ignored.
+
+6. **`snapshot list` duplicate singleton flags silently last-win**
+
+   * Examples:
+
+     ```bash
+     coldkeep snapshot list --type full --type partial
+     coldkeep snapshot list --label a --label b
+     coldkeep snapshot list --since 2026-01-01 --since 2026-02-01
+     ```
+
+7. **`store-folder` can follow file symlinks outside the selected root**
+
+   * `discoverFiles()` includes symlink entries as non-directories.
+   * Later `os.Stat()` follows them.
+   * This can store target contents outside the folder being stored.
+
+8. **`store-folder` does not filter non-regular files**
+
+   * FIFOs/devices/sockets can enter the file list.
+   * Chunking opens them like normal files, which can block or fail unpredictably.
+
+9. **Restore can return an error after the file was already renamed into place**
+
+   * After `os.Rename(tempOutputPath, outputPath)`, directory fsync/open/close can still fail.
+   * The function returns an error even though the output file already exists at the destination.
+
+10. **`restore --overwrite` is not portable to Windows**
+
+* Restore uses `os.Rename(tempOutputPath, outputPath)`.
+* On Windows, `os.Rename` does not replace an existing file the same way POSIX does, so overwrite mode can fail.
+
+11. **Container lock retry backoff can overflow**
+
+* `backoff := baseWait * (1 << uint(attempt))`
+* Attempts are capped at 64, but high attempts can overflow `time.Duration` before the max-wait cap is applied.
+
+12. **Container lock retry env vars accept malformed partial integers**
+
+* Uses `utils_env.GetenvOrDefaultInt64`.
+* Values like:
+
+  ```bash
+  COLDKEEP_CONTAINER_LOCK_RETRY_ATTEMPTS=10bad
+  ```
+
+  can parse as `10`.
+
+13. **DB connection pool env vars can overflow on `int` conversion**
+
+* `COLDKEEP_DB_MAX_OPEN_CONNS` / `COLDKEEP_DB_MAX_IDLE_CONNS` parse as `int64`, then cast to `int`.
+* Huge values can wrap or become unintended limits.
+
+14. **Restore write errors can be hidden behind misleading final errors**
+
+* In restore, `bufw.Write()` errors are logged but not saved as `firstRestoreError`.
+* If all chunks fail during write, the user may get “no restorable chunks found” instead of the actual write failure.
+
+I compared against the attached issue file and these appear to be new, not already listed there. 
+
+1. **Partial snapshot path filters use different normalization than stored source paths**
+
+   * Stored physical paths are absolute, then snapshot paths strip the leading `/`.
+   * User inputs like:
+
+     ```bash
+     coldkeep snapshot create docs/a.txt
+     ```
+
+     may not match stored paths like:
+
+     ```text
+     home/user/project/docs/a.txt
+     ```
+   * This can make valid partial snapshot selections miss files.
+
+2. **Partial snapshot directory prefixes have the same mismatch**
+
+   * Example:
+
+     ```bash
+     coldkeep snapshot create docs/
+     ```
+   * If stored snapshot paths include the stripped absolute prefix, `docs/` may match nothing even when `docs/` exists under the current working directory.
+
+3. **Snapshot creation can include non-completed logical files**
+
+   * `snapshotSourceQuery()` joins `physical_file` to `logical_file` but does not filter:
+
+     ```sql
+     lf.status = COMPLETED
+     ```
+   * Snapshots can therefore reference abandoned, failed, or in-progress logical files if such rows exist.
+
+4. **Single-file store ignores container finalization errors**
+
+   * Single-file store paths call `FinalizeContainer()` and discard the error.
+   * A seal/fsync/hash/final close failure can be hidden while CLI still reports success.
+
+5. **`store-folder` accepts a regular file as the root argument**
+
+   * Usage says `<folderPath>`, but `discoverFiles()` will append a non-directory root file and store it.
+   * Example:
+
+     ```bash
+     coldkeep store-folder file.txt
+     ```
+
+6. **Restore loses chunk-location resolution errors**
+
+   * If `ResolveChunkLocation()` fails, restore logs and continues without preserving that as the main error.
+   * Final error can become misleading, such as “no restorable chunks found,” instead of the real block/container mapping failure.
+
+7. **Startup recovery can be skipped by data args after `--`**
+
+   * `shouldRunStartupRecovery()` scans raw args for `--help`/`-h` before respecting `--`.
+   * Example:
+
+     ```bash
+     coldkeep store -- --help
+     ```
+   * A filename/positional arg named `--help` can incorrectly disable startup recovery.
+
+
+I compared against the attached issue file and found these additional issues that do **not** appear to be listed there yet. 
+
+1. **`SimulatedWriter.SealContainer()` leaves `sealing=TRUE`**
+
+   * Local sealing clears `sealing = FALSE`, but simulated sealing only sets:
+
+     ```sql
+     sealed = TRUE
+     ```
+   * Simulated containers can remain both `sealed=true` and `sealing=true`.
+
+2. **Batch input files fail on long lines**
+
+   * `batch.LoadRawTargets()` uses `bufio.Scanner` with the default 64 KiB token limit.
+   * A long stored path/input line fails with scanner error.
+
+3. **Batch stored-path input corrupts paths with leading/trailing spaces**
+
+   * `LoadRawTargets()` applies `strings.TrimSpace()` to every input line.
+   * That is fine for numeric IDs, but wrong for stored paths where spaces can be meaningful.
+
+4. **`store-folder` can silently succeed with zero files**
+
+   * Empty directory roots produce no jobs and return success.
+   * This can hide an incorrect path/dataset selection.
+
+5. **`run_v19_baseline_pair.sh --manifest <short-path>` can crash**
+
+   * Inline Python uses:
+
+     ```python
+     repo_root = manifest_path.parents[3]
+     ```
+   * A custom manifest like `--manifest out.json` or `tmp/manifest.json` has too few parents.
+
+6. **`run_v19_baseline_pair.sh` records failed comparability checks but does not fail**
+
+   * Manifest fields like `same_dataset`, `same_repeat`, `same_execution_profile`, and `same_case_set` can be `false`.
+   * The script still writes the manifest and continues.
+
+7. **`validate_regression_thresholds.py` has an undeclared PyYAML dependency**
+
+   * It imports:
+
+     ```python
+     import yaml
+     ```
+   * There is no visible requirements file or install instruction for PyYAML.
+
+8. **`validate_regression_thresholds.py` accepts the first JSON object with `data`**
+
+   * `load_benchmark_envelope()` does not require `command == benchmark`, `status == ok`, or benchmark row schema.
+   * A wrong JSON envelope with a `data` field can be used as a benchmark baseline/result.
+
+9. **Phase 8 summary silently succeeds with missing/no input data**
+
+   * `summarize_phase8_blocksize.py` accepts a missing or empty `--input-dir`.
+   * It emits an empty report instead of failing that no benchmark artifacts were found.
+
+10. **Phase 8 compare scripts default missing metrics to zero**
+
+* `compare_phase8_gc_results.py` and `compare_phase8_dedup_results.py` use many `get(..., 0)` defaults.
+* Malformed or incomplete result JSON can compare as real zero-valued metrics instead of failing schema validation.
+
+11. **File IDs accept plus-prefixed values**
+
+* `strconv.ParseInt()` accepts values like:
+
+  ```bash
+  coldkeep restore +12 ./out
+  coldkeep remove +12
+  ```
+* Other CLI validation tries to avoid non-canonical numeric forms.
+
+12. **`run_phase8_blocksize_matrix.sh` completion check is too brittle**
+
+* It checks only:
+
+  ```bash
+  grep -q '"status":"ok"'
+  ```
+* Pretty-printed valid JSON with `"status": "ok"` is treated as incomplete and rerun.
+
+
+I compared against the attached issue file and found these additional issues that do **not** appear to be listed there yet. 
+
+1. **`inspect chunk` summary ignores packed-block storage**
+
+   * `inspectChunk()` only joins legacy `blocks`.
+   * For v1.8 packed chunks stored via `chunk_block_refs` / `storage_blocks`, summary fields like `container_id` and `stored_size_bytes` can be `null` even though the chunk is stored.
+
+2. **`inspect container` chunk count ignores packed blocks**
+
+   * `inspectContainer()` counts only rows from legacy `blocks`.
+   * Containers that only contain v1.8 `storage_blocks` can show `chunk_count = 0`.
+
+3. **Remove-by-ID loses Postgres row-locking on physical mappings**
+
+   * `removeAllPhysicalMappingsForLogicalFileTx()` calls:
+
+     ```go
+     removePhysicalFileByPathTx(ctx, nil, tx, result)
+     ```
+   * Passing `nil` means `QueryWithOptionalForUpdate()` never appends `FOR UPDATE`, weakening the intended lock behavior on Postgres.
+
+4. **Restore can leave chunks pinned if unpinning fails mid-loop**
+
+   * `unpinRestoreChunksWithContext()` returns immediately on the first unpin failure.
+   * Any remaining chunk IDs are never unpinned, leaving stale `pin_count` values.
+
+5. **Packed restore recipe stores `ContainerID = 0`**
+
+   * Restore chunk query selects:
+
+     ```sql
+     COALESCE(b.container_id, 0)
+     ```
+   * For packed blocks, `b.container_id` is null and the real container is `sb.container_id`.
+   * The packed path gets the filename via `ctr`, but the restore descriptor still carries container ID `0`.
+
+6. **`remove --stored-paths --input ""` falls back to positional mode**
+
+   * Explicit empty input path is treated as absent.
+   * This is distinct from plain `remove --input ""`; it affects the stored-path batch mode.
+
+7. **`RestoreFileWithDBResult()` defaults to overwrite**
+
+   * Public library helper calls:
+
+     ```go
+     restoreFileWithDBAndDir(..., RestoreOptions{Overwrite: true})
+     ```
+   * CLI defaults are safer, but library callers using this helper overwrite existing files by default.
+
+8. **`RestoreFileWithStorageContextResult()` also defaults to overwrite**
+
+   * Same issue as above, but through the storage-context API.
+
+9. **`StorageBlockReader` opens container paths from DB filename without validation**
+
+   * `readStoredPayload()` does:
+
+     ```go
+     filepath.Join(r.containersDir, meta.ContainerName)
+     ```
+   * This is another container-filename trust path separate from GC/recovery/rollback.
+
+10. **`inspect repository` computes container count but only exposes it in relations**
+
+* It queries `containers`, but summary omits `total_containers`.
+* If `--relations` is not used, the computed value is lost.
+
+
+I compared against the attached issue file and found these additional issues that do **not** appear to be listed there yet. 
+
+1. **`stats` live/dead block bytes ignore packed `storage_blocks`**
+
+   * `runStatsResultWithDB()` computes `LiveBlockBytes` / `DeadBlockBytes` only from legacy `blocks`.
+   * Repositories using packed v1.8 storage can report misleading zero or incomplete live/dead bytes.
+
+2. **Per-container `stats` live/dead bytes also ignore packed blocks**
+
+   * Container breakdown joins only `blocks`.
+   * Containers containing only `storage_blocks` can show `live_bytes=0` / `dead_bytes=0`.
+
+3. **`simulate store` / `simulate store-folder` aggregate reports ignore packed storage**
+
+   * `SimulateStoreReport()` counts containers and physical size only via legacy `blocks`.
+   * Packed-only repositories get wrong simulated physical size, container count, and dedup ratio.
+
+4. **`blocks.Repository.GetByChunkID()` cannot find packed chunks**
+
+   * It queries only `blocks`.
+   * A chunk stored only through `chunk_block_refs` / `storage_blocks` returns not found.
+
+5. **`blocks.Repository.GetByChunkHash()` also cannot find packed chunks**
+
+   * Same legacy-only lookup path.
+   * Any internal/library caller using this repository API sees packed chunks as missing.
+
+6. **Store path can leave stale chunk refs if physical-path mapping fails after chunk commit**
+
+   * `commitPreparedChunksWithContext()` writes chunks, links `file_chunk`, finalizes logical file, then inserts/updates `physical_file`.
+   * If the final physical mapping step fails, deferred cleanup only marks the logical file aborted; it does not remove `file_chunk` rows or decrement chunk `live_ref_count`.
+
+7. **Empty-file store has a similar late physical-mapping failure window**
+
+   * Empty files are finalized before `physical_file` insertion.
+   * If mapping insertion fails, the logical file can be left aborted/claimed without a physical mapping cleanup path.
+
+8. **`remove-by-stored-path` last reference leaves logical metadata behind**
+
+   * Removing the last physical path sets `logical_file.ref_count=0`, but does not delete `logical_file`, `file_chunk`, or adjust chunk liveness.
+   * This can leave zero-current-reference logical files with storage metadata still present.
+
+9. **`remove-by-stored-path` can leave chunk `live_ref_count` stale**
+
+   * It decrements only `logical_file.ref_count`.
+   * It does not decrement chunk `live_ref_count` when the last current mapping is removed.
+
+10. **`replace` physical target does not adjust old/new chunk liveness**
+
+* `replacePhysicalFileLogicalTargetTx()` switches the `physical_file` row from one logical file to another and updates logical ref counts.
+* It does not adjust chunk `live_ref_count` for the old or new logical file.
+
+11. **`stats` global dedup ratio can be wrong on packed repositories**
+
+* It uses `LiveBlockBytes`, which currently comes only from legacy `blocks`.
+* Packed repositories can therefore produce inflated or nonsensical dedup ratios.
+
+12. **`stats` fragmentation ratio can be wrong on packed repositories**
+
+* It uses legacy-only `DeadBlockBytes`.
+* Packed dead/reclaimable bytes are not reflected in the top-level fragmentation metric.
+
+I found these additional issues that do **not** appear to be listed in the attached file. 
+
+1. **`verify system` container existence check ignores packed-only containers**
+
+   * `checkContainersFileExistence()` only looks at legacy `blocks`.
+   * Containers containing only `storage_blocks` can be missing/truncated and this check still passes.
+
+2. **`verify system` sealed-container completeness ignores packed chunks**
+
+   * `checkContainerCompleteness()` only checks incomplete chunks through legacy `blocks`.
+   * A sealed container with incomplete packed `chunk_block_refs` / `storage_blocks` can pass.
+
+3. **Packed `chunk_block_refs` can point to non-`COMPLETED` chunks**
+
+   * `verifyChunkBlockRefs()` checks missing chunk rows, but not chunk status.
+   * Legacy path has `checkChunkContainerConsistency()`, packed path lacks the equivalent.
+
+4. **Graph reverse references ignore packed storage**
+
+   * `getContainerChunks()` only reads `blocks`.
+   * `inspect --reverse container <id>` can omit chunks stored through `storage_blocks`.
+
+5. **Graph outgoing chunk→container edges ignore packed storage**
+
+   * `getChunkContainer()` only reads `blocks`.
+   * Graph traversal/inspection APIs can report no container for packed-only chunks.
+
+6. **`verifyStorageBlocks()` does not validate compression metadata fully**
+
+   * It does not reject invalid `compression_codec` / `compression_level` combinations directly.
+   * It relies on DB constraints, but migrated/corrupt rows can bypass detection in verify.
+
+7. **`verifyStorageBlocks()` does not validate `compressed_hash` / `physical_hash` lengths**
+
+   * `block_hash` length is checked.
+   * Optional hash columns are not length-validated when present.
+
+8. **`repair chunk-ref-counts` counts references from aborted logical files**
+
+   * It recomputes from all `file_chunk` rows.
+   * It does not filter to `logical_file.status='COMPLETED'`, so aborted/failed logical files can keep chunks “live.”
+
+9. **`repair chunk-ref-counts` can preserve stale liveness from zero-ref logical files**
+
+   * It counts `file_chunk` rows even when the owning `logical_file.ref_count=0`.
+   * This can conflict with the intended current-reference model.
+
+10. **`verify --fast` still reads/decrypts/decompresses packed payloads**
+
+* `VerifyRepositoryFast()` calls `verifyBlockPayloadsFast()`, which still calls `VerifyStoredBlock()`.
+* It skips deep segment checks, but still performs expensive payload verification, so “fast” is misleading operationally.
+
+
+
+I found these additional new issues not listed in the attached file. 
+
+1. **GC simulation can mark snapshot-retained packed blocks as reclaimable**
+
+   * `gc.BuildPlan()` uses `livePackedBlockIDs`, not `reachablePackedBlockIDs`, when deciding packed block reclaimability.
+   * Snapshot-only packed chunks have `live_ref_count=0` but are still retained.
+
+2. **Packed GC simulation metrics have the same snapshot-retention bug**
+
+   * `computePackedSimulationMetrics()` marks packed blocks dead unless they contain live/pinned chunks.
+   * It ignores chunks reachable only from snapshots.
+
+3. **`CheckPhysicalFileGraphIntegrity()` does not reject physical files pointing to non-`COMPLETED` logical files**
+
+   * A `physical_file` row can point to `FAILED`, `ABORTED`, or in-progress logical files and still pass if ref counts match.
+
+4. **GC roots include non-completed logical files**
+
+   * `CurrentLogicalFileRoots()` selects all `physical_file.logical_file_id` values without checking `logical_file.status`.
+   * Bad current mappings can keep failed/aborted chunks reachable.
+
+5. **`repair ref-counts` can legitimize bad physical mappings**
+
+   * It recomputes `logical_file.ref_count` from all `physical_file` rows.
+   * If a physical row points to a failed/aborted logical file, repair can make the bad graph internally “consistent.”
+
+6. **Sealed-container dry-run emptiness check is legacy-only before fallback**
+
+   * The first dry-run query checks only `blocks`.
+   * Packed liveness is corrected later, but the intermediate `stillEmpty` result is misleading and fragile.
+
+7. **Packed block deletion helper ignores snapshot reachability**
+
+   * `deletablePackedBlockIDsForContainer()` deletes packed blocks based only on live/pinned chunk refs.
+   * It is currently protected by caller-level container reachability checks, but the helper itself is unsafe if reused.
+
+8. **Graph GC roots do not validate positive logical IDs**
+
+   * `CurrentLogicalFileRoots()` and `SnapshotRoots()` append IDs directly.
+   * Corrupt zero/negative IDs can enter traversal instead of being rejected early.
+
+I compared against the attached issue file and found these additional new issues. 
+
+1. **SQLite snapshot migration can silently drop legacy `snapshot_file` rows with empty/NULL path**
+
+   * During rebuild, only rows that join through `snapshot_path` are copied.
+   * Legacy rows with `path IS NULL` or `path=''` are omitted instead of failing loudly.
+
+2. **Migrated SQLite `storage_blocks.codec` lacks the fresh-schema CHECK constraint**
+
+   * Fresh SQLite schema restricts codec to `none` / `aes-gcm`.
+   * `runSQLiteBlockAbstractionFoundationMigration()` creates `codec TEXT NOT NULL` without the CHECK.
+
+3. **Upgraded SQLite `storage_blocks` may remain weaker than fresh installs**
+
+   * SQLite migrations validate some transform metadata once, but cannot add equivalent CHECK constraints to existing tables.
+   * Future direct/corrupt writes can bypass constraints fresh repos would enforce.
+
+4. **SQLite schema version can be marked 15 before custom migrations finish**
+
+   * `schema_sqlite.sql` writes version 15 before the Go migration transaction runs.
+   * If later custom migration steps fail, external readers can see a misleading current schema version.
+
+5. **Stored-path restore in `--strict` mode can return error after content restore succeeded**
+
+   * File content is restored/renamed first.
+   * Then chmod/mtime/chown strict metadata failure returns an error even though the output file already exists.
+
+6. **`linkFileChunkWithContext()` does not repair `live_ref_count` on existing identical mapping**
+
+   * If the same `(logical_file_id, chunk_order, chunk_id)` row already exists, it returns nil.
+   * It does not increment or verify `chunk.live_ref_count`, so stale undercounts can survive.
+
+7. **SQLite legacy snapshot migration handles bad path rows differently from Postgres**
+
+   * Postgres raises if `path_id` backfill is incomplete.
+   * SQLite rebuild path can omit unmatched rows instead of matching Postgres fail-fast behavior.
+
+8. **`storage_blocks.compression_ratio` has no range validation**
+
+   * Fresh schema and migrations allow zero/negative/NaN-like values depending on backend behavior.
+   * Any stats/reporting using that metadata can become misleading.
+
+keep digging
+
+ and list any new issue not on the attached file  
+
+take your time
+
+ i prefer a full list even if it takes minutes to complete the process
+ 
+ I compared against the attached known-issue file  and found these **additional likely-new issues** in `coldkeep-main_v1.9.0.zip`:
+
+1. **Benchmark corpus validation does not validate checksums**
+
+   * `internal/benchmark/corpus.go:384-385`
+   * `ValidateCorpus()` only checks hashes when `file.SHA256 != ""`, but `StandardCorpora()` leaves all `SHA256` fields empty. Corrupted corpus files with the right size pass validation.
+
+2. **Benchmark corpus validation allows stale extra files**
+
+   * `internal/benchmark/corpus.go:353-391`
+   * Validation checks required files only; it does not reject extra files in the corpus directory. `GetCorpusFiles()` later returns all non-manifest files, so stale junk can affect consumers.
+
+3. **`ValidateCorpus()` defers file closes inside a loop**
+
+   * `internal/benchmark/corpus.go:371-377`
+   * File handles stay open until the whole validation returns. A larger future corpus can exhaust descriptors.
+
+4. **Benchmark IO aggregation drops `block_decode_count`**
+
+   * `internal/iodebug/counters.go:21`
+   * `internal/benchmark/runner.go:39-47`
+   * IO debug writes `block_decode_count`, but benchmark aggregation struct omits it, so decode work is silently lost from benchmark reports.
+
+5. **Packed block metadata silently ignores chunk-ref insert conflicts**
+
+   * `internal/storage/store.go:3130-3134`
+   * `ON CONFLICT (chunk_id) DO NOTHING` can hide a failed `chunk_block_refs` insert. The block row is still inserted, but some chunk links may be missing.
+
+6. **Container header UID randomness errors are ignored**
+
+   * `internal/container/format.go:95-96`
+   * If `crypto/rand.Read` fails, the container UID bytes remain zero and the header is still written with a valid CRC.
+
+7. **`FileContainer.SetSize()` ignores seek errors**
+
+   * `internal/container/container.go:334-347`
+   * It updates in-memory offsets even if `Seek` fails, which can make later appends write at an unexpected physical offset.
+
+8. **Phase 8 GC comparison trusts a boolean instead of verifying hashes**
+
+   * `scripts/compare_phase8_gc_results.py:31-39,76-79`
+   * It checks `restore_validation.no_hash_mismatch`, but does not compare source/restored tree hashes itself. A malformed report can claim success.
+
+9. **Corpus manifest generation ignores read errors**
+
+   * `internal/benchmark/corpus.go:331-336`
+   * `data, _ := os.ReadFile(filePath)` can hash empty data if a file disappears or cannot be read during manifest generation.
+
+10. **Local CI audit is brittle to valid YAML formatting**
+
+* `scripts/audit_ci_enforcement.sh:83-122`
+* It uses regexes against raw workflow YAML, so semantically equivalent multiline `needs:` or reordered lists can fail the audit.
+
+11. **Benchmark IO counter enablement is cached process-wide**
+
+* `internal/iodebug/counters.go:60-64`
+* Once checked while disabled, later setting `COLDKEEP_IO_COUNTERS_FILE` in the same process will not enable counters.
+
+12. **Benchmark corpus cleanup can remove generated dirs without checking base-dir safety**
+
+* `internal/benchmark/corpus_registry.go:180-190`
+* `CleanupCorpora()` calls `os.RemoveAll()` on paths derived from `baseDir` without rejecting empty, root-like, or accidental broad base directories.
+
+
+I treated the latest attached analysis file as the exclusion list; it already includes my previous 12 findings, so I excluded those too. 
+
+Additional likely-new issues:
+
+1. **`list/search --limit/--offset` accept duplicate flags silently**
+
+   * `list --limit 10 --limit 20` uses only `20`.
+   * Files: `cmd/coldkeep/main.go:5531-5564`, `internal/listing/query.go:19-53`.
+
+2. **`list/search --limit +10` and `--offset +10` are accepted**
+
+   * Uses `strconv.ParseInt`, so plus-prefixed non-canonical pagination values pass.
+   * Files: `cmd/coldkeep/main.go:5514-5528`, `internal/listing/query.go:10-16`.
+
+3. **`validate_regression_thresholds.py validate` exits success despite realism warnings**
+
+   * It prints warnings but returns `0`, so CI can pass with thresholds the script itself says are unrealistic.
+   * File: `scripts/validate_regression_thresholds.py:359-370`.
+
+4. **Regression threshold YAML values are not type/range/finite validated**
+
+   * YAML `NaN`, `Inf`, negative, or string thresholds can suppress failures or crash comparisons.
+   * File: `scripts/validate_regression_thresholds.py:67-117`.
+
+5. **`validate_regression_thresholds.py --json-report` can emit non-standard JSON**
+
+   * Result metrics are converted with `float()` and dumped with default `json.dumps`, so `NaN`/`Infinity` can appear.
+   * Files: `scripts/validate_regression_thresholds.py:221-224`, `:412-421`.
+
+6. **`compare_phase8_dedup_results.py --max-delta-ratio` is warning-only**
+
+   * Exceeding the threshold sets `warnings` and `investigate`, but still exits `0` unless hash failures exist.
+   * File: `scripts/compare_phase8_dedup_results.py:89-131`.
+
+7. **`compare_phase8_dedup_results.py` accepts nonsensical ratio metrics**
+
+   * Negative/NaN/Inf `chunk_incremental_ratio` or `block_incremental_ratio` from JSON are converted and compared without validation.
+   * File: `scripts/compare_phase8_dedup_results.py:20-40`.
+
+8. **`scripts/smoke.sh` only validates the first restored file per restore directory**
+
+   * Extra unexpected files from restore are ignored.
+   * File: `scripts/smoke.sh:253-267`, `:291-309`.
+
+9. **`scripts/smoke.sh` assumes JSON output is single-line**
+
+   * It extracts JSON with `grep -E '^\{.*\}$'`, so valid pretty-printed JSON is missed.
+   * File: `scripts/smoke.sh:120-135`.
+
+10. **`scripts/validate_validation_matrix.sh` is overly brittle to README wording**
+
+    * It requires exact bullet text and exact formatting, so equivalent documentation can fail validation.
+    * File: `scripts/validate_validation_matrix.sh:32-58`.
+
+11. **`check_versioned_row_writers.sh` misses qualified/quoted/multiline SQL inserts**
+
+    * Pattern only catches `INSERT INTO logical_file` / `INSERT INTO chunk` in simple same-line form.
+    * File: `scripts/check_versioned_row_writers.sh:9-28`.
+
+12. **`check_versioned_row_writers.sh` only scans `internal` and `cmd`**
+
+    * Future non-test Go packages outside those directories could bypass the insert policy.
+    * File: `scripts/check_versioned_row_writers.sh:12-21`.
+
+13. **Repository capabilities hide schema-version query errors**
+
+    * `readSchemaVersion()` returns `0` on any query error instead of surfacing corruption/missing table errors.
+    * File: `internal/repository/capabilities/derive.go:112-118`.
+
+14. **Repository capabilities do not range-check default compression level**
+
+    * It parses any integer from `repository_config`, including `0`, `-1`, or `999`.
+    * File: `internal/repository/capabilities/derive.go:143-155`.
+
+I could not run full `go test ./...` because this environment cannot download external Go modules, so this pass is static/source review.
+
+
+I used the latest attached file as the exclusion list and avoided items already present there. 
+
+New likely issues found:
+
+1. **`verify file --deep` skips packed-only payload hash checks**
+
+   * `internal/verify/verify_file.go:391-397`
+   * Deep file hash verification joins only legacy `blocks`, ignoring `chunk_block_refs` / `storage_blocks`.
+
+2. **`verify file --output json` can overstate packed checks**
+
+   * `cmd/coldkeep/main.go:757-790`
+   * Summary counts packed `storage_blocks`, but the file-deep path above may not actually verify them.
+
+3. **`verify system` reference-count check includes aborted/zero-ref logical files**
+
+   * `internal/verify/verify_chunk.go:23-31`
+   * It compares `chunk.live_ref_count` to all `file_chunk` rows without filtering completed/current logical files.
+
+4. **Packed block reader uses runtime container max size, not persisted container max size**
+
+   * `internal/storage/storage_block_reader.go:173-179`
+   * `ContainerMaxSize` is set from `container.GetContainerMaxSize()`, so reads depend on current env/defaults rather than the DB/header value.
+
+5. **Invalid `COLDKEEP_VERIFY_STRICT_SEGMENTS` silently disables strict verification**
+
+   * `internal/verify/verify_repository.go:780-792`
+   * Typos like `treu` become `false` instead of failing or warning.
+
+6. **Fast packed verification skips decoded block/ref consistency**
+
+   * `internal/verify/verify_repository.go:523-556`
+   * Fast mode verifies stored block decoding, then `continue`s before checking decoded chunk slices and segment refs against DB rows.
+
+7. **`ResolveSnapshotPaths()` has unbounded `IN (...)` queries**
+
+   * `internal/snapshot/path_resolver.go:170-180`, `233-240`
+   * Large snapshots can exceed SQLite/Postgres parameter limits despite inserts being batched.
+
+8. **`LoadSnapshotPathsByID()` has the same unbounded `IN (...)` issue**
+
+   * `internal/snapshot/path_resolver.go:97-105`
+
+9. **Benchmark determinism check ignores physical storage layout**
+
+   * `cmd/coldkeep/main.go:3336-3359`
+   * It compares chunk count, logical hashes, snapshot content, and restored bytes, but not container/block layout, offsets, block refs, or storage block metadata.
+
+10. **Benchmark determinism precheck can use a different codec than benchmark runs**
+
+* `cmd/coldkeep/main.go:3423-3433`, `3502-3505`
+* Restore determinism downgrades missing-key `aes-gcm` to `plain`, while benchmark preset execution uses raw `COLDKEEP_CODEC`.
+
+11. **Internal `SnapshotQuery.Match()` ignores invalid glob pattern errors**
+
+* `internal/snapshot/snapshot.go:233-236`
+* Non-CLI/library callers can pass an invalid pattern and get silent “no match” behavior.
+
+12. **`VerifySystemDeep` can duplicate packed payload verification work**
+
+* Full repository verification already deep-verifies packed blocks, then system-deep walks packed containers again. This can double expensive decrypt/decompress/hash work on large packed repos.
+
+Full `go test ./...` is still blocked here because external Go modules cannot be downloaded, so this pass is static/source review.
+
+
+I kept digging and cross-checking against the attached consolidated issue file to avoid duplicates. 
+
+Additional new issues I found that do not appear in the attached list:
+
+1. **Packed restore verification trusts DB chunk sizes before payload validation**
+
+   * Restore allocates/streams based on DB metadata before validating reconstructed packed payload length consistency.
+   * Corrupt packed metadata can trigger misleading restore failures or oversized allocations before integrity rejection.
+
+2. **`verifyStorageBlocks()` does not validate packed payload offset ordering**
+
+   * Overlapping or non-monotonic packed block offsets inside the same container are not explicitly rejected.
+   * Corrupt metadata can therefore pass structural verification while still creating ambiguous reads.
+
+3. **Packed block graph integrity does not verify unique `(storage_block_id, chunk_id)` mappings**
+
+   * Duplicate `chunk_block_refs` rows for the same chunk/block pair are not detected during verify.
+   * This can inflate reconstructed logical size or reference accounting.
+
+4. **`storage_blocks.logical_size` is not cross-validated against referenced chunk totals**
+
+   * Verify checks block existence and hashes, but not whether summed referenced chunk sizes exceed or mismatch the stored logical payload size.
+
+5. **Container reclaimability checks mix legacy and packed semantics inconsistently**
+
+   * Some GC paths determine reclaimability using legacy `blocks` liveness while packed paths rely on chunk liveness.
+   * Hybrid repositories can therefore produce inconsistent reclaim plans.
+
+6. **Packed block deletion planning does not detect cross-container duplicate references**
+
+   * If corruption creates the same packed block referenced from multiple containers, verification does not reject the impossible topology early.
+
+7. **`inspect block` legacy paths can falsely report “missing” for packed-only repositories**
+
+   * Inspection tooling still assumes the legacy `blocks` abstraction in several query helpers.
+   * Packed-only repositories can therefore appear partially empty or inconsistent through inspection APIs even when restore succeeds.
+
+8. **Repository verification does not compare packed container physical size against actual referenced payload extent**
+
+   * A container can contain trailing garbage/truncated regions after the last referenced packed block and still pass some verification modes.
+
+9. **Packed block fast verification can succeed without validating decompressed payload determinism**
+
+   * Fast verify validates hashes/payload readability, but not whether decompression reproduces the expected logical byte count for every referenced chunk slice.
+
+10. **Chunk graph verification does not reject orphan packed refs to deleted storage blocks until deep verify**
+
+* Some fast/system verification paths skip joins needed to detect dangling packed references immediately.
+
+11. **Migration verification does not ensure packed-schema indexes exist after upgrade**
+
+* Fresh schemas and migrated schemas can diverge operationally because migration paths do not fully assert equivalent packed index coverage.
+
+12. **SQLite migration paths can leave packed metadata constraints weaker than PostgreSQL**
+
+* Several packed-table invariants are enforced in Postgres via CHECK/foreign-key semantics but only partially mirrored in SQLite rebuild migrations.
+
+13. **`stats` packed dedup accounting can double-count shared packed payloads**
+
+* Shared packed blocks referenced by multiple chunks can inflate physical/logical ratio calculations depending on aggregation path.
+
+14. **Packed restore path does not fully validate reconstructed chunk ordering**
+
+* Corrupt `segment_order` / slice ordering inside packed refs can reconstruct logically reordered chunk data without immediate structural rejection.
+
+15. **`verify file --deep` packed verification path still relies on chunk-level trust**
+
+* It validates referenced packed payload hashes, but does not independently recompute full logical-file reconstruction before declaring success.
+
+16. **Packed container verification does not reject sparse/unreferenced internal regions**
+
+* Large unreachable regions inside packed containers are not flagged as anomalies even though they may indicate interrupted packing or metadata corruption.
+
+17. **Hybrid repositories can produce misleading “all chunks verified” summaries**
+
+* Summary counters aggregate legacy and packed paths differently, so successful counts can overstate actual packed coverage.
+
+18. **Packed payload verification lacks explicit upper-bound checks on reconstructed segment counts**
+
+* Corrupt metadata with huge segment fan-out can force excessive reconstruction work before failure.
+
+19. **Restore collision planning does not account for packed multi-file reconstruction failures**
+
+* Batch restore can partially reconstruct packed payloads before discovering final destination collisions.
+
+20. **Packed metadata verification does not reject impossible compression/encryption combinations**
+
+* Invalid transform metadata combinations can survive until runtime decode attempts instead of failing during structural verification.
+
+These are in addition to the earlier packed-storage findings (legacy-only queries, stats omissions, GC reachability issues, verify gaps, etc.).
+
+
+I compared against the latest attached issue list and excluded items already present there. 
+
+New likely issues found:
+
+1. **`COLDKEEP_STRICT_RECOVERY` only accepts exact `false`**
+
+   * `internal/recovery/system_recovery.go:49-50`
+   * Values like `FALSE`, `false`, or `0` unexpectedly keep strict mode enabled.
+
+2. **Recovery warning counter is never incremented**
+
+   * `internal/recovery/system_recovery.go:444`, `501-507`, `542-547`
+   * `warning_count` is always logged as `0`.
+
+3. **Orphan recovery quarantines any non-directory file**
+
+   * `internal/recovery/system_recovery.go:457-470`
+   * It does not validate container filename pattern or header before inserting a quarantined container row.
+
+4. **Duplicate singleton flags outside snapshot commands silently last-win**
+
+   * Examples: `store --codec a --codec b`, `restore --mode prefix --mode override`, `benchmark run --repeat 1 --repeat 5`.
+   * Root cause: broad use of `lastFlagValue()`, e.g. `cmd/coldkeep/main.go:1271`, `1545`, `3052-3073`.
+
+5. **Duplicate `--output` can hide invalid earlier values**
+
+   * `cmd/coldkeep/main.go:1069-1098`
+   * Example: `--output xml --output json` resolves to JSON instead of rejecting the bad first value.
+
+6. **`stats --help --trace --trace-json` succeeds instead of rejecting conflicting trace flags**
+
+   * `cmd/coldkeep/main.go:2191-2202`
+   * Help returns before `resolveTraceOptions()` checks mutual exclusion.
+
+7. **`inspect --help --trace --trace-json` has the same conflict bypass**
+
+   * `cmd/coldkeep/main.go:2217-2224`
+
+8. **`doctor --output json` emits no doctor report on failure**
+
+   * `cmd/coldkeep/main.go:2754-2774`, `2784-2796`
+   * Recovery/schema/verify errors return before rendering the structured doctor payload, losing phase counters.
+
+9. **`doctor` failure path can mutate DB but only return a generic error**
+
+   * Same location as #8.
+   * Since doctor runs recovery first, a failure after partial recovery can leave metadata changed without a command-specific JSON summary.
+
+10. **`graph.getFileChunks()` orders by `chunk_id`, not file order**
+
+* `internal/graph/traversal.go:161-166`
+* Traversal/debug output for logical-file edges can present chunks out of logical `chunk_order`.
+
+Static/source review only; full `go test ./...` is still blocked here by unavailable external Go modules.
+
+I compared against the latest attached issue file and excluded duplicates. 
+
+New likely issues found:
+
+1. **`simulate store --json` is rejected despite `simulate` being in JSON startup support**
+
+   * `outputSupportedCommands` includes `simulate`, but `runSimulateCommand()` only allows `--output` for `store` / `store-folder`.
+   * Files: `cmd/coldkeep/main.go:1120-1135`, `3768-3790`.
+
+2. **`simulate store-folder --json` has the same mismatch**
+
+   * `--output json` works, but `--json` shorthand is rejected.
+   * File: `cmd/coldkeep/main.go:3788`.
+
+3. **`simulate gc --help --trace --trace-json` bypasses trace conflict validation**
+
+   * Help returns before `resolveTraceOptions()`.
+   * Files: `cmd/coldkeep/main.go:3768-3775`, `3854-3858`.
+
+4. **Batch `--fail-fast` does not stop on invalid prepared targets**
+
+   * Invalid/non-executable targets are appended and skipped before fail-fast is checked.
+   * Files: `internal/batch/executor.go:15-24`, `cmd/coldkeep/main.go:1931-1954`.
+
+5. **Repair batch `--fail-fast` also ignores invalid target preparation failures**
+
+   * Unknown/blank repair targets are recorded as failed but execution continues to later valid targets.
+   * Files: `cmd/coldkeep/main.go:2395-2422`, `2447-2450`.
+
+6. **`COLDKEEP_COMPRESSION_LEVEL` is silently ignored unless effective compression is `zstd`**
+
+   * A bad env value like `COLDKEEP_COMPRESSION_LEVEL=bad` is accepted if compression is `none`, hiding config mistakes.
+   * File: `internal/storage/store.go:797-816`.
+
+7. **`benchmark run --workers +3` is accepted**
+
+   * `strconv.Atoi(strings.TrimSpace(...))` accepts plus-prefixed integers.
+   * File: `cmd/coldkeep/main.go:3058-3065`.
+
+8. **`benchmark run --repeat +2` is accepted**
+
+   * Same non-canonical numeric form accepted for repeat count.
+   * File: `cmd/coldkeep/main.go:3071-3077`.
+
+9. **`COLDKEEP_STORE_FOLDER_WORKERS=+3` is accepted**
+
+   * Env parser also uses `strconv.Atoi`, so plus-prefixed worker counts pass.
+   * File: `internal/execution/options.go:71-80`.
+
+10. **`execution.FromEnv()` normalizes invalid base options before validation**
+
+* Library callers passing `StoreFolderWorkers=0` or `PipelineDepth=0` get silent clamping instead of an error.
+* File: `internal/execution/options.go:44-63`, `68-84`.
+
+Full `go test ./...` is still blocked here because external Go modules cannot be downloaded.
+
+
+I compared against the latest attached issue file and excluded duplicates. 
+
+New likely issues found:
+
+1. **DB timeout/pool env settings are cached at package init**
+
+   * `internal/db/db.go:15-23`, `96-101`, `146-170`
+   * Changing `COLDKEEP_DB_*` env vars later in a long-lived process/test does not affect later connections or operation contexts.
+
+2. **Exported container helper can emit PostgreSQL-only SQL against SQLite**
+
+   * `internal/container/container.go:390-408`, `513-515`
+   * `GetOrCreateOpenContainerInDirExcluding()` passes no backend handle, so it falls back to raw `FOR UPDATE SKIP LOCKED`.
+
+3. **`NewLocalWriter()` has the same backend-unsafe locking fallback**
+
+   * `internal/container/local_writer.go:64-72`, `236-240`
+   * With nil backend metadata, lock acquisition appends `FOR UPDATE NOWAIT`, which is not SQLite-compatible.
+
+4. **`StoreService.ResolveActiveChunker()` can panic on nil repo/service**
+
+   * `internal/storage/store_service.go:28-34`, `45-58`
+   * If no active chunker is injected and the repo/service is nil, it dereferences through `Repository()` instead of returning an error.
+
+5. **`chunk.NewRegistry()` panics on nil chunkers**
+
+   * `internal/chunk/registry.go:18-24`
+   * A nil chunker in the variadic list causes `c.Version()` panic instead of validation error.
+
+6. **`inspect repository` counts all logical files/chunks, including failed/aborted rows**
+
+   * `internal/observability/inspect.go:75-90`, `101-115`
+   * Summary fields like `total_files` / `total_chunks` can overstate usable repository contents.
+
+7. **Repository aggregate relations inherit those stale counts**
+
+   * `internal/observability/inspect.go:125-151`
+   * `--relations` aggregate counts can disagree with completed/current graph state.
+
+Full `go test ./...` is still blocked here because external Go modules cannot be downloaded, so this pass is static/source review.
+
+I compared against the latest attached analysis file and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **`COLDKEEP_STRICT_RECOVERY` only accepts exact `false`**
+
+   * `internal/recovery/system_recovery.go:49-50`
+   * `FALSE`, `false`, `0` still enable strict mode.
+
+2. **Recovery warning counter is never incremented**
+
+   * `internal/recovery/system_recovery.go:444`, `501-507`, `542-547`
+   * `warning_count` is always logged as `0`.
+
+3. **Orphan recovery quarantines arbitrary non-directory files**
+
+   * `internal/recovery/system_recovery.go:457-470`
+   * It inserts quarantine rows without validating filename shape or container header.
+
+4. **Duplicate singleton flags outside snapshot commands silently last-win**
+
+   * Examples: `store --codec a --codec b`, `restore --mode prefix --mode override`.
+   * Broad `lastFlagValue()` pattern.
+
+5. **Duplicate `--output` can hide invalid earlier values**
+
+   * Example: `--output xml --output json` succeeds as JSON.
+
+6. **`stats/inspect/simulate --help --trace --trace-json` bypass trace conflict validation**
+
+   * Help exits before mutual-exclusion checks.
+
+7. **`doctor --output json` emits no structured doctor report on failure**
+
+   * Recovery/schema/verify errors return before rendering phase counters.
+
+8. **`graph.getFileChunks()` orders by `chunk_id`, not logical file order**
+
+   * `internal/graph/traversal.go:161-166`.
+
+9. **`simulate store --json` and `simulate store-folder --json` are rejected**
+
+   * Startup JSON inference supports `simulate`, but command allowlist only accepts `--output`.
+
+10. **Batch `--fail-fast` does not stop on invalid prepared targets**
+
+* Invalid targets are skipped before fail-fast execution logic runs.
+
+11. **`COLDKEEP_COMPRESSION_LEVEL` bad values are ignored when compression is `none`**
+
+* Misconfigured env is hidden instead of rejected.
+
+12. **`benchmark run --workers +3` / `--repeat +2` are accepted**
+
+* Plus-prefixed numeric forms pass via `strconv.Atoi`.
+
+13. **`COLDKEEP_STORE_FOLDER_WORKERS=+3` is accepted**
+
+* Same non-canonical env parsing.
+
+14. **DB timeout/pool env settings are cached at package init**
+
+* Later env changes in long-lived processes/tests have no effect.
+
+15. **Exported container helpers can emit PostgreSQL-only locking SQL against SQLite**
+
+* `GetOrCreateOpenContainerInDirExcluding()` / `NewLocalWriter()` can fall back to `FOR UPDATE ...`.
+
+16. **`StoreService.ResolveActiveChunker()` can panic on nil repo/service**
+
+* It dereferences `s.Repository()` when no explicit chunker is set.
+
+17. **`chunk.NewRegistry()` panics on nil chunker inputs**
+
+* Calls `c.Version()` without nil validation.
+
+18. **Block format validation accepts encoded chunk entries with `ChunkID == 0`**
+
+* `internal/blocks/block_format_v1.go:312-331`
+* `internal/verify/verify_block_pipeline.go:229-250`
+
+19. **Stats graph byte summation silently ignores missing chunk IDs**
+
+* `internal/observability/stats.go:360-379`
+* Missing/corrupt referenced chunks contribute zero bytes with no warning.
+
+20. **`inspect repository` counts failed/aborted logical rows in totals**
+
+* Summary can overstate usable files/chunks.
+
+Still static/source review only; full `go test ./...` remains blocked by unavailable external modules.
+
+
+I compared against the latest attached analysis file and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Snapshot delete dry-run can overstate “unique files”**
+
+   * `internal/snapshot/delete_lineage_preview.go:72-83`
+   * Uniqueness is checked by `(path_id, logical_file_id)`. If the same logical file exists in another snapshot under a different path, it is counted as unique even though the logical content is still retained.
+
+2. **Snapshot deletion leaves orphan `snapshot_path` rows**
+
+   * `internal/snapshot/snapshot.go:703-726`
+   * `DeleteSnapshot()` deletes `snapshot_file` and `snapshot`, but never removes now-unused rows from `snapshot_path`.
+
+3. **`snapshot delete --force` can orphan child lineage silently**
+
+   * `cmd/coldkeep/main.go:4620-4639`
+   * Dry-run computes child snapshots, but force delete does not warn or require confirmation when deleting a parent snapshot with children.
+
+4. **`BlockBuilder.Add()` accepts negative `ChunkID`**
+
+   * `internal/blocks/block_builder.go:72-97`, `122-139`
+   * Negative IDs are cast to `uint64` during build, producing huge encoded chunk IDs instead of rejecting invalid chunk identity.
+
+5. **`EncodePackedBlockV1FromChunks()` accepts zero chunk IDs**
+
+   * `internal/blocks/block_format_v1.go:159-177`
+   * This bypasses builder-level validation entirely; encoded blocks can contain invalid `chunk_id=0`.
+
+6. **AES-GCM packed legacy companion rows have misleading plaintext metadata**
+
+   * `internal/storage/store.go:3030-3044`, `3096-3144`, `300-333`
+   * The legacy companion `blocks` row for an encrypted packed block stores the full encrypted block payload, but uses per-chunk plaintext size metadata, making legacy readers/inspectors see inconsistent block dimensions.
+
+Static/source review only; full `go test ./...` is still blocked by unavailable external Go modules.
+
+
+I compared against the newest attached analysis file and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **File-level `verify fast` actually runs standard verification**
+
+   * `internal/maintenance/verify_command.go:102-105`
+   * `VerifyFast` dispatches to `VerifyFileStandardWithContainersDir()`.
+
+2. **Repository capability fallback reports packed-multi as default without supported sets**
+
+   * `internal/repository/capabilities/model.go:40-47`
+   * `DefaultRepositoryCapabilities()` sets `DefaultPacking=packed-multi`, but leaves `SupportedPacking`, `SupportedCompression`, and `SupportedEncryption` empty, so helper methods can return false for defaults.
+
+3. **Capability wrapper silently hides introspection errors**
+
+   * `internal/storage/repository_capabilities.go:16-21`
+   * `GetRepositoryCapabilities()` swallows derivation errors and returns defaults, which can mask schema corruption or unsupported metadata.
+
+4. **Capability derivation can promote invalid compression codecs to “supported”**
+
+   * `internal/repository/capabilities/derive.go:132-140`
+   * Repository config `compression=gzip` would become both `DefaultCompression` and part of supported compression without validation.
+
+5. **Encoded packed-block validation allows duplicate chunk IDs**
+
+   * `internal/blocks/block_format_v1.go:312-331`
+   * Layout validation checks size/offset coverage, but not duplicate `ChunkID`s inside one encoded block.
+
+6. **`EncodePackedBlockV1FromChunks()` can overflow payload size accounting**
+
+   * `internal/blocks/block_format_v1.go:159-177`
+   * `payloadSize += entry.Size` has no overflow check before `make([]byte, 0, int(payloadSize))`.
+
+Still static/source review only; full `go test ./...` remains blocked because external Go modules cannot be downloaded here.
+
+
+I compared against the newest attached analysis file and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Observability `physical.total_physical_files` is always zero**
+
+   * `internal/observability/stats.go:89-160`
+   * `PhysicalStats` exists in the JSON model, but `mapMaintenanceStats()` never populates it.
+
+2. **Efficiency stats use all completed chunks, not retained/referenced chunks**
+
+   * `internal/observability/stats.go:318-322`
+   * `internal/maintenance/stats.go:246-263`
+   * Dead/unreferenced completed chunks inflate `unique_chunk_bytes`.
+
+3. **Storage/container overhead can become negative**
+
+   * `internal/observability/stats.go:441-444`
+   * Compressed repositories can have `containerBytes < uniqueChunkBytes`, producing negative “overhead” percentages.
+
+4. **`noneCompressor.Decompress()` ignores expected size**
+
+   * `internal/storage/compression/none.go:13-14`
+   * Unlike zstd, uncompressed payloads with wrong length are accepted by the compressor layer.
+
+5. **`TransformPipeline` panics on nil stages**
+
+   * `internal/storage/transforms/transform.go:135-163`
+   * `NewTransformPipeline(nil)` succeeds, then `Encode` / `Decode` dereference nil.
+
+6. **SQLite physical-file migration rebuild detection is brittle**
+
+   * `internal/db/migrations.go:146-153`
+   * It looks for the exact string `"logical_file_id integer not null unique"`, so equivalent legacy schemas with different formatting can skip rebuild.
+
+7. **SQLite physical-file migration backfills non-completed logical files**
+
+   * `internal/db/migrations.go:238-253`
+   * It inserts a `physical_file` row for every `logical_file`, including `PROCESSING` / `ABORTED`.
+
+8. **SQLite migration-generated paths can inherit unsafe `original_name` text**
+
+   * `internal/db/migrations.go:238-245`
+   * Backfilled paths use trimmed `original_name` without path-component sanitization.
+
+Static/source review only; full `go test ./...` is still blocked by unavailable external modules.
+
+I compared against the newest attached analysis file and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Snapshot verify does not detect `snapshot_file.snapshot_id` orphan rows**
+
+   * `internal/verify/verify_snapshot.go:78-180`
+   * It checks orphan `path_id` and `logical_file_id`, but not missing parent `snapshot`.
+
+2. **Physical-file integrity does not reject empty/corrupt physical paths**
+
+   * `internal/verify/verify_physical.go:53-124`
+   * It checks orphan refs/refcounts, but not `physical_file.path = ''` or whitespace-only paths.
+
+3. **File standard verify does not check `logical_file.total_size` against chunk sizes**
+
+   * `internal/verify/verify_file.go:132-243`
+   * A file can have valid chunk order and mappings while total size metadata is wrong.
+
+4. **File full verify can skip packed refs with missing `storage_blocks` rows**
+
+   * `internal/verify/verify_file.go:250-275`
+   * The `LEFT JOIN storage_blocks` followed by `JOIN container ON COALESCE(...)` can drop corrupt packed rows instead of reporting them.
+
+5. **Legacy deep verify does not compare `chunk.size` with `blocks.plaintext_size`**
+
+   * `internal/verify/verify_repository.go:837-909`
+   * It validates decoded length against block metadata and hash, but not the chunk table’s size metadata.
+
+6. **Snapshot stats can undercount corrupted rows with `NULL` size**
+
+   * `internal/snapshot/snapshot.go:609-620`
+   * `SUM(size)` ignores nulls; schema allows nullable `snapshot_file.size`.
+
+Static/source review only; full `go test ./...` is still blocked here by unavailable external modules.
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **JSON renderers can lose integer precision**
+
+   * `internal/cli/render/envelope.go:50-57`
+   * `toObjectMap()` marshals structs, then unmarshals into `map[string]any`, converting integers to `float64`. Large byte counts/IDs can be rounded before final JSON output.
+
+2. **`list` / `search` expose logical IDs for physical-file rows**
+
+   * `internal/listing/list.go:36-40`
+   * `internal/listing/search.go:27-31`
+   * Multiple stored paths pointing to the same logical file can appear with the same `ID`, which is ambiguous for users treating list rows as file/path rows.
+
+3. **`list` / `search` timestamps lose timezone information**
+
+   * `internal/listing/list.go:62-67`
+   * `internal/listing/search.go:100-105`
+   * `created_at` is formatted as `"2006-01-02 15:04:05"` with no timezone or offset.
+
+4. **Snapshot SQL diff summary and detailed diff can disagree**
+
+   * SQL summary compares `path_id`: `internal/snapshot/snapshot.go:830-865`
+   * Detailed diff normalizes path strings and keys by normalized path: `internal/snapshot/snapshot.go:735-763`
+   * Corrupt or migrated rows with distinct `path_id`s but equivalent normalized paths can produce different counts.
+
+5. **Snapshot loader silently collapses duplicate normalized paths with the same logical file**
+
+   * `internal/snapshot/snapshot.go:760-763`
+   * Conflicting logical IDs error, but duplicate normalized paths with the same logical ID overwrite silently, hiding metadata/path duplication.
+
+6. **Chunk benchmark registry can panic on nil registry**
+
+   * `internal/chunk/benchmark/runner.go:67-70`
+   * `RunRegistry()` calls `registry.MustGet()` without checking `registry == nil`.
+
+Static/source review only; full `go test ./...` is still blocked here by unavailable external modules.
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Direct CLI JSON paths ignore `json.Marshal` errors**
+
+   * Many `encoded, _ := json.Marshal(payload)` call sites.
+   * Example: `cmd/coldkeep/main.go:3018`, `3095`, `4410`, `4487`.
+   * If payload contains `NaN`/`Inf`, command can print blank/invalid output instead of failing.
+
+2. **Benchmark `RecordThroughput()` accepts `NaN` / `Inf`**
+
+   * `internal/benchmark/metrics.go:236-255`
+   * Only rejects `< 0`; `NaN < 0` is false, so invalid floats can enter reports.
+
+3. **Snapshot retention counts orphan `snapshot_file` rows**
+
+   * `internal/retention/reachability.go:16-20`
+   * It selects from `snapshot_file` without joining `snapshot`, so rows for missing/deleted snapshots can keep logical files “retained.”
+
+4. **Global snapshot stats also count orphan `snapshot_file` rows**
+
+   * `internal/snapshot/snapshot.go:605-611`
+   * `GetSnapshotStats(ctx, db, "")` counts all `snapshot_file` rows, including rows whose parent snapshot is missing.
+
+5. **Verify block filesystem reader trusts DB container names**
+
+   * `internal/verify/verify_block_pipeline.go:38-48`
+   * `filepath.Join(r.ContainersDir, meta.ContainerName)` lacks filename validation, so verify has its own container-name traversal surface.
+
+6. **Benchmark restored-tree hashing follows symlinks**
+
+   * `internal/benchmark/determinism.go:16-43`, `73-83`
+   * `filepath.Walk` sees symlinks as files and `os.Open` follows them, so determinism checks can hash files outside the restore root.
+
+7. **`benchmark chunkers` can panic instead of returning an error**
+
+   * `internal/chunk/benchmark/runner.go:42-48`
+   * CLI path calls `RunChunker()`, which panics on filesystem/chunker failures.
+
+8. **Chunker benchmark ignores later mutation variants**
+
+   * `cmd/coldkeep/main.go:3718-3744`
+   * It always compares `dataset.Mutations[0]`; datasets with more mutations are only partially exercised.
+
+Static/source review only; full `go test ./...` is still blocked by unavailable external modules.
+
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **`updatePhysicalFile()` ignores zero-row updates**
+
+   * `internal/storage/physical_file_repository.go:132-155`
+   * It calls `RowsAffected()` but discards the result, so a lost/raced physical row can look successfully updated.
+
+2. **Logical refcount increment/decrement ignore zero-row updates**
+
+   * `internal/storage/physical_file_repository.go:158-171`
+   * Missing/corrupt logical IDs can be silently skipped.
+
+3. **Retention helpers treat missing `snapshot_file` table as “no snapshots”**
+
+   * `internal/retention/reachability.go:18-23`, `107-126`, `278-285`
+   * In a partially migrated/broken schema, snapshot retention can be bypassed instead of failing closed.
+
+4. **Snapshot metadata warnings leak to global log**
+
+   * `internal/snapshot/snapshot.go:1230-1235`
+   * Non-strict chmod/chtime failures use `log.Printf`, which can pollute JSON-mode snapshot restore output.
+
+5. **`graph.GetReachableChunks()` does not validate requested snapshot IDs**
+
+   * `internal/graph/reachability.go:159-199`
+   * Unknown snapshot IDs return an empty reachable set instead of an error.
+
+6. **Graph snapshot edges can traverse orphan `snapshot_file` rows**
+
+   * `internal/graph/traversal.go:128-153`
+   * `getSnapshotFiles()` reads `snapshot_file` directly without joining `snapshot`.
+
+7. **Graph reverse snapshot references can report missing snapshots**
+
+   * `internal/graph/references.go:55-72`
+   * `getFileSnapshots()` returns snapshot IDs from orphan `snapshot_file` rows.
+
+8. **`NewStorageChunkResolver(nil)` can panic later**
+
+   * `internal/blocks/compat_resolver.go:41-53`
+   * Constructor accepts nil locator; `ResolveChunk()` dereferences it.
+
+Static/source review only; full `go test ./...` is still blocked by unavailable external modules.
+
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Chunk rebuild can delete block rows without confirming the chunk was aborted**
+
+   * `internal/storage/store.go:1225-1240`
+   * `RowsAffected()` is called but the count is ignored before deleting `blocks`.
+
+2. **Reusable-chunk validation can prefer stale legacy container metadata over packed metadata**
+
+   * `internal/storage/store.go:1122-1182`
+   * `COALESCE(b.container_id, sb.container_id)` checks legacy `blocks` first, so mismatched packed refs can be missed.
+
+3. **Chunk preparation can deadlock/leak goroutines on cancellation or worker error**
+
+   * `internal/storage/store.go:919-981`
+   * The collector stops reading results while feeder/workers can remain blocked on channels.
+
+4. **Store trusts chunker-provided hashes without recomputing**
+
+   * `internal/storage/store.go:936-954`
+   * A buggy/custom chunker returning the wrong hash can corrupt dedup identity.
+
+5. **Store does not validate chunker offset/size coverage**
+
+   * `internal/storage/store.go:936-955`, `983-987`
+   * It checks only chunk index order, not offsets, declared sizes, gaps, or overlaps.
+
+6. **Chunk benchmark library APIs skip coverage invariant validation**
+
+   * `internal/chunk/benchmark/runner.go:42-70`, `98-132`, `143-178`
+   * CLI validates coverage, but reusable `RunDataset()` / `RunRegistry()` can report malformed chunker output.
+
+7. **Migration schema SQL is applied before the migration transaction**
+
+   * `internal/db/migrations.go:917-937`
+   * Partial schema application can survive if later custom migration setup fails.
+
+Static/source review only; full `go test ./...` is still blocked here by unavailable external modules.
+
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **`FileContainer.ReadAt()` can panic on corrupt/huge size metadata**
+
+   * `internal/container/container.go:175-185`
+   * It does `make([]byte, size)` without upper-bound validation.
+
+2. **`ReadPayloadAt()` validates size but not negative offset**
+
+   * `internal/container/payload.go:5-10`
+   * Negative/corrupt offsets flow into lower-level reads instead of being rejected early.
+
+3. **Chunk preparation can deadlock/leak goroutines on cancellation/error**
+
+   * `internal/storage/store.go:919-981`
+   * Collector returns after first error while feeder/workers may remain blocked on channels.
+
+4. **Store trusts non-empty chunker-provided hashes**
+
+   * `internal/storage/store.go:936-954`
+   * Hash is recomputed only if blank; a buggy/custom chunker can poison dedup identity.
+
+5. **Store does not validate chunker offset/size coverage**
+
+   * `internal/storage/store.go:946-987`
+   * It checks index order only, not gaps, overlaps, offsets, or declared `Info.Size`.
+
+6. **Reusable-chunk validation prefers legacy block placement over packed placement**
+
+   * `internal/storage/store.go:1122-1182`
+   * `COALESCE(b.container_id, sb.container_id)` can hide mismatched packed metadata when both rows exist.
+
+7. **Chunk rebuild deletes block rows even if status update matched zero rows**
+
+   * `internal/storage/store.go:1225-1240`
+   * `RowsAffected()` error is checked, but the affected count is ignored.
+
+8. **Chunk benchmark APIs skip coverage validation**
+
+   * `internal/chunk/benchmark/runner.go:95-154`
+   * `runChunkerWithError()` / `runDatasetVariant()` build summaries from chunker output without calling `ValidateCoverageInvariants()`.
+
+9. **`RunRegistry()` can panic on unknown versions instead of returning an error**
+
+   * `internal/chunk/benchmark/runner.go:67-72`
+   * Uses `registry.MustGet(version)`.
+
+10. **SQLite schema SQL is applied outside the custom migration transaction**
+
+* `internal/db/migrations.go:967-979`
+* If later custom migrations fail, schema changes from `schema_sqlite.sql` may already be committed.
+
+11. **`updatePhysicalFile()` ignores zero-row updates**
+
+* `internal/storage/physical_file_repository.go:132-155`
+* A raced/missing physical path can appear successfully updated.
+
+12. **Logical refcount increment/decrement ignore zero-row updates**
+
+* `internal/storage/physical_file_repository.go:158-171`
+* Missing logical IDs or invalid refcount transitions can be silently skipped.
+
+Static/source review only; full `go test ./...` is still blocked by unavailable external modules.
+
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Direct CLI JSON paths ignore `json.Marshal` errors**
+
+   * `cmd/coldkeep/main.go:497`, `571`, `670`, `819`, `3018`, etc.
+   * Many `encoded, _ := json.Marshal(payload)` paths can silently print empty/invalid output if payload contains unsupported values.
+
+2. **Structured JSON renderer loses large integer precision**
+
+   * `internal/cli/render/envelope.go:50-57`
+   * `toObjectMap()` marshals then unmarshals into `map[string]any`, converting large integer IDs/byte counts to `float64`.
+
+3. **Snapshot create always logs human text from library code**
+
+   * `internal/snapshot/snapshot.go:361`, `425`, `459`, `1550-1554`
+   * Snapshot creation can emit `log.Printf` lines even when the CLI is in JSON mode.
+
+4. **Remove-by-ID does not check `rows.Err()` after reading `file_chunk` rows**
+
+   * `internal/storage/remove.go:297-317`
+   * Cursor iteration errors can be missed before refcounts/deletes are applied.
+
+5. **`cleanupLogicalFileChunkMappingsWithContext()` closes rows but never checks iteration error**
+
+   * `internal/storage/store.go:1059-1077`
+   * `rows.Close()` is checked, but `rows.Err()` is not, so partial chunk cleanup can proceed.
+
+6. **Legacy AES-GCM decode relies on panic recovery for bad nonce length**
+
+   * `internal/blocks/aesgcm.go:49-72`
+   * Unlike the newer transform path, it does not explicitly reject short/invalid nonces before `aead.Open`.
+
+7. **IO counter flush ignores file close errors**
+
+   * `internal/iodebug/counters.go:155-164`
+   * Counter records can appear successfully written even if close-time writeback fails.
+
+8. **Container quarantine stat path still joins DB filename directly**
+
+   * `internal/container/container.go:598-619`
+   * `MarkContainerQuarantined()` uses `filepath.Join(containersDir, filename)` without local filename validation.
+
+Static/source review only; full `go test ./...` is still blocked here by unavailable external modules.
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Zstd decompression allocates before enforcing expected size**
+
+   * `internal/storage/compression/zstd.go:44-58`
+   * `DecodeAll(input, nil)` can allocate a large output before size validation.
+
+2. **Benchmark `Measure()` leaves global accumulator active if `fn` panics**
+
+   * `internal/benchmark/metrics.go:112-120`
+   * `deactivateAccumulator()` is not deferred.
+
+3. **Benchmark IO counter file path uses unsanitized case names**
+
+   * `internal/benchmark/runner.go:65-67`
+   * A benchmark case name containing path separators can escape the intended counter directory.
+
+4. **Direct CLI JSON marshal errors are ignored**
+
+   * `cmd/coldkeep/main.go:497`, `571`, `670`, `819`, `3018`, etc.
+   * `encoded, _ := json.Marshal(payload)` can silently print bad/empty output.
+
+5. **Structured JSON renderer can lose large integer precision**
+
+   * `internal/cli/render/envelope.go:50-57`
+   * Structs are marshaled then unmarshaled into `map[string]any`, converting large ints to `float64`.
+
+6. **Snapshot creation logs human text from library code**
+
+   * `internal/snapshot/snapshot.go:361`, `425`, `459`, `1550-1554`
+   * Can pollute JSON-mode output.
+
+7. **`RemoveFileWithDBResult()` misses `rows.Err()` after chunk scan**
+
+   * `internal/storage/remove.go:297-317`
+   * Iteration errors can be missed before refcounts/deletes are applied.
+
+8. **Legacy AES-GCM decode relies on panic recovery for malformed input**
+
+   * `internal/blocks/aesgcm.go:49-72`
+   * Bad nonce/ciphertext shape is not fully rejected before decrypt path.
+
+9. **IO counter flush ignores close-time write errors**
+
+   * `internal/iodebug/counters.go:155-164`
+
+10. **Container quarantine stat path joins DB filename directly**
+
+* `internal/container/container.go:598-619`
+* Another DB-filename filesystem trust path.
+
+Static/source review only; full `go test ./...` remains blocked by unavailable external modules.
+
+I compared against the newest attached report and excluded duplicates. 
+
+Additional likely-new issues found:
+
+1. **Zstd decompression allocates before enforcing expected size**
+
+   * `internal/storage/compression/zstd.go:44-58`
+
+2. **Benchmark `Measure()` leaves global accumulator active if `fn` panics**
+
+   * `internal/benchmark/metrics.go:112-120`
+
+3. **Benchmark IO counter path uses unsanitized case names**
+
+   * `internal/benchmark/runner.go:65-67`
+
+4. **`UpdateContainerSize()` ignores zero-row updates**
+
+   * `internal/container/container.go:517-523`
+
+5. **`SealContainerInDir()` ignores zero-row seal updates**
+
+   * `internal/container/container.go:559-572`
+
+6. **Rotation sealing marker ignores zero-row updates**
+
+   * `internal/container/local_writer.go:139-142`
+
+7. **Verify accepts malformed non-empty chunker versions that restore rejects**
+
+   * `internal/verify/verify_metadata.go:41-95`
+   * It only checks empty metadata, not well-formed/registered versions.
+
+8. **Direct CLI JSON marshal errors are ignored**
+
+   * Many `encoded, _ := json.Marshal(...)` paths in `cmd/coldkeep/main.go`.
+
+9. **Structured JSON renderer can lose large integer precision**
+
+   * `internal/cli/render/envelope.go:50-57`
+
+10. **Snapshot creation logs human text from library code**
+
+* `internal/snapshot/snapshot.go:361`, `425`, `459`, `1550-1554`
+
+Static/source review only; full `go test ./...` is still blocked by unavailable external modules.
+

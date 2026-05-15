@@ -1,0 +1,459 @@
+# Coldkeep CI Evolution & Codacy Integration Proposal
+
+## Objective
+
+Strengthen Coldkeep’s correctness-first engineering process without introducing unnecessary review noise or weakening the project’s deterministic-storage philosophy.
+
+This proposal defines:
+
+* CI evolution priorities
+* Validation strategy improvements
+* Correct use of Codacy
+* When AI-assisted review tools should (and should not) be introduced
+
+---
+
+# 1. Philosophy
+
+Coldkeep is not a typical CRUD application.
+
+It is a correctness-critical storage engine whose primary responsibility is:
+
+> Never lose user data.
+
+The CI pipeline must therefore prioritize:
+
+1. Determinism
+2. Crash safety
+3. GC safety
+4. Integrity guarantees
+5. Compatibility stability
+6. Adversarial resilience
+
+over:
+
+* stylistic purity
+* abstraction aesthetics
+* superficial maintainability metrics
+
+The current CI already strongly reflects this philosophy and should continue evolving in that direction.
+
+---
+
+# 2. Current CI Assessment
+
+## Current Strengths
+
+The existing CI pipeline already provides:
+
+### Correctness Validation
+
+* Race detection
+* Integration matrices
+* Adversarial validation
+* Long-run stability testing
+* Snapshot lifecycle validation
+* Deterministic chunker verification
+* Legacy compatibility regression testing
+
+### Operational Validation
+
+* Benchmark regression gates
+* Multi-codec testing
+* Smoke testing
+* Schema bootstrap validation
+* Benchmark artifact preservation
+
+### Engineering Discipline
+
+* Formatting enforcement
+* Shell validation
+* Linting
+* Version-scope enforcement
+* CI invariant auditing
+
+This is significantly stronger than most early-stage infrastructure projects.
+
+---
+
+# 3. Proposed CI Evolution
+
+The next improvements should focus on deeper storage-engine validation rather than additional stylistic tooling.
+
+---
+
+# 4. Priority 1 — Filesystem Fault Injection
+
+## Goal
+
+Simulate real filesystem failure conditions.
+
+## Rationale
+
+Most catastrophic storage bugs occur during:
+
+* partial writes
+* failed fsync operations
+* interrupted rename operations
+* disk-full conditions
+* delayed persistence
+
+These are currently underrepresented compared to process-level chaos testing.
+
+## Proposed Additions
+
+### New Fault Classes
+
+* ENOSPC simulation
+* EIO simulation
+* fsync failure simulation
+* partial container write simulation
+* delayed flush simulation
+* interrupted atomic rename simulation
+
+### Suggested Architecture
+
+Introduce a fault-injectable filesystem abstraction:
+
+* `internal/fs`
+* deterministic fault scripting
+* operation-level injection hooks
+
+### Validation Requirements
+
+Every injected failure must guarantee:
+
+* no silent corruption
+* no orphaned references
+* no broken restore paths
+* deterministic recovery behavior
+
+---
+
+# 5. Priority 2 — Critical Path Coverage Gates
+
+## Goal
+
+Enforce coverage on correctness-critical packages only.
+
+## Why Not Global Coverage
+
+Global coverage metrics are often misleading in storage systems.
+
+Coldkeep should instead prioritize:
+
+* correctness surface coverage
+* invariant-path coverage
+* recovery-path coverage
+
+## Suggested Critical Packages
+
+* chunk storage
+* snapshot lifecycle
+* GC engine
+* restore pipeline
+* metadata graph logic
+* transaction coordination
+* verification layer
+
+## Proposed Thresholds
+
+Initial targets:
+
+* 85%+ critical-path coverage
+* 95%+ invariant validation coverage
+
+Non-critical utilities should not block CI.
+
+---
+
+# 6. Priority 3 — Mutation Testing
+
+## Goal
+
+Verify that tests actually detect logic corruption.
+
+## Rationale
+
+Traditional coverage does not prove correctness.
+
+Mutation testing validates:
+
+* invariant sensitivity
+* branch correctness
+* safety enforcement
+* ordering guarantees
+
+## Recommended Targets
+
+Start with:
+
+* reference counting
+* GC eligibility logic
+* snapshot retention logic
+* integrity verification
+* deterministic ordering
+
+## Suggested Frequency
+
+Do NOT run on every PR initially.
+
+Instead:
+
+* nightly
+* scheduled workflow
+* pre-release validation
+
+---
+
+# 7. Priority 4 — Cross-Platform Validation
+
+## Goal
+
+Ensure deterministic restore behavior across OS boundaries.
+
+## Additions
+
+### Expand Matrix
+
+* Ubuntu
+* macOS
+* Windows
+
+### Validate
+
+* path normalization
+* permissions handling
+* symlink behavior
+* newline stability
+* timestamp consistency
+
+## Priority
+
+Medium-term requirement before stable enterprise usage.
+
+---
+
+# 8. Priority 5 — Advanced Chaos Scheduling
+
+## Goal
+
+Increase concurrency unpredictability.
+
+## Proposed Chaos Features
+
+Randomized:
+
+* snapshot timing
+* GC timing
+* restore timing
+* lock contention
+* transaction ordering
+
+## Objective
+
+Expose:
+
+* hidden race conditions
+* ordering assumptions
+* non-deterministic edge cases
+
+---
+
+# 9. Codacy Proposal
+
+## Recommendation
+
+Adopt Codacy in a constrained, observability-focused role.
+
+Codacy should NOT become:
+
+* architectural authority
+* correctness authority
+* invariant authority
+
+Its purpose should remain limited to:
+
+* maintainability tracking
+* duplication visibility
+* security surfacing
+* PR annotations
+* trend reporting
+
+---
+
+# 10. What Codacy SHOULD Be Allowed To Enforce
+
+## Acceptable Enforcement
+
+### Safe Static Checks
+
+* dead code detection
+* duplicated code detection
+* unsafe patterns
+* unchecked errors
+* obvious resource leaks
+* dependency vulnerability alerts
+
+### Informational Metrics
+
+* maintainability trend
+* complexity trend
+* coverage reporting
+* PR annotation summaries
+
+---
+
+# 11. What Codacy SHOULD NOT Block
+
+Codacy should NOT block merges based on:
+
+* stylistic opinions
+* abstraction preferences
+* naming conventions
+* generic maintainability scoring
+* architectural suggestions
+
+Especially NOT for:
+
+* deterministic code paths
+* intentionally explicit logic
+* invariant-heavy implementations
+
+Correctness always overrides elegance.
+
+---
+
+# 12. Proposed Codacy Rollout Plan
+
+## Phase 1 — Passive Mode
+
+Timeline:
+Immediate
+
+Enable:
+
+* repository analysis
+* PR annotations
+* maintainability tracking
+
+Disable:
+
+* hard merge blocking
+
+Objective:
+Observe signal quality.
+
+---
+
+## Phase 2 — Soft Enforcement
+
+Timeline:
+After 3–4 weeks of evaluation
+
+Allow blocking only for:
+
+* security findings
+* duplicated critical-path code
+* unchecked errors
+* severe maintainability regressions
+
+Still avoid stylistic enforcement.
+
+---
+
+## Phase 3 — Mature Integration
+
+Timeline:
+v1.10+ Engine Boundary Phase
+
+Potentially expand:
+
+* engine API complexity tracking
+* architectural boundary drift detection
+* duplication between CLI and engine layers
+
+Only after architecture stabilizes.
+
+---
+
+# 13. CodeRabbit Recommendation
+
+## Recommendation
+
+Do NOT adopt yet.
+
+## Reasons
+
+Current project stage still involves:
+
+* architectural evolution
+* storage-model refinement
+* invariant experimentation
+
+AI review tools currently risk:
+
+* review noise
+* premature abstraction pressure
+* misleading concurrency advice
+* superficial cleanup churn
+
+## Re-evaluate Later
+
+Best introduction point:
+
+* v1.10+
+* engine extraction phase
+* multi-contributor scaling
+
+At that stage:
+
+* PR summarization
+* reviewer assistance
+* architectural consistency checking
+
+become much more valuable.
+
+---
+
+# 14. Final Recommendation Summary
+
+## Immediate Actions
+
+### Add
+
+* Codacy (passive mode)
+* critical-path coverage gates
+* filesystem fault injection groundwork
+
+### Medium-Term
+
+* mutation testing
+* cross-platform restore validation
+* randomized concurrency chaos
+
+### Delay
+
+* CodeRabbit
+* aggressive style automation
+* architecture-driven AI review
+
+---
+
+# 15. Final Principle
+
+Coldkeep’s reputation will not come from:
+
+* perfect lint scores
+* pretty abstractions
+* AI-generated review comments
+
+It will come from:
+
+* surviving crashes
+* surviving corruption
+* surviving concurrency
+* preserving determinism
+* never losing data
+
+The CI pipeline should continue optimizing for those outcomes above all else.
