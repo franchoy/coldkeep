@@ -452,18 +452,21 @@ For v1.10.0:
 - [ ] Codacy is not blocking release on raw count
 - [ ] Codacy is not blocking release on style-only findings
 
-## Later v1.10.x Codacy gate
+## Codacy Policy Gate
 
-Before Codacy becomes a hard gate:
+Before Codacy can be used as any hard release gate:
 
-- [ ] Codacy policy is defined
-- [ ] Suppression rationale format is defined
-- [ ] False-positive classes are documented
-- [ ] Production security classes are reviewed
-- [ ] Dependency CVE handling is defined
-- [ ] Style-only findings remain non-blocking
-- [ ] Test-only scanner noise is handled with rationale
-- [ ] Blocking rules map to correctness/security risk, not maintainability score
+- [ ] `codacy-policy.md` is complete
+- [ ] suppression format is defined
+- [ ] false-positive classes are documented
+- [ ] production security review policy is documented
+- [ ] dependency/CVE handling points to `toolchain-vulnerability-plan.md`
+- [ ] style-only findings are non-blocking
+- [ ] raw issue count is non-blocking
+- [ ] test-only scanner noise has review rules
+- [ ] hard-blocking classes map to correctness/security/release risk
+
+Codacy hard gates are not enabled in the current v1.10 baseline policy.
 
 ## Codacy must not block on
 

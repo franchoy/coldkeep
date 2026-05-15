@@ -318,6 +318,30 @@ These are imported into `issue-tracker.csv` and should be grouped into root inva
 
 These findings are not automatically treated as true positives.
 
+# Policy Link
+
+Codacy handling during v1.10 is governed by:
+
+```text
+docs/release/v1.10/codacy-policy.md
+```
+
+The baseline import records findings.
+
+The policy defines how findings may become:
+
+- fixed,
+- suppressed,
+- accepted,
+- deferred,
+- duplicate,
+- not applicable,
+- or converted into regression/CI requirements.
+
+Raw Codacy count is not a release gate.
+
+Style-only Codacy findings are not release blockers.
+
 These findings are not automatically suppressed.
 
 ## Validation checklist
