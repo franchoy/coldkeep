@@ -1,0 +1,15 @@
+gate_id,release_scope,category,title,required,phase_owner,status,notes
+RG-1100-001,v1.10.0,phase,All v1.10.0 phases complete,true,Phase 13,pending,Phases 0-13 must be complete
+RG-1100-002,v1.10.0,scope,No engine extraction,true,Phase 9,defined,Engine work deferred to v1.11
+RG-1100-003,v1.10.0,scope,No remediation implementation,true,Phase 9,defined,v1.10.0 is baseline/freeze
+RG-1100-004,v1.10.0,evidence,Evidence manifest and checksums complete,true,Phase 2,complete,Phase 2 output
+RG-1100-005,v1.10.0,tracking,Codacy findings imported,true,Phase 5,complete,Phase 5 output
+RG-1100-006,v1.10.0,tracking,External audit findings imported,true,Phase 6,complete,Phase 6 output
+RG-1100-007,v1.10.0,tracking,Remediation matrix created,true,Phase 7,complete,Phase 7 output
+RG-1100-008,v1.10.0,ci,CI baseline captured,true,Phase 8,complete,Phase 8 output
+RG-1100-009,v1.10.0,risk,S0/S1 candidate review complete,true,Phase 12,pending,Phase 12 output
+RG-1100-010,v1.10.0,validation,Local pre-release checklist run,true,Phase 13,pending,Final release candidate validation
+RG-1100-011,v1.10.0,validation,Local CI simulation run,true,Phase 13,pending,Final release candidate validation
+RG-110X-001,v1.10.x,branch,Tag only from main,true,Every release,defined,No feature-branch release tags
+RG-110X-002,v1.10.x,codacy,No style-only Codacy blocking,true,Every release,defined,Codacy is constrained
+RG-110X-003,v1.10.x,risk,No unknown S0/S1,true,Every release,defined,S0/S1 must be fixed/accepted/deferred/targeted

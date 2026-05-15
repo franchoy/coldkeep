@@ -16,7 +16,7 @@ Status: In progress
 | 6 | External Audit Import | Complete | `external-audit-inventory.md`, `issue-tracker.csv`, `external-audit-summary.csv` |
 | 7 | Remediation Matrix Construction | Complete | `remediation-matrix.csv`, `remediation-matrix-summary.md`, linked `issue-tracker.csv` |
 | 8 | CI Baseline Capture | Complete | `ci-baseline.md`, `ci-evolution.md`, `ci-gap-inventory.csv`, `ci-baseline-summary.csv`, `local-validation-baseline.md` |
-| 9 | Release Gate Definition | Pending | `release-gates.md` |
+| 9 | Release Gate Definition | Complete | `release-gates.md`, `release-gate-summary.csv` |
 | 10 | Dependency & Toolchain Vulnerability Plan | Pending | `toolchain-vulnerability-plan.md` |
 | 11 | Codacy Policy Baseline | Pending | `codacy-policy.md` |
 | 12 | Initial S0/S1 Candidate Review | Pending | `known-s0-s1.md` |
@@ -34,6 +34,6 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 9 — Release Gate Definition
+Phase 10 — Dependency & Toolchain Vulnerability Plan
 
-Phase 8 completion recorded.
+Phase 9 completion recorded.
