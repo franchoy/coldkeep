@@ -1,0 +1,11 @@
+policy_id,category,rule,release_behavior,target_release,notes
+CODACY-POL-001,role,Codacy is observability and surfacing only in v1.10.0,non-blocking,v1.10.0,Findings imported and matrix-linked
+CODACY-POL-002,forbidden,Codacy is not architecture authority,non-blocking,all-v1.10,Manual design decisions remain authoritative
+CODACY-POL-003,forbidden,Codacy is not correctness authority,non-blocking,all-v1.10,Correctness invariants decide severity
+CODACY-POL-004,blocking-candidate,High-confidence production security findings may block later,conditional,v1.10.6+,Requires policy and baseline
+CODACY-POL-005,blocking-candidate,Dependency CVEs without plan may block later,conditional,v1.10.2+,Handled through Phase 10 plan
+CODACY-POL-006,non-blocking,Markdown style findings are non-blocking,non-blocking,all-v1.10,Track or suppress with rationale
+CODACY-POL-007,non-blocking,Raw issue count is non-blocking,non-blocking,all-v1.10,Matrix rows drive plan
+CODACY-POL-008,suppression,Suppressions require rationale,required,all-v1.10,No shallow false-positive claims
+CODACY-POL-009,test-policy,Test-only findings require review but normally do not block,conditional,all-v1.10,Can matter if they mask CI failure
+CODACY-POL-010,passive-integration,Codacy passive integration target is v1.10.6,planned,v1.10.6,No style blocking

@@ -1,0 +1,9 @@
+gap_id,title,status,target_release,domain,severity,related_matrix_ids,requires_ci_gate,notes
+CK-110-CI-001,Filesystem fault injection not yet available,gap,v1.10.9,ci,S2,,true,ENOSPC/EIO/fsync/partial-write/rename failure simulation for storage adversarial tests
+CK-110-CI-002,Critical-path coverage gates not yet enforced,gap,v1.10.7,ci,S2,,true,Correctness-critical packages only (storage/gc/snapshot/recovery); not global coverage
+CK-110-CI-003,Mutation testing not yet integrated,deferred,v1.10.11,ci,S3,,false,Run scheduled/pre-release first; not every PR; candidate for Phase 12+ as aggressive tool
+CK-110-CI-004,Cross-platform validation not yet complete,gap,v1.10.10,ci,S2,,true,Ubuntu/macOS/Windows restore/path/symlink/permissions; expand beyond ubuntu-latest
+CK-110-CI-005,Advanced chaos scheduling not yet integrated,deferred,v1.10.11,ci,S3,,false,Randomized snapshot/GC/restore/lock contention; scheduled hardening; not per-PR
+CK-110-CI-006,Codacy passive integration not yet enabled,gap,v1.10.6,codacy,S2,CK-110-M022;CK-110-M044;CK-110-M070;CK-110-M071;CK-110-M076,true,Observability and reporting first; no style blocking yet; prepare for Phase 9 blocking integration
+CK-110-CI-007,Benchmark/script malformed input gates incomplete,gap,v1.10.6,benchmark,S2,CK-110-M039;CK-110-M040;CK-110-M041;CK-110-M042;CK-110-M043;CK-110-M045;CK-110-M046;CK-110-M088,true,Duplicate benchmark cases; NaN/Inf handling; mixed CSV headers; malformed JSON detection
+CK-110-CI-008,Release gate environment propagation gaps,gap,v1.10.6,ci,S2,CK-110-M043;CK-110-M045;CK-110-M046,true,DB_SSLMODE consistency and related env propagation across all release gate scripts

@@ -1,0 +1,52 @@
+# v1.10.0 Phase Status
+
+Release package: v1.10.0 — Baseline & Freeze Declaration  
+Status: Complete
+
+## Phase Progress
+
+| Phase | Name | Status | Output |
+|---:|---|---|---|
+| 0 | Freeze Declaration & Scope Lock | Complete | `freeze-declaration.md` |
+| 1 | Release Documentation Skeleton | Complete | v1.10 documentation structure |
+| 2 | Source Inventory & Evidence Freeze | Complete | `evidence/MANIFEST.md`, `evidence/SHA256SUMS` |
+| 3 | Severity Model Adoption | Complete | `labels.md` |
+| 4 | Issue Tracking Schema Freeze | Complete | `issue-triage-schema.md`, CSV headers |
+| 5 | Codacy Baseline Import | Complete | `codacy-baseline.md`, `issue-tracker.csv`, `codacy-summary.csv` |
+| 6 | External Audit Import | Complete | `external-audit-inventory.md`, `issue-tracker.csv`, `external-audit-summary.csv` |
+| 7 | Remediation Matrix Construction | Complete | `remediation-matrix.csv`, `remediation-matrix-summary.md`, linked `issue-tracker.csv` |
+| 8 | CI Baseline Capture | Complete | `ci-baseline.md`, `ci-evolution.md`, `ci-gap-inventory.csv`, `ci-baseline-summary.csv`, `local-validation-baseline.md` |
+| 9 | Release Gate Definition | Complete | `release-gates.md`, `release-gate-summary.csv` |
+| 10 | Dependency & Toolchain Vulnerability Plan | Complete | `toolchain-vulnerability-plan.md`, toolchain/dependency decision |
+| 11 | Codacy Policy Baseline | Complete | `codacy-policy.md`, suppression policy, Codacy gate rules |
+| 12 | Initial S0/S1 Candidate Review | Complete | `known-s0-s1.md`, `s0-s1-candidate-summary.csv` |
+| 13 | v1.10.0 Checklist & Release Candidate | Complete | `v1.10.0-release-candidate.md`, `v1.10.0-local-validation.md`, final checklist |
+
+## Status Values
+
+| Status | Meaning |
+|---|---|
+| Pending | Not started |
+| In progress | Work started but not complete |
+| Complete | Phase deliverables are committed |
+| Blocked | Cannot proceed without decision |
+| Deferred | Intentionally moved out of v1.10.0 |
+
+## Current Next Phase
+
+v1.10.0 pull request and release process
+
+## v1.10.0 Phase Completion
+
+All v1.10.0 baseline/freeze phases are complete.
+
+Next actions:
+
+1. Open PR from the v1.10.0 feature branch.
+2. Wait for required CI to pass.
+3. Merge into `main`.
+4. Confirm `main` is green.
+5. Tag and publish `v1.10.0` from `main`.
+6. Start the v1.10.1 feature branch after v1.10.0 is released.
+
+Phase 9 completion recorded.

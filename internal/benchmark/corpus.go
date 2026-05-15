@@ -321,11 +321,11 @@ func (cb *CorpusBuilder) generateManifest(def CorpusDefinition, corpusDir string
 	var buf bytes.Buffer
 
 	buf.WriteString("# Benchmark Corpus Manifest\n")
-	buf.WriteString(fmt.Sprintf("Type: %s\n", def.Type))
-	buf.WriteString(fmt.Sprintf("Version: %s\n", def.Version))
-	buf.WriteString(fmt.Sprintf("Name: %s\n", def.Name))
-	buf.WriteString(fmt.Sprintf("Description: %s\n", def.Description))
-	buf.WriteString(fmt.Sprintf("Seed: 0x%x\n", def.Seed))
+	fmt.Fprintf(&buf, "Type: %s\n", def.Type)
+	fmt.Fprintf(&buf, "Version: %s\n", def.Version)
+	fmt.Fprintf(&buf, "Name: %s\n", def.Name)
+	fmt.Fprintf(&buf, "Description: %s\n", def.Description)
+	fmt.Fprintf(&buf, "Seed: 0x%x\n", def.Seed)
 	buf.WriteString("\n# Files\n")
 
 	totalSize := int64(0)
@@ -335,17 +335,17 @@ func (cb *CorpusBuilder) generateManifest(def CorpusDefinition, corpusDir string
 		hash := sha256.Sum256(data)
 		fileSHA256 := hex.EncodeToString(hash[:])
 
-		buf.WriteString(fmt.Sprintf("  %s\n", file.Name))
-		buf.WriteString(fmt.Sprintf("    Size: %d bytes\n", file.Size))
-		buf.WriteString(fmt.Sprintf("    SHA256: %s\n", fileSHA256))
-		buf.WriteString(fmt.Sprintf("    Content Type: %s\n", file.Content.Type))
-		buf.WriteString(fmt.Sprintf("    Compression Size Ratio (compressed/original): %.2f\n", file.Content.CompressionRatio))
+		fmt.Fprintf(&buf, "  %s\n", file.Name)
+		fmt.Fprintf(&buf, "    Size: %d bytes\n", file.Size)
+		fmt.Fprintf(&buf, "    SHA256: %s\n", fileSHA256)
+		fmt.Fprintf(&buf, "    Content Type: %s\n", file.Content.Type)
+		fmt.Fprintf(&buf, "    Compression Size Ratio (compressed/original): %.2f\n", file.Content.CompressionRatio)
 		totalSize += file.Size
 	}
 
 	buf.WriteString("\n# Summary\n")
-	buf.WriteString(fmt.Sprintf("Total Files: %d\n", len(def.Files)))
-	buf.WriteString(fmt.Sprintf("Total Size: %d bytes (%.2f MB)\n", totalSize, float64(totalSize)/(1024*1024)))
+	fmt.Fprintf(&buf, "Total Files: %d\n", len(def.Files))
+	fmt.Fprintf(&buf, "Total Size: %d bytes (%.2f MB)\n", totalSize, float64(totalSize)/(1024*1024))
 
 	return buf.String()
 }
@@ -473,12 +473,12 @@ func generateJSON(rng *rand.Rand, buf []byte, objects int64) ([]byte, error) {
 		if i > 0 {
 			result.WriteString(",")
 		}
-		result.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&result,
 			`{"id":%d,"name":"user_%d","status":"%s"}`,
 			i,
 			i,
 			statuses[rng.Intn(len(statuses))],
-		))
+		)
 		i++
 		if i > objects && objects > 0 {
 			break
@@ -510,7 +510,7 @@ func generateLogs(rng *rand.Rand, buf []byte, lines int64) ([]byte, error) {
 	var result strings.Builder
 	for i := int64(0); i < lines && result.Len() < len(buf); i++ {
 		format := logFormats[rng.Intn(len(logFormats))]
-		result.WriteString(fmt.Sprintf(format, i%1000))
+		fmt.Fprintf(&result, format, i%1000)
 	}
 
 	resultData := []byte(result.String())
