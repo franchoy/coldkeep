@@ -1,0 +1,37 @@
+item_id,category,name,state,target_release,related_matrix_ids,notes
+CI-BASE-001,current-gate,Go unit/integration tests,baseline-recorded,v1.10.0,,Both plain and aes-gcm codecs in CI quality job
+CI-BASE-002,current-gate,Race detection,baseline-recorded,v1.10.0,,Enabled in CI quality job and all integration/adversarial jobs
+CI-BASE-003,current-gate,Formatting/linting,baseline-recorded,v1.10.0,,"gofmt, go vet, golangci-lint"
+CI-BASE-004,current-gate,Shell validation,baseline-recorded,v1.10.0,,bash -n and shellcheck on scripts/*.sh
+CI-BASE-005,current-gate,Deterministic chunker tests,baseline-recorded,v1.10.0,,Correctness-critical for storage determinism
+CI-BASE-006,current-gate,Module/dependency hygiene,baseline-recorded,v1.10.0,,go mod tidy && git diff --exit-code
+CI-BASE-007,current-gate,Validation matrix audit,baseline-recorded,v1.10.0,,Ensures VALIDATION_MATRIX.md coverage
+CI-BASE-008,current-gate,Versioned row writer scope,baseline-recorded,v1.10.0,,Enforces row writer version isolation
+CI-BASE-009,current-gate,Smart quotes check,baseline-recorded,v1.10.0,,Prevents smart quotes in Go source files
+CI-BASE-010,current-gate,Smoke validation,baseline-recorded,v1.10.0,,Both plain and aes-gcm codecs; requires PostgreSQL 16
+CI-BASE-011,current-gate,CI invariant audit,baseline-recorded,v1.10.0,,Validates workflow structure; gates; snapshot invariants
+CI-BASE-012,current-gate,Legacy compatibility regression,baseline-recorded,v1.10.0,,v1.7/v1.8 repository format regression testing
+CI-BASE-013,current-gate,Integration correctness matrix,baseline-recorded,v1.10.0,,Both codecs; focused snapshot retention validation
+CI-BASE-014,current-gate,Integration stress matrix,baseline-recorded,v1.10.0,,Both codecs; full integration test suite
+CI-BASE-015,current-gate,Integration long-run matrix,baseline-recorded,v1.10.0,,Both codecs; stability/soak validation
+CI-BASE-016,current-gate,Adversarial validation G1-G17,baseline-recorded,v1.10.0,,Both codecs; storage resilience under fault injection
+CI-BASE-017,current-gate,Snapshot lifecycle gates G14-G17,baseline-recorded,v1.10.0,,Phase 7 snapshot/retention contract validation
+CI-BASE-018,current-gate,Benchmark regression gates,baseline-recorded,v1.10.0,,Both compression modes; compares vs v1.9 baseline threshold=100
+CI-BASE-019,current-gate,Required CI gate aggregator,baseline-recorded,v1.10.0,,ci-required job aggregates all 8 jobs
+CI-BASE-020,manual-gate,Snapshot release gate,baseline-recorded,v1.10.0,,scripts/run_snapshot_release_gate.sh
+CI-BASE-021,manual-gate,Phase 7 v1.7 compatibility gate,baseline-recorded,v1.10.0,,scripts/run_phase7_v17_binary_gate.sh; requires v1.7 binary
+CI-BASE-022,manual-gate,Release checklist,baseline-recorded,v1.10.0,,PRE_RELEASE_CHECKLIST.md steps 1-13; 15-18 for snapshots
+CI-GAP-001,future-gap,Filesystem fault injection,pending,v1.10.9,CK-110-CI-001,ENOSPC/EIO/fsync/partial-write/rename failure simulation
+CI-GAP-002,future-gap,Critical-path coverage gates,pending,v1.10.7,CK-110-CI-002,Correctness-critical packages only; not global coverage
+CI-GAP-003,future-gap,Mutation testing,deferred,v1.10.11,CK-110-CI-003,Scheduled/pre-release only; not per-PR
+CI-GAP-004,future-gap,Cross-platform validation,pending,v1.10.10,CK-110-CI-004,Ubuntu/macOS/Windows; expand beyond ubuntu-latest
+CI-GAP-005,future-gap,Advanced chaos scheduling,deferred,v1.10.11,CK-110-CI-005,Randomized timing; lock contention; scheduled hardening
+CI-GAP-006,future-gap,Codacy passive integration,pending,v1.10.6,CK-110-CI-006,Observability first; no style blocking; M022;M044;M070;M071;M076
+CI-GAP-007,future-gap,Benchmark/script malformed input gates,pending,v1.10.6,CK-110-CI-007,Duplicate cases; NaN/Inf handling; M039-M043;M045;M046;M088
+CI-GAP-008,future-gap,Release gate environment propagation,pending,v1.10.6,CK-110-CI-008,DB_SSLMODE consistency across release scripts; M043;M045;M046
+CODACY-001,current-state,Codacy baseline evidence,captured,v1.10.0,,Raw Codacy JSON frozen in Phase 2
+CODACY-002,current-state,Codacy issue import,complete,v1.10.0,,87 findings imported in Phase 5
+CODACY-003,current-state,Codacy blocking CI gate,not-enabled,v1.10.0,,v1.10.0 must not block on style-only findings
+CODACY-004,current-state,Codacy suppression policy,pending,Phase 11,,Determines false-positives and infrastructure noise
+CODACY-005,current-state,Style-only enforcement,non-blocking,v1.10.0,,Markdown; documentation style tracked but not release-blocking
+CODACY-006,current-state,Dependency/security surfacing,tracked,v1.10.0,,Toolchain vulnerabilities feed Phase 10
