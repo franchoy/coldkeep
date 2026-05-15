@@ -13,7 +13,7 @@ Status: In progress
 | 3 | Severity Model Adoption | Complete | `labels.md` |
 | 4 | Issue Tracking Schema Freeze | Complete | `issue-triage-schema.md`, CSV headers |
 | 5 | Codacy Baseline Import | Complete | `codacy-baseline.md`, `issue-tracker.csv`, `codacy-summary.csv` |
-| 6 | External Audit Import | Pending | `external-audit-inventory.md`, `issue-tracker.csv` |
+| 6 | External Audit Import | Complete | `external-audit-inventory.md`, `issue-tracker.csv`, `external-audit-summary.csv` |
 | 7 | Remediation Matrix Construction | Pending | `remediation-matrix.csv` |
 | 8 | CI Baseline Capture | Pending | `ci-baseline.md` |
 | 9 | Release Gate Definition | Pending | `release-gates.md` |
@@ -34,6 +34,6 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 6 — External Audit Import
+Phase 7 — Remediation Matrix Construction
 
 Phase 1 completion recorded.
