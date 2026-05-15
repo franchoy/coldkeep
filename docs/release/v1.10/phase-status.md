@@ -8,7 +8,7 @@ Status: In progress
 | Phase | Name | Status | Output |
 |---:|---|---|---|
 | 0 | Freeze Declaration & Scope Lock | Complete | `freeze-declaration.md` |
-| 1 | Release Documentation Skeleton | In progress | v1.10 documentation structure |
+| 1 | Release Documentation Skeleton | Complete | v1.10 documentation structure |
 | 2 | Source Inventory & Evidence Freeze | Pending | `evidence/MANIFEST.md` |
 | 3 | Severity Model Adoption | Pending | `labels.md` |
 | 4 | Issue Tracking Schema Freeze | Pending | `issue-triage-schema.md` |
@@ -36,8 +36,4 @@ Status: In progress
 
 Phase 2 — Source Inventory & Evidence Freeze
 
-After Phase 1 is complete, update the Phase 1 row to:
-
-| 1 | Release Documentation Skeleton | Complete | v1.10 documentation structure |
-
-And set current next phase to Phase 2.
+Phase 1 completion recorded.
