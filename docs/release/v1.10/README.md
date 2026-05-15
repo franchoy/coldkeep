@@ -84,10 +84,10 @@ v1.10.0 does not implement the actual remediation fixes. Remediation begins in v
 | `release-chain.md` | v1.10.x release train overview |
 | `phase-status.md` | Phase-by-phase completion tracking |
 | `v1.10.0-checklist.md` | Completion checklist for v1.10.0 |
-| `issue-triage-schema.md` | Canonical issue tracking schema |
+| `issue-triage-schema.md` | Canonical schema for issue tracker and remediation matrix |
 | `labels.md` | Severity/status/domain/risk labels |
-| `issue-tracker.csv` | Raw imported issue inventory |
-| `remediation-matrix.csv` | Deduplicated root-invariant matrix |
+| `issue-tracker.csv` | Raw imported issue inventory; one row per finding |
+| `remediation-matrix.csv` | Deduplicated root-invariant work packages |
 | `accepted-risks.md` | Risks accepted with rationale |
 | `deferred-issues.md` | Real issues intentionally deferred |
 | `suppressed-findings.md` | Scanner findings suppressed with rationale |
@@ -101,6 +101,15 @@ v1.10.0 does not implement the actual remediation fixes. Remediation begins in v
 | `codacy-policy.md` | How Codacy is used during v1.10 |
 | `evidence/MANIFEST.md` | Frozen source evidence manifest |
 | `templates/` | Reusable templates for later phases |
+
+## Tracking Model
+
+v1.10 uses a two-layer tracking model:
+
+- raw findings are imported into `issue-tracker.csv`
+- deduplicated remediation work is tracked in `remediation-matrix.csv`
+
+The release plan follows remediation matrix rows, not raw scanner count.
 
 ## Completion Rule
 
