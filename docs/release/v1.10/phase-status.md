@@ -14,7 +14,7 @@ Status: In progress
 | 4 | Issue Tracking Schema Freeze | Complete | `issue-triage-schema.md`, CSV headers |
 | 5 | Codacy Baseline Import | Complete | `codacy-baseline.md`, `issue-tracker.csv`, `codacy-summary.csv` |
 | 6 | External Audit Import | Complete | `external-audit-inventory.md`, `issue-tracker.csv`, `external-audit-summary.csv` |
-| 7 | Remediation Matrix Construction | Pending | `remediation-matrix.csv` |
+| 7 | Remediation Matrix Construction | Complete | `remediation-matrix.csv`, `remediation-matrix-summary.md`, linked `issue-tracker.csv` |
 | 8 | CI Baseline Capture | Pending | `ci-baseline.md` |
 | 9 | Release Gate Definition | Pending | `release-gates.md` |
 | 10 | Dependency & Toolchain Vulnerability Plan | Pending | `toolchain-vulnerability-plan.md` |
@@ -34,6 +34,6 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 7 — Remediation Matrix Construction
+Phase 8 — CI Baseline Capture
 
 Phase 1 completion recorded.
