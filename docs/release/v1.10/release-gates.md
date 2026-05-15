@@ -351,6 +351,18 @@ It may release with known S0/S1 candidates only if Phase 12 has completed and ev
 - rationale,
 - required regression/CI expectation where applicable.
 
+## Phase 12 S0/S1 Review Gate
+
+For v1.10.0 release:
+
+- [ ] `known-s0-s1.md` is complete
+- [ ] `s0-s1-candidate-summary.csv` exists or candidate review is otherwise documented
+- [ ] every candidate has final severity
+- [ ] every confirmed S0/S1 has concrete release target or formal accepted/deferred record
+- [ ] every confirmed S0/S1 has rationale
+- [ ] no candidate remains `pending-review`
+- [ ] no confirmed S0/S1 remains unknown
+
 ## Engine extraction gate
 
 No v1.11 engine-boundary work may begin while known S0/S1 issues remain untriaged.

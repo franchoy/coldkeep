@@ -45,3 +45,9 @@ Only create an accepted-risk record if:
 - you decide not to upgrade,
 - you decide the risk is real,
 - and you intentionally tolerate it for a defined period.
+
+## Phase 12 Note
+
+No S0/S1 risk was accepted during Phase 12 initial candidate review.
+
+Phase 12 outcome for S0/S1 candidates is triaged plus concrete v1.10.x targeting with required follow-up, not risk acceptance.

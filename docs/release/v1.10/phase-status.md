@@ -19,7 +19,7 @@ Status: In progress
 | 9 | Release Gate Definition | Complete | `release-gates.md`, `release-gate-summary.csv` |
 | 10 | Dependency & Toolchain Vulnerability Plan | Complete | `toolchain-vulnerability-plan.md`, toolchain/dependency decision |
 | 11 | Codacy Policy Baseline | Complete | `codacy-policy.md`, suppression policy, Codacy gate rules |
-| 12 | Initial S0/S1 Candidate Review | Pending | `known-s0-s1.md` |
+| 12 | Initial S0/S1 Candidate Review | Complete | `known-s0-s1.md`, `s0-s1-candidate-summary.csv` |
 | 13 | v1.10.0 Checklist & Release Candidate | Pending | `v1.10.0-checklist.md` |
 
 ## Status Values
@@ -34,6 +34,6 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 12 — Initial S0/S1 Candidate Review
+Phase 13 — v1.10.0 Checklist & Release Candidate
 
 Phase 9 completion recorded.
