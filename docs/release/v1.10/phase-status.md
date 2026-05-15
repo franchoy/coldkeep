@@ -1,7 +1,7 @@
 # v1.10.0 Phase Status
 
 Release package: v1.10.0 — Baseline & Freeze Declaration  
-Status: In progress
+Status: Complete
 
 ## Phase Progress
 
@@ -20,7 +20,7 @@ Status: In progress
 | 10 | Dependency & Toolchain Vulnerability Plan | Complete | `toolchain-vulnerability-plan.md`, toolchain/dependency decision |
 | 11 | Codacy Policy Baseline | Complete | `codacy-policy.md`, suppression policy, Codacy gate rules |
 | 12 | Initial S0/S1 Candidate Review | Complete | `known-s0-s1.md`, `s0-s1-candidate-summary.csv` |
-| 13 | v1.10.0 Checklist & Release Candidate | Pending | `v1.10.0-checklist.md` |
+| 13 | v1.10.0 Checklist & Release Candidate | Complete | `v1.10.0-release-candidate.md`, `v1.10.0-local-validation.md`, final checklist |
 
 ## Status Values
 
@@ -34,6 +34,19 @@ Status: In progress
 
 ## Current Next Phase
 
-Phase 13 — v1.10.0 Checklist & Release Candidate
+v1.10.0 pull request and release process
+
+## v1.10.0 Phase Completion
+
+All v1.10.0 baseline/freeze phases are complete.
+
+Next actions:
+
+1. Open PR from the v1.10.0 feature branch.
+2. Wait for required CI to pass.
+3. Merge into `main`.
+4. Confirm `main` is green.
+5. Tag and publish `v1.10.0` from `main`.
+6. Start the v1.10.1 feature branch after v1.10.0 is released.
 
 Phase 9 completion recorded.

@@ -84,6 +84,9 @@ v1.10.0 does not implement the actual remediation fixes. Remediation begins in v
 | `release-chain.md` | v1.10.x release train overview |
 | `phase-status.md` | Phase-by-phase completion tracking |
 | `v1.10.0-checklist.md` | Completion checklist for v1.10.0 |
+| `v1.10.0-release-candidate.md` | Final v1.10.0 release-candidate summary and readiness decision |
+| `v1.10.0-local-validation.md` | Local pre-release and CI simulation results |
+| `v1.10.0-pr-notes.md` | Prepared PR message for v1.10.0, if created |
 | `issue-triage-schema.md` | Canonical schema for issue tracker and remediation matrix |
 | `labels.md` | Severity/status/domain/risk labels |
 | `issue-tracker.csv` | Raw imported issue inventory; rows linked to remediation matrix IDs |
@@ -122,6 +125,14 @@ As of Phase 7:
 - Raw issue rows are linked to matrix rows.
 - Remediation work is planned by matrix rows.
 - Implementation remediation has not started.
+
+## v1.10.0 Final State
+
+v1.10.0 is a baseline/freeze release.
+
+It completes the evidence, tracking, policy, CI baseline, release gate, and S0/S1 review foundation for the v1.10 remediation train.
+
+Actual remediation begins in v1.10.1.
 
 ## Completion Rule
 

@@ -20,7 +20,7 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
-## v1.10.0 - 2026-05-14 — Baseline & Freeze Declaration
+## v1.10.0 - 2026-05-15 — Baseline & Freeze Declaration
 
 ### Status
 
@@ -28,31 +28,40 @@ Reliability freeze and stabilization baseline.
 
 ### Summary
 
-v1.10.0 declares the v1.10 reliability freeze. This release does not introduce new product features. It establishes the documentation and scope-control baseline for the v1.10.x correctness burn-down, CI hardening, Codacy baseline classification, external audit inventory, remediation matrix, and release-gate process.
+v1.10.0 starts the Reliability Freeze, CI Hardening, and Correctness Burn-down release train.
 
-### Scope
+This release establishes the baseline, evidence inventory, issue tracking model, remediation matrix, CI baseline, release gates, Codacy policy, toolchain vulnerability plan, and initial S0/S1 candidate review for the v1.10 stabilization series.
 
-Included:
+### Added
 
 - v1.10 feature freeze declaration
-- v1.10 stabilization-train documentation
-- release scope boundaries
-- allowed/forbidden change classes
-- v1.10.x release train outline
-- initial v1.10.0 validation checklist
+- v1.10 release documentation workspace
+- frozen baseline evidence under `docs/release/v1.10/evidence/`
+- evidence manifest and SHA256 checksums
+- S0-S4 severity model, status lifecycle, domain labels, risk labels, release-target labels, and decision labels
+- frozen raw issue tracker and remediation matrix schemas
+- Codacy baseline findings imported into `issue-tracker.csv`
+- external audit findings imported into `issue-tracker.csv`
+- root-invariant remediation matrix construction
+- current CI and local validation baseline capture
+- v1.10 release gate definition
+- Go/toolchain vulnerability handling plan
+- Codacy usage, blocking, and suppression policy
+- initial S0/S1 candidate review completion
+- v1.10.0 release-candidate validation record
 
-Excluded:
+### Changed
 
-- engine extraction
-- new product features
-- storage format expansion
-- broad refactors
-- Codacy style-only burn-down
-- remediation implementation for known issues
+- No production behavior changes.
+- No repository format changes.
+- No CI enforcement changes.
+- No Codacy hard-blocking changes.
 
-### Next
+### Notes
 
-v1.10.1 begins CLI correctness and contract stabilization.
+v1.10.0 is a baseline/freeze release.
+
+It does not remediate the imported findings. Remediation begins in v1.10.1.
 
 ------------------------------------------------------------------------
 
