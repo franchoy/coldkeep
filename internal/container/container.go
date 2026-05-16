@@ -15,6 +15,7 @@ import (
 
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/iodebug"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	"github.com/franchoy/coldkeep/internal/utils_hash"
 )
 
@@ -70,6 +71,15 @@ type ActiveContainer struct {
 	Filename  string
 	Container Container
 	MaxSize   int64
+}
+
+// SafeContainerPath validates a container filename before joining it under a
+// container root.
+func SafeContainerPath(containersDir, filename string) (string, error) {
+	if err := pathsafe.ValidateSafeFileName(filename); err != nil {
+		return "", err
+	}
+	return filepath.Join(containersDir, filename), nil
 }
 
 // --------------------------------------------------------------------------
@@ -413,7 +423,10 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 	}
 	if err == nil {
 		// Found existing open container
-		fullPath := filepath.Join(containersDir, filename)
+		fullPath, err := SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 
 		container, err := OpenWritableContainer(fullPath, maxSize)
 		if err != nil {
@@ -453,7 +466,10 @@ func getOrCreateOpenContainerInDirExcluding(tx db.DBTX, dbconn *sql.DB, containe
 		return ActiveContainer{}, err
 	}
 
-	fullPath := filepath.Join(containersDir, filename)
+	fullPath, err := SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return ActiveContainer{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
 	retireNewContainer := func(openErr error) error {
 		retireErr := QuarantineContainerInDir(dbconn, id, containersDir)
 		removeErr := os.Remove(fullPath)
@@ -530,7 +546,10 @@ func SealContainer(tx db.DBTX, containerID int64, filename string) error {
 func SealContainerInDir(tx db.DBTX, containerID int64, filename string, containersDir string) error {
 	containersDir = containersDirOrDefault(containersDir)
 
-	originalPath := filepath.Join(containersDir, filename)
+	originalPath, err := SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
 
 	info, err := os.Stat(originalPath)
 	if err != nil {
@@ -603,9 +622,14 @@ func QuarantineContainerInDir(dbconn *sql.DB, containerID int64, containersDir s
 		return fmt.Errorf("query container %d before quarantine: %w", containerID, err)
 	}
 
+	containerPath, err := SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
+
 	var updateQuery string
 	var updateArgs []any
-	if info, statErr := os.Stat(filepath.Join(containersDir, filename)); statErr == nil {
+	if info, statErr := os.Stat(containerPath); statErr == nil {
 		updateQuery = updateQuarantineWithSizeQuery
 		if backend == db.BackendSQLite {
 			updateArgs = []any{info.Size(), info.Size(), containerID}
@@ -639,7 +663,10 @@ func CheckContainerHashFile(id int, filename, storedHash string) error {
 
 func CheckContainerHashFileInDir(id int, filename, storedHash string, containersDir string) error {
 	containersDir = containersDirOrDefault(containersDir)
-	containerPath := filepath.Join(containersDir, filename)
+	containerPath, err := SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
 
 	computedHash, err := utils_hash.ComputeFileHashHex(containerPath)
 	if err != nil {

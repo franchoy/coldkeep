@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -527,7 +526,10 @@ func (w *LocalWriter) RollbackLastAppend() error {
 			return fmt.Errorf("rollback append: truncate container %s to %d: %w", filename, target, truncErr)
 		}
 		if filename != "" {
-			fullPath := filepath.Join(w.dir, filename)
+			fullPath, err := SafeContainerPath(w.dir, filename)
+			if err != nil {
+				return fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err)
+			}
 			if info, statErr := os.Stat(fullPath); statErr == nil {
 				if info.Size() != target {
 					return fmt.Errorf("rollback append: truncate verification failed for %s: expected %d bytes, got %d", fullPath, target, info.Size())
@@ -539,7 +541,10 @@ func (w *LocalWriter) RollbackLastAppend() error {
 	} else if !w.hasActive && filename != "" {
 		// FinalizeContainer was already called for a full container: the file handle is
 		// closed but the file exists on disk. Truncate by path.
-		fullPath := filepath.Join(w.dir, filename)
+		fullPath, err := SafeContainerPath(w.dir, filename)
+		if err != nil {
+			return fmt.Errorf("rollback append: invalid container filename %q: %w", filename, err)
+		}
 		if err := os.Truncate(fullPath, target); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("rollback append: truncate closed container %s to %d: %w", fullPath, target, err)
 		}

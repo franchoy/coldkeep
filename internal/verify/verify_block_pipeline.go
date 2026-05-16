@@ -3,7 +3,6 @@ package verify
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -46,7 +45,10 @@ type FilesystemContainerReader struct {
 
 // ReadStoredPayload reads the exact stored payload bytes for one packed block.
 func (r FilesystemContainerReader) ReadStoredPayload(_ context.Context, meta BlockStorageMetadata) ([]byte, error) {
-	path := filepath.Join(r.ContainersDir, meta.ContainerName)
+	path, err := container.SafeContainerPath(r.ContainersDir, meta.ContainerName)
+	if err != nil {
+		return nil, err
+	}
 	fc, err := container.OpenReadOnlyContainer(path, meta.ContainerMaxSize)
 	if err != nil {
 		return nil, err

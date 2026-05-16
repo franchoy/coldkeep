@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
+	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/graph"
 	"github.com/franchoy/coldkeep/internal/invariants"
@@ -336,7 +336,10 @@ func RunGCWithContainersDirResult(dryRun bool, containersDir string) (result GCR
 		}
 
 		// After commit, delete file from disk
-		containerPath := filepath.Join(containersDir, filename)
+		containerPath, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return GCResult{}, fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 
 		if err := os.Remove(containerPath); err != nil {
 			log.Println("warning: failed to delete container file:", err)
@@ -776,7 +779,10 @@ func cleanupFullyDeadActiveContainers(ctx context.Context, dbconn *sql.DB, conta
 		}
 
 		// Physical file deletion after commit.
-		containerPath := filepath.Join(containersDir, ac.filename)
+		containerPath, err := container.SafeContainerPath(containersDir, ac.filename)
+		if err != nil {
+			return fmt.Errorf("invalid container filename %q: %w", ac.filename, err)
+		}
 		if err := os.Remove(containerPath); err != nil {
 			log.Println("warning: failed to delete fully-dead active container file:", err)
 		}

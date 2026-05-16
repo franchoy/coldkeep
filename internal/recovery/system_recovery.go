@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -201,7 +200,10 @@ func recoverSealingContainers(dbconn *sql.DB, containersDir string, stats *recov
 			return fmt.Errorf("scan sealing container row: %w", err)
 		}
 
-		path := filepath.Join(containersDir, filename)
+		path, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 		fileInfo, statErr := os.Stat(path)
 		if statErr == nil && fileInfo.Size() != currentSize {
 			if _, qErr := dbconn.ExecContext(ctx,
@@ -287,11 +289,14 @@ func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *re
 		}
 		stats.totalContainersChecked++
 
-		path := filepath.Join(containersDir, filename)
+		path, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 
-		_, err := os.Stat(path)
+		_, statErr := os.Stat(path)
 
-		if os.IsNotExist(err) {
+		if os.IsNotExist(statErr) {
 
 			_, err := dbconn.ExecContext(ctx, `UPDATE container SET quarantine = TRUE WHERE id = $1`, id)
 			if err != nil {
@@ -305,8 +310,8 @@ func quarantineMissingContainers(dbconn *sql.DB, containersDir string, stats *re
 				"reason=missing_file",
 			)
 
-		} else if err != nil {
-			return fmt.Errorf("stat container file: %w", err)
+		} else if statErr != nil {
+			return fmt.Errorf("stat container file: %w", statErr)
 		}
 
 	}
@@ -343,7 +348,10 @@ func quarantineCorruptActiveContainerTails(dbconn *sql.DB, containersDir string,
 			return fmt.Errorf("scan active container row: %w", err)
 		}
 
-		path := filepath.Join(containersDir, filename)
+		path, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 		fileInfo, err := os.Stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {

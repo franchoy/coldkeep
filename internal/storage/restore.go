@@ -1169,7 +1169,10 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			// Phase 6 Step 6: Get container reader from cache (reduces open/close overhead)
-			containerPath := filepath.Join(containersDir, chunk.ContainerName)
+			containerPath, err := container.SafeContainerPath(containersDir, chunk.ContainerName)
+			if err != nil {
+				return RestoreFileResult{}, fmt.Errorf("invalid container filename %q: %w", chunk.ContainerName, err)
+			}
 			filecontainer, err := readerCache.GetReader(containerPath, chunk.ContainerMaxSize)
 			if err != nil {
 				log.Printf("event=restore_skip_chunk action=container_read_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -318,7 +317,10 @@ func verifyFileContainersAndOffsets(dbconn *sql.DB, fileID int, containersDir st
 		if !ok {
 			containerFilename := filename
 
-			fullPath := filepath.Join(containersDir, containerFilename)
+			fullPath, err := container.SafeContainerPath(containersDir, containerFilename)
+			if err != nil {
+				return fmt.Errorf("invalid container filename %q: %w", containerFilename, err)
+			}
 			fileInfo, err := os.Stat(fullPath)
 			if err != nil {
 				return fmt.Errorf("missing container file: %s: %w", fullPath, err)
@@ -448,7 +450,11 @@ func verifyFileChunkHashes(dbconn *sql.DB, fileID int, containersDir string) err
 				currentContainer = nil
 			}
 
-			fullPath := filepath.Join(containersDir, filename)
+			fullPath, err := container.SafeContainerPath(containersDir, filename)
+			if err != nil {
+				appendHashError(fmt.Errorf("invalid container filename %q: %w", filename, err))
+				continue
+			}
 			// Open in read-only mode for verification safety.
 			currentContainer, err = container.OpenReadOnlyContainer(fullPath, maxSize)
 			if err != nil {

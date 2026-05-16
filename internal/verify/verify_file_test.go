@@ -249,3 +249,45 @@ func TestVerifyFileStandardAcceptsUnknownWellFormedVersions(t *testing.T) {
 		t.Fatalf("verify should accept unknown well-formed version metadata; got: %v", err)
 	}
 }
+
+func TestCheckContainersFileExistenceRejectsUnsafeContainerFilename(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	if _, err := dbconn.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatalf("disable foreign_keys: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		"../escape.bin", int64(128), int64(256), true, false,
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		strings.Repeat("a", 64), int64(128), filestate.ChunkCompleted, int64(1), int64(0), int64(0), "v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, container_id, block_offset, stored_size, plaintext_size, codec, format_version, nonce)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		chunkID, containerID, int64(0), int64(128), int64(128), "plain", 1, []byte("nonce00000000000"),
+	); err != nil {
+		t.Fatalf("insert blocks row: %v", err)
+	}
+
+	err := checkContainersFileExistence(dbconn, t.TempDir())
+	if err == nil {
+		t.Fatal("expected checkContainersFileExistence to reject unsafe filename")
+	}
+	if !strings.Contains(err.Error(), "found 1 errors in checkContainersFileExistence checks") {
+		t.Fatalf("expected aggregated file-existence error, got: %v", err)
+	}
+}

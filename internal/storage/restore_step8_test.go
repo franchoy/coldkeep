@@ -265,6 +265,35 @@ func TestStep8RestoreSyntheticPackedBlock(t *testing.T) {
 	}
 }
 
+func TestStep8RestoreRejectsUnsafeLegacyContainerFilename(t *testing.T) {
+	dbconn := setupStep8DB(t)
+	defer func() { _ = dbconn.Close() }()
+	containersDir := t.TempDir()
+
+	payload := []byte("legacy-unsafe-container")
+	chunk := insertChunkForRestore(t, dbconn, payload, "v1-simple-rolling")
+	fileID := insertLogicalFileForRestore(t, dbconn, "legacy-unsafe.bin", []restoreChunkSeed{chunk}, "v1-simple-rolling")
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed)
+		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
+		"../escape.bin", int64(container.ContainerHdrLen+len(payload)), container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert unsafe container: %v", err)
+	}
+	insertLegacyBlocksRows(t, dbconn, containerID, []restoreChunkSeed{chunk})
+
+	outPath := filepath.Join(t.TempDir(), "restore-unsafe.bin")
+	_, err := restoreFileWithDBAndDir(dbconn, fileID, outPath, containersDir, RestoreOptions{Overwrite: true})
+	if err == nil {
+		t.Fatal("expected restore to reject unsafe legacy container filename")
+	}
+	if !strings.Contains(err.Error(), "invalid container filename") {
+		t.Fatalf("expected invalid container filename error, got: %v", err)
+	}
+}
+
 // Step 7 invariant: restore output order is driven by file recipe (chunk_index),
 // not by physical packed entry order inside a storage block.
 func TestStep7RestoreRecipeOrderOverridesPhysicalPackedOrder(t *testing.T) {

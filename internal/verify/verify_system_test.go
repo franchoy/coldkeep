@@ -1825,3 +1825,56 @@ func TestVerifyRepositoryErrorCategoryPhysicalMissing(t *testing.T) {
 		t.Fatalf("expected physical_missing category prefix, got: %v", err)
 	}
 }
+
+func TestVerifyLegacyChunkHashesRejectsUnsafeContainerFilename(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, FALSE, FALSE)
+		 RETURNING id`,
+		"../escape.bin",
+		int64(1024),
+		int64(1024),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, retry_count, chunker_version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id`,
+		strings.Repeat("b", 64),
+		int64(16),
+		filestate.ChunkCompleted,
+		int64(0),
+		int64(0),
+		int64(0),
+		"v1-simple-rolling",
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, x'', $4, $5)`,
+		chunkID,
+		int64(16),
+		int64(16),
+		containerID,
+		int64(0),
+	); err != nil {
+		t.Fatalf("insert legacy block row: %v", err)
+	}
+
+	err := verifyLegacyChunkHashes(dbconn, t.TempDir())
+	if err == nil {
+		t.Fatal("expected verifyLegacyChunkHashes to reject unsafe filename")
+	}
+	if !strings.Contains(err.Error(), "invalid container filename") {
+		t.Fatalf("expected invalid container filename error, got: %v", err)
+	}
+}

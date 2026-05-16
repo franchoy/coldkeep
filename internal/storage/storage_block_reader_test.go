@@ -147,6 +147,41 @@ func TestStorageBlockReaderTransformerCache(t *testing.T) {
 	_ = reader
 }
 
+func TestStorageBlockReaderRejectsUnsafeContainerName(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	if _, err := dbconn.ExecContext(context.Background(), `
+		INSERT INTO container (id, filename, current_size, max_size, sealed)
+		VALUES (1, '../escape.bin', 128, 1024, TRUE)
+	`); err != nil {
+		t.Fatalf("insert container: %v", err)
+	}
+	if _, err := dbconn.ExecContext(context.Background(), `
+		INSERT INTO storage_blocks (
+			id, format_version, codec, plaintext_size, stored_size, container_id, container_offset, block_hash
+		) VALUES (1, 1, 'none', 16, 16, 1, 0, 'abcdef')
+	`); err != nil {
+		t.Fatalf("insert storage block: %v", err)
+	}
+
+	reader := NewStorageBlockReader(dbconn, t.TempDir())
+	_, err = reader.ReadBlock(context.Background(), 1)
+	if err == nil {
+		t.Fatal("expected unsafe container name to be rejected")
+	}
+	if !strings.Contains(err.Error(), "invalid container filename") {
+		t.Fatalf("expected invalid container filename error, got: %v", err)
+	}
+}
+
 // TestStorageBlockReaderMetadataValidation validates metadata field validators.
 // This tests the validation logic without needing full container setup.
 func TestStorageBlockReaderMetadataValidation(t *testing.T) {

@@ -1207,7 +1207,10 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		return fmt.Errorf("chunk %d has out-of-bounds placement in container %d: block_offset=%d stored_size=%d container_size=%d", chunkID, containerID, blockOffset, storedSize, containerSize)
 	}
 
-	fullPath := filepath.Join(containersDir, filename)
+	fullPath, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
 	info, statErr := os.Stat(fullPath)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -1348,7 +1351,10 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 		if err := rows.Scan(&containerID, &filename); err != nil {
 			return fmt.Errorf("scan reusable logical file container for file %d: %w", fileID, err)
 		}
-		fullPath := filepath.Join(containersDir, filename)
+		fullPath, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 		if _, err := os.Stat(fullPath); err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("warning: logical file %d references missing container file %d (%s)", fileID, containerID, fullPath)
@@ -1495,7 +1501,10 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 					filecontainer = nil
 				}
 
-				containerPath := filepath.Join(containersDir, chunkRow.filename)
+				containerPath, err := container.SafeContainerPath(containersDir, chunkRow.filename)
+				if err != nil {
+					return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+				}
 				filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
 				if err != nil {
 					return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)

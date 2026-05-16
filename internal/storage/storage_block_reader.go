@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -351,7 +350,10 @@ func validateStorageBlockCompressionMetadata(codec string, level *int) error {
 // readStoredPayload reads the raw stored bytes for a block from its container file.
 // This is Stage 2 of the read pipeline.
 func (r *StorageBlockReader) readStoredPayload(meta *blockMetadata) ([]byte, error) {
-	containerPath := filepath.Join(r.containersDir, meta.ContainerName)
+	containerPath, err := container.SafeContainerPath(r.containersDir, meta.ContainerName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid container filename %q: %w", meta.ContainerName, err)
+	}
 
 	// Open container file for reading
 	// Note: We use the maximum container size here; this is just for validation purposes

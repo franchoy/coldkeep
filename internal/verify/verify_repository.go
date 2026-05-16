@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -866,7 +865,11 @@ func verifyLegacyChunkHashes(dbconn *sql.DB, containersDir string) error {
 
 		fc := openContainers[filename]
 		if fc == nil {
-			fc, err = container.OpenReadOnlyContainer(filepath.Join(containersDir, filename), maxSize)
+			containerPath, pathErr := container.SafeContainerPath(containersDir, filename)
+			if pathErr != nil {
+				return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyLegacyChunkHashes: invalid container filename %q", filename), pathErr)
+			}
+			fc, err = container.OpenReadOnlyContainer(containerPath, maxSize)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return verifyCategoryError(verifyErrPhysicalMissing, fmt.Sprintf("verifyLegacyChunkHashes: open container %q", filename), err)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/franchoy/coldkeep/internal/container"
@@ -138,5 +139,36 @@ func TestQuarantineOrphanContainersResyncsExistingQuarantineSizeDrift(t *testing
 	}
 	if stats.quarantinedOrphan != 0 {
 		t.Fatalf("expected no new orphan rows, got %d", stats.quarantinedOrphan)
+	}
+}
+
+func TestQuarantineMissingContainersRejectsUnsafeFilename(t *testing.T) {
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer func() { _ = dbconn.Close() }()
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	containersDir := t.TempDir()
+	if _, err := dbconn.Exec(`
+		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+		VALUES (?, ?, ?, FALSE, FALSE, FALSE)
+	`, "../escape.bin", container.ContainerHdrLen, container.ContainerHdrLen+128); err != nil {
+		t.Fatalf("insert unsafe container row: %v", err)
+	}
+
+	stats := &recoveryStats{}
+	err = quarantineMissingContainers(dbconn, containersDir, stats)
+	if err == nil {
+		t.Fatal("expected quarantineMissingContainers to reject unsafe filename")
+	}
+	if !strings.Contains(err.Error(), "invalid container filename") {
+		t.Fatalf("expected invalid container filename error, got: %v", err)
 	}
 }
