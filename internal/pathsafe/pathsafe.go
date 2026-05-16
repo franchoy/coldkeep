@@ -2,6 +2,7 @@ package pathsafe
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,9 @@ func SafeJoin(root string, rel string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve joined path: %w", err)
 	}
+	if err := ValidatePathHasNoSymlinkComponents(joinedAbs); err != nil {
+		return "", err
+	}
 
 	relToRoot, err := filepath.Rel(rootAbs, joinedAbs)
 	if err != nil {
@@ -124,4 +128,57 @@ func SafeJoin(root string, rel string) (string, error) {
 	}
 
 	return joinedAbs, nil
+}
+
+// ValidatePathHasNoSymlinkComponents rejects paths that traverse existing symlink
+// components. Missing suffix components are allowed.
+func ValidatePathHasNoSymlinkComponents(p string) error {
+	if strings.TrimSpace(p) == "" {
+		return fmt.Errorf("path is empty")
+	}
+
+	absPath, err := filepath.Abs(p)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+
+	cleanPath := filepath.Clean(absPath)
+	volume := filepath.VolumeName(cleanPath)
+	relPath := strings.TrimPrefix(cleanPath, volume)
+	relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+	if relPath == "" {
+		relPath = "."
+	}
+
+	current := volume
+	if current == "" {
+		current = string(filepath.Separator)
+	}
+
+	segments := strings.Split(relPath, string(filepath.Separator))
+	for _, segment := range segments {
+		if segment == "" || segment == "." {
+			continue
+		}
+		if current == string(filepath.Separator) {
+			current = filepath.Join(current, segment)
+		} else {
+			current = filepath.Join(current, segment)
+		}
+
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil
+			}
+			// Preserve existing restore error contracts for inaccessible paths or
+			// non-directory ancestors; only explicit symlink traversal is rejected.
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component is a symlink: %q", current)
+		}
+	}
+
+	return nil
 }

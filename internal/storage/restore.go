@@ -17,6 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
@@ -851,6 +852,9 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 
 	switch mode {
 	case RestoreDestinationOriginal:
+		if err := pathsafe.ValidatePathHasNoSymlinkComponents(descriptor.Path); err != nil {
+			return "", fmt.Errorf("resolve restore original destination: %w", err)
+		}
 		return descriptor.Path, nil
 	case RestoreDestinationPrefix:
 		prefix := strings.TrimSpace(opts.Destination)
@@ -871,7 +875,11 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 			return "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
 		}
 
-		return filepath.Join(absPrefix, relativePath), nil
+		joinedPath, err := pathsafe.SafeJoin(absPrefix, relativePath)
+		if err != nil {
+			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
+		}
+		return joinedPath, nil
 	case RestoreDestinationOverride:
 		overridePath := strings.TrimSpace(opts.Destination)
 		if overridePath == "" {
@@ -879,6 +887,9 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 		}
 		absOverridePath, err := filepath.Abs(overridePath)
 		if err != nil {
+			return "", fmt.Errorf("resolve restore override destination: %w", err)
+		}
+		if err := pathsafe.ValidatePathHasNoSymlinkComponents(absOverridePath); err != nil {
 			return "", fmt.Errorf("resolve restore override destination: %w", err)
 		}
 		return filepath.Clean(absOverridePath), nil
@@ -939,6 +950,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			return RestoreFileResult{}, fmt.Errorf("create output directory: %w", err)
 		}
 		outputPath = filepath.Join(outputPath, originalName)
+	}
+	if err := pathsafe.ValidatePathHasNoSymlinkComponents(outputPath); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
 	}
 	result.OutputPath = outputPath
 	if !opts.Overwrite {

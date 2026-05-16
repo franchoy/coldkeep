@@ -1826,6 +1826,27 @@ func TestPlanSnapshotRestoreOutputsCollisionDetectionTriggers(t *testing.T) {
 	}
 }
 
+func TestPlanSnapshotRestoreOutputsRejectsUnsafeStoredPaths(t *testing.T) {
+	rows := []snapshotRestoreRow{{Path: "docs/../../escape.txt", LogicalFileID: 1}}
+
+	_, err := planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid snapshot restore path") {
+		t.Fatalf("expected invalid snapshot restore path error, got: %v", err)
+	}
+
+	rows = []snapshotRestoreRow{{Path: "/absolute/path.txt", LogicalFileID: 1}}
+	_, err = planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid snapshot restore path") {
+		t.Fatalf("expected absolute snapshot path to be rejected, got: %v", err)
+	}
+}
+
 // ---- applySnapshotMetadata unit tests ----
 
 // TestApplySnapshotMetadataAppliesChmodAndChtimes verifies that when both mode and mtime are

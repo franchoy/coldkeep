@@ -1157,18 +1157,22 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 	seenOutput := make(map[string]string)
 
 	for _, row := range rows {
+		if err := pathsafe.ValidateStoredRelativePath(row.Path); err != nil {
+			return nil, fmt.Errorf("invalid snapshot restore path %q: %w", row.Path, err)
+		}
+
 		var outputPath string
+		var err error
 		switch mode {
 		case storage.RestoreDestinationOriginal:
 			// Snapshot path is already normalized and relative.
-			outputPath = row.Path
+			outputPath = filepath.Clean(filepath.FromSlash(row.Path))
 		case storage.RestoreDestinationPrefix:
 			prefix := strings.TrimSpace(opts.Destination)
-			absPrefix, err := filepath.Abs(prefix)
+			outputPath, err = pathsafe.SafeJoin(prefix, row.Path)
 			if err != nil {
 				return nil, fmt.Errorf("resolve prefix destination: %w", err)
 			}
-			outputPath = filepath.Join(absPrefix, filepath.FromSlash(row.Path))
 		case storage.RestoreDestinationOverride:
 			overridePath := strings.TrimSpace(opts.Destination)
 			absOverride, err := filepath.Abs(overridePath)
@@ -1176,6 +1180,9 @@ func planSnapshotRestoreOutputs(rows []snapshotRestoreRow, requestedPaths []stri
 				return nil, fmt.Errorf("resolve override destination: %w", err)
 			}
 			outputPath = filepath.Clean(absOverride)
+			if err := pathsafe.ValidatePathHasNoSymlinkComponents(outputPath); err != nil {
+				return nil, fmt.Errorf("resolve override destination: %w", err)
+			}
 		default:
 			return nil, fmt.Errorf("unsupported restore destination mode: %s", mode)
 		}
