@@ -1,6 +1,7 @@
 package pathsafe
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -172,4 +173,27 @@ func TestSafeJoinRejectsEscapeAttemptsAndPrefixConfusion(t *testing.T) {
 		return
 	}
 	t.Fatalf("prefix confusion probe expected outside root, got rel=%q", rel)
+}
+
+func TestValidatePathHasNoSymlinkComponentsRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	linkPath := filepath.Join(root, "link")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+
+	err := ValidatePathHasNoSymlinkComponents(filepath.Join(linkPath, "escaped.txt"))
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection error, got: %v", err)
+	}
+}
+
+func TestValidatePathHasNoSymlinkComponentsAllowsMissingSuffix(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "nested", "missing", "file.txt")
+
+	if err := ValidatePathHasNoSymlinkComponents(target); err != nil {
+		t.Fatalf("expected missing suffix path to be allowed, got: %v", err)
+	}
 }

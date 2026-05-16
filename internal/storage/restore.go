@@ -844,6 +844,13 @@ func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath 
 	return err
 }
 
+func validateRestoreWritePath(path string) error {
+	if err := pathsafe.ValidatePathHasNoSymlinkComponents(path); err != nil {
+		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
+	}
+	return nil
+}
+
 func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, error) {
 	mode := opts.DestinationMode
 	if mode == "" {
@@ -852,7 +859,7 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 
 	switch mode {
 	case RestoreDestinationOriginal:
-		if err := pathsafe.ValidatePathHasNoSymlinkComponents(descriptor.Path); err != nil {
+		if err := validateRestoreWritePath(descriptor.Path); err != nil {
 			return "", fmt.Errorf("resolve restore original destination: %w", err)
 		}
 		return descriptor.Path, nil
@@ -889,7 +896,7 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 		if err != nil {
 			return "", fmt.Errorf("resolve restore override destination: %w", err)
 		}
-		if err := pathsafe.ValidatePathHasNoSymlinkComponents(absOverridePath); err != nil {
+		if err := validateRestoreWritePath(absOverridePath); err != nil {
 			return "", fmt.Errorf("resolve restore override destination: %w", err)
 		}
 		return filepath.Clean(absOverridePath), nil
@@ -951,7 +958,7 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 		outputPath = filepath.Join(outputPath, originalName)
 	}
-	if err := pathsafe.ValidatePathHasNoSymlinkComponents(outputPath); err != nil {
+	if err := validateRestoreWritePath(outputPath); err != nil {
 		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
 	}
 	result.OutputPath = outputPath

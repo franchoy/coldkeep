@@ -34,6 +34,13 @@ func (c *failIfInvokedChunker) ChunkFile(path string) ([]chunk.Result, error) {
 	return nil, fmt.Errorf("restore must not invoke chunker")
 }
 
+func requireSymlink(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.Symlink(oldname, newname); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+}
+
 func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -1002,9 +1009,7 @@ func TestRestoreFileByStoredPathRejectsSymlinkedPrefixRoot(t *testing.T) {
 		t.Fatalf("create real root: %v", err)
 	}
 	symlinkRoot := filepath.Join(baseDir, "prefix-root-link")
-	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
-		t.Skipf("symlink not supported in test environment: %v", err)
-	}
+	requireSymlink(t, realRoot, symlinkRoot)
 
 	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
 		Overwrite:       true,
@@ -1014,6 +1019,48 @@ func TestRestoreFileByStoredPathRejectsSymlinkedPrefixRoot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("expected symlinked prefix root to be rejected, got: %v", err)
 	}
+
+	entries, readErr := os.ReadDir(realRoot)
+	if readErr != nil {
+		t.Fatalf("read symlink target root: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no writes under symlink target root, found %d entries", len(entries))
+	}
+}
+
+func TestRestoreRejectsSymlinkedParentEscapingDestinationNoOutsideWrite(t *testing.T) {
+	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	prefixRoot := t.TempDir()
+	outside := t.TempDir()
+
+	relativePath := storedPath
+	if vol := filepath.VolumeName(relativePath); vol != "" {
+		relativePath = strings.TrimPrefix(relativePath, vol)
+	}
+	relativePath = strings.TrimLeft(relativePath, `/\\`)
+	rest := strings.TrimPrefix(relativePath, "tmp"+string(filepath.Separator))
+	if rest == relativePath {
+		t.Skipf("stored path %q does not route through tmp segment expected for this environment", storedPath)
+	}
+
+	requireSymlink(t, outside, filepath.Join(prefixRoot, "tmp"))
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected restore through symlinked parent to fail, got: %v", err)
+	}
+
+	outsideTarget := filepath.Join(outside, rest)
+	if _, statErr := os.Stat(outsideTarget); !os.IsNotExist(statErr) {
+		t.Fatalf("outside-root file should not be created, stat=%v", statErr)
+	}
 }
 
 func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
@@ -1022,10 +1069,11 @@ func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
 
 	baseDir := t.TempDir()
 	realTarget := filepath.Join(baseDir, "override-target.bin")
-	symlinkTarget := filepath.Join(baseDir, "override-link.bin")
-	if err := os.Symlink(realTarget, symlinkTarget); err != nil {
-		t.Skipf("symlink not supported in test environment: %v", err)
+	if err := os.WriteFile(realTarget, []byte("sentinel"), 0o600); err != nil {
+		t.Fatalf("seed real target: %v", err)
 	}
+	symlinkTarget := filepath.Join(baseDir, "override-link.bin")
+	requireSymlink(t, realTarget, symlinkTarget)
 
 	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
 		Overwrite:       true,
@@ -1034,6 +1082,14 @@ func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("expected symlinked override path to be rejected, got: %v", err)
+	}
+
+	data, readErr := os.ReadFile(realTarget)
+	if readErr != nil {
+		t.Fatalf("read real target after rejected restore: %v", readErr)
+	}
+	if string(data) != "sentinel" {
+		t.Fatalf("expected real target to remain unchanged, got %q", string(data))
 	}
 }
 
