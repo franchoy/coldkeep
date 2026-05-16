@@ -1026,7 +1026,7 @@ func TestRestoreFileByStoredPathRejectsSymlinkedPrefixRoot(t *testing.T) {
 
 	baseDir := t.TempDir()
 	realRoot := filepath.Join(baseDir, "real-root")
-	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+	if err := os.MkdirAll(realRoot, 0o700); err != nil {
 		t.Fatalf("create real root: %v", err)
 	}
 	symlinkRoot := filepath.Join(baseDir, "prefix-root-link")
@@ -2228,7 +2228,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_CONTENT")
-	if err := os.WriteFile(destPath, originalContent, 0644); err != nil {
+	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
 		t.Fatalf("write original dest file: %v", err)
 	}
 
@@ -2333,7 +2333,7 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_DEST_CONTENT")
-	if err := os.WriteFile(destPath, originalContent, 0644); err != nil {
+	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
 		t.Fatalf("write original dest file: %v", err)
 	}
 
@@ -2420,18 +2420,18 @@ func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 
 	outputRoot := t.TempDir()
 	destDir := filepath.Join(outputRoot, "nested")
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		t.Fatalf("create destination directory: %v", err)
 	}
 	destPath := filepath.Join(destDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_DEST_CONTENT")
-	if err := os.WriteFile(destPath, originalContent, 0o644); err != nil {
+	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
 		t.Fatalf("write original destination file: %v", err)
 	}
 
 	foreignPath := filepath.Join(destDir, "keep-me.tmp")
 	foreignContent := []byte("foreign-temp-content")
-	if err := os.WriteFile(foreignPath, foreignContent, 0o644); err != nil {
+	if err := os.WriteFile(foreignPath, foreignContent, 0o600); err != nil {
 		t.Fatalf("write foreign temp file: %v", err)
 	}
 
@@ -2564,7 +2564,7 @@ func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, originalName)
 	originalDest := []byte("existing-file-content")
-	if err := os.WriteFile(destPath, originalDest, 0o644); err != nil {
+	if err := os.WriteFile(destPath, originalDest, 0o600); err != nil {
 		t.Fatalf("write existing destination file: %v", err)
 	}
 
@@ -2665,7 +2665,7 @@ func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
 
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, originalName)
-	if err := os.WriteFile(destPath, []byte("old-content"), 0o644); err != nil {
+	if err := os.WriteFile(destPath, []byte("old-content"), 0o600); err != nil {
 		t.Fatalf("write existing destination file: %v", err)
 	}
 
