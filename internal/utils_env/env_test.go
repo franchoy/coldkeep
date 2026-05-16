@@ -1,7 +1,9 @@
 package utils_env
 
-import "strings"
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGetenvOrDefault(t *testing.T) {
 	const key = "COLDKEEP_TEST_GETENV_OR_DEFAULT"
