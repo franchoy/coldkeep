@@ -42,6 +42,90 @@ func requireSymlink(t *testing.T, oldname, newname string) {
 	}
 }
 
+func createSeededTempFile(t *testing.T, dir string, pattern string, content []byte) *os.File {
+	t.Helper()
+
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		t.Fatalf("write temp file content: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatalf("sync temp file content: %v", err)
+	}
+	return file
+}
+
+func reserveTempPath(t *testing.T, dir string, pattern string) string {
+	t.Helper()
+
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		t.Fatalf("reserve temp path: %v", err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		t.Fatalf("close reserved temp path: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove reserved temp path placeholder: %v", err)
+	}
+	return path
+}
+
+func assertOpenFileContent(t *testing.T, file *os.File, want []byte, label string) {
+	t.Helper()
+
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatalf("rewind %s: %v", label, err)
+	}
+	got, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", label, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("unexpected %s content: got %q want %q", label, string(got), string(want))
+	}
+}
+
+type symlinkedOverridePathFixture struct {
+	realFile      *os.File
+	realTarget    string
+	symlinkTarget string
+	sentinelData  []byte
+}
+
+func setupSymlinkedOverridePathFixture(t *testing.T) symlinkedOverridePathFixture {
+	t.Helper()
+
+	baseDir := t.TempDir()
+	sentinelData := []byte("sentinel")
+	realFile := createSeededTempFile(t, baseDir, "override-target-*.bin", sentinelData)
+	symlinkTarget := reserveTempPath(t, baseDir, "override-link-*.bin")
+	realTarget := realFile.Name()
+	requireSymlink(t, realTarget, symlinkTarget)
+	t.Cleanup(func() { _ = realFile.Close() })
+
+	return symlinkedOverridePathFixture{
+		realFile:      realFile,
+		realTarget:    realTarget,
+		symlinkTarget: symlinkTarget,
+		sentinelData:  sentinelData,
+	}
+}
+
+func assertSymlinkedOverrideRestoreRejected(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlinked override path to be rejected, got: %v", err)
+	}
+}
+
 func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -991,41 +1075,15 @@ func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
 	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
 	defer func() { _ = dbconn.Close() }()
 
-	baseDir := t.TempDir()
-	realTarget := filepath.Join(baseDir, "override-target.bin")
-	realFile, err := os.OpenFile(realTarget, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
-	if err != nil {
-		t.Fatalf("seed real target: %v", err)
-	}
-	defer func() { _ = realFile.Close() }()
-	if _, err := realFile.Write([]byte("sentinel")); err != nil {
-		t.Fatalf("write real target sentinel: %v", err)
-	}
-	if err := realFile.Sync(); err != nil {
-		t.Fatalf("sync real target sentinel: %v", err)
-	}
-	symlinkTarget := filepath.Join(baseDir, "override-link.bin")
-	requireSymlink(t, realTarget, symlinkTarget)
+	fixture := setupSymlinkedOverridePathFixture(t)
 
-	_, err = RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
 		Overwrite:       true,
 		DestinationMode: RestoreDestinationOverride,
-		Destination:     symlinkTarget,
+		Destination:     fixture.symlinkTarget,
 	})
-	if err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("expected symlinked override path to be rejected, got: %v", err)
-	}
-
-	if _, err := realFile.Seek(0, 0); err != nil {
-		t.Fatalf("rewind real target after rejected restore: %v", err)
-	}
-	data, err := io.ReadAll(realFile)
-	if err != nil {
-		t.Fatalf("read real target after rejected restore: %v", err)
-	}
-	if string(data) != "sentinel" {
-		t.Fatalf("expected real target to remain unchanged, got %q", string(data))
-	}
+	assertSymlinkedOverrideRestoreRejected(t, err)
+	assertOpenFileContent(t, fixture.realFile, fixture.sentinelData, "real target after rejected restore")
 }
 
 func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
@@ -2346,7 +2404,6 @@ type preRenameFailureFixture struct {
 	destPath        string
 	destFile        *os.File
 	originalContent []byte
-	foreignPath     string
 	foreignFile     *os.File
 	foreignContent  []byte
 }
@@ -2361,38 +2418,12 @@ func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
 
 	outputRoot := t.TempDir()
 	destDir := outputRoot
-	destPath := filepath.Join(destDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_DEST_CONTENT")
-	destFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
-	if err != nil {
-		t.Fatalf("write original destination file: %v", err)
-	}
-	if _, err := destFile.Write(originalContent); err != nil {
-		_ = destFile.Close()
-		t.Fatalf("write original destination file: %v", err)
-	}
-	if err := destFile.Sync(); err != nil {
-		_ = destFile.Close()
-		t.Fatalf("sync original destination file: %v", err)
-	}
+	destFile := createSeededTempFile(t, destDir, "restored-*.bin", originalContent)
+	destPath := destFile.Name()
 
-	foreignPath := filepath.Join(destDir, "keep-me.tmp")
 	foreignContent := []byte("foreign-temp-content")
-	foreignFile, err := os.OpenFile(foreignPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
-	if err != nil {
-		_ = destFile.Close()
-		t.Fatalf("write foreign temp file: %v", err)
-	}
-	if _, err := foreignFile.Write(foreignContent); err != nil {
-		_ = foreignFile.Close()
-		_ = destFile.Close()
-		t.Fatalf("write foreign temp file: %v", err)
-	}
-	if err := foreignFile.Sync(); err != nil {
-		_ = foreignFile.Close()
-		_ = destFile.Close()
-		t.Fatalf("sync foreign temp file: %v", err)
-	}
+	foreignFile := createSeededTempFile(t, destDir, "keep-me-*.tmp", foreignContent)
 	t.Cleanup(func() {
 		_ = foreignFile.Close()
 		_ = destFile.Close()
@@ -2403,7 +2434,6 @@ func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
 		destPath:        destPath,
 		destFile:        destFile,
 		originalContent: originalContent,
-		foreignPath:     foreignPath,
 		foreignFile:     foreignFile,
 		foreignContent:  foreignContent,
 	}
@@ -2463,27 +2493,8 @@ func assertPreRenameHookObserved(t *testing.T, hookState *preRenameHookState) {
 func assertPreRenameFilesUnchanged(t *testing.T, fixture preRenameFailureFixture) {
 	t.Helper()
 
-	if _, err := fixture.destFile.Seek(0, 0); err != nil {
-		t.Fatalf("rewind destination file: %v", err)
-	}
-	data, err := io.ReadAll(fixture.destFile)
-	if err != nil {
-		t.Fatalf("read destination file: %v", err)
-	}
-	if string(data) != string(fixture.originalContent) {
-		t.Fatalf("destination file modified on pre-rename failure: got %q want %q", string(data), string(fixture.originalContent))
-	}
-
-	if _, err := fixture.foreignFile.Seek(0, 0); err != nil {
-		t.Fatalf("rewind foreign temp file: %v", err)
-	}
-	foreignData, err := io.ReadAll(fixture.foreignFile)
-	if err != nil {
-		t.Fatalf("read foreign temp file: %v", err)
-	}
-	if string(foreignData) != string(fixture.foreignContent) {
-		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(fixture.foreignContent))
-	}
+	assertOpenFileContent(t, fixture.destFile, fixture.originalContent, "destination file")
+	assertOpenFileContent(t, fixture.foreignFile, fixture.foreignContent, "foreign temp file")
 }
 
 func assertPreRenameCleanupComplete(t *testing.T, fixture preRenameFailureFixture) {
