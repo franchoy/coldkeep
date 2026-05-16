@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -82,5 +83,12 @@ func TestCountersEnabledSnapshotAndFlush(t *testing.T) {
 	}
 	if decoded.BytesWritten != 99 || decoded.BytesRead != 7 || decoded.ContainerAppendCount != 1 {
 		t.Fatalf("unexpected flushed counters: %+v", decoded)
+	}
+}
+
+func TestFlushProcessCountersRejectsNULPath(t *testing.T) {
+	_, err := parseIOCountersPath("bad\x00path")
+	if err == nil || !strings.Contains(err.Error(), envIOCountersFile) {
+		t.Fatalf("expected NUL path error mentioning setting name, got: %v", err)
 	}
 }

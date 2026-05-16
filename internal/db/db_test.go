@@ -374,3 +374,17 @@ func TestLoadConnectTimeoutFallsBackOnNegativeValues(t *testing.T) {
 		t.Fatalf("expected default connect timeout 5s for negative value, got %v", got)
 	}
 }
+
+func TestLoadConnectTimeoutFallsBackOnMalformedPartialToken(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONNECT_TIMEOUT_MS", "1500ms")
+	if got := loadConnectTimeout(); got != 5*time.Second {
+		t.Fatalf("expected default connect timeout for malformed token, got %v", got)
+	}
+}
+
+func TestLoadMaxOpenConnsFallsBackOnMalformedPartialToken(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", "50workers")
+	if got := loadMaxOpenConns(); got != 25 {
+		t.Fatalf("expected default max open conns for malformed token, got %d", got)
+	}
+}

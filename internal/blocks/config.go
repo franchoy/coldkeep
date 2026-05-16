@@ -2,9 +2,8 @@ package blocks
 
 import (
 	"fmt"
+	"os"
 	"strings"
-
-	"github.com/franchoy/coldkeep/internal/utils_env"
 )
 
 func ParseCodec(value string) (Codec, error) {
@@ -21,9 +20,18 @@ func ParseCodec(value string) (Codec, error) {
 // LoadDefaultCodec resolves codec from env with a secure default.
 // Precedence: env (COLDKEEP_CODEC) -> default (aes-gcm).
 func LoadDefaultCodec() (Codec, error) {
-	value := utils_env.GetenvOrDefault("COLDKEEP_CODEC", string(CodecAESGCM))
-	if strings.TrimSpace(value) == "" {
-		value = string(CodecAESGCM)
+	const envCodec = "COLDKEEP_CODEC"
+	raw, isSet := os.LookupEnv(envCodec)
+	if !isSet {
+		return CodecAESGCM, nil
 	}
-	return ParseCodec(value)
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("%s must not be empty", envCodec)
+	}
+	codec, err := ParseCodec(value)
+	if err != nil {
+		return "", fmt.Errorf("invalid %s value %q: %w", envCodec, raw, err)
+	}
+	return codec, nil
 }

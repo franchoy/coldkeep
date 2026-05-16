@@ -1,12 +1,23 @@
 package blocks
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
 
 func TestLoadDefaultCodec_DefaultIsAESGCM(t *testing.T) {
-	t.Setenv("COLDKEEP_CODEC", "")
+	prev, hadPrev := os.LookupEnv("COLDKEEP_CODEC")
+	if err := os.Unsetenv("COLDKEEP_CODEC"); err != nil {
+		t.Fatalf("unset COLDKEEP_CODEC: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadPrev {
+			_ = os.Setenv("COLDKEEP_CODEC", prev)
+		} else {
+			_ = os.Unsetenv("COLDKEEP_CODEC")
+		}
+	})
 
 	codec, err := LoadDefaultCodec()
 	if err != nil {
@@ -33,20 +44,17 @@ func TestLoadDefaultCodec_InvalidEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "invalid")
 
 	_, err := LoadDefaultCodec()
-	if err == nil || !strings.Contains(err.Error(), "unsupported codec") {
+	if err == nil || !strings.Contains(err.Error(), "COLDKEEP_CODEC") || !strings.Contains(err.Error(), "unsupported codec") {
 		t.Fatalf("expected unsupported codec error, got: %v", err)
 	}
 }
 
-func TestLoadDefaultCodec_WhitespaceEnvFallsBackToDefault(t *testing.T) {
+func TestLoadDefaultCodec_WhitespaceEnvFailsDeterministically(t *testing.T) {
 	t.Setenv("COLDKEEP_CODEC", "   ")
 
-	codec, err := LoadDefaultCodec()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if codec != CodecAESGCM {
-		t.Fatalf("expected whitespace env to fall back to %s, got %s", CodecAESGCM, codec)
+	_, err := LoadDefaultCodec()
+	if err == nil || !strings.Contains(err.Error(), "COLDKEEP_CODEC") || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("expected whitespace env error with setting name, got: %v", err)
 	}
 }
 

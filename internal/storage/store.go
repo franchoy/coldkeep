@@ -1377,18 +1377,25 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	return nil
 }
 
-func loadReuseSemanticValidationModeFromEnv() reuseSemanticValidationMode {
-	modeValue := strings.ToLower(strings.TrimSpace(os.Getenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION")))
+func loadReuseSemanticValidationModeFromEnv() (reuseSemanticValidationMode, error) {
+	const envMode = "COLDKEEP_REUSE_SEMANTIC_VALIDATION"
+	rawValue, isSet := os.LookupEnv(envMode)
+	if !isSet {
+		return reuseSemanticValidationSuspicious, nil
+	}
+
+	modeValue := strings.ToLower(strings.TrimSpace(rawValue))
 	switch modeValue {
-	case "", string(reuseSemanticValidationSuspicious):
-		return reuseSemanticValidationSuspicious
+	case "":
+		return "", fmt.Errorf("%s must not be empty", envMode)
+	case string(reuseSemanticValidationSuspicious):
+		return reuseSemanticValidationSuspicious, nil
 	case string(reuseSemanticValidationOff):
-		return reuseSemanticValidationOff
+		return reuseSemanticValidationOff, nil
 	case string(reuseSemanticValidationAlways):
-		return reuseSemanticValidationAlways
+		return reuseSemanticValidationAlways, nil
 	default:
-		log.Printf("event=store_reuse_semantic_validation_invalid_mode value=%q fallback=%q", modeValue, reuseSemanticValidationSuspicious)
-		return reuseSemanticValidationSuspicious
+		return "", fmt.Errorf("%s has invalid value %q (accepted: off, suspicious, always)", envMode, rawValue)
 	}
 }
 
@@ -1599,7 +1606,10 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return nil
 	}
 
-	mode := loadReuseSemanticValidationModeFromEnv()
+	mode, err := loadReuseSemanticValidationModeFromEnv()
+	if err != nil {
+		return fmt.Errorf("parse COLDKEEP_REUSE_SEMANTIC_VALIDATION: %w", err)
+	}
 	runSemanticValidation, reason, err := shouldRunSemanticReuseValidationWithContext(ctx, dbconn, fileID, mode)
 	if err != nil {
 		return err
