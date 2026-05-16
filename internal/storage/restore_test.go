@@ -1040,7 +1040,7 @@ func TestRestoreRejectsSymlinkedParentEscapingDestinationNoOutsideWrite(t *testi
 	if vol := filepath.VolumeName(relativePath); vol != "" {
 		relativePath = strings.TrimPrefix(relativePath, vol)
 	}
-	relativePath = strings.TrimLeft(relativePath, `/\\`)
+	relativePath = strings.TrimLeft(relativePath, `/\`)
 	rest := strings.TrimPrefix(relativePath, "tmp"+string(filepath.Separator))
 	if rest == relativePath {
 		t.Skipf("stored path %q does not route through tmp segment expected for this environment", storedPath)
