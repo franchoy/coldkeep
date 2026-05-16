@@ -16,6 +16,7 @@ import (
 
 	idb "github.com/franchoy/coldkeep/internal/db"
 	"github.com/franchoy/coldkeep/internal/iodebug"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	"github.com/franchoy/coldkeep/internal/storage"
 )
 
@@ -322,6 +323,10 @@ func NormalizeSnapshotPath(path string) (string, error) {
 	// After stripping, path must not be empty.
 	if normalized == "" {
 		return "", errors.New("snapshot path cannot be empty after normalization")
+	}
+
+	if err := pathsafe.ValidateStoredRelativePath(normalized); err != nil {
+		return "", fmt.Errorf("snapshot path is invalid: %w", err)
 	}
 
 	return normalized, nil

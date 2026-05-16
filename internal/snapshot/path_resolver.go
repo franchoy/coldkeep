@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 )
 
 // pathResolverDB is the DB surface required by the path resolver helpers.
@@ -23,6 +25,9 @@ type pathResolverDB interface {
 func ResolveSnapshotPath(ctx context.Context, exec pathResolverDB, normalizedPath string) (int64, error) {
 	if normalizedPath == "" {
 		return 0, fmt.Errorf("resolve snapshot_path: path must not be empty")
+	}
+	if err := pathsafe.ValidateStoredRelativePath(normalizedPath); err != nil {
+		return 0, fmt.Errorf("resolve snapshot_path %q: %w", normalizedPath, err)
 	}
 
 	// Upsert: insert the path if absent, otherwise do nothing.
@@ -158,6 +163,9 @@ func ResolveSnapshotPaths(ctx context.Context, exec pathResolverDB, paths []stri
 	for _, p := range paths {
 		if p == "" {
 			return nil, fmt.Errorf("resolve snapshot_paths: path must not be empty")
+		}
+		if err := pathsafe.ValidateStoredRelativePath(p); err != nil {
+			return nil, fmt.Errorf("resolve snapshot_paths %q: %w", p, err)
 		}
 		if _, ok := seen[p]; !ok {
 			seen[p] = struct{}{}

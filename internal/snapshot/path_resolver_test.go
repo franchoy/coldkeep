@@ -69,6 +69,34 @@ func TestResolveSnapshotPathRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveSnapshotPathRejectsUnsafeInputs(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+	nulPath := "docs/evil" + string([]byte{0}) + "name.txt"
+	cases := []string{
+		"../escape.txt",
+		"nested/../../escape.txt",
+		"/absolute/path.txt",
+		"C:/windows/path.txt",
+		`\\server\share\path.txt`,
+		nulPath,
+	}
+
+	for _, input := range cases {
+		if _, err := ResolveSnapshotPath(ctx, db, input); err == nil {
+			t.Fatalf("expected error for unsafe path %q", input)
+		}
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&count); err != nil {
+		t.Fatalf("count snapshot_path rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no snapshot_path rows after rejected inputs, got %d", count)
+	}
+}
+
 func TestLoadSnapshotPathByIDReturnsPath(t *testing.T) {
 	db := openPathResolverDB(t)
 	ctx := context.Background()
@@ -197,6 +225,34 @@ func TestResolveSnapshotPathsRejectsEmptyPath(t *testing.T) {
 
 	if _, err := ResolveSnapshotPaths(ctx, db, []string{"good/path.txt", ""}); err == nil {
 		t.Fatal("expected error for empty path in batch")
+	}
+}
+
+func TestResolveSnapshotPathsRejectsUnsafeInputs(t *testing.T) {
+	db := openPathResolverDB(t)
+	ctx := context.Background()
+	nulPath := "docs/evil" + string([]byte{0}) + "name.txt"
+	cases := [][]string{
+		{"good/path.txt", "../escape.txt"},
+		{"good/path.txt", "nested/../../escape.txt"},
+		{"good/path.txt", "/absolute/path.txt"},
+		{"good/path.txt", "C:/windows/path.txt"},
+		{"good/path.txt", `\\server\share\path.txt`},
+		{"good/path.txt", nulPath},
+	}
+
+	for _, paths := range cases {
+		if _, err := ResolveSnapshotPaths(ctx, db, paths); err == nil {
+			t.Fatalf("expected error for unsafe paths %q", paths)
+		}
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM snapshot_path`).Scan(&count); err != nil {
+		t.Fatalf("count snapshot_path rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no snapshot_path rows after rejected batch inputs, got %d", count)
 	}
 }
 

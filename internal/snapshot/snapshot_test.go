@@ -151,6 +151,7 @@ func TestNormalizeSnapshotPathValid(t *testing.T) {
 }
 
 func TestNormalizeSnapshotPathInvalid(t *testing.T) {
+	nulPath := "docs/evil" + string([]byte{0}) + "name.txt"
 	cases := []string{
 		"",
 		"   ",
@@ -158,6 +159,11 @@ func TestNormalizeSnapshotPathInvalid(t *testing.T) {
 		"docs/a.txt ",
 		"/absolute/path",
 		"/",
+		"../escape.txt",
+		"nested/../../escape.txt",
+		"C:/windows/path.txt",
+		`\\server\share\file.txt`,
+		nulPath,
 	}
 	for _, input := range cases {
 		_, err := NormalizeSnapshotPath(input)
