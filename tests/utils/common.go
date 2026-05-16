@@ -843,13 +843,10 @@ func OpenRawPostgresDB(t *testing.T, dbName string) *sql.DB {
 	if dbName == "" {
 		dbName = GetenvOrDefault("DB_NAME", "coldkeep")
 	}
-	connStr := "host=" + GetenvOrDefault("DB_HOST", "127.0.0.1") +
-		" port=" + GetenvOrDefault("DB_PORT", "5432") +
-		" user=" + GetenvOrDefault("DB_USER", "coldkeep") +
-		" password=" + os.Getenv("DB_PASSWORD") +
-		" dbname=" + dbName +
-		" sslmode=" + GetenvOrDefault("DB_SSLMODE", "disable") +
-		" connect_timeout=5"
+	connStr, err := db.BuildPostgresConnStringFromEnv(dbName)
+	if err != nil {
+		t.Fatalf("build raw postgres DSN (%s): %v", dbName, err)
+	}
 	rawDB, err := sql.Open("postgres", connStr)
 	if err != nil {
 		t.Fatalf("open raw postgres DB (%s): %v", dbName, err)
