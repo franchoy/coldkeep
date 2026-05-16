@@ -884,7 +884,7 @@ func validateConfigDefaultChunkerVersion(raw string) (chunk.Version, error) {
 }
 
 func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 2 {
@@ -1111,16 +1111,11 @@ func resolveOutputMode(parsed parsedCommandLine) (cliOutputMode, error) {
 	hasJSONFlag := parsed.hasFlag("json")
 	normalized := strings.ToLower(strings.TrimSpace(value))
 
-	if hasJSONFlag && hasValue && normalized != "" && normalized != "json" {
-		return outputModeText, usageErrorf("cannot combine --json with --output %s", normalized)
+	if hasJSONFlag && hasValue {
+		return outputModeText, usageErrorf("cannot combine --json with --output")
 	}
 	if hasJSONFlag {
-		if !hasValue {
-			return outputModeJSON, nil
-		}
-		if normalized == "json" {
-			return outputModeJSON, nil
-		}
+		return outputModeJSON, nil
 	}
 
 	if !hasValue {
@@ -1160,6 +1155,7 @@ func resolveTraceOptions(parsed parsedCommandLine) (observability.TraceOptions, 
 var outputSupportedCommands = map[string]bool{
 	"config":       true,
 	"doctor":       true,
+	"inspect":      true,
 	"verify":       true,
 	"list":         true,
 	"search":       true,
@@ -1178,11 +1174,9 @@ func inferOutputModeFromArgs(args []string) cliOutputMode {
 	if len(args) < 1 || !outputSupportedCommands[args[0]] {
 		return outputModeText
 	}
-	if args[0] == "stats" {
-		for i := 1; i < len(args); i++ {
-			if args[i] == "--json" {
-				return outputModeJSON
-			}
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--json" {
+			return outputModeJSON
 		}
 	}
 
@@ -1300,7 +1294,7 @@ func classifyExitCode(err error) int {
 }
 
 func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
@@ -1372,7 +1366,7 @@ func runStoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "codec", "output", "workers"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output", "json", "workers"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
@@ -1434,7 +1428,7 @@ func runStoreFolderCommand(parsed parsedCommandLine, outputMode cliOutputMode) e
 }
 
 func runRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "overwrite", "stored-path", "mode", "destination", "strict", "no-metadata"); err != nil {
 		return err
 	}
 
@@ -1600,7 +1594,7 @@ func parseRestoreDestinationMode(parsed parsedCommandLine) (storage.RestoreDesti
 }
 
 func runRemoveCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "input", "dry-run", "dryRun", "fail-fast", "failFast", "stored-path", "stored-paths"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "input", "dry-run", "dryRun", "fail-fast", "failFast", "stored-path", "stored-paths"); err != nil {
 		return err
 	}
 
@@ -2143,7 +2137,7 @@ func deriveBatchFailureExitCode(report batch.Report) int {
 }
 
 func runGCCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "dry-run", "dryRun", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "dry-run", "dryRun", "output", "json"); err != nil {
 		return err
 	}
 
@@ -2334,7 +2328,7 @@ func runInspectCommand(parsed parsedCommandLine, outputMode cliOutputMode) error
 }
 
 func runRepairCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "output", "batch", "input", "fail-fast", "failFast"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json", "batch", "input", "fail-fast", "failFast"); err != nil {
 		return err
 	}
 
@@ -2557,7 +2551,7 @@ func executeRepairPrepared(failFast bool, targets []preparedRepairTarget) batch.
 }
 
 func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "limit", "offset", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "limit", "offset", "output", "json"); err != nil {
 		return err
 	}
 	if err := validateNonNegativeIntegerFlag(parsed, "limit"); err != nil {
@@ -2602,7 +2596,7 @@ func runListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 }
 
 func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "limit", "offset", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "limit", "offset", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
@@ -2668,7 +2662,7 @@ func printFileRecordsTable(records []listing.FileRecord) {
 // online checker during active writes, where transient metadata/data divergence
 // can produce false positives.
 func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "fast", "standard", "full", "deep", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "fast", "standard", "full", "deep", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) == 0 {
@@ -2778,7 +2772,7 @@ func runVerifyCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 // markers) before any integrity check executes. Running doctor on a fresh
 // deployment or after an unclean shutdown is safe and intended.
 func runDoctorCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
-	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "standard", "full", "deep", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 0 {
@@ -3831,7 +3825,7 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 		return runSimulateGCCommand(parsed, outputMode)
 	}
 
-	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "codec", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 2 || len(parsed.positionals) > 2 {
@@ -4371,7 +4365,7 @@ func snapshotFilesJSON(items []snapshot.SnapshotFileEntry) []map[string]any {
 func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "tree", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "type", "label", "since", "until", "limit", "tree", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 1 {
@@ -4469,7 +4463,7 @@ func runSnapshotListCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "limit", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+	if err := ensureAllowedFlags(parsed, "limit", "output", "json", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
@@ -4549,7 +4543,7 @@ func runSnapshotShowCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 func runSnapshotStatsCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) > 2 {
@@ -4645,7 +4639,7 @@ func snapshotLineageUnavailableMessage(status snapshot.SnapshotLineageStatus) st
 func runSnapshotDeleteCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "force", "dry-run", "dryRun", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "force", "dry-run", "dryRun", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 2 {
@@ -4804,7 +4798,7 @@ func formatSnapshotDeleteDryRunOutput(snapshotID string, preview *snapshotDelete
 func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "filter", "summary", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+	if err := ensureAllowedFlags(parsed, "filter", "summary", "output", "json", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) != 3 {
@@ -4958,7 +4952,7 @@ func runSnapshotDiffCommand(parsed parsedCommandLine, outputMode cliOutputMode) 
 func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	perf := newPerfTimer()
 
-	if err := ensureAllowedFlags(parsed, "id", "label", "from", "output"); err != nil {
+	if err := ensureAllowedFlags(parsed, "id", "label", "from", "output", "json"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 1 {
@@ -5085,7 +5079,7 @@ func runSnapshotCreateCommand(parsed parsedCommandLine, outputMode cliOutputMode
 func runSnapshotRestoreCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	startedAt := time.Now()
 
-	if err := ensureAllowedFlags(parsed, "mode", "destination", "overwrite", "strict", "no-metadata", "output", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
+	if err := ensureAllowedFlags(parsed, "mode", "destination", "overwrite", "strict", "no-metadata", "output", "json", "path", "prefix", "pattern", "regex", "min-size", "max-size", "modified-after", "modified-before"); err != nil {
 		return err
 	}
 	if len(parsed.positionals) < 2 {

@@ -1626,8 +1626,21 @@ func TestResolveOutputModeRejectsJSONConflictWithHumanOutput(t *testing.T) {
 			"output": {"human"},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output") {
 		t.Fatalf("expected conflict error for --json with --output human, got %v", err)
+	}
+}
+
+func TestResolveOutputModeRejectsDuplicateJSONSelectors(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"json":   {""},
+			"output": {"json"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output") {
+		t.Fatalf("expected duplicate selector conflict error, got %v", err)
 	}
 }
 
@@ -2681,6 +2694,27 @@ func TestInferOutputModeFromArgsSupportsStatsJSONShorthand(t *testing.T) {
 	mode := inferOutputModeFromArgs([]string{"stats", "--json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected stats --json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsInspectJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"inspect", "chunk", "7", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected inspect --json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsDoctorJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"doctor", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected doctor --json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsSnapshotJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"snapshot", "stats", "snap-1", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected snapshot --json to infer json mode, got %q", mode)
 	}
 }
 
@@ -7458,8 +7492,35 @@ func TestStatsCommandConflictingOutputFlags(t *testing.T) {
 			"output": {"human"},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output") {
 		t.Fatalf("expected output flag conflict error, got %v", err)
+	}
+}
+
+func TestRunListCommandJSONShorthandAccepted(t *testing.T) {
+	err := runListCommand(parsedCommandLine{
+		method: "list",
+		flags:  map[string][]string{"json": {""}},
+	}, outputModeJSON)
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), "unknown flag(s) for list: json") {
+		t.Fatalf("expected --json shorthand to be accepted for list, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkCommandRejectsJSONShorthand(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"json": {""}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for benchmark: json") {
+		t.Fatalf("expected benchmark --json to be rejected, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
