@@ -187,49 +187,96 @@ func escapePostgresConnValue(value string) string {
 	return "'" + escaped + "'"
 }
 
-func buildPostgresConnStringForDatabase(dbName string) (string, error) {
+type postgresConnParams struct {
+	host     string
+	port     string
+	user     string
+	password string
+	dbName   string
+	sslMode  string
+	options  string
+}
+
+func resolvePostgresConnParams(dbName string) (postgresConnParams, error) {
 	host, err := validateDBConnComponent("DB_HOST", dbEnvOrDefault("DB_HOST", "127.0.0.1"))
 	if err != nil {
-		return "", err
+		return postgresConnParams{}, err
 	}
 	port, err := validateDBPort(dbEnvOrDefault("DB_PORT", "5432"))
 	if err != nil {
-		return "", err
+		return postgresConnParams{}, err
 	}
 	user, err := validateDBConnComponent("DB_USER", dbEnvOrDefault("DB_USER", "coldkeep"))
 	if err != nil {
-		return "", err
+		return postgresConnParams{}, err
 	}
+	password, err := resolveDBPassword()
+	if err != nil {
+		return postgresConnParams{}, err
+	}
+	resolvedDBName, err := resolveDBName(dbName)
+	if err != nil {
+		return postgresConnParams{}, err
+	}
+	sslMode, err := validateDBSSLMode(dbEnvOrDefault("DB_SSLMODE", "disable"))
+	if err != nil {
+		return postgresConnParams{}, err
+	}
+	options, err := resolvePostgresOptions()
+	if err != nil {
+		return postgresConnParams{}, err
+	}
+
+	return postgresConnParams{
+		host:     host,
+		port:     port,
+		user:     user,
+		password: password,
+		dbName:   resolvedDBName,
+		sslMode:  sslMode,
+		options:  options,
+	}, nil
+}
+
+func resolveDBPassword() (string, error) {
 	password := os.Getenv("DB_PASSWORD")
 	if strings.ContainsRune(password, '\x00') {
 		return "", fmt.Errorf("DB_PASSWORD must not contain NUL")
 	}
+	return password, nil
+}
+
+func resolveDBName(dbName string) (string, error) {
 	resolvedDBName := strings.TrimSpace(dbName)
 	if resolvedDBName == "" {
 		resolvedDBName = dbEnvOrDefault("DB_NAME", "coldkeep")
 	}
-	resolvedDBName, err = validateDBConnComponent("DB_NAME", resolvedDBName)
-	if err != nil {
-		return "", err
-	}
-	sslMode, err := validateDBSSLMode(dbEnvOrDefault("DB_SSLMODE", "disable"))
-	if err != nil {
-		return "", err
-	}
+	return validateDBConnComponent("DB_NAME", resolvedDBName)
+}
+
+func resolvePostgresOptions() (string, error) {
 	options := buildConnectionOptions()
 	if strings.ContainsRune(options, '\x00') {
 		return "", fmt.Errorf("postgres options must not contain NUL")
 	}
+	return options, nil
+}
+
+func buildPostgresConnStringForDatabase(dbName string) (string, error) {
+	params, err := resolvePostgresConnParams(dbName)
+	if err != nil {
+		return "", err
+	}
 
 	connStr := strings.Join([]string{
-		"host=" + escapePostgresConnValue(host),
-		"port=" + escapePostgresConnValue(port),
-		"user=" + escapePostgresConnValue(user),
-		"password=" + escapePostgresConnValue(password),
-		"dbname=" + escapePostgresConnValue(resolvedDBName),
-		"sslmode=" + escapePostgresConnValue(sslMode),
+		"host=" + escapePostgresConnValue(params.host),
+		"port=" + escapePostgresConnValue(params.port),
+		"user=" + escapePostgresConnValue(params.user),
+		"password=" + escapePostgresConnValue(params.password),
+		"dbname=" + escapePostgresConnValue(params.dbName),
+		"sslmode=" + escapePostgresConnValue(params.sslMode),
 		fmt.Sprintf("connect_timeout=%d", max(1, int(connectTimeout/time.Second))),
-		"options=" + escapePostgresConnValue(options),
+		"options=" + escapePostgresConnValue(params.options),
 	}, " ")
 
 	return connStr, nil

@@ -904,120 +904,43 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 }
 
 func TestRestoreFileByStoredPathPrefixModeCreatesMissingParents(t *testing.T) {
-	dbconn, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
-	}
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
 	defer func() { _ = dbconn.Close() }()
-	if err := db.RunMigrations(dbconn); err != nil {
-		t.Fatalf("run migrations: %v", err)
-	}
-
-	containersDir := t.TempDir()
-	payload := []byte("restore-prefix-missing-parents")
-	sum := sha256.Sum256(payload)
-	hash := hex.EncodeToString(sum[:])
-
-	containerFilename := "restore-prefix-missing-parents.bin"
-	containerPath := filepath.Join(containersDir, containerFilename)
-	if err := writeReusableTestContainerFileWithPayload(containerPath, payload); err != nil {
-		t.Fatalf("write test container file: %v", err)
-	}
-
-	var containerID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO container (filename, current_size, max_size, sealed)
-		 VALUES ($1, $2, $3, TRUE) RETURNING id`,
-		containerFilename,
-		int64(container.ContainerHdrLen+len(payload)),
-		container.GetContainerMaxSize(),
-	).Scan(&containerID); err != nil {
-		t.Fatalf("insert container: %v", err)
-	}
-
-	var chunkID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, chunker_version)
-		 VALUES ($1, $2, $3, 1, 'v1-simple-rolling') RETURNING id`,
-		hash,
-		int64(len(payload)),
-		filestate.ChunkCompleted,
-	).Scan(&chunkID); err != nil {
-		t.Fatalf("insert chunk: %v", err)
-	}
-
-	if _, err := dbconn.Exec(
-		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, nonce, container_id, block_offset)
-		 VALUES ($1, 'plain', 1, $2, $3, $4, $5, $6)`,
-		chunkID,
-		int64(len(payload)),
-		int64(len(payload)),
-		[]byte{},
-		containerID,
-		int64(container.ContainerHdrLen),
-	); err != nil {
-		t.Fatalf("insert block: %v", err)
-	}
-
-	var fileID int64
-	if err := dbconn.QueryRow(
-		`INSERT INTO logical_file (original_name, total_size, file_hash, status, ref_count, chunker_version)
-		 VALUES ($1, $2, $3, $4, $5, 'v1-simple-rolling') RETURNING id`,
-		"prefix-mode-original.bin",
-		int64(len(payload)),
-		hash,
-		filestate.LogicalFileCompleted,
-		1,
-	).Scan(&fileID); err != nil {
-		t.Fatalf("insert logical file: %v", err)
-	}
-
-	if _, err := dbconn.Exec(
-		`INSERT INTO file_chunk (logical_file_id, chunk_id, chunk_order) VALUES ($1, $2, 0)`,
-		fileID,
-		chunkID,
-	); err != nil {
-		t.Fatalf("insert file_chunk: %v", err)
-	}
-
-	storedPath := filepath.Join(string(os.PathSeparator), "home", "tester", "docs", "prefix-file.bin")
-	if _, err := dbconn.Exec(
-		`INSERT INTO physical_file (path, logical_file_id, mode, mtime, uid, gid, is_metadata_complete)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		storedPath,
-		fileID,
-		nil,
-		nil,
-		nil,
-		nil,
-		0,
-	); err != nil {
-		t.Fatalf("insert physical_file: %v", err)
-	}
 
 	prefixRoot := filepath.Join(t.TempDir(), "nested", "restore-out")
-	sgctx := StorageContext{DB: dbconn, ContainerDir: containersDir}
+	assertPrefixModeRestoreOutput(t, sgctx, storedPath, payload, prefixRoot)
+}
+
+func assertPrefixModeRestoreOutput(t *testing.T, sgctx StorageContext, storedPath string, payload []byte, prefixRoot string) {
+	t.Helper()
+
 	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
 		Overwrite:       true,
 		DestinationMode: RestoreDestinationPrefix,
 		Destination:     prefixRoot,
 	})
 	if err != nil {
-		t.Fatalf("restore by path with nested prefix mode: %v", err)
+		t.Fatalf("restore by path with prefix mode: %v", err)
 	}
 
-	expectedOutputPath := filepath.Join(prefixRoot, "home", "tester", "docs", "prefix-file.bin")
+	expectedOutputPath := expectedPrefixModeOutputPath(prefixRoot, storedPath)
 	if result.OutputPath != expectedOutputPath {
 		t.Fatalf("expected prefixed output path %q, got %q", expectedOutputPath, result.OutputPath)
 	}
 
-	restored, err := os.ReadFile(expectedOutputPath)
-	if err != nil {
-		t.Fatalf("read restored file: %v", err)
-	}
+	restored := readFileWithinBase(t, prefixRoot, expectedOutputPath)
 	if string(restored) != string(payload) {
 		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
+}
+
+func expectedPrefixModeOutputPath(prefixRoot string, storedPath string) string {
+	relativePath := storedPath
+	if vol := filepath.VolumeName(relativePath); vol != "" {
+		relativePath = strings.TrimPrefix(relativePath, vol)
+	}
+	relativePath = strings.TrimLeft(relativePath, `/\`)
+	return filepath.Join(prefixRoot, relativePath)
 }
 
 func TestRestoreFileByStoredPathRejectsSymlinkedPrefixRoot(t *testing.T) {
@@ -2417,12 +2340,35 @@ func TestShouldCleanupRestoreTempPath(t *testing.T) {
 
 func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 	_, sgctx, fileID, _, _ := setupRestorePinningFixture(t, [][]byte{[]byte("phase6-restore-temp")})
+	fixture := setupPreRenameFailureFixture(t)
+	hookState := installPreRenameFailureHook(t, fixture.destPath)
+
+	err := RestoreFileWithStorageContext(sgctx, fileID, fixture.destPath)
+	assertPreRenameFailureAndCleanup(t, err, fixture, hookState)
+}
+
+type preRenameFailureFixture struct {
+	destDir         string
+	destPath        string
+	originalContent []byte
+	foreignPath     string
+	foreignContent  []byte
+}
+
+type preRenameHookState struct {
+	hookCalled   bool
+	seenTempPath string
+}
+
+func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
+	t.Helper()
 
 	outputRoot := t.TempDir()
 	destDir := filepath.Join(outputRoot, "nested")
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		t.Fatalf("create destination directory: %v", err)
 	}
+
 	destPath := filepath.Join(destDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_DEST_CONTENT")
 	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
@@ -2435,11 +2381,22 @@ func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 		t.Fatalf("write foreign temp file: %v", err)
 	}
 
-	hookCalled := false
-	seenTempPath := ""
+	return preRenameFailureFixture{
+		destDir:         destDir,
+		destPath:        destPath,
+		originalContent: originalContent,
+		foreignPath:     foreignPath,
+		foreignContent:  foreignContent,
+	}
+}
+
+func installPreRenameFailureHook(t *testing.T, destPath string) *preRenameHookState {
+	t.Helper()
+
+	state := &preRenameHookState{}
 	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
-		hookCalled = true
-		seenTempPath = tempOutputPath
+		state.hookCalled = true
+		state.seenTempPath = tempOutputPath
 		if filepath.Dir(tempOutputPath) != filepath.Dir(destPath) {
 			t.Fatalf("temp output dir mismatch: got %q want %q", filepath.Dir(tempOutputPath), filepath.Dir(destPath))
 		}
@@ -2451,30 +2408,35 @@ func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 		}
 		return fmt.Errorf("forced failure before rename for phase6")
 	}
-	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+	t.Cleanup(func() { TestRestoreFailBeforeRenameHook = nil })
 
-	err := RestoreFileWithStorageContext(sgctx, fileID, destPath)
+	return state
+}
+
+func assertPreRenameFailureAndCleanup(t *testing.T, err error, fixture preRenameFailureFixture, hookState *preRenameHookState) {
+	t.Helper()
+
 	if err == nil || !strings.Contains(err.Error(), "test hook restore failure") {
 		t.Fatalf("expected pre-rename hook failure, got: %v", err)
 	}
-	if !hookCalled {
+	if !hookState.hookCalled {
 		t.Fatalf("expected pre-rename hook to be called")
 	}
-	if seenTempPath == "" {
+	if hookState.seenTempPath == "" {
 		t.Fatalf("expected hook to observe restore temp path")
 	}
 
-	data := readFileWithinBase(t, destDir, destPath)
-	if string(data) != string(originalContent) {
-		t.Fatalf("destination file modified on pre-rename failure: got %q want %q", string(data), string(originalContent))
+	data := readFileWithinBase(t, fixture.destDir, fixture.destPath)
+	if string(data) != string(fixture.originalContent) {
+		t.Fatalf("destination file modified on pre-rename failure: got %q want %q", string(data), string(fixture.originalContent))
 	}
 
-	foreignData := readFileWithinBase(t, destDir, foreignPath)
-	if string(foreignData) != string(foreignContent) {
-		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(foreignContent))
+	foreignData := readFileWithinBase(t, fixture.destDir, fixture.foreignPath)
+	if string(foreignData) != string(fixture.foreignContent) {
+		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(fixture.foreignContent))
 	}
 
-	entries, listErr := os.ReadDir(destDir)
+	entries, listErr := os.ReadDir(fixture.destDir)
 	if listErr != nil {
 		t.Fatalf("list destination directory: %v", listErr)
 	}

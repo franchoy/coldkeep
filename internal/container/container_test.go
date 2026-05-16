@@ -374,11 +374,25 @@ func TestSafeContainerPathRejectsUnsafeNamesAndAcceptsGeneratedName(t *testing.T
 }
 
 func TestContainerOperationsRejectUnsafeFilenames(t *testing.T) {
+	dbconn := setupContainerOpsTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	unsafeFilename := "../escape.bin"
+	containerID := insertUnsafeContainerRow(t, dbconn, unsafeFilename)
+
+	assertSealRejectsInvalidContainerFilename(t, dbconn, containerID, unsafeFilename, containersDir)
+	assertInvalidContainerFilenameErr(t, QuarantineContainerInDir(dbconn, containerID, containersDir), "expected quarantine to reject unsafe filename")
+	assertInvalidContainerFilenameErr(t, CheckContainerHashFileInDir(int(containerID), unsafeFilename, "deadbeef", containersDir), "expected hash check to reject unsafe filename")
+}
+
+func setupContainerOpsTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
 	}
-	defer func() { _ = dbconn.Close() }()
 	dbconn.SetMaxOpenConns(1)
 	dbconn.SetMaxIdleConns(1)
 
@@ -386,8 +400,12 @@ func TestContainerOperationsRejectUnsafeFilenames(t *testing.T) {
 		t.Fatalf("run migrations: %v", err)
 	}
 
-	containersDir := t.TempDir()
-	unsafeFilename := "../escape.bin"
+	return dbconn
+}
+
+func insertUnsafeContainerRow(t *testing.T, dbconn *sql.DB, unsafeFilename string) int64 {
+	t.Helper()
+
 	res, err := dbconn.Exec(
 		`INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 		 VALUES (?, ?, ?, FALSE, FALSE, FALSE)`,
@@ -402,24 +420,26 @@ func TestContainerOperationsRejectUnsafeFilenames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("last insert id: %v", err)
 	}
+	return containerID
+}
+
+func assertSealRejectsInvalidContainerFilename(t *testing.T, dbconn *sql.DB, containerID int64, unsafeFilename string, containersDir string) {
+	t.Helper()
 
 	tx, err := dbconn.Begin()
 	if err != nil {
 		t.Fatalf("begin tx: %v", err)
 	}
-	if err := SealContainerInDir(tx, containerID, unsafeFilename, containersDir); err == nil || !strings.Contains(err.Error(), "invalid container filename") {
-		_ = tx.Rollback()
-		t.Fatalf("expected seal to reject unsafe filename, got: %v", err)
+	err = SealContainerInDir(tx, containerID, unsafeFilename, containersDir)
+	if rbErr := tx.Rollback(); rbErr != nil {
+		t.Fatalf("rollback tx: %v", rbErr)
 	}
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("rollback tx: %v", err)
-	}
+	assertInvalidContainerFilenameErr(t, err, "expected seal to reject unsafe filename")
+}
 
-	if err := QuarantineContainerInDir(dbconn, containerID, containersDir); err == nil || !strings.Contains(err.Error(), "invalid container filename") {
-		t.Fatalf("expected quarantine to reject unsafe filename, got: %v", err)
-	}
-
-	if err := CheckContainerHashFileInDir(int(containerID), unsafeFilename, "deadbeef", containersDir); err == nil || !strings.Contains(err.Error(), "invalid container filename") {
-		t.Fatalf("expected hash check to reject unsafe filename, got: %v", err)
+func assertInvalidContainerFilenameErr(t *testing.T, err error, message string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "invalid container filename") {
+		t.Fatalf("%s, got: %v", message, err)
 	}
 }

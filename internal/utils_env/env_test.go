@@ -42,26 +42,30 @@ func TestGetenvOrDefaultInt64(t *testing.T) {
 }
 
 func TestParseRequiredInt64(t *testing.T) {
-	got, err := ParseRequiredInt64("COLDKEEP_TEST_INT", "42")
+	assertParseRequiredInt64OK(t, "COLDKEEP_TEST_INT", "42", 42)
+
+	assertParseRequiredInt64ErrorContains(t, "COLDKEEP_TEST_INT", "", "COLDKEEP_TEST_INT")
+	assertParseRequiredInt64ErrorContains(t, "COLDKEEP_TEST_INT", "12x", "invalid integer value")
+	assertParseRequiredInt64ErrorContains(t, "COLDKEEP_TEST_INT", "1\x00", "must not contain NUL")
+}
+
+func assertParseRequiredInt64OK(t *testing.T, name string, raw string, want int64) {
+	t.Helper()
+
+	got, err := ParseRequiredInt64(name, raw)
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
-	if got != 42 {
-		t.Fatalf("expected 42, got %d", got)
+	if got != want {
+		t.Fatalf("expected %d, got %d", want, got)
 	}
+}
 
-	_, err = ParseRequiredInt64("COLDKEEP_TEST_INT", "")
-	if err == nil || !strings.Contains(err.Error(), "COLDKEEP_TEST_INT") {
-		t.Fatalf("expected setting-name error for empty value, got: %v", err)
-	}
+func assertParseRequiredInt64ErrorContains(t *testing.T, name string, raw string, wantSubstr string) {
+	t.Helper()
 
-	_, err = ParseRequiredInt64("COLDKEEP_TEST_INT", "12x")
-	if err == nil || !strings.Contains(err.Error(), "invalid integer value") {
-		t.Fatalf("expected invalid integer error, got: %v", err)
-	}
-
-	_, err = ParseRequiredInt64("COLDKEEP_TEST_INT", "1\x00")
-	if err == nil || !strings.Contains(err.Error(), "must not contain NUL") {
-		t.Fatalf("expected NUL rejection error, got: %v", err)
+	_, err := ParseRequiredInt64(name, raw)
+	if err == nil || !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("expected error containing %q, got: %v", wantSubstr, err)
 	}
 }
