@@ -2,7 +2,7 @@
 
 Status: In progress  
 Release train: v1.10.x  
-Current release package: v1.10.0 — Baseline & Freeze Declaration
+Current release package: v1.10.1 — CLI Correctness & Contract Stabilization
 
 ## Purpose
 
@@ -76,17 +76,52 @@ v1.10.0 does not implement the actual remediation fixes. Remediation begins in v
 | v1.10.11 | Stabilization & Regression Burn-down |
 | v1.10.12 | Engine Boundary Preparation |
 
+## v1.10.1 — CLI Correctness & Contract Stabilization
+
+v1.10.1 is the first remediation release after the v1.10.0 baseline/freeze release.
+
+Primary files:
+
+| File | Purpose |
+|---|---|
+| `v1.10.1-scope.md` | Scope and exclusions for v1.10.1 |
+| `v1.10.1-phase-status.md` | Phase tracking for v1.10.1 |
+| `v1.10.1-checklist.md` | Release checklist for v1.10.1 |
+| `v1.10.1-branch-baseline.md` | Branch starting point and baseline checks |
+
+Scope:
+
+- CLI argument contract
+- JSON shorthand consistency
+- JSON output contract
+- boolean and duplicate flag behavior
+- validation before stateful work where directly tied to CLI misuse
+
+Out of scope:
+
+- packed storage
+- GC/refcount/reachability
+- restore/recovery internals
+- filesystem fault injection
+- cross-platform CI expansion
+- Codacy hard blocking
+- engine extraction
+
 ## Directory Map
 
 | File | Purpose |
 |---|---|
 | `freeze-declaration.md` | Formal v1.10 freeze and scope lock |
 | `release-chain.md` | v1.10.x release train overview |
-| `phase-status.md` | Phase-by-phase completion tracking |
+| `phase-status.md` | v1.10.0 baseline/freeze phase tracking |
 | `v1.10.0-checklist.md` | Completion checklist for v1.10.0 |
 | `v1.10.0-release-candidate.md` | Final v1.10.0 release-candidate summary and readiness decision |
 | `v1.10.0-local-validation.md` | Local pre-release and CI simulation results |
 | `v1.10.0-pr-notes.md` | Prepared PR message for v1.10.0, if created |
+| `v1.10.1-scope.md` | Locked v1.10.1 remediation scope and exclusions |
+| `v1.10.1-checklist.md` | Completion checklist for v1.10.1 |
+| `v1.10.1-phase-status.md` | Phase-by-phase completion tracking for v1.10.1 |
+| `v1.10.1-branch-baseline.md` | Recorded baseline facts for the v1.10.1 branch |
 | `issue-triage-schema.md` | Canonical schema for issue tracker and remediation matrix |
 | `labels.md` | Severity/status/domain/risk labels |
 | `issue-tracker.csv` | Raw imported issue inventory; rows linked to remediation matrix IDs |
@@ -118,13 +153,13 @@ The release plan follows remediation matrix rows, not raw scanner count.
 
 ## Current Tracking State
 
-As of Phase 7:
+As of v1.10.1 Phase 0:
 
-- Codacy findings are imported.
-- External audit findings are imported.
-- Raw issue rows are linked to matrix rows.
-- Remediation work is planned by matrix rows.
-- Implementation remediation has not started.
+- v1.10.0 baseline/freeze release is complete and tagged.
+- The v1.10.1 feature branch is created from released `main`.
+- Relevant CLI/JSON remediation rows are identified for extraction.
+- v1.10.1 scope is locked to CLI/JSON contract remediation.
+- Implementation remediation has not started yet.
 
 ## v1.10.0 Final State
 

@@ -1,0 +1,12 @@
+command,command_family,affected_matrices,test_coverage_status,unexpected_positional_test,flag_value_test,boolean_flag_test,duplicate_flag_test,pre_stateful_test
+config,management,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no
+inspect,core,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no
+list,core,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no
+repair,management,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no
+search,core,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no
+simulate,management,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no
+snapshot create,snapshot,CK-110-M029|CK-110-M086|CK-110-M028|CK-110-M030,mixed,yes,yes,yes,yes,no
+snapshot delete,snapshot,CK-110-M029|CK-110-M086|CK-110-M028|CK-110-M030,mixed,yes,yes,yes,yes,no
+snapshot list,snapshot,CK-110-M029|CK-110-M086|CK-110-M028|CK-110-M030,mixed,yes,yes,yes,yes,no
+snapshot stats,snapshot,CK-110-M029|CK-110-M086|CK-110-M028,mixed,yes,yes,yes,no,no
+verify,core,CK-110-M029|CK-110-M086|CK-110-M030,mixed,yes,yes,no,yes,no

@@ -115,6 +115,50 @@ func runCLIWithCapturedIO(t *testing.T, args []string) (stdout string, stderr st
 	return stdout, stderr, code
 }
 
+func splitNonEmptyTrimmedLines(s string) []string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func assertSingleJSONObjectLine(t *testing.T, output string) map[string]any {
+	t.Helper()
+
+	lines := splitNonEmptyTrimmedLines(output)
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly one non-empty output line, got %d\noutput=%q", len(lines), output)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &payload); err != nil {
+		t.Fatalf("expected single JSON object line, parse error: %v\nline=%q", err, lines[0])
+	}
+
+	return payload
+}
+
+func assertEveryLineIsJSONObject(t *testing.T, output string) []map[string]any {
+	t.Helper()
+
+	lines := splitNonEmptyTrimmedLines(output)
+	objects := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("expected JSON object line, parse error: %v\nline=%q\noutput=%q", err, line, output)
+		}
+		objects = append(objects, payload)
+	}
+
+	return objects
+}
+
 func assertGoldenBytes(t *testing.T, name string, got string) {
 	t.Helper()
 
@@ -663,23 +707,7 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 		}
 	})
 
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			nonEmpty = append(nonEmpty, trimmed)
-		}
-	}
-
-	if len(nonEmpty) != 1 {
-		t.Fatalf("expected exactly one non-empty output line, got %d\noutput=%q", len(nonEmpty), output)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(nonEmpty[0]), &payload); err != nil {
-		t.Fatalf("expected single JSON object line, parse error: %v\nline=%q", err, nonEmpty[0])
-	}
+	payload := assertSingleJSONObjectLine(t, output)
 
 	if got, _ := payload["status"].(string); got != "error" {
 		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
@@ -1626,8 +1654,21 @@ func TestResolveOutputModeRejectsJSONConflictWithHumanOutput(t *testing.T) {
 			"output": {"human"},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output") {
 		t.Fatalf("expected conflict error for --json with --output human, got %v", err)
+	}
+}
+
+func TestResolveOutputModeRejectsDuplicateJSONSelectors(t *testing.T) {
+	_, err := resolveOutputMode(parsedCommandLine{
+		method: "stats",
+		flags: map[string][]string{
+			"json":   {""},
+			"output": {"json"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output") {
+		t.Fatalf("expected duplicate selector conflict error, got %v", err)
 	}
 }
 
@@ -1918,6 +1959,48 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 		t.Fatalf("expected unknown simulate subcommand error, got: %v", err)
 	}
 
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSimulateCommandStoreRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *testing.T) {
+	err := runSimulateCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"store", "input.txt", "extra"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep simulate <store|store-folder>") {
+		t.Fatalf("expected simulate store usage error for extra positional argument, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSimulateCommandGCRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	called := false
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected call with opts=%+v", opts)
+	}
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	err := runSimulateCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"gc", "extra"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep simulate gc") {
+		t.Fatalf("expected simulate gc usage error for extra positional argument, got: %v", err)
+	}
+	if called {
+		t.Fatalf("expected simulate gc to fail before invoking observability simulation")
+	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
@@ -2475,6 +2558,22 @@ func TestRunSearchCommandInvalidOffsetClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunSearchCommandRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *testing.T) {
+	err := runSearchCommand(parsedCommandLine{
+		method:      "search",
+		positionals: []string{"extra"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep search") {
+		t.Fatalf("expected search usage error for extra positional argument, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	args := searchArgs(parsedCommandLine{
 		method: "search",
@@ -2555,6 +2654,36 @@ func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
 	}
 }
 
+func TestRunCLIHelpRejectsUnexpectedPositionalArgs(t *testing.T) {
+	_, stderr, code := runCLIWithCapturedIO(t, []string{"help", "extra"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage=%d, got %d", exitUsage, code)
+	}
+	if !strings.Contains(stderr, "Usage: coldkeep help") {
+		t.Fatalf("expected help usage error in stderr, got: %q", stderr)
+	}
+}
+
+func TestRunCLIVersionRejectsUnexpectedPositionalArgs(t *testing.T) {
+	_, stderr, code := runCLIWithCapturedIO(t, []string{"version", "extra"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage=%d, got %d", exitUsage, code)
+	}
+	if !strings.Contains(stderr, "Usage: coldkeep version") {
+		t.Fatalf("expected version usage error in stderr, got: %q", stderr)
+	}
+}
+
+func TestRunCLIInitRejectsUnexpectedPositionalArgs(t *testing.T) {
+	_, stderr, code := runCLIWithCapturedIO(t, []string{"init", "extra"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage=%d, got %d", exitUsage, code)
+	}
+	if !strings.Contains(stderr, "Usage: coldkeep init") {
+		t.Fatalf("expected init usage error in stderr, got: %q", stderr)
+	}
+}
+
 func TestInferOutputModeFromArgsSupportsDoctorJSON(t *testing.T) {
 	mode := inferOutputModeFromArgs([]string{"doctor", "--output", "json"})
 	if mode != outputModeJSON {
@@ -2593,6 +2722,27 @@ func TestInferOutputModeFromArgsSupportsStatsJSONShorthand(t *testing.T) {
 	mode := inferOutputModeFromArgs([]string{"stats", "--json"})
 	if mode != outputModeJSON {
 		t.Fatalf("expected stats --json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsInspectJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"inspect", "chunk", "7", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected inspect --json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsDoctorJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"doctor", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected doctor --json to infer json mode, got %q", mode)
+	}
+}
+
+func TestInferOutputModeFromArgsSupportsSnapshotJSONShorthand(t *testing.T) {
+	mode := inferOutputModeFromArgs([]string{"snapshot", "stats", "snap-1", "--json"})
+	if mode != outputModeJSON {
+		t.Fatalf("expected snapshot --json to infer json mode, got %q", mode)
 	}
 }
 
@@ -2757,6 +2907,33 @@ func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
 	})
 	if strings.TrimSpace(getOut) != string(chunk.VersionV2FastCDC) {
 		t.Fatalf("expected get output %q, got %q", chunk.VersionV2FastCDC, strings.TrimSpace(getOut))
+	}
+}
+
+func TestConfigGetPreStatefulRejectsExtraPositionalBeforeStorageInit(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	storageInitCalls := 0
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		storageInitCalls++
+		return storage.StorageContext{}, errors.New("storage init should not be called for argument-only validation failures")
+	}
+
+	err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"get", "compression-level", "extra"},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep config get") {
+		t.Fatalf("expected config get usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if storageInitCalls != 0 {
+		t.Fatalf("expected storage init to be skipped, got %d call(s)", storageInitCalls)
 	}
 }
 
@@ -3436,6 +3613,44 @@ func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
 	}
 }
 
+func TestRunInspectCommandReverseExplicitFalseDoesNotEnableReverse(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedOpts observability.InspectOptions
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedOpts = opts
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   id,
+			Summary:    map[string]any{},
+		}, nil
+	}
+
+	err := runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "1"},
+		flags:       map[string][]string{"reverse": {"false"}},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runInspectCommand returned error: %v", err)
+	}
+
+	if capturedOpts.Reverse {
+		t.Fatal("expected Reverse=false from --reverse=false")
+	}
+}
+
+func TestRunInspectCommandRejectsInvalidReverseBooleanValue(t *testing.T) {
+	_, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse=maybe"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "invalid boolean value for --reverse") {
+		t.Fatalf("expected invalid boolean value error for --reverse=maybe, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunInspectCommandNotFoundError(t *testing.T) {
 	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
@@ -4052,6 +4267,136 @@ func TestParseCommandLineTreatsDeleteSnapshotAsValueFlag(t *testing.T) {
 	}
 	if deleted[0] != "snap-a" || deleted[1] != "release-2026-04" {
 		t.Fatalf("unexpected delete-snapshot values: %v", deleted)
+	}
+}
+
+func TestParseCommandLineRejectsDuplicateSingletonValueFlag(t *testing.T) {
+	_, err := parseCommandLine([]string{"list", "--limit", "10", "--limit", "20"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "duplicate singleton flag: --limit") {
+		t.Fatalf("expected duplicate singleton error for --limit, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineRejectsDuplicateSingletonBooleanFlag(t *testing.T) {
+	_, err := parseCommandLine([]string{"snapshot", "delete", "snap-1", "--force", "--force=false"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "duplicate singleton flag: --force") {
+		t.Fatalf("expected duplicate singleton error for --force, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineRejectsDuplicateSingletonAliasFlags(t *testing.T) {
+	_, err := parseCommandLine([]string{"snapshot", "delete", "snap-1", "--dry-run", "--dryRun=false"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "duplicate singleton flag: --dry-run") {
+		t.Fatalf("expected duplicate singleton error for dry-run aliases, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineAllowsRepeatableSnapshotQueryFlags(t *testing.T) {
+	parsed, err := parseCommandLine(
+		[]string{"snapshot", "list", "--path", "a.txt", "--path", "b.txt", "--prefix", "dir/", "--prefix", "tmp/"},
+		flagsWithValues,
+	)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	paths := parsed.flagValues("path")
+	if len(paths) != 2 {
+		t.Fatalf("expected two path values, got %v", paths)
+	}
+	prefixes := parsed.flagValues("prefix")
+	if len(prefixes) != 2 {
+		t.Fatalf("expected two prefix values, got %v", prefixes)
+	}
+}
+
+func TestParseCommandLineRejectsKnownFlagTokenForOutput(t *testing.T) {
+	_, err := parseCommandLine([]string{"doctor", "--output", "--json"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "missing value for --output") {
+		t.Fatalf("expected missing value error for --output, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineRejectsKnownFlagTokenForLimit(t *testing.T) {
+	_, err := parseCommandLine([]string{"search", "--limit", "--offset", "10"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "missing value for --limit") {
+		t.Fatalf("expected missing value error for --limit, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineAcceptsLiteralDashPrefixedUnknownValue(t *testing.T) {
+	parsed, err := parseCommandLine([]string{"search", "--name", "--archive"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	name, ok := parsed.lastFlagValue("name")
+	if !ok {
+		t.Fatalf("expected --name in parsed flags: %+v", parsed.flags)
+	}
+	if name != "--archive" {
+		t.Fatalf("expected literal value --archive, got %q", name)
+	}
+}
+
+func TestParseCommandLineRejectsKnownFlagTokenForOutputEqualsForm(t *testing.T) {
+	_, err := parseCommandLine([]string{"doctor", "--output=--json"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "missing value for --output") {
+		t.Fatalf("expected missing value error for --output=--json, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineBooleanFlagExplicitValues(t *testing.T) {
+	parsedFalse, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse=false"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine with --reverse=false returned error: %v", err)
+	}
+	if parsedFalse.hasFlag("reverse") {
+		t.Fatal("expected hasFlag(reverse)=false for --reverse=false")
+	}
+
+	parsedTrue, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse=true"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine with --reverse=true returned error: %v", err)
+	}
+	if !parsedTrue.hasFlag("reverse") {
+		t.Fatal("expected hasFlag(reverse)=true for --reverse=true")
+	}
+
+	parsedPresent, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine with --reverse returned error: %v", err)
+	}
+	if !parsedPresent.hasFlag("reverse") {
+		t.Fatal("expected hasFlag(reverse)=true for bare --reverse")
+	}
+}
+
+func TestParseCommandLineRejectsInvalidBooleanValue(t *testing.T) {
+	_, err := parseCommandLine([]string{"snapshot", "delete", "snap-1", "--force=maybe"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "invalid boolean value for --force") {
+		t.Fatalf("expected invalid boolean value error for --force=maybe, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
@@ -5602,6 +5947,24 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
 		t.Fatalf("expected --force/--dry-run requirement error, got: %v", err)
+	}
+
+	err = runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags:       map[string][]string{"force": {"false"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
+		t.Fatalf("expected requirement error for --force=false, got: %v", err)
+	}
+
+	err = runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags:       map[string][]string{"dry-run": {"false"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
+		t.Fatalf("expected requirement error for --dry-run=false, got: %v", err)
 	}
 
 	originalLoad := loadDefaultStorageContextPhase
@@ -7184,8 +7547,35 @@ func TestStatsCommandConflictingOutputFlags(t *testing.T) {
 			"output": {"human"},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output human") {
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --json with --output") {
 		t.Fatalf("expected output flag conflict error, got %v", err)
+	}
+}
+
+func TestRunListCommandJSONShorthandAccepted(t *testing.T) {
+	err := runListCommand(parsedCommandLine{
+		method: "list",
+		flags:  map[string][]string{"json": {""}},
+	}, outputModeJSON)
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), "unknown flag(s) for list: json") {
+		t.Fatalf("expected --json shorthand to be accepted for list, got: %v", err)
+	}
+}
+
+func TestRunBenchmarkCommandRejectsJSONShorthand(t *testing.T) {
+	err := runBenchmarkCommand(parsedCommandLine{
+		method:      "benchmark",
+		positionals: []string{"run"},
+		flags:       map[string][]string{"json": {""}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag(s) for benchmark: json") {
+		t.Fatalf("expected benchmark --json to be rejected, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
 	}
 }
 
@@ -7897,6 +8287,82 @@ func TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata(t *testi
 	}
 	if action, _ := first["recommended_action"].(string); !strings.Contains(action, "orphan physical_file") {
 		t.Fatalf("expected recommended_action to mention orphan physical_file handling, got first=%v", first)
+	}
+}
+
+func TestRepairBatchPreStatefulRejectsMissingInputBeforeRepairExecution(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	t.Cleanup(func() {
+		repairLogicalRefCountsPhase = originalRepair
+	})
+
+	repairCalls := 0
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		repairCalls++
+		return maintenance.RepairLogicalRefCountsResult{}, nil
+	}
+
+	err := runRepairCommand(parsedCommandLine{
+		method:      "repair",
+		positionals: []string{"ref-counts"},
+		flags: map[string][]string{
+			"batch": {""},
+			"input": {filepath.Join(t.TempDir(), "missing-input.txt")},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "failed to open/read input file") {
+		t.Fatalf("expected missing input usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if repairCalls != 0 {
+		t.Fatalf("expected repair execution to be skipped, got %d call(s)", repairCalls)
+	}
+}
+
+func TestSnapshotCreateFromMissingParentStateDependentDeterministicError(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	createSnapshotCalls := 0
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		createSnapshotCalls++
+		if opts.ParentID == nil || *opts.ParentID != "missing-parent" {
+			t.Fatalf("expected parent id missing-parent, got %+v", opts.ParentID)
+		}
+		return fmt.Errorf(`snapshot %q does not exist`, *opts.ParentID)
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags: map[string][]string{
+			"id":   {"child-1"},
+			"from": {"missing-parent"},
+			"json": {""},
+		},
+	}, outputModeJSON)
+	if err == nil {
+		t.Fatal("expected missing parent error")
+	}
+	if !strings.Contains(err.Error(), `snapshot "missing-parent" does not exist`) {
+		t.Fatalf("expected deterministic missing parent error, got: %v", err)
+	}
+	if createSnapshotCalls != 1 {
+		t.Fatalf("expected create snapshot to be called once, got %d", createSnapshotCalls)
 	}
 }
 
@@ -8649,6 +9115,75 @@ func TestSimulateCLIJSON(t *testing.T) {
 	}
 	if got, _ := payload["type"].(string); got != "simulation" {
 		t.Fatalf("expected type=simulation, got %v", payload["type"])
+	}
+}
+
+func TestJSONModeStdoutIsSingleObjectForStatsInspectSimulate(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "stats", args: []string{"stats", "--json"}, want: "stats"},
+		{name: "inspect", args: []string{"inspect", "chunk", "7", "--output", "json"}, want: "inspect"},
+		{name: "simulate", args: []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"}, want: "simulation"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code := runCLIWithCapturedIO(t, tc.args)
+			if code != exitSuccess {
+				t.Fatalf("expected exitSuccess, got %d stderr=%q", code, stderr)
+			}
+
+			payload := assertSingleJSONObjectLine(t, stdout)
+			if got, _ := payload["type"].(string); got != tc.want {
+				t.Fatalf("expected type=%s, got %v payload=%v", tc.want, payload["type"], payload)
+			}
+
+			if tc.name == "simulate" {
+				if strings.TrimSpace(stderr) != "" {
+					t.Fatalf("expected no stderr output for simulate JSON command, got %q", stderr)
+				}
+				return
+			}
+
+			stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
+			if len(stderrPayloads) == 0 {
+				t.Fatalf("expected startup recovery JSON event on stderr")
+			}
+			if got, _ := stderrPayloads[0]["event"].(string); got != "startup_recovery" {
+				t.Fatalf("expected first stderr event=startup_recovery, got %v payload=%v", stderrPayloads[0]["event"], stderrPayloads[0])
+			}
+		})
+	}
+}
+
+func TestJSONModeUsageErrorKeepsStdoutEmptyAndStderrJSONOnly(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"stats", "--json", "--output", "human"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage, got %d", code)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("expected empty stdout on JSON usage error, got %q", stdout)
+	}
+
+	stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
+	if len(stderrPayloads) != 2 {
+		t.Fatalf("expected startup event + error payload on stderr, got %d lines output=%q", len(stderrPayloads), stderr)
+	}
+	if got, _ := stderrPayloads[0]["event"].(string); got != "startup_recovery" {
+		t.Fatalf("expected first stderr line to be startup_recovery event, got %v payload=%v", stderrPayloads[0]["event"], stderrPayloads[0])
+	}
+	if got, _ := stderrPayloads[1]["status"].(string); got != "error" {
+		t.Fatalf("expected second stderr line status=error, got %v payload=%v", stderrPayloads[1]["status"], stderrPayloads[1])
+	}
+	if got, _ := stderrPayloads[1]["error_class"].(string); got != "USAGE" {
+		t.Fatalf("expected second stderr line error_class=USAGE, got %v payload=%v", stderrPayloads[1]["error_class"], stderrPayloads[1])
 	}
 }
 

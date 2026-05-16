@@ -20,6 +20,12 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.1 - 2026-05-16 — CLI Correctness & Contract Stabilization
+
+Stabilization release focused on strict CLI validation, deterministic malformed-input behavior, JSON output contracts, pre-stateful validation ordering, and closure of selected v1.10.1 tracker/matrix rows.
+
+------------------------------------------------------------------------
+
 ## v1.10.0 - 2026-05-15 — Baseline & Freeze Declaration
 
 ### Status
