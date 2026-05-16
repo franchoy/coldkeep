@@ -115,6 +115,50 @@ func runCLIWithCapturedIO(t *testing.T, args []string) (stdout string, stderr st
 	return stdout, stderr, code
 }
 
+func splitNonEmptyTrimmedLines(s string) []string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func assertSingleJSONObjectLine(t *testing.T, output string) map[string]any {
+	t.Helper()
+
+	lines := splitNonEmptyTrimmedLines(output)
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly one non-empty output line, got %d\noutput=%q", len(lines), output)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &payload); err != nil {
+		t.Fatalf("expected single JSON object line, parse error: %v\nline=%q", err, lines[0])
+	}
+
+	return payload
+}
+
+func assertEveryLineIsJSONObject(t *testing.T, output string) []map[string]any {
+	t.Helper()
+
+	lines := splitNonEmptyTrimmedLines(output)
+	objects := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("expected JSON object line, parse error: %v\nline=%q\noutput=%q", err, line, output)
+		}
+		objects = append(objects, payload)
+	}
+
+	return objects
+}
+
 func assertGoldenBytes(t *testing.T, name string, got string) {
 	t.Helper()
 
@@ -663,23 +707,7 @@ func TestRunCLIDoctorJSONParseFailureEmitsSingleJSONError(t *testing.T) {
 		}
 	})
 
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	nonEmpty := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			nonEmpty = append(nonEmpty, trimmed)
-		}
-	}
-
-	if len(nonEmpty) != 1 {
-		t.Fatalf("expected exactly one non-empty output line, got %d\noutput=%q", len(nonEmpty), output)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(nonEmpty[0]), &payload); err != nil {
-		t.Fatalf("expected single JSON object line, parse error: %v\nline=%q", err, nonEmpty[0])
-	}
+	payload := assertSingleJSONObjectLine(t, output)
 
 	if got, _ := payload["status"].(string); got != "error" {
 		t.Fatalf("status mismatch: got=%v payload=%v", payload["status"], payload)
@@ -8984,6 +9012,75 @@ func TestSimulateCLIJSON(t *testing.T) {
 	}
 	if got, _ := payload["type"].(string); got != "simulation" {
 		t.Fatalf("expected type=simulation, got %v", payload["type"])
+	}
+}
+
+func TestJSONModeStdoutIsSingleObjectForStatsInspectSimulate(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "stats", args: []string{"stats", "--json"}, want: "stats"},
+		{name: "inspect", args: []string{"inspect", "chunk", "7", "--output", "json"}, want: "inspect"},
+		{name: "simulate", args: []string{"simulate", "gc", "--output", "json", "--delete-snapshot", "snap-old"}, want: "simulation"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code := runCLIWithCapturedIO(t, tc.args)
+			if code != exitSuccess {
+				t.Fatalf("expected exitSuccess, got %d stderr=%q", code, stderr)
+			}
+
+			payload := assertSingleJSONObjectLine(t, stdout)
+			if got, _ := payload["type"].(string); got != tc.want {
+				t.Fatalf("expected type=%s, got %v payload=%v", tc.want, payload["type"], payload)
+			}
+
+			if tc.name == "simulate" {
+				if strings.TrimSpace(stderr) != "" {
+					t.Fatalf("expected no stderr output for simulate JSON command, got %q", stderr)
+				}
+				return
+			}
+
+			stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
+			if len(stderrPayloads) == 0 {
+				t.Fatalf("expected startup recovery JSON event on stderr")
+			}
+			if got, _ := stderrPayloads[0]["event"].(string); got != "startup_recovery" {
+				t.Fatalf("expected first stderr event=startup_recovery, got %v payload=%v", stderrPayloads[0]["event"], stderrPayloads[0])
+			}
+		})
+	}
+}
+
+func TestJSONModeUsageErrorKeepsStdoutEmptyAndStderrJSONOnly(t *testing.T) {
+	installStep9CLIStubs(t)
+
+	stdout, stderr, code := runCLIWithCapturedIO(t, []string{"stats", "--json", "--output", "human"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage, got %d", code)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("expected empty stdout on JSON usage error, got %q", stdout)
+	}
+
+	stderrPayloads := assertEveryLineIsJSONObject(t, stderr)
+	if len(stderrPayloads) != 2 {
+		t.Fatalf("expected startup event + error payload on stderr, got %d lines output=%q", len(stderrPayloads), stderr)
+	}
+	if got, _ := stderrPayloads[0]["event"].(string); got != "startup_recovery" {
+		t.Fatalf("expected first stderr line to be startup_recovery event, got %v payload=%v", stderrPayloads[0]["event"], stderrPayloads[0])
+	}
+	if got, _ := stderrPayloads[1]["status"].(string); got != "error" {
+		t.Fatalf("expected second stderr line status=error, got %v payload=%v", stderrPayloads[1]["status"], stderrPayloads[1])
+	}
+	if got, _ := stderrPayloads[1]["error_class"].(string); got != "USAGE" {
+		t.Fatalf("expected second stderr line error_class=USAGE, got %v payload=%v", stderrPayloads[1]["error_class"], stderrPayloads[1])
 	}
 }
 
