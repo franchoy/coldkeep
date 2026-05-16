@@ -4143,6 +4143,51 @@ func TestParseCommandLineTreatsDeleteSnapshotAsValueFlag(t *testing.T) {
 	}
 }
 
+func TestParseCommandLineRejectsKnownFlagTokenForOutput(t *testing.T) {
+	_, err := parseCommandLine([]string{"doctor", "--output", "--json"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "missing value for --output") {
+		t.Fatalf("expected missing value error for --output, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineRejectsKnownFlagTokenForLimit(t *testing.T) {
+	_, err := parseCommandLine([]string{"search", "--limit", "--offset", "10"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "missing value for --limit") {
+		t.Fatalf("expected missing value error for --limit, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineAcceptsLiteralDashPrefixedUnknownValue(t *testing.T) {
+	parsed, err := parseCommandLine([]string{"search", "--name", "--archive"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	name, ok := parsed.lastFlagValue("name")
+	if !ok {
+		t.Fatalf("expected --name in parsed flags: %+v", parsed.flags)
+	}
+	if name != "--archive" {
+		t.Fatalf("expected literal value --archive, got %q", name)
+	}
+}
+
+func TestParseCommandLineRejectsKnownFlagTokenForOutputEqualsForm(t *testing.T) {
+	_, err := parseCommandLine([]string{"doctor", "--output=--json"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "missing value for --output") {
+		t.Fatalf("expected missing value error for --output=--json, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunSnapshotCommandRejectsUnknownSubcommand(t *testing.T) {
 	err := runSnapshotCommand(parsedCommandLine{
 		method:      "snapshot",

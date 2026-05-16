@@ -93,6 +93,32 @@ var flagsWithValues = map[string]bool{
 	"workers":           true,
 }
 
+var flagsWithoutValues = map[string]bool{
+	"batch":       true,
+	"containers":  true,
+	"deep":        true,
+	"dry-run":     true,
+	"dryRun":      true,
+	"fail-fast":   true,
+	"failFast":    true,
+	"fast":        true,
+	"force":       true,
+	"full":        true,
+	"h":           true,
+	"help":        true,
+	"json":        true,
+	"no-metadata": true,
+	"overwrite":   true,
+	"relations":   true,
+	"reverse":     true,
+	"standard":    true,
+	"strict":      true,
+	"summary":     true,
+	"trace":       true,
+	"trace-json":  true,
+	"tree":        true,
+}
+
 type cliOutputMode string
 
 const (
@@ -5457,12 +5483,18 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 
 		flagToken := strings.TrimPrefix(arg, "--")
 		if name, value, found := strings.Cut(flagToken, "="); found {
+			if valueFlags[name] && isKnownFlagTokenValue(value, valueFlags) {
+				return parsedCommandLine{}, usageErrorf("missing value for --%s", name)
+			}
 			parsed.flags[name] = append(parsed.flags[name], value)
 			continue
 		}
 
 		if valueFlags[flagToken] {
 			if i+1 >= len(args) {
+				return parsedCommandLine{}, usageErrorf("missing value for --%s", flagToken)
+			}
+			if isKnownFlagTokenValue(args[i+1], valueFlags) {
 				return parsedCommandLine{}, usageErrorf("missing value for --%s", flagToken)
 			}
 			i++
@@ -5474,6 +5506,26 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 	}
 
 	return parsed, nil
+}
+
+func isKnownFlagTokenValue(value string, valueFlags map[string]bool) bool {
+	if !strings.HasPrefix(value, "--") {
+		return false
+	}
+
+	name := strings.TrimPrefix(value, "--")
+	if i := strings.IndexByte(name, '='); i >= 0 {
+		name = name[:i]
+	}
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+
+	if valueFlags[name] {
+		return true
+	}
+
+	return flagsWithoutValues[name]
 }
 
 func (parsed parsedCommandLine) lastFlagValue(name string) (string, bool) {
