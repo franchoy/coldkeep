@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
@@ -111,7 +110,10 @@ func checkContainersFileExistence(dbconn *sql.DB, containersDir string) error {
 func checkContainerFile(id int, filename string, currentSize int64, containersDir string) error {
 	// Check if the file exists on disk and has the correct size
 
-	fullPath := filepath.Join(containersDir, filename)
+	fullPath, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return err
+	}
 
 	info, err := os.Stat(fullPath)
 	if err != nil {

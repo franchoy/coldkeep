@@ -1,6 +1,8 @@
 package execution
 
 import (
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -65,7 +67,17 @@ func TestNormalizeThenValidate(t *testing.T) {
 }
 
 func TestFromEnvUsesBaseWhenUnset(t *testing.T) {
-	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "")
+	prev, hadPrev := os.LookupEnv("COLDKEEP_STORE_FOLDER_WORKERS")
+	if err := os.Unsetenv("COLDKEEP_STORE_FOLDER_WORKERS"); err != nil {
+		t.Fatalf("unset COLDKEEP_STORE_FOLDER_WORKERS: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadPrev {
+			_ = os.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", prev)
+		} else {
+			_ = os.Unsetenv("COLDKEEP_STORE_FOLDER_WORKERS")
+		}
+	})
 
 	base := DefaultOptions()
 	got, err := FromEnv(base)
@@ -108,5 +120,17 @@ func TestFromEnvRejectsNonPositiveStoreFolderWorkers(t *testing.T) {
 
 	if _, err := FromEnv(DefaultOptions()); err == nil {
 		t.Fatal("expected error for non-positive COLDKEEP_STORE_FOLDER_WORKERS")
+	}
+}
+
+func TestFromEnvRejectsWhitespaceOnlyStoreFolderWorkersWhenSet(t *testing.T) {
+	t.Setenv("COLDKEEP_STORE_FOLDER_WORKERS", "   ")
+
+	_, err := FromEnv(DefaultOptions())
+	if err == nil {
+		t.Fatal("expected error for whitespace-only COLDKEEP_STORE_FOLDER_WORKERS")
+	}
+	if !strings.Contains(err.Error(), "COLDKEEP_STORE_FOLDER_WORKERS") {
+		t.Fatalf("expected error to mention setting name, got: %v", err)
 	}
 }

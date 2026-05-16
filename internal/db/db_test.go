@@ -285,22 +285,22 @@ func TestBuildPostgresConnStringAppliesDefaultsForBlankCoreFields(t *testing.T) 
 	t.Setenv("DB_SSLMODE", "")
 	t.Setenv("DB_PASSWORD", "")
 
-	connStr := buildPostgresConnString()
+	connStr, err := buildPostgresConnStringForDatabase("")
+	if err != nil {
+		t.Fatalf("build postgres conn string: %v", err)
+	}
 	for _, want := range []string{
-		"host=127.0.0.1",
-		"port=5432",
-		"user=coldkeep",
-		"dbname=coldkeep",
-		"sslmode=disable",
+		"host='127.0.0.1'",
+		"port='5432'",
+		"user='coldkeep'",
+		"password=''",
+		"dbname='coldkeep'",
+		"sslmode='disable'",
 		"connect_timeout=5",
 	} {
 		if !strings.Contains(connStr, want) {
 			t.Fatalf("expected conn string to include %q, got: %s", want, connStr)
 		}
-	}
-
-	if strings.Contains(connStr, "port= ") || strings.Contains(connStr, "port=") && strings.Contains(connStr, "port= user") {
-		t.Fatalf("connection string should not contain an empty port token: %s", connStr)
 	}
 }
 
@@ -316,20 +316,90 @@ func TestBuildPostgresConnStringUsesExplicitOverrides(t *testing.T) {
 	t.Setenv("DB_SSLMODE", "require")
 	t.Setenv("DB_PASSWORD", "secret")
 
-	connStr := buildPostgresConnString()
+	connStr, err := buildPostgresConnStringForDatabase("")
+	if err != nil {
+		t.Fatalf("build postgres conn string: %v", err)
+	}
 	for _, want := range []string{
-		"host=10.0.0.5",
-		"port=6432",
-		"user=operator",
-		"password=secret",
-		"dbname=archive",
-		"sslmode=require",
+		"host='10.0.0.5'",
+		"port='6432'",
+		"user='operator'",
+		"password='secret'",
+		"dbname='archive'",
+		"sslmode='require'",
 		"connect_timeout=9",
 		fmt.Sprintf("options='%s'", buildConnectionOptions()),
 	} {
 		if !strings.Contains(connStr, want) {
 			t.Fatalf("expected conn string to include %q, got: %s", want, connStr)
 		}
+	}
+}
+
+func TestBuildPostgresConnStringEscapesCredentialAndDatabaseValues(t *testing.T) {
+	originalConnectTimeout := connectTimeout
+	t.Cleanup(func() { connectTimeout = originalConnectTimeout })
+	connectTimeout = 5 * time.Second
+
+	t.Setenv("DB_HOST", "db host")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "o'connor")
+	t.Setenv("DB_PASSWORD", "pa's\\word")
+	t.Setenv("DB_NAME", "archive prod")
+	t.Setenv("DB_SSLMODE", "disable")
+
+	connStr, err := buildPostgresConnStringForDatabase("")
+	if err != nil {
+		t.Fatalf("build postgres conn string: %v", err)
+	}
+
+	for _, want := range []string{
+		"host='db host'",
+		"user='o\\'connor'",
+		"password='pa\\'s\\\\word'",
+		"dbname='archive prod'",
+	} {
+		if !strings.Contains(connStr, want) {
+			t.Fatalf("expected escaped token %q in %q", want, connStr)
+		}
+	}
+}
+
+func TestBuildPostgresConnStringRejectsInvalidPort(t *testing.T) {
+	t.Setenv("DB_PORT", "5432 user=oops")
+
+	_, err := buildPostgresConnStringForDatabase("")
+	if err == nil || !strings.Contains(err.Error(), "DB_PORT") {
+		t.Fatalf("expected DB_PORT validation error, got %v", err)
+	}
+}
+
+func TestBuildPostgresConnStringRejectsInvalidSSLMode(t *testing.T) {
+	t.Setenv("DB_SSLMODE", "disable sslmode=require")
+
+	_, err := buildPostgresConnStringForDatabase("")
+	if err == nil || !strings.Contains(err.Error(), "DB_SSLMODE") {
+		t.Fatalf("expected DB_SSLMODE validation error, got %v", err)
+	}
+}
+
+func TestValidateDBConnComponentRejectsNUL(t *testing.T) {
+	_, err := validateDBConnComponent("DB_USER", "cold\x00keep")
+	if err == nil || !strings.Contains(err.Error(), "must not contain NUL") {
+		t.Fatalf("expected NUL validation error, got %v", err)
+	}
+}
+
+func TestBuildPostgresConnStringFromEnvSupportsDatabaseOverride(t *testing.T) {
+	t.Setenv("DB_NAME", "defaultdb")
+
+	connStr, err := BuildPostgresConnStringFromEnv("override_db")
+	if err != nil {
+		t.Fatalf("BuildPostgresConnStringFromEnv: %v", err)
+	}
+
+	if !strings.Contains(connStr, "dbname='override_db'") {
+		t.Fatalf("expected DB_NAME override in conn string, got %q", connStr)
 	}
 }
 
@@ -372,5 +442,19 @@ func TestLoadConnectTimeoutFallsBackOnNegativeValues(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_CONNECT_TIMEOUT_MS", "-1")
 	if got := loadConnectTimeout(); got != 5*time.Second {
 		t.Fatalf("expected default connect timeout 5s for negative value, got %v", got)
+	}
+}
+
+func TestLoadConnectTimeoutFallsBackOnMalformedPartialToken(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_CONNECT_TIMEOUT_MS", "1500ms")
+	if got := loadConnectTimeout(); got != 5*time.Second {
+		t.Fatalf("expected default connect timeout for malformed token, got %v", got)
+	}
+}
+
+func TestLoadMaxOpenConnsFallsBackOnMalformedPartialToken(t *testing.T) {
+	t.Setenv("COLDKEEP_DB_MAX_OPEN_CONNS", "50workers")
+	if got := loadMaxOpenConns(); got != 25 {
+		t.Fatalf("expected default max open conns for malformed token, got %d", got)
 	}
 }

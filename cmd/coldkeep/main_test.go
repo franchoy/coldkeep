@@ -9683,6 +9683,32 @@ func TestBuildDeterminismEnvKeepsAESWhenKeyPresent(t *testing.T) {
 	}
 }
 
+func TestCreateTemporaryBenchmarkDatabaseRejectsMalformedPort(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", "5432 user=attacker")
+	t.Setenv("DB_USER", "coldkeep")
+	t.Setenv("DB_PASSWORD", "coldkeep")
+	t.Setenv("DB_SSLMODE", "disable")
+
+	_, _, err := createTemporaryBenchmarkDatabase("phase8")
+	if err == nil || !strings.Contains(err.Error(), "DB_PORT") {
+		t.Fatalf("expected DB_PORT validation error, got %v", err)
+	}
+}
+
+func TestCaptureBenchmarkStateRejectsInvalidSSLMode(t *testing.T) {
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_USER", "coldkeep")
+	t.Setenv("DB_PASSWORD", "coldkeep")
+	t.Setenv("DB_SSLMODE", "disable sslmode=require")
+
+	_, err := captureBenchmarkState("benchdb")
+	if err == nil || !strings.Contains(err.Error(), "DB_SSLMODE") {
+		t.Fatalf("expected DB_SSLMODE validation error, got %v", err)
+	}
+}
+
 func envSliceToMap(env []string) map[string]string {
 	out := make(map[string]string, len(env))
 	for _, kv := range env {

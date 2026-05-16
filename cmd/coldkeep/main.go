@@ -3568,11 +3568,6 @@ func createTemporaryBenchmarkDatabase(label string) (string, func() error, error
 	host := strings.TrimSpace(os.Getenv("DB_HOST"))
 	port := strings.TrimSpace(os.Getenv("DB_PORT"))
 	user := strings.TrimSpace(os.Getenv("DB_USER"))
-	password := os.Getenv("DB_PASSWORD")
-	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
-	if sslMode == "" {
-		sslMode = "disable"
-	}
 	if host == "" || port == "" || user == "" {
 		return "", nil, fmt.Errorf("determinism validation requires DB_HOST, DB_PORT, and DB_USER")
 	}
@@ -3583,7 +3578,10 @@ func createTemporaryBenchmarkDatabase(label string) (string, func() error, error
 	}
 
 	name := fmt.Sprintf("coldkeep_bench_%s_%d", sanitizeDBNamePart(label), time.Now().UnixNano())
-	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, maintenanceDB, sslMode)
+	connStr, err := db.BuildPostgresConnStringFromEnv(maintenanceDB)
+	if err != nil {
+		return "", nil, fmt.Errorf("build maintenance DB connection string: %w", err)
+	}
 	adminDB, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return "", nil, fmt.Errorf("open maintenance DB: %w", err)
@@ -3632,15 +3630,10 @@ func sanitizeDBNamePart(label string) string {
 }
 
 func captureBenchmarkState(dbName string) (benchmarkStateSnapshot, error) {
-	host := strings.TrimSpace(os.Getenv("DB_HOST"))
-	port := strings.TrimSpace(os.Getenv("DB_PORT"))
-	user := strings.TrimSpace(os.Getenv("DB_USER"))
-	password := os.Getenv("DB_PASSWORD")
-	sslMode := strings.TrimSpace(os.Getenv("DB_SSLMODE"))
-	if sslMode == "" {
-		sslMode = "disable"
+	connStr, err := db.BuildPostgresConnStringFromEnv(dbName)
+	if err != nil {
+		return benchmarkStateSnapshot{}, fmt.Errorf("build benchmark DB connection string: %w", err)
 	}
-	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", host, port, user, password, dbName, sslMode)
 	dbconn, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return benchmarkStateSnapshot{}, fmt.Errorf("open benchmark DB %q: %w", dbName, err)

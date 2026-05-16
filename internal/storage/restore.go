@@ -17,6 +17,7 @@ import (
 	"github.com/franchoy/coldkeep/internal/chunk"
 	"github.com/franchoy/coldkeep/internal/container"
 	"github.com/franchoy/coldkeep/internal/db"
+	"github.com/franchoy/coldkeep/internal/pathsafe"
 	filestate "github.com/franchoy/coldkeep/internal/status"
 )
 
@@ -843,6 +844,13 @@ func RestoreFileByStoredPathWithStorageContext(sgctx StorageContext, storedPath 
 	return err
 }
 
+func validateRestoreWritePath(path string) error {
+	if err := pathsafe.ValidatePathHasNoSymlinkComponents(path); err != nil {
+		return fmt.Errorf("restore write path contains unsafe symlink component: %w", err)
+	}
+	return nil
+}
+
 func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions) (string, error) {
 	mode := opts.DestinationMode
 	if mode == "" {
@@ -851,6 +859,9 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 
 	switch mode {
 	case RestoreDestinationOriginal:
+		if err := validateRestoreWritePath(descriptor.Path); err != nil {
+			return "", fmt.Errorf("resolve restore original destination: %w", err)
+		}
 		return descriptor.Path, nil
 	case RestoreDestinationPrefix:
 		prefix := strings.TrimSpace(opts.Destination)
@@ -871,7 +882,11 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 			return "", fmt.Errorf("cannot derive relative path from stored path %q", descriptor.Path)
 		}
 
-		return filepath.Join(absPrefix, relativePath), nil
+		joinedPath, err := pathsafe.SafeJoin(absPrefix, relativePath)
+		if err != nil {
+			return "", fmt.Errorf("resolve restore prefix destination: %w", err)
+		}
+		return joinedPath, nil
 	case RestoreDestinationOverride:
 		overridePath := strings.TrimSpace(opts.Destination)
 		if overridePath == "" {
@@ -879,6 +894,9 @@ func resolveRestoreOutputPath(descriptor RestoreDescriptor, opts RestoreOptions)
 		}
 		absOverridePath, err := filepath.Abs(overridePath)
 		if err != nil {
+			return "", fmt.Errorf("resolve restore override destination: %w", err)
+		}
+		if err := validateRestoreWritePath(absOverridePath); err != nil {
 			return "", fmt.Errorf("resolve restore override destination: %w", err)
 		}
 		return filepath.Clean(absOverridePath), nil
@@ -940,6 +958,9 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 		}
 		outputPath = filepath.Join(outputPath, originalName)
 	}
+	if err := validateRestoreWritePath(outputPath); err != nil {
+		return RestoreFileResult{}, fmt.Errorf("validate output path %s: %w", outputPath, err)
+	}
 	result.OutputPath = outputPath
 	if !opts.Overwrite {
 		if _, statErr := os.Stat(outputPath); statErr == nil {
@@ -965,7 +986,11 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			_ = outFile.Close()
 		}
 		if cleanupTemp {
-			_ = os.Remove(tempOutputPath)
+			if shouldCleanupRestoreTempPath(tempOutputPath, outputPath) {
+				_ = os.Remove(tempOutputPath)
+			} else {
+				log.Printf("event=restore_temp_cleanup_skip action=path_not_owned file_id=%d temp_path=%q output_path=%q", fileID, tempOutputPath, outputPath)
+			}
 		}
 	}()
 
@@ -1169,7 +1194,10 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			}
 
 			// Phase 6 Step 6: Get container reader from cache (reduces open/close overhead)
-			containerPath := filepath.Join(containersDir, chunk.ContainerName)
+			containerPath, err := container.SafeContainerPath(containersDir, chunk.ContainerName)
+			if err != nil {
+				return RestoreFileResult{}, fmt.Errorf("invalid container filename %q: %w", chunk.ContainerName, err)
+			}
 			filecontainer, err := readerCache.GetReader(containerPath, chunk.ContainerMaxSize)
 			if err != nil {
 				log.Printf("event=restore_skip_chunk action=container_read_failed file_id=%d chunk_id=%d container=%s err=%v", fileID, chunk.ID, chunk.ContainerName, err)
@@ -1345,6 +1373,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
+}
+
+func shouldCleanupRestoreTempPath(tempOutputPath, outputPath string) bool {
+	if tempOutputPath == "" || outputPath == "" {
+		return false
+	}
+	tempDir := filepath.Clean(filepath.Dir(tempOutputPath))
+	outputDir := filepath.Clean(filepath.Dir(outputPath))
+	if tempDir != outputDir {
+		return false
+	}
+	return strings.HasPrefix(filepath.Base(tempOutputPath), ".coldkeep-restore-")
 }
 
 func applyPhysicalMetadata(outputPath string, descriptor RestoreDescriptor, opts RestoreOptions) error {

@@ -834,15 +834,25 @@ func loadPostgresSchema() (string, error) {
 	return dbschema.PostgresSchema, nil
 }
 
-func loadPostgresAutoBootstrapEnabled() bool {
-	raw := strings.TrimSpace(os.Getenv("COLDKEEP_DB_AUTO_BOOTSTRAP"))
+func loadPostgresAutoBootstrapEnabled() (bool, error) {
+	const envAutoBootstrap = "COLDKEEP_DB_AUTO_BOOTSTRAP"
+	raw, isSet := os.LookupEnv(envAutoBootstrap)
+	if !isSet {
+		return false, nil
+	}
+
+	raw = strings.TrimSpace(raw)
 	raw = strings.Trim(raw, "\"'")
 	raw = strings.TrimSpace(strings.ToLower(raw))
 	switch raw {
 	case "1", "true", "yes", "on":
-		return true
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	case "":
+		return false, fmt.Errorf("%s must not be empty", envAutoBootstrap)
 	default:
-		return false
+		return false, fmt.Errorf("%s has invalid boolean value %q", envAutoBootstrap, raw)
 	}
 }
 
@@ -884,7 +894,11 @@ func EnsurePostgresSchema(dbconn *sql.DB) error {
 	}
 
 	if !schemaVersionTable.Valid {
-		if !loadPostgresAutoBootstrapEnabled() {
+		autoBootstrapEnabled, parseErr := loadPostgresAutoBootstrapEnabled()
+		if parseErr != nil {
+			return parseErr
+		}
+		if !autoBootstrapEnabled {
 			return errors.New(
 				"postgres schema is not initialized (missing schema_version table); apply db/schema_postgres.sql or set COLDKEEP_DB_AUTO_BOOTSTRAP=true",
 			)

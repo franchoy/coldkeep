@@ -56,6 +56,30 @@ DATASET_F_ROOT="$2"
 RUN_ID="$3"
 shift 3
 
+# Argument validation helpers (Phase 10 hardening)
+validate_identifier() {
+  local value="$1" name="$2"
+  [[ -z "$value" ]] && { echo "error: $name is empty" >&2; return 1; }
+  [[ "$value" =~ [[:space:]\;\|\&\<\>\$\`\(\)\[\]\{\}\\\*\?\!] ]] && \
+    { echo "error: $name contains unsafe characters: $value" >&2; return 1; }
+  [[ "$value" =~ \.\. ]] && \
+    { echo "error: $name contains path traversal: $value" >&2; return 1; }
+  return 0
+}
+validate_relative_path() {
+  local value="$1" name="$2"
+  [[ -z "$value" ]] && { echo "error: $name is empty" >&2; return 1; }
+  [[ "$value" =~ ^/ ]] && \
+    { echo "error: $name must be relative (not absolute): $value" >&2; return 1; }
+  [[ "$value" =~ \.\. ]] && \
+    { echo "error: $name contains path traversal: $value" >&2; return 1; }
+  [[ "$value" =~ [[:space:]] ]] && \
+    { echo "error: $name contains spaces: $value" >&2; return 1; }
+  return 0
+}
+
+validate_identifier "$RUN_ID" "RUN_ID" || exit 1
+
 DATASET_LABEL="$(basename "$DATASET_F_ROOT")"
 OUT_DIR="tmp/bench_phase8_gc_sequence"
 COLDKEEP_BIN="coldkeep"
@@ -71,6 +95,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--output-dir)
 			OUT_DIR="$2"
+			validate_relative_path "$OUT_DIR" "--output-dir" || exit 1
 			shift 2
 			;;
 		--bin)

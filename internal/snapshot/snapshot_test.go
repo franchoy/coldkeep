@@ -151,6 +151,7 @@ func TestNormalizeSnapshotPathValid(t *testing.T) {
 }
 
 func TestNormalizeSnapshotPathInvalid(t *testing.T) {
+	nulPath := "docs/evil" + string([]byte{0}) + "name.txt"
 	cases := []string{
 		"",
 		"   ",
@@ -158,6 +159,11 @@ func TestNormalizeSnapshotPathInvalid(t *testing.T) {
 		"docs/a.txt ",
 		"/absolute/path",
 		"/",
+		"../escape.txt",
+		"nested/../../escape.txt",
+		"C:/windows/path.txt",
+		`\\server\share\file.txt`,
+		nulPath,
 	}
 	for _, input := range cases {
 		_, err := NormalizeSnapshotPath(input)
@@ -1817,6 +1823,27 @@ func TestPlanSnapshotRestoreOutputsCollisionDetectionTriggers(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "collision") {
 		t.Fatalf("expected output path collision error, got: %v", err)
+	}
+}
+
+func TestPlanSnapshotRestoreOutputsRejectsUnsafeStoredPaths(t *testing.T) {
+	rows := []snapshotRestoreRow{{Path: "docs/../../escape.txt", LogicalFileID: 1}}
+
+	_, err := planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid snapshot restore path") {
+		t.Fatalf("expected invalid snapshot restore path error, got: %v", err)
+	}
+
+	rows = []snapshotRestoreRow{{Path: "/absolute/path.txt", LogicalFileID: 1}}
+	_, err = planSnapshotRestoreOutputs(rows, []string{}, RestoreSnapshotOptions{
+		DestinationMode: storage.RestoreDestinationOriginal,
+		Overwrite:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid snapshot restore path") {
+		t.Fatalf("expected absolute snapshot path to be rejected, got: %v", err)
 	}
 }
 

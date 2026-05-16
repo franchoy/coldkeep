@@ -481,3 +481,23 @@ func TestVerifyStoredBlockMixedRepositoryMetadataNegotiationStep78(t *testing.T)
 		})
 	}
 }
+
+func TestFilesystemContainerReaderRejectsUnsafeContainerName(t *testing.T) {
+	reader := FilesystemContainerReader{ContainersDir: t.TempDir()}
+	meta := BlockStorageMetadata{
+		BlockID:          901,
+		ContainerID:      902,
+		ContainerOffset:  64,
+		ContainerName:    "../escape.bin",
+		ContainerMaxSize: 1 << 20,
+		StoredSize:       16,
+	}
+
+	_, err := reader.ReadStoredPayload(context.Background(), meta)
+	if err == nil {
+		t.Fatal("expected unsafe container name to be rejected")
+	}
+	if !strings.Contains(err.Error(), "path separators") {
+		t.Fatalf("expected unsafe filename rejection, got: %v", err)
+	}
+}

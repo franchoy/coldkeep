@@ -2,6 +2,7 @@ package iodebug
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -137,7 +138,10 @@ func FlushProcessCounters(command string, subcommand string) error {
 	if !isEnabled() {
 		return nil
 	}
-	path := strings.TrimSpace(os.Getenv(envIOCountersFile))
+	path, err := parseIOCountersPath(os.Getenv(envIOCountersFile))
+	if err != nil {
+		return err
+	}
 	if path == "" {
 		return nil
 	}
@@ -162,4 +166,15 @@ func FlushProcessCounters(command string, subcommand string) error {
 		return err
 	}
 	return nil
+}
+
+func parseIOCountersPath(raw string) (string, error) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "", nil
+	}
+	if strings.ContainsRune(path, '\x00') {
+		return "", fmt.Errorf("%s must not contain NUL byte", envIOCountersFile)
+	}
+	return path, nil
 }

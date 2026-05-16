@@ -81,6 +81,11 @@ if [[ ! -x "$BIN_PATH" ]]; then
   exit 1
 fi
 
+if [[ "$BIN_PATH" =~ \.\.  ]]; then
+  echo "binary path contains path traversal: $BIN_PATH" >&2
+  exit 1
+fi
+
 if [[ -z "${COLDKEEP_KEY:-}" ]]; then
   echo "COLDKEEP_KEY must be set for aes-gcm benchmark baselines" >&2
   exit 1

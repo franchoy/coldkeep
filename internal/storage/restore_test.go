@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -32,6 +33,97 @@ func (c *failIfInvokedChunker) Version() chunk.Version {
 func (c *failIfInvokedChunker) ChunkFile(path string) ([]chunk.Result, error) {
 	c.called = true
 	return nil, fmt.Errorf("restore must not invoke chunker")
+}
+
+func requireSymlink(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.Symlink(oldname, newname); err != nil {
+		t.Skipf("symlink unavailable on this platform/environment: %v", err)
+	}
+}
+
+func createSeededTempFile(t *testing.T, dir string, pattern string, content []byte) *os.File {
+	t.Helper()
+
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		t.Fatalf("write temp file content: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatalf("sync temp file content: %v", err)
+	}
+	return file
+}
+
+func reserveTempPath(t *testing.T, dir string, pattern string) string {
+	t.Helper()
+
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		t.Fatalf("reserve temp path: %v", err)
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		t.Fatalf("close reserved temp path: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove reserved temp path placeholder: %v", err)
+	}
+	return path
+}
+
+func assertOpenFileContent(t *testing.T, file *os.File, want []byte, label string) {
+	t.Helper()
+
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatalf("rewind %s: %v", label, err)
+	}
+	got, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", label, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("unexpected %s content: got %q want %q", label, string(got), string(want))
+	}
+}
+
+type symlinkedOverridePathFixture struct {
+	realFile      *os.File
+	realTarget    string
+	symlinkTarget string
+	sentinelData  []byte
+}
+
+func setupSymlinkedOverridePathFixture(t *testing.T) symlinkedOverridePathFixture {
+	t.Helper()
+
+	baseDir := t.TempDir()
+	sentinelData := []byte("sentinel")
+	realFile := createSeededTempFile(t, baseDir, "override-target-*.bin", sentinelData)
+	symlinkTarget := reserveTempPath(t, baseDir, "override-link-*.bin")
+	realTarget := realFile.Name()
+	requireSymlink(t, realTarget, symlinkTarget)
+	t.Cleanup(func() { _ = realFile.Close() })
+
+	return symlinkedOverridePathFixture{
+		realFile:      realFile,
+		realTarget:    realTarget,
+		symlinkTarget: symlinkTarget,
+		sentinelData:  sentinelData,
+	}
+}
+
+func assertSymlinkedOverrideRestoreRejected(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlinked override path to be rejected, got: %v", err)
+	}
 }
 
 func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
@@ -873,6 +965,125 @@ func TestRestoreFileByStoredPathPrefixMode(t *testing.T) {
 	if string(restored) != string(payload) {
 		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
+}
+
+func TestRestoreFileByStoredPathPrefixModeCreatesMissingParents(t *testing.T) {
+	dbconn, sgctx, storedPath, payload := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	prefixRoot := filepath.Join(t.TempDir(), "nested", "restore-out")
+	assertPrefixModeRestoreOutput(t, sgctx, storedPath, payload, prefixRoot)
+}
+
+func assertPrefixModeRestoreOutput(t *testing.T, sgctx StorageContext, storedPath string, payload []byte, prefixRoot string) {
+	t.Helper()
+
+	result, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+	})
+	if err != nil {
+		t.Fatalf("restore by path with prefix mode: %v", err)
+	}
+
+	expectedOutputPath := expectedPrefixModeOutputPath(prefixRoot, storedPath)
+	if result.OutputPath != expectedOutputPath {
+		t.Fatalf("expected prefixed output path %q, got %q", expectedOutputPath, result.OutputPath)
+	}
+
+	restored, err := os.ReadFile(expectedOutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != string(payload) {
+		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
+	}
+}
+
+func expectedPrefixModeOutputPath(prefixRoot string, storedPath string) string {
+	relativePath := storedPath
+	if vol := filepath.VolumeName(relativePath); vol != "" {
+		relativePath = strings.TrimPrefix(relativePath, vol)
+	}
+	relativePath = strings.TrimLeft(relativePath, `/\`)
+	return filepath.Join(prefixRoot, relativePath)
+}
+
+func TestRestoreFileByStoredPathRejectsSymlinkedPrefixRoot(t *testing.T) {
+	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	realRoot := t.TempDir()
+	symlinkParent := t.TempDir()
+	symlinkRoot := filepath.Join(symlinkParent, "prefix-root-link")
+	requireSymlink(t, realRoot, symlinkRoot)
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     symlinkRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlinked prefix root to be rejected, got: %v", err)
+	}
+
+	entries, readErr := os.ReadDir(realRoot)
+	if readErr != nil {
+		t.Fatalf("read symlink target root: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no writes under symlink target root, found %d entries", len(entries))
+	}
+}
+
+func TestRestoreRejectsSymlinkedParentEscapingDestinationNoOutsideWrite(t *testing.T) {
+	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	prefixRoot := t.TempDir()
+	outside := t.TempDir()
+
+	relativePath := storedPath
+	if vol := filepath.VolumeName(relativePath); vol != "" {
+		relativePath = strings.TrimPrefix(relativePath, vol)
+	}
+	relativePath = strings.TrimLeft(relativePath, `/\`)
+	rest := strings.TrimPrefix(relativePath, "tmp"+string(filepath.Separator))
+	if rest == relativePath {
+		t.Skipf("stored path %q does not route through tmp segment expected for this environment", storedPath)
+	}
+
+	requireSymlink(t, outside, filepath.Join(prefixRoot, "tmp"))
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationPrefix,
+		Destination:     prefixRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected restore through symlinked parent to fail, got: %v", err)
+	}
+
+	outsideTarget := filepath.Join(outside, rest)
+	if _, statErr := os.Stat(outsideTarget); !os.IsNotExist(statErr) {
+		t.Fatalf("outside-root file should not be created, stat=%v", statErr)
+	}
+}
+
+func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
+	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
+	defer func() { _ = dbconn.Close() }()
+
+	fixture := setupSymlinkedOverridePathFixture(t)
+
+	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
+		Overwrite:       true,
+		DestinationMode: RestoreDestinationOverride,
+		Destination:     fixture.symlinkTarget,
+	})
+	assertSymlinkedOverrideRestoreRejected(t, err)
+	assertOpenFileContent(t, fixture.realFile, fixture.sentinelData, "real target after rejected restore")
 }
 
 func TestRestoreFileByStoredPathOverrideMode(t *testing.T) {
@@ -1992,7 +2203,7 @@ func TestRestoreFailurePreservesExistingOutput(t *testing.T) {
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_CONTENT")
-	if err := os.WriteFile(destPath, originalContent, 0644); err != nil {
+	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
 		t.Fatalf("write original dest file: %v", err)
 	}
 
@@ -2097,7 +2308,7 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_DEST_CONTENT")
-	if err := os.WriteFile(destPath, originalContent, 0644); err != nil {
+	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
 		t.Fatalf("write original dest file: %v", err)
 	}
 
@@ -2127,6 +2338,184 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 		}
 	}
 	// (Deliberately do not check destination file content here)
+}
+
+func TestShouldCleanupRestoreTempPath(t *testing.T) {
+	tests := []struct {
+		name           string
+		tempOutputPath string
+		outputPath     string
+		want           bool
+	}{
+		{
+			name:           "same directory with restore temp prefix",
+			tempOutputPath: filepath.Join("/tmp", "restore", ".coldkeep-restore-abc"),
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           true,
+		},
+		{
+			name:           "different directory",
+			tempOutputPath: filepath.Join("/tmp", "other", ".coldkeep-restore-abc"),
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           false,
+		},
+		{
+			name:           "wrong filename prefix",
+			tempOutputPath: filepath.Join("/tmp", "restore", "not-owned.tmp"),
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           false,
+		},
+		{
+			name:           "empty temp path",
+			tempOutputPath: "",
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           false,
+		},
+		{
+			name:           "empty output path",
+			tempOutputPath: filepath.Join("/tmp", "restore", ".coldkeep-restore-abc"),
+			outputPath:     "",
+			want:           false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldCleanupRestoreTempPath(tc.tempOutputPath, tc.outputPath)
+			if got != tc.want {
+				t.Fatalf("shouldCleanupRestoreTempPath(%q, %q)=%t, want %t", tc.tempOutputPath, tc.outputPath, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
+	_, sgctx, fileID, _, _ := setupRestorePinningFixture(t, [][]byte{[]byte("phase6-restore-temp")})
+	fixture := setupPreRenameFailureFixture(t)
+	hookState := installPreRenameFailureHook(t, fixture.destPath)
+
+	err := RestoreFileWithStorageContext(sgctx, fileID, fixture.destPath)
+	assertPreRenameFailureAndCleanup(t, err, fixture, hookState)
+}
+
+type preRenameFailureFixture struct {
+	destDir         string
+	destPath        string
+	destFile        *os.File
+	originalContent []byte
+	foreignFile     *os.File
+	foreignContent  []byte
+}
+
+type preRenameHookState struct {
+	hookCalled   bool
+	seenTempPath string
+}
+
+func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
+	t.Helper()
+
+	outputRoot := t.TempDir()
+	destDir := outputRoot
+	originalContent := []byte("ORIGINAL_DEST_CONTENT")
+	destFile := createSeededTempFile(t, destDir, "restored-*.bin", originalContent)
+	destPath := destFile.Name()
+
+	foreignContent := []byte("foreign-temp-content")
+	foreignFile := createSeededTempFile(t, destDir, "keep-me-*.tmp", foreignContent)
+	t.Cleanup(func() {
+		_ = foreignFile.Close()
+		_ = destFile.Close()
+	})
+
+	return preRenameFailureFixture{
+		destDir:         destDir,
+		destPath:        destPath,
+		destFile:        destFile,
+		originalContent: originalContent,
+		foreignFile:     foreignFile,
+		foreignContent:  foreignContent,
+	}
+}
+
+func installPreRenameFailureHook(t *testing.T, destPath string) *preRenameHookState {
+	t.Helper()
+
+	state := &preRenameHookState{}
+	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+		state.hookCalled = true
+		state.seenTempPath = tempOutputPath
+		if filepath.Dir(tempOutputPath) != filepath.Dir(destPath) {
+			t.Fatalf("temp output dir mismatch: got %q want %q", filepath.Dir(tempOutputPath), filepath.Dir(destPath))
+		}
+		if !strings.HasPrefix(filepath.Base(tempOutputPath), ".coldkeep-restore-") {
+			t.Fatalf("temp output file has unexpected prefix: %q", filepath.Base(tempOutputPath))
+		}
+		if outputPath != destPath {
+			t.Fatalf("hook output path mismatch: got %q want %q", outputPath, destPath)
+		}
+		return fmt.Errorf("forced failure before rename for phase6")
+	}
+	t.Cleanup(func() { TestRestoreFailBeforeRenameHook = nil })
+
+	return state
+}
+
+func assertPreRenameFailureAndCleanup(t *testing.T, err error, fixture preRenameFailureFixture, hookState *preRenameHookState) {
+	t.Helper()
+
+	assertPreRenameFailure(t, err)
+	assertPreRenameHookObserved(t, hookState)
+	assertPreRenameFilesUnchanged(t, fixture)
+	assertPreRenameCleanupComplete(t, fixture)
+}
+
+func assertPreRenameFailure(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil || !strings.Contains(err.Error(), "test hook restore failure") {
+		t.Fatalf("expected pre-rename hook failure, got: %v", err)
+	}
+}
+
+func assertPreRenameHookObserved(t *testing.T, hookState *preRenameHookState) {
+	t.Helper()
+
+	if !hookState.hookCalled {
+		t.Fatalf("expected pre-rename hook to be called")
+	}
+	if hookState.seenTempPath == "" {
+		t.Fatalf("expected hook to observe restore temp path")
+	}
+}
+
+func assertPreRenameFilesUnchanged(t *testing.T, fixture preRenameFailureFixture) {
+	t.Helper()
+
+	assertOpenFileContent(t, fixture.destFile, fixture.originalContent, "destination file")
+	assertOpenFileContent(t, fixture.foreignFile, fixture.foreignContent, "foreign temp file")
+}
+
+func assertPreRenameCleanupComplete(t *testing.T, fixture preRenameFailureFixture) {
+	t.Helper()
+
+	entries, listErr := os.ReadDir(fixture.destDir)
+	if listErr != nil {
+		t.Fatalf("list destination directory: %v", listErr)
+	}
+	if hasRestoreTempFile(entries) {
+		t.Fatalf("restore-owned temp file should be cleaned up on failure")
+	}
+}
+
+func hasRestoreTempFile(entries []os.DirEntry) bool {
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".coldkeep-restore-") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
@@ -2208,7 +2597,7 @@ func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, originalName)
 	originalDest := []byte("existing-file-content")
-	if err := os.WriteFile(destPath, originalDest, 0o644); err != nil {
+	if err := os.WriteFile(destPath, originalDest, 0o600); err != nil {
 		t.Fatalf("write existing destination file: %v", err)
 	}
 
@@ -2309,7 +2698,7 @@ func TestRestoreOptionsOverwriteTrueReplacesExistingDestination(t *testing.T) {
 
 	outputDir := t.TempDir()
 	destPath := filepath.Join(outputDir, originalName)
-	if err := os.WriteFile(destPath, []byte("old-content"), 0o644); err != nil {
+	if err := os.WriteFile(destPath, []byte("old-content"), 0o600); err != nil {
 		t.Fatalf("write existing destination file: %v", err)
 	}
 

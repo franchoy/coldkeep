@@ -345,3 +345,101 @@ func TestQuarantineContainerInDirUpdatesSizesToPhysicalFile(t *testing.T) {
 		t.Fatalf("expected max_size=%d, got %d", info.Size(), maxSize)
 	}
 }
+
+func TestSafeContainerPathRejectsUnsafeNamesAndAcceptsGeneratedName(t *testing.T) {
+	root := t.TempDir()
+	unsafeNames := []string{
+		"../escape.bin",
+		"/abs/container.bin",
+		"C:\\container.bin",
+		"//server/share/container.bin",
+		"",
+		"   ",
+	}
+
+	for _, name := range unsafeNames {
+		if _, err := SafeContainerPath(root, name); err == nil {
+			t.Fatalf("expected safe container path validation to reject %q", name)
+		}
+	}
+
+	name := newContainerFilename()
+	path, err := SafeContainerPath(root, name)
+	if err != nil {
+		t.Fatalf("expected generated filename %q to validate, got: %v", name, err)
+	}
+	if !strings.HasPrefix(path, root+string(os.PathSeparator)) && path != filepath.Join(root, name) {
+		t.Fatalf("unexpected safe path result: %s", path)
+	}
+}
+
+func TestContainerOperationsRejectUnsafeFilenames(t *testing.T) {
+	dbconn := setupContainerOpsTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	unsafeFilename := "../escape.bin"
+	containerID := insertUnsafeContainerRow(t, dbconn, unsafeFilename)
+
+	assertSealRejectsInvalidContainerFilename(t, dbconn, containerID, unsafeFilename, containersDir)
+	assertInvalidContainerFilenameErr(t, QuarantineContainerInDir(dbconn, containerID, containersDir), "expected quarantine to reject unsafe filename")
+	assertInvalidContainerFilenameErr(t, CheckContainerHashFileInDir(int(containerID), unsafeFilename, "deadbeef", containersDir), "expected hash check to reject unsafe filename")
+}
+
+func setupContainerOpsTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+
+	dbconn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	dbconn.SetMaxOpenConns(1)
+	dbconn.SetMaxIdleConns(1)
+
+	if err := db.RunMigrations(dbconn); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	return dbconn
+}
+
+func insertUnsafeContainerRow(t *testing.T, dbconn *sql.DB, unsafeFilename string) int64 {
+	t.Helper()
+
+	res, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
+		 VALUES (?, ?, ?, FALSE, FALSE, FALSE)`,
+		unsafeFilename,
+		int64(ContainerHdrLen),
+		int64(ContainerHdrLen+128),
+	)
+	if err != nil {
+		t.Fatalf("insert unsafe container row: %v", err)
+	}
+	containerID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("last insert id: %v", err)
+	}
+	return containerID
+}
+
+func assertSealRejectsInvalidContainerFilename(t *testing.T, dbconn *sql.DB, containerID int64, unsafeFilename string, containersDir string) {
+	t.Helper()
+
+	tx, err := dbconn.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	err = SealContainerInDir(tx, containerID, unsafeFilename, containersDir)
+	if rbErr := tx.Rollback(); rbErr != nil {
+		t.Fatalf("rollback tx: %v", rbErr)
+	}
+	assertInvalidContainerFilenameErr(t, err, "expected seal to reject unsafe filename")
+}
+
+func assertInvalidContainerFilenameErr(t *testing.T, err error, message string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "invalid container filename") {
+		t.Fatalf("%s, got: %v", message, err)
+	}
+}

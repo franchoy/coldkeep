@@ -1934,18 +1934,36 @@ func getenvOrDefault(key, fallback string) string {
 
 func TestLoadPostgresAutoBootstrapEnabledReadsCurrentEnv(t *testing.T) {
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "false")
-	if loadPostgresAutoBootstrapEnabled() {
+	enabled, err := loadPostgresAutoBootstrapEnabled()
+	if err != nil {
+		t.Fatalf("unexpected false parse error: %v", err)
+	}
+	if enabled {
 		t.Fatal("expected auto-bootstrap to be disabled")
 	}
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", "true")
-	if !loadPostgresAutoBootstrapEnabled() {
+	enabled, err = loadPostgresAutoBootstrapEnabled()
+	if err != nil {
+		t.Fatalf("unexpected true parse error: %v", err)
+	}
+	if !enabled {
 		t.Fatal("expected auto-bootstrap to be enabled after env change")
 	}
 
 	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", " 'On' ")
-	if !loadPostgresAutoBootstrapEnabled() {
+	enabled, err = loadPostgresAutoBootstrapEnabled()
+	if err != nil {
+		t.Fatalf("unexpected quoted truthy parse error: %v", err)
+	}
+	if !enabled {
 		t.Fatal("expected quoted mixed-case truthy env value to be enabled")
+	}
+
+	t.Setenv("COLDKEEP_DB_AUTO_BOOTSTRAP", " maybe ")
+	_, err = loadPostgresAutoBootstrapEnabled()
+	if err == nil || !strings.Contains(err.Error(), "COLDKEEP_DB_AUTO_BOOTSTRAP") {
+		t.Fatalf("expected invalid boolean value error, got: %v", err)
 	}
 }
 

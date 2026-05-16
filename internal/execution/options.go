@@ -68,9 +68,13 @@ func (o Options) Validate() error {
 func FromEnv(base Options) (Options, error) {
 	opts := base.Normalize()
 
-	raw := strings.TrimSpace(os.Getenv(envStoreFolderWorkers))
-	if raw != "" {
-		n, err := strconv.Atoi(raw)
+	raw, isSet := os.LookupEnv(envStoreFolderWorkers)
+	if isSet {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return Options{}, fmt.Errorf("invalid %s value %q: must not be empty", envStoreFolderWorkers, raw)
+		}
+		n, err := strconv.Atoi(trimmed)
 		if err != nil {
 			return Options{}, fmt.Errorf("invalid %s value %q: %w", envStoreFolderWorkers, raw, err)
 		}

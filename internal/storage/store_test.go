@@ -3825,24 +3825,46 @@ func runStoreFolderAndRestoreTree(t *testing.T, workers int) storeFolderRunSumma
 }
 
 func TestLoadReuseSemanticValidationModeFromEnv(t *testing.T) {
-	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "")
-	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationSuspicious {
+	if err := os.Unsetenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION"); err != nil {
+		t.Fatalf("unset env: %v", err)
+	}
+
+	got, err := loadReuseSemanticValidationModeFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected default parse error: %v", err)
+	}
+	if got != reuseSemanticValidationSuspicious {
 		t.Fatalf("expected default mode %q, got %q", reuseSemanticValidationSuspicious, got)
 	}
 
+	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "")
+	_, err = loadReuseSemanticValidationModeFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "COLDKEEP_REUSE_SEMANTIC_VALIDATION") {
+		t.Fatalf("expected setting-name error for empty value, got: %v", err)
+	}
+
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "off")
-	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationOff {
+	got, err = loadReuseSemanticValidationModeFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if got != reuseSemanticValidationOff {
 		t.Fatalf("expected mode %q, got %q", reuseSemanticValidationOff, got)
 	}
 
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "always")
-	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationAlways {
+	got, err = loadReuseSemanticValidationModeFromEnv()
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if got != reuseSemanticValidationAlways {
 		t.Fatalf("expected mode %q, got %q", reuseSemanticValidationAlways, got)
 	}
 
 	t.Setenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION", "invalid-value")
-	if got := loadReuseSemanticValidationModeFromEnv(); got != reuseSemanticValidationSuspicious {
-		t.Fatalf("expected invalid mode fallback %q, got %q", reuseSemanticValidationSuspicious, got)
+	_, err = loadReuseSemanticValidationModeFromEnv()
+	if err == nil || !strings.Contains(err.Error(), "COLDKEEP_REUSE_SEMANTIC_VALIDATION") || !strings.Contains(err.Error(), "invalid value") {
+		t.Fatalf("expected deterministic invalid-mode error, got: %v", err)
 	}
 }
 

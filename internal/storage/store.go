@@ -1207,7 +1207,10 @@ func validateReusableCompletedChunkWithContext(ctx context.Context, dbconn *sql.
 		return fmt.Errorf("chunk %d has out-of-bounds placement in container %d: block_offset=%d stored_size=%d container_size=%d", chunkID, containerID, blockOffset, storedSize, containerSize)
 	}
 
-	fullPath := filepath.Join(containersDir, filename)
+	fullPath, err := container.SafeContainerPath(containersDir, filename)
+	if err != nil {
+		return fmt.Errorf("invalid container filename %q: %w", filename, err)
+	}
 	info, statErr := os.Stat(fullPath)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -1348,7 +1351,10 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 		if err := rows.Scan(&containerID, &filename); err != nil {
 			return fmt.Errorf("scan reusable logical file container for file %d: %w", fileID, err)
 		}
-		fullPath := filepath.Join(containersDir, filename)
+		fullPath, err := container.SafeContainerPath(containersDir, filename)
+		if err != nil {
+			return fmt.Errorf("invalid container filename %q: %w", filename, err)
+		}
 		if _, err := os.Stat(fullPath); err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("warning: logical file %d references missing container file %d (%s)", fileID, containerID, fullPath)
@@ -1371,18 +1377,25 @@ func validateReusableLogicalFileGraphWithContext(ctx context.Context, dbconn *sq
 	return nil
 }
 
-func loadReuseSemanticValidationModeFromEnv() reuseSemanticValidationMode {
-	modeValue := strings.ToLower(strings.TrimSpace(os.Getenv("COLDKEEP_REUSE_SEMANTIC_VALIDATION")))
+func loadReuseSemanticValidationModeFromEnv() (reuseSemanticValidationMode, error) {
+	const envMode = "COLDKEEP_REUSE_SEMANTIC_VALIDATION"
+	rawValue, isSet := os.LookupEnv(envMode)
+	if !isSet {
+		return reuseSemanticValidationSuspicious, nil
+	}
+
+	modeValue := strings.ToLower(strings.TrimSpace(rawValue))
 	switch modeValue {
-	case "", string(reuseSemanticValidationSuspicious):
-		return reuseSemanticValidationSuspicious
+	case "":
+		return "", fmt.Errorf("%s must not be empty", envMode)
+	case string(reuseSemanticValidationSuspicious):
+		return reuseSemanticValidationSuspicious, nil
 	case string(reuseSemanticValidationOff):
-		return reuseSemanticValidationOff
+		return reuseSemanticValidationOff, nil
 	case string(reuseSemanticValidationAlways):
-		return reuseSemanticValidationAlways
+		return reuseSemanticValidationAlways, nil
 	default:
-		log.Printf("event=store_reuse_semantic_validation_invalid_mode value=%q fallback=%q", modeValue, reuseSemanticValidationSuspicious)
-		return reuseSemanticValidationSuspicious
+		return "", fmt.Errorf("%s has invalid value %q (accepted: off, suspicious, always)", envMode, rawValue)
 	}
 }
 
@@ -1495,7 +1508,10 @@ func validateReusableLogicalFileSemanticsWithContext(ctx context.Context, dbconn
 					filecontainer = nil
 				}
 
-				containerPath := filepath.Join(containersDir, chunkRow.filename)
+				containerPath, err := container.SafeContainerPath(containersDir, chunkRow.filename)
+				if err != nil {
+					return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
+				}
 				filecontainer, err = container.OpenReadOnlyContainer(containerPath, chunkRow.maxSize)
 				if err != nil {
 					return fmt.Errorf("open container %q during semantic validation: %w", chunkRow.filename, err)
@@ -1590,7 +1606,10 @@ func validateReusableLogicalFileForStoreWithContext(ctx context.Context, dbconn 
 		return nil
 	}
 
-	mode := loadReuseSemanticValidationModeFromEnv()
+	mode, err := loadReuseSemanticValidationModeFromEnv()
+	if err != nil {
+		return fmt.Errorf("parse COLDKEEP_REUSE_SEMANTIC_VALIDATION: %w", err)
+	}
 	runSemanticValidation, reason, err := shouldRunSemanticReuseValidationWithContext(ctx, dbconn, fileID, mode)
 	if err != nil {
 		return err
