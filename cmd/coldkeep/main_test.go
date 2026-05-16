@@ -3524,6 +3524,44 @@ func TestRunInspectCommandFlagsPassedThrough(t *testing.T) {
 	}
 }
 
+func TestRunInspectCommandReverseExplicitFalseDoesNotEnableReverse(t *testing.T) {
+	originalInspect := runObservabilityInspectPhase
+	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
+
+	var capturedOpts observability.InspectOptions
+	runObservabilityInspectPhase = func(entity observability.EntityType, id string, opts observability.InspectOptions) (*observability.InspectResult, error) {
+		capturedOpts = opts
+		return &observability.InspectResult{
+			EntityType: observability.EntityLogicalFile,
+			EntityID:   id,
+			Summary:    map[string]any{},
+		}, nil
+	}
+
+	err := runInspectCommand(parsedCommandLine{
+		method:      "inspect",
+		positionals: []string{"file", "1"},
+		flags:       map[string][]string{"reverse": {"false"}},
+	}, outputModeText)
+	if err != nil {
+		t.Fatalf("runInspectCommand returned error: %v", err)
+	}
+
+	if capturedOpts.Reverse {
+		t.Fatal("expected Reverse=false from --reverse=false")
+	}
+}
+
+func TestRunInspectCommandRejectsInvalidReverseBooleanValue(t *testing.T) {
+	_, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse=maybe"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "invalid boolean value for --reverse") {
+		t.Fatalf("expected invalid boolean value error for --reverse=maybe, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunInspectCommandNotFoundError(t *testing.T) {
 	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() { runObservabilityInspectPhase = originalInspect })
@@ -4182,6 +4220,42 @@ func TestParseCommandLineRejectsKnownFlagTokenForOutputEqualsForm(t *testing.T) 
 	_, err := parseCommandLine([]string{"doctor", "--output=--json"}, flagsWithValues)
 	if err == nil || !strings.Contains(err.Error(), "missing value for --output") {
 		t.Fatalf("expected missing value error for --output=--json, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineBooleanFlagExplicitValues(t *testing.T) {
+	parsedFalse, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse=false"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine with --reverse=false returned error: %v", err)
+	}
+	if parsedFalse.hasFlag("reverse") {
+		t.Fatal("expected hasFlag(reverse)=false for --reverse=false")
+	}
+
+	parsedTrue, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse=true"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine with --reverse=true returned error: %v", err)
+	}
+	if !parsedTrue.hasFlag("reverse") {
+		t.Fatal("expected hasFlag(reverse)=true for --reverse=true")
+	}
+
+	parsedPresent, err := parseCommandLine([]string{"inspect", "file", "1", "--reverse"}, flagsWithValues)
+	if err != nil {
+		t.Fatalf("parseCommandLine with --reverse returned error: %v", err)
+	}
+	if !parsedPresent.hasFlag("reverse") {
+		t.Fatal("expected hasFlag(reverse)=true for bare --reverse")
+	}
+}
+
+func TestParseCommandLineRejectsInvalidBooleanValue(t *testing.T) {
+	_, err := parseCommandLine([]string{"snapshot", "delete", "snap-1", "--force=maybe"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "invalid boolean value for --force") {
+		t.Fatalf("expected invalid boolean value error for --force=maybe, got: %v", err)
 	}
 	if got := classifyExitCode(err); got != exitUsage {
 		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
@@ -5735,6 +5809,24 @@ func TestRunSnapshotCommandDeleteRequiresForceAndForwards(t *testing.T) {
 	}, outputModeText)
 	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
 		t.Fatalf("expected --force/--dry-run requirement error, got: %v", err)
+	}
+
+	err = runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags:       map[string][]string{"force": {"false"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
+		t.Fatalf("expected requirement error for --force=false, got: %v", err)
+	}
+
+	err = runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"delete", "snap-del-1"},
+		flags:       map[string][]string{"dry-run": {"false"}},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "requires --force or --dry-run") {
+		t.Fatalf("expected requirement error for --dry-run=false, got: %v", err)
 	}
 
 	originalLoad := loadDefaultStorageContextPhase

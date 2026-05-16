@@ -5486,6 +5486,11 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 			if valueFlags[name] && isKnownFlagTokenValue(value, valueFlags) {
 				return parsedCommandLine{}, usageErrorf("missing value for --%s", name)
 			}
+			if flagsWithoutValues[name] {
+				if _, err := strconv.ParseBool(strings.TrimSpace(value)); err != nil {
+					return parsedCommandLine{}, usageErrorf("invalid boolean value for --%s: %q", name, value)
+				}
+			}
 			parsed.flags[name] = append(parsed.flags[name], value)
 			continue
 		}
@@ -5549,7 +5554,22 @@ func (parsed parsedCommandLine) flagValues(name string) []string {
 func (parsed parsedCommandLine) hasFlag(names ...string) bool {
 	for _, name := range names {
 		if values, ok := parsed.flags[name]; ok && len(values) > 0 {
-			return true
+			if !flagsWithoutValues[name] {
+				return true
+			}
+
+			last := strings.TrimSpace(values[len(values)-1])
+			if last == "" {
+				return true
+			}
+
+			parsedValue, err := strconv.ParseBool(last)
+			if err != nil {
+				return false
+			}
+			if parsedValue {
+				return true
+			}
 		}
 	}
 
