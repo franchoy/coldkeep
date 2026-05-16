@@ -897,6 +897,19 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return usageErrorf("unknown config key: %s", parsed.positionals[1])
 	}
 
+	switch subcommand {
+	case "get":
+		if len(parsed.positionals) != 2 {
+			return usageErrorf("Usage: coldkeep config get <default-chunker|compression|compression-level>")
+		}
+	case "set":
+		if len(parsed.positionals) != 3 {
+			return usageErrorf("Usage: coldkeep config set <default-chunker|compression|compression-level> <value>")
+		}
+	default:
+		return usageErrorf("unknown config subcommand: %s", parsed.positionals[0])
+	}
+
 	sgctx, err := loadDefaultStorageContextPhase()
 	if err != nil {
 		return fmt.Errorf("load storage context: %w", err)
@@ -907,10 +920,6 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 
 	switch subcommand {
 	case "get":
-		if len(parsed.positionals) != 2 {
-			return usageErrorf("Usage: coldkeep config get <default-chunker|compression|compression-level>")
-		}
-
 		switch key {
 		case "compression":
 			codec, err := repo.GetDefaultCompression(sgctx.DB)
@@ -978,10 +987,6 @@ func runConfigCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 		return nil
 
 	case "set":
-		if len(parsed.positionals) != 3 {
-			return usageErrorf("Usage: coldkeep config set <default-chunker|compression|compression-level> <value>")
-		}
-
 		switch key {
 		case "compression":
 			codec := strings.TrimSpace(parsed.positionals[2])

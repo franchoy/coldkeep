@@ -2910,6 +2910,33 @@ func TestRunConfigCommandSetAndGetDefaultChunker(t *testing.T) {
 	}
 }
 
+func TestConfigGetPreStatefulRejectsExtraPositionalBeforeStorageInit(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+	})
+
+	storageInitCalls := 0
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		storageInitCalls++
+		return storage.StorageContext{}, errors.New("storage init should not be called for argument-only validation failures")
+	}
+
+	err := runConfigCommand(parsedCommandLine{
+		method:      "config",
+		positionals: []string{"get", "compression-level", "extra"},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep config get") {
+		t.Fatalf("expected config get usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if storageInitCalls != 0 {
+		t.Fatalf("expected storage init to be skipped, got %d call(s)", storageInitCalls)
+	}
+}
+
 func TestRunInspectCommandFileTextShowsChunkerAndChunkSummary(t *testing.T) {
 	originalInspect := runObservabilityInspectPhase
 	t.Cleanup(func() {
@@ -8260,6 +8287,82 @@ func TestRunRepairCommandBatchInvariantFailureUsesVerifyExitAndMetadata(t *testi
 	}
 	if action, _ := first["recommended_action"].(string); !strings.Contains(action, "orphan physical_file") {
 		t.Fatalf("expected recommended_action to mention orphan physical_file handling, got first=%v", first)
+	}
+}
+
+func TestRepairBatchPreStatefulRejectsMissingInputBeforeRepairExecution(t *testing.T) {
+	originalRepair := repairLogicalRefCountsPhase
+	t.Cleanup(func() {
+		repairLogicalRefCountsPhase = originalRepair
+	})
+
+	repairCalls := 0
+	repairLogicalRefCountsPhase = func() (maintenance.RepairLogicalRefCountsResult, error) {
+		repairCalls++
+		return maintenance.RepairLogicalRefCountsResult{}, nil
+	}
+
+	err := runRepairCommand(parsedCommandLine{
+		method:      "repair",
+		positionals: []string{"ref-counts"},
+		flags: map[string][]string{
+			"batch": {""},
+			"input": {filepath.Join(t.TempDir(), "missing-input.txt")},
+		},
+	}, outputModeText)
+	if err == nil || !strings.Contains(err.Error(), "failed to open/read input file") {
+		t.Fatalf("expected missing input usage error, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+	if repairCalls != 0 {
+		t.Fatalf("expected repair execution to be skipped, got %d call(s)", repairCalls)
+	}
+}
+
+func TestSnapshotCreateFromMissingParentStateDependentDeterministicError(t *testing.T) {
+	originalLoad := loadDefaultStorageContextPhase
+	originalCreate := createSnapshotPhase
+	t.Cleanup(func() {
+		loadDefaultStorageContextPhase = originalLoad
+		createSnapshotPhase = originalCreate
+	})
+
+	loadDefaultStorageContextPhase = func() (storage.StorageContext, error) {
+		dbconn, err := sql.Open("sqlite3", ":memory:")
+		if err != nil {
+			return storage.StorageContext{}, err
+		}
+		return storage.StorageContext{DB: dbconn}, nil
+	}
+
+	createSnapshotCalls := 0
+	createSnapshotPhase = func(_ context.Context, _ *sql.DB, opts snapshot.SnapshotCreateOptions) error {
+		createSnapshotCalls++
+		if opts.ParentID == nil || *opts.ParentID != "missing-parent" {
+			t.Fatalf("expected parent id missing-parent, got %+v", opts.ParentID)
+		}
+		return fmt.Errorf(`snapshot %q does not exist`, *opts.ParentID)
+	}
+
+	err := runSnapshotCommand(parsedCommandLine{
+		method:      "snapshot",
+		positionals: []string{"create"},
+		flags: map[string][]string{
+			"id":   {"child-1"},
+			"from": {"missing-parent"},
+			"json": {""},
+		},
+	}, outputModeJSON)
+	if err == nil {
+		t.Fatal("expected missing parent error")
+	}
+	if !strings.Contains(err.Error(), `snapshot "missing-parent" does not exist`) {
+		t.Fatalf("expected deterministic missing parent error, got: %v", err)
+	}
+	if createSnapshotCalls != 1 {
+		t.Fatalf("expected create snapshot to be called once, got %d", createSnapshotCalls)
 	}
 }
 
