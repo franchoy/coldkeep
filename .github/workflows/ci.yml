@@ -36,7 +36,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Verify module
@@ -133,7 +133,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Run integration tests (correctness tier)
@@ -238,7 +238,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Run legacy compatibility regression tests
@@ -288,7 +288,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Run integration tests (standard stress tier)
@@ -338,7 +338,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Run dedicated long-run stability tests
@@ -390,7 +390,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Run adversarial validation (G1–G17)
@@ -453,7 +453,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Build CLI
@@ -514,7 +514,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           cache: true
 
       - name: Build CLI
