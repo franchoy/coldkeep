@@ -396,8 +396,16 @@ func runCLI(args []string) int {
 	case "inspect":
 		err = runInspectCommand(parsed, outputMode)
 	case "help", "-h", "--help":
+		if len(parsed.positionals) != 0 {
+			err = usageErrorf("Usage: coldkeep %s", parsed.method)
+			break
+		}
 		printHelp()
 	case "version", "-v", "--version":
+		if len(parsed.positionals) != 0 {
+			err = usageErrorf("Usage: coldkeep %s", parsed.method)
+			break
+		}
 		err = runVersionCommand(outputMode)
 	case "list":
 		err = runListCommand(parsed, outputMode)
@@ -2565,6 +2573,9 @@ func runSearchCommand(parsed parsedCommandLine, outputMode cliOutputMode) error 
 	if err := ensureAllowedFlags(parsed, "name", "min-size", "max-size", "limit", "offset", "output"); err != nil {
 		return err
 	}
+	if len(parsed.positionals) != 0 {
+		return usageErrorf("Usage: coldkeep search [--name <pattern>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--offset <count>] [--output <text|json>]")
+	}
 
 	// Validate numeric filter values at CLI level before forwarding to SQL.
 	if err := validateNonNegativeIntegerFlag(parsed, "min-size"); err != nil {
@@ -3782,13 +3793,16 @@ func runSimulateCommand(parsed parsedCommandLine, outputMode cliOutputMode) erro
 	subcommand := parsed.positionals[0]
 
 	if subcommand == "gc" {
+		if len(parsed.positionals) > 1 {
+			return usageErrorf("Usage: coldkeep simulate gc [--delete-snapshot <id>] [--containers] [--output <text|json>]")
+		}
 		return runSimulateGCCommand(parsed, outputMode)
 	}
 
 	if err := ensureAllowedFlags(parsed, "codec", "output"); err != nil {
 		return err
 	}
-	if len(parsed.positionals) < 2 {
+	if len(parsed.positionals) < 2 || len(parsed.positionals) > 2 {
 		return usageErrorf("Usage: coldkeep simulate <store|store-folder> [--codec <codec>] <path>")
 	}
 

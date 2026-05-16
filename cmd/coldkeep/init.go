@@ -13,6 +13,9 @@ import (
 
 func initCommand(parsed parsedCommandLine, outputMode cliOutputMode) error {
 	_ = outputMode
+	if len(parsed.positionals) != 0 {
+		return usageErrorf("Usage: coldkeep init [--compression <none|zstd>] [--compression-level <1-9>]")
+	}
 
 	key, err := blocks.GenerateKeyHex()
 	if err != nil {

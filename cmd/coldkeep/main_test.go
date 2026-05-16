@@ -1923,6 +1923,48 @@ func TestRunSimulateCommandUnknownSubcommandClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunSimulateCommandStoreRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *testing.T) {
+	err := runSimulateCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"store", "input.txt", "extra"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep simulate <store|store-folder>") {
+		t.Fatalf("expected simulate store usage error for extra positional argument, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestRunSimulateCommandGCRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *testing.T) {
+	originalSimulate := runObservabilitySimulateGCPhase
+	called := false
+	runObservabilitySimulateGCPhase = func(opts observability.SimulationOptions) (*observability.SimulationResult, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected call with opts=%+v", opts)
+	}
+	t.Cleanup(func() { runObservabilitySimulateGCPhase = originalSimulate })
+
+	err := runSimulateCommand(parsedCommandLine{
+		method:      "simulate",
+		positionals: []string{"gc", "extra"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep simulate gc") {
+		t.Fatalf("expected simulate gc usage error for extra positional argument, got: %v", err)
+	}
+	if called {
+		t.Fatalf("expected simulate gc to fail before invoking observability simulation")
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestRunSimulateCommandHelpIncludesRequiredGuaranteesAndExample(t *testing.T) {
 	output := captureStdout(t, func() {
 		if err := runSimulateCommand(parsedCommandLine{method: "simulate", flags: map[string][]string{"help": {""}}}, outputModeText); err != nil {
@@ -2475,6 +2517,22 @@ func TestRunSearchCommandInvalidOffsetClassifiesAsUsage(t *testing.T) {
 	}
 }
 
+func TestRunSearchCommandRejectsUnexpectedPositionalArgsClassifiesAsUsage(t *testing.T) {
+	err := runSearchCommand(parsedCommandLine{
+		method:      "search",
+		positionals: []string{"extra"},
+		flags:       map[string][]string{},
+	}, outputModeText)
+
+	if err == nil || !strings.Contains(err.Error(), "Usage: coldkeep search") {
+		t.Fatalf("expected search usage error for extra positional argument, got: %v", err)
+	}
+
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
 func TestSearchArgsIncludesPaginationFlags(t *testing.T) {
 	args := searchArgs(parsedCommandLine{
 		method: "search",
@@ -2552,6 +2610,36 @@ func TestShouldNotRunStartupRecoveryForNonStorageCommands(t *testing.T) {
 		if shouldRunStartupRecovery([]string{command}) {
 			t.Fatalf("expected startup recovery to be skipped for command %q", command)
 		}
+	}
+}
+
+func TestRunCLIHelpRejectsUnexpectedPositionalArgs(t *testing.T) {
+	_, stderr, code := runCLIWithCapturedIO(t, []string{"help", "extra"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage=%d, got %d", exitUsage, code)
+	}
+	if !strings.Contains(stderr, "Usage: coldkeep help") {
+		t.Fatalf("expected help usage error in stderr, got: %q", stderr)
+	}
+}
+
+func TestRunCLIVersionRejectsUnexpectedPositionalArgs(t *testing.T) {
+	_, stderr, code := runCLIWithCapturedIO(t, []string{"version", "extra"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage=%d, got %d", exitUsage, code)
+	}
+	if !strings.Contains(stderr, "Usage: coldkeep version") {
+		t.Fatalf("expected version usage error in stderr, got: %q", stderr)
+	}
+}
+
+func TestRunCLIInitRejectsUnexpectedPositionalArgs(t *testing.T) {
+	_, stderr, code := runCLIWithCapturedIO(t, []string{"init", "extra"})
+	if code != exitUsage {
+		t.Fatalf("expected exitUsage=%d, got %d", exitUsage, code)
+	}
+	if !strings.Contains(stderr, "Usage: coldkeep init") {
+		t.Fatalf("expected init usage error in stderr, got: %q", stderr)
 	}
 }
 
