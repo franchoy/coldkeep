@@ -986,7 +986,11 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 			_ = outFile.Close()
 		}
 		if cleanupTemp {
-			_ = os.Remove(tempOutputPath)
+			if shouldCleanupRestoreTempPath(tempOutputPath, outputPath) {
+				_ = os.Remove(tempOutputPath)
+			} else {
+				log.Printf("event=restore_temp_cleanup_skip action=path_not_owned file_id=%d temp_path=%q output_path=%q", fileID, tempOutputPath, outputPath)
+			}
 		}
 	}()
 
@@ -1369,6 +1373,18 @@ func restoreFileWithDBAndDir(dbconn *sql.DB, fileID int64, outputPath string, co
 	// Set result hash
 	result.RestoredHash = restoredHash
 	return result, nil
+}
+
+func shouldCleanupRestoreTempPath(tempOutputPath, outputPath string) bool {
+	if tempOutputPath == "" || outputPath == "" {
+		return false
+	}
+	tempDir := filepath.Clean(filepath.Dir(tempOutputPath))
+	outputDir := filepath.Clean(filepath.Dir(outputPath))
+	if tempDir != outputDir {
+		return false
+	}
+	return strings.HasPrefix(filepath.Base(tempOutputPath), ".coldkeep-restore-")
 }
 
 func applyPhysicalMetadata(outputPath string, descriptor RestoreDescriptor, opts RestoreOptions) error {

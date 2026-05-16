@@ -2347,6 +2347,132 @@ func TestRestoreFailureDoesNotCorruptDestination(t *testing.T) {
 	// (Deliberately do not check destination file content here)
 }
 
+func TestShouldCleanupRestoreTempPath(t *testing.T) {
+	tests := []struct {
+		name           string
+		tempOutputPath string
+		outputPath     string
+		want           bool
+	}{
+		{
+			name:           "same directory with restore temp prefix",
+			tempOutputPath: filepath.Join("/tmp", "restore", ".coldkeep-restore-abc"),
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           true,
+		},
+		{
+			name:           "different directory",
+			tempOutputPath: filepath.Join("/tmp", "other", ".coldkeep-restore-abc"),
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           false,
+		},
+		{
+			name:           "wrong filename prefix",
+			tempOutputPath: filepath.Join("/tmp", "restore", "not-owned.tmp"),
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           false,
+		},
+		{
+			name:           "empty temp path",
+			tempOutputPath: "",
+			outputPath:     filepath.Join("/tmp", "restore", "output.bin"),
+			want:           false,
+		},
+		{
+			name:           "empty output path",
+			tempOutputPath: filepath.Join("/tmp", "restore", ".coldkeep-restore-abc"),
+			outputPath:     "",
+			want:           false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldCleanupRestoreTempPath(tc.tempOutputPath, tc.outputPath)
+			if got != tc.want {
+				t.Fatalf("shouldCleanupRestoreTempPath(%q, %q)=%t, want %t", tc.tempOutputPath, tc.outputPath, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
+	_, sgctx, fileID, _, _ := setupRestorePinningFixture(t, [][]byte{[]byte("phase6-restore-temp")})
+
+	outputRoot := t.TempDir()
+	destDir := filepath.Join(outputRoot, "nested")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		t.Fatalf("create destination directory: %v", err)
+	}
+	destPath := filepath.Join(destDir, "restored.bin")
+	originalContent := []byte("ORIGINAL_DEST_CONTENT")
+	if err := os.WriteFile(destPath, originalContent, 0o644); err != nil {
+		t.Fatalf("write original destination file: %v", err)
+	}
+
+	foreignPath := filepath.Join(destDir, "keep-me.tmp")
+	foreignContent := []byte("foreign-temp-content")
+	if err := os.WriteFile(foreignPath, foreignContent, 0o644); err != nil {
+		t.Fatalf("write foreign temp file: %v", err)
+	}
+
+	hookCalled := false
+	seenTempPath := ""
+	TestRestoreFailBeforeRenameHook = func(tempOutputPath, outputPath string) error {
+		hookCalled = true
+		seenTempPath = tempOutputPath
+		if filepath.Dir(tempOutputPath) != filepath.Dir(destPath) {
+			t.Fatalf("temp output dir mismatch: got %q want %q", filepath.Dir(tempOutputPath), filepath.Dir(destPath))
+		}
+		if !strings.HasPrefix(filepath.Base(tempOutputPath), ".coldkeep-restore-") {
+			t.Fatalf("temp output file has unexpected prefix: %q", filepath.Base(tempOutputPath))
+		}
+		if outputPath != destPath {
+			t.Fatalf("hook output path mismatch: got %q want %q", outputPath, destPath)
+		}
+		return fmt.Errorf("forced failure before rename for phase6")
+	}
+	defer func() { TestRestoreFailBeforeRenameHook = nil }()
+
+	err := RestoreFileWithStorageContext(sgctx, fileID, destPath)
+	if err == nil || !strings.Contains(err.Error(), "test hook restore failure") {
+		t.Fatalf("expected pre-rename hook failure, got: %v", err)
+	}
+	if !hookCalled {
+		t.Fatalf("expected pre-rename hook to be called")
+	}
+	if seenTempPath == "" {
+		t.Fatalf("expected hook to observe restore temp path")
+	}
+
+	data, readErr := os.ReadFile(destPath)
+	if readErr != nil {
+		t.Fatalf("read destination file: %v", readErr)
+	}
+	if string(data) != string(originalContent) {
+		t.Fatalf("destination file modified on pre-rename failure: got %q want %q", string(data), string(originalContent))
+	}
+
+	foreignData, foreignReadErr := os.ReadFile(foreignPath)
+	if foreignReadErr != nil {
+		t.Fatalf("read foreign temp file: %v", foreignReadErr)
+	}
+	if string(foreignData) != string(foreignContent) {
+		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(foreignContent))
+	}
+
+	entries, listErr := os.ReadDir(destDir)
+	if listErr != nil {
+		t.Fatalf("list destination directory: %v", listErr)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".coldkeep-restore-") {
+			t.Fatalf("restore-owned temp file should be cleaned up on failure: %q", entry.Name())
+		}
+	}
+}
+
 func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
