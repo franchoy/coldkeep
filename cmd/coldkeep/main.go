@@ -119,6 +119,12 @@ var flagsWithoutValues = map[string]bool{
 	"tree":        true,
 }
 
+var repeatableFlags = map[string]bool{
+	"delete-snapshot": true,
+	"path":            true,
+	"prefix":          true,
+}
+
 type cliOutputMode string
 
 const (
@@ -5468,6 +5474,8 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 		flags:       make(map[string][]string),
 	}
 
+	seenSingletons := make(map[string]struct{})
+
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 
@@ -5491,6 +5499,9 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 					return parsedCommandLine{}, usageErrorf("invalid boolean value for --%s: %q", name, value)
 				}
 			}
+			if err := rejectDuplicateSingletonFlag(name, seenSingletons, valueFlags); err != nil {
+				return parsedCommandLine{}, err
+			}
 			parsed.flags[name] = append(parsed.flags[name], value)
 			continue
 		}
@@ -5502,15 +5513,55 @@ func parseCommandLine(args []string, valueFlags map[string]bool) (parsedCommandL
 			if isKnownFlagTokenValue(args[i+1], valueFlags) {
 				return parsedCommandLine{}, usageErrorf("missing value for --%s", flagToken)
 			}
+			if err := rejectDuplicateSingletonFlag(flagToken, seenSingletons, valueFlags); err != nil {
+				return parsedCommandLine{}, err
+			}
 			i++
 			parsed.flags[flagToken] = append(parsed.flags[flagToken], args[i])
 			continue
+		}
+
+		if err := rejectDuplicateSingletonFlag(flagToken, seenSingletons, valueFlags); err != nil {
+			return parsedCommandLine{}, err
 		}
 
 		parsed.flags[flagToken] = append(parsed.flags[flagToken], "")
 	}
 
 	return parsed, nil
+}
+
+func rejectDuplicateSingletonFlag(name string, seen map[string]struct{}, valueFlags map[string]bool) error {
+	canonical := canonicalFlagName(name)
+	if !isSingletonFlag(canonical, valueFlags) {
+		return nil
+	}
+	if _, ok := seen[canonical]; ok {
+		return usageErrorf("duplicate singleton flag: --%s", canonical)
+	}
+	seen[canonical] = struct{}{}
+	return nil
+}
+
+func canonicalFlagName(name string) string {
+	switch name {
+	case "dryRun":
+		return "dry-run"
+	case "failFast":
+		return "fail-fast"
+	default:
+		return name
+	}
+}
+
+func isSingletonFlag(name string, valueFlags map[string]bool) bool {
+	if repeatableFlags[name] {
+		return false
+	}
+	if valueFlags[name] {
+		return true
+	}
+	return flagsWithoutValues[name]
 }
 
 func isKnownFlagTokenValue(value string, valueFlags map[string]bool) bool {

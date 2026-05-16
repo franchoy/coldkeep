@@ -4181,6 +4181,55 @@ func TestParseCommandLineTreatsDeleteSnapshotAsValueFlag(t *testing.T) {
 	}
 }
 
+func TestParseCommandLineRejectsDuplicateSingletonValueFlag(t *testing.T) {
+	_, err := parseCommandLine([]string{"list", "--limit", "10", "--limit", "20"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "duplicate singleton flag: --limit") {
+		t.Fatalf("expected duplicate singleton error for --limit, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineRejectsDuplicateSingletonBooleanFlag(t *testing.T) {
+	_, err := parseCommandLine([]string{"snapshot", "delete", "snap-1", "--force", "--force=false"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "duplicate singleton flag: --force") {
+		t.Fatalf("expected duplicate singleton error for --force, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineRejectsDuplicateSingletonAliasFlags(t *testing.T) {
+	_, err := parseCommandLine([]string{"snapshot", "delete", "snap-1", "--dry-run", "--dryRun=false"}, flagsWithValues)
+	if err == nil || !strings.Contains(err.Error(), "duplicate singleton flag: --dry-run") {
+		t.Fatalf("expected duplicate singleton error for dry-run aliases, got: %v", err)
+	}
+	if got := classifyExitCode(err); got != exitUsage {
+		t.Fatalf("expected usage exit code %d, got %d", exitUsage, got)
+	}
+}
+
+func TestParseCommandLineAllowsRepeatableSnapshotQueryFlags(t *testing.T) {
+	parsed, err := parseCommandLine(
+		[]string{"snapshot", "list", "--path", "a.txt", "--path", "b.txt", "--prefix", "dir/", "--prefix", "tmp/"},
+		flagsWithValues,
+	)
+	if err != nil {
+		t.Fatalf("parseCommandLine returned error: %v", err)
+	}
+
+	paths := parsed.flagValues("path")
+	if len(paths) != 2 {
+		t.Fatalf("expected two path values, got %v", paths)
+	}
+	prefixes := parsed.flagValues("prefix")
+	if len(prefixes) != 2 {
+		t.Fatalf("expected two prefix values, got %v", prefixes)
+	}
+}
+
 func TestParseCommandLineRejectsKnownFlagTokenForOutput(t *testing.T) {
 	_, err := parseCommandLine([]string{"doctor", "--output", "--json"}, flagsWithValues)
 	if err == nil || !strings.Contains(err.Error(), "missing value for --output") {
