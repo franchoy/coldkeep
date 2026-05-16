@@ -55,7 +55,7 @@ func readFileWithinBase(t *testing.T, baseDir, targetPath string) []byte {
 		t.Fatalf("guarded read target escapes base: base=%q target=%q rel=%q", cleanBase, cleanTarget, rel)
 	}
 
-	data, err := os.ReadFile(cleanTarget)
+	data, err := os.ReadFile(cleanTarget) // #nosec G304 -- base and target are validated above before read
 	if err != nil {
 		t.Fatalf("guarded read failed: %v", err)
 	}
@@ -2364,11 +2364,7 @@ func setupPreRenameFailureFixture(t *testing.T) preRenameFailureFixture {
 	t.Helper()
 
 	outputRoot := t.TempDir()
-	destDir := filepath.Join(outputRoot, "nested")
-	if err := os.MkdirAll(destDir, 0o700); err != nil {
-		t.Fatalf("create destination directory: %v", err)
-	}
-
+	destDir := outputRoot
 	destPath := filepath.Join(destDir, "restored.bin")
 	originalContent := []byte("ORIGINAL_DEST_CONTENT")
 	if err := os.WriteFile(destPath, originalContent, 0o600); err != nil {
@@ -2416,15 +2412,33 @@ func installPreRenameFailureHook(t *testing.T, destPath string) *preRenameHookSt
 func assertPreRenameFailureAndCleanup(t *testing.T, err error, fixture preRenameFailureFixture, hookState *preRenameHookState) {
 	t.Helper()
 
+	assertPreRenameFailure(t, err)
+	assertPreRenameHookObserved(t, hookState)
+	assertPreRenameFilesUnchanged(t, fixture)
+	assertPreRenameCleanupComplete(t, fixture)
+}
+
+func assertPreRenameFailure(t *testing.T, err error) {
+	t.Helper()
+
 	if err == nil || !strings.Contains(err.Error(), "test hook restore failure") {
 		t.Fatalf("expected pre-rename hook failure, got: %v", err)
 	}
+}
+
+func assertPreRenameHookObserved(t *testing.T, hookState *preRenameHookState) {
+	t.Helper()
+
 	if !hookState.hookCalled {
 		t.Fatalf("expected pre-rename hook to be called")
 	}
 	if hookState.seenTempPath == "" {
 		t.Fatalf("expected hook to observe restore temp path")
 	}
+}
+
+func assertPreRenameFilesUnchanged(t *testing.T, fixture preRenameFailureFixture) {
+	t.Helper()
 
 	data := readFileWithinBase(t, fixture.destDir, fixture.destPath)
 	if string(data) != string(fixture.originalContent) {
@@ -2435,16 +2449,27 @@ func assertPreRenameFailureAndCleanup(t *testing.T, err error, fixture preRename
 	if string(foreignData) != string(fixture.foreignContent) {
 		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(fixture.foreignContent))
 	}
+}
+
+func assertPreRenameCleanupComplete(t *testing.T, fixture preRenameFailureFixture) {
+	t.Helper()
 
 	entries, listErr := os.ReadDir(fixture.destDir)
 	if listErr != nil {
 		t.Fatalf("list destination directory: %v", listErr)
 	}
+	if hasRestoreTempFile(entries) {
+		t.Fatalf("restore-owned temp file should be cleaned up on failure")
+	}
+}
+
+func hasRestoreTempFile(entries []os.DirEntry) bool {
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".coldkeep-restore-") {
-			t.Fatalf("restore-owned temp file should be cleaned up on failure: %q", entry.Name())
+			return true
 		}
 	}
+	return false
 }
 
 func TestRestoreOptionsOverwriteFalseRejectsExistingDestination(t *testing.T) {
