@@ -41,27 +41,6 @@ func requireSymlink(t *testing.T, oldname, newname string) {
 	}
 }
 
-func readFileWithinBase(t *testing.T, baseDir, targetPath string) []byte {
-	t.Helper()
-
-	cleanBase := filepath.Clean(baseDir)
-	cleanTarget := filepath.Clean(targetPath)
-
-	rel, err := filepath.Rel(cleanBase, cleanTarget)
-	if err != nil {
-		t.Fatalf("compute relative path for guarded read: %v", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		t.Fatalf("guarded read target escapes base: base=%q target=%q rel=%q", cleanBase, cleanTarget, rel)
-	}
-
-	data, err := os.ReadFile(cleanTarget) // #nosec G304 -- base and target are validated above before read
-	if err != nil {
-		t.Fatalf("guarded read failed: %v", err)
-	}
-	return data
-}
-
 func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -928,7 +907,10 @@ func assertPrefixModeRestoreOutput(t *testing.T, sgctx StorageContext, storedPat
 		t.Fatalf("expected prefixed output path %q, got %q", expectedOutputPath, result.OutputPath)
 	}
 
-	restored := readFileWithinBase(t, prefixRoot, expectedOutputPath)
+	restored, err := os.ReadFile(expectedOutputPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
 	if string(restored) != string(payload) {
 		t.Fatalf("unexpected restored payload: got %q want %q", string(restored), string(payload))
 	}
@@ -947,12 +929,9 @@ func TestRestoreFileByStoredPathRejectsSymlinkedPrefixRoot(t *testing.T) {
 	dbconn, sgctx, storedPath, _ := setupStoredPathRestoreFixture(t, sql.NullInt64{}, sql.NullTime{}, sql.NullInt64{}, sql.NullInt64{}, true)
 	defer func() { _ = dbconn.Close() }()
 
-	baseDir := t.TempDir()
-	realRoot := filepath.Join(baseDir, "real-root")
-	if err := os.MkdirAll(realRoot, 0o700); err != nil {
-		t.Fatalf("create real root: %v", err)
-	}
-	symlinkRoot := filepath.Join(baseDir, "prefix-root-link")
+	realRoot := t.TempDir()
+	symlinkParent := t.TempDir()
+	symlinkRoot := filepath.Join(symlinkParent, "prefix-root-link")
 	requireSymlink(t, realRoot, symlinkRoot)
 
 	_, err := RestoreFileByStoredPathWithStorageContextResultOptions(sgctx, storedPath, RestoreOptions{
@@ -1028,7 +1007,10 @@ func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
 		t.Fatalf("expected symlinked override path to be rejected, got: %v", err)
 	}
 
-	data := readFileWithinBase(t, baseDir, realTarget)
+	data, err := os.ReadFile(realTarget)
+	if err != nil {
+		t.Fatalf("read real target after rejected restore: %v", err)
+	}
 	if string(data) != "sentinel" {
 		t.Fatalf("expected real target to remain unchanged, got %q", string(data))
 	}
@@ -2440,12 +2422,18 @@ func assertPreRenameHookObserved(t *testing.T, hookState *preRenameHookState) {
 func assertPreRenameFilesUnchanged(t *testing.T, fixture preRenameFailureFixture) {
 	t.Helper()
 
-	data := readFileWithinBase(t, fixture.destDir, fixture.destPath)
+	data, err := os.ReadFile(filepath.Join(fixture.destDir, "restored.bin"))
+	if err != nil {
+		t.Fatalf("read destination file: %v", err)
+	}
 	if string(data) != string(fixture.originalContent) {
 		t.Fatalf("destination file modified on pre-rename failure: got %q want %q", string(data), string(fixture.originalContent))
 	}
 
-	foreignData := readFileWithinBase(t, fixture.destDir, fixture.foreignPath)
+	foreignData, err := os.ReadFile(filepath.Join(fixture.destDir, "keep-me.tmp"))
+	if err != nil {
+		t.Fatalf("read foreign temp file: %v", err)
+	}
 	if string(foreignData) != string(fixture.foreignContent) {
 		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(fixture.foreignContent))
 	}
