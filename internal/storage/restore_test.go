@@ -41,6 +41,27 @@ func requireSymlink(t *testing.T, oldname, newname string) {
 	}
 }
 
+func readFileWithinBase(t *testing.T, baseDir, targetPath string) []byte {
+	t.Helper()
+
+	cleanBase := filepath.Clean(baseDir)
+	cleanTarget := filepath.Clean(targetPath)
+
+	rel, err := filepath.Rel(cleanBase, cleanTarget)
+	if err != nil {
+		t.Fatalf("compute relative path for guarded read: %v", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		t.Fatalf("guarded read target escapes base: base=%q target=%q rel=%q", cleanBase, cleanTarget, rel)
+	}
+
+	data, err := os.ReadFile(cleanTarget)
+	if err != nil {
+		t.Fatalf("guarded read failed: %v", err)
+	}
+	return data
+}
+
 func TestRestoreChunkPinningKeepsChunkLiveDuringRemove(t *testing.T) {
 	dbconn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -1084,10 +1105,7 @@ func TestRestoreFileByStoredPathRejectsSymlinkedOverridePath(t *testing.T) {
 		t.Fatalf("expected symlinked override path to be rejected, got: %v", err)
 	}
 
-	data, readErr := os.ReadFile(realTarget)
-	if readErr != nil {
-		t.Fatalf("read real target after rejected restore: %v", readErr)
-	}
+	data := readFileWithinBase(t, baseDir, realTarget)
 	if string(data) != "sentinel" {
 		t.Fatalf("expected real target to remain unchanged, got %q", string(data))
 	}
@@ -2446,18 +2464,12 @@ func TestRestoreFailureBeforeRenameTempPlacementAndScopedCleanup(t *testing.T) {
 		t.Fatalf("expected hook to observe restore temp path")
 	}
 
-	data, readErr := os.ReadFile(destPath)
-	if readErr != nil {
-		t.Fatalf("read destination file: %v", readErr)
-	}
+	data := readFileWithinBase(t, destDir, destPath)
 	if string(data) != string(originalContent) {
 		t.Fatalf("destination file modified on pre-rename failure: got %q want %q", string(data), string(originalContent))
 	}
 
-	foreignData, foreignReadErr := os.ReadFile(foreignPath)
-	if foreignReadErr != nil {
-		t.Fatalf("read foreign temp file: %v", foreignReadErr)
-	}
+	foreignData := readFileWithinBase(t, destDir, foreignPath)
 	if string(foreignData) != string(foreignContent) {
 		t.Fatalf("foreign temp file content changed: got %q want %q", string(foreignData), string(foreignContent))
 	}

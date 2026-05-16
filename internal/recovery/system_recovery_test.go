@@ -156,10 +156,16 @@ func TestQuarantineMissingContainersRejectsUnsafeFilename(t *testing.T) {
 	}
 
 	containersDir := t.TempDir()
-	if _, err := dbconn.Exec(`
+	insertStmt, err := dbconn.Prepare(`
 		INSERT INTO container (filename, current_size, max_size, sealed, sealing, quarantine)
 		VALUES (?, ?, ?, FALSE, FALSE, FALSE)
-	`, "../escape.bin", container.ContainerHdrLen, container.ContainerHdrLen+128); err != nil {
+	`)
+	if err != nil {
+		t.Fatalf("prepare unsafe container insert statement: %v", err)
+	}
+	defer func() { _ = insertStmt.Close() }()
+
+	if _, err := insertStmt.Exec("../escape.bin", container.ContainerHdrLen, container.ContainerHdrLen+128); err != nil {
 		t.Fatalf("insert unsafe container row: %v", err)
 	}
 
