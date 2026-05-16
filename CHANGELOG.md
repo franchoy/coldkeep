@@ -20,6 +20,12 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.2 - 2026-05-16 — Validation & Security Hardening
+
+Hardening release focused on path-safety centralization, container filename trust-boundary enforcement, snapshot/stored-path traversal rejection, restore destination and symlink safety, temp/rename cleanup safeguards, environment/config parsing validation, PostgreSQL DSN escaping, toolchain CVE remediation, and benchmark script argument validation for security-sensitive paths.
+
+------------------------------------------------------------------------
+
 ## v1.10.1 - 2026-05-16 — CLI Correctness & Contract Stabilization
 
 Stabilization release focused on strict CLI validation, deterministic malformed-input behavior, JSON output contracts, pre-stateful validation ordering, and closure of selected v1.10.1 tracker/matrix rows.

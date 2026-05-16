@@ -2,7 +2,7 @@
 
 Status: In progress  
 Release train: v1.10.x  
-Current release package: v1.10.1 — CLI Correctness & Contract Stabilization
+Current release package: v1.10.2 — Validation & Security Hardening
 
 ## Purpose
 
