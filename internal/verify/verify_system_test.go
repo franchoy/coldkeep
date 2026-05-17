@@ -2036,3 +2036,138 @@ func TestVerifyRepositoryFastRejectsPackedRangeBeforeRead(t *testing.T) {
 		t.Fatalf("expected bounds failure before payload read stage (fast), got: %v", err)
 	}
 }
+
+// Phase 4 — Block Hash / Checksum Consistency
+
+func TestPackedDigestValidationRejectsMissingDigest(t *testing.T) {
+	err := validateSHA256HexDigest("chunk hash", "")
+	if err == nil || !strings.Contains(err.Error(), "is required") {
+		t.Fatalf("expected missing digest error, got: %v", err)
+	}
+}
+
+func TestPackedDigestValidationRejectsMalformedHex(t *testing.T) {
+	err := validateSHA256HexDigest("chunk hash", strings.Repeat("g", 64))
+	if err == nil || !strings.Contains(err.Error(), "must be valid hex") {
+		t.Fatalf("expected malformed hex error, got: %v", err)
+	}
+}
+
+func TestPackedDigestValidationRejectsWrongDigestLength(t *testing.T) {
+	err := validateSHA256HexDigest("chunk hash", strings.Repeat("a", 63))
+	if err == nil || !strings.Contains(err.Error(), "must be 64 hex chars") {
+		t.Fatalf("expected wrong digest length error, got: %v", err)
+	}
+}
+
+func TestPackedDigestValidationAcceptsMatchingPayload(t *testing.T) {
+	payload := []byte("phase4-valid-payload")
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+	err := validateSHA256HexDigest("chunk hash", digest)
+	if err != nil {
+		t.Fatalf("expected valid digest to pass, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsInvalidPhysicalHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-invalid-physical")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = zeroblob(31) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set invalid physical_hash length: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid physical_hash length") {
+		t.Fatalf("expected invalid physical_hash length error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsInvalidCompressedHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-invalid-compressed")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = zeroblob(31) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set invalid compressed_hash length: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid compressed_hash length") {
+		t.Fatalf("expected invalid compressed_hash length error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsMalformedChunkHashHex(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-malformed-chunk-hash")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("g", 64), chunkIDs[0]); err != nil {
+		t.Fatalf("set malformed chunk_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid expected chunk_hash format") {
+		t.Fatalf("expected malformed chunk_hash format error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsWrongChunkHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-short-chunk-hash")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("a", 63), chunkIDs[0]); err != nil {
+		t.Fatalf("set short chunk_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid expected chunk_hash format") {
+		t.Fatalf("expected short chunk_hash format error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsPackedPayloadHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-payload-mismatch")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate block hash for VerifyRepository mismatch: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected block_hash_mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsPackedPayloadHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-fast-payload-mismatch")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate block hash for VerifyRepositoryFast mismatch: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected block_hash_mismatch category in fast mode, got: %v", err)
+	}
+}

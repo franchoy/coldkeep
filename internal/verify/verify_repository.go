@@ -299,6 +299,35 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid block_hash length=%d expected=%d", invalidHashLenRows, expectedBlockHashLen), nil)
 	}
 
+	const expectedOptionalHashLen = 32
+	var invalidCompressedHashLenRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE compressed_hash IS NOT NULL
+		  AND length(compressed_hash) > 0
+		  AND length(compressed_hash) != $1
+	`, expectedOptionalHashLen).Scan(&invalidCompressedHashLenRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid compressed_hash length rows", err)
+	}
+	if invalidCompressedHashLenRows > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid compressed_hash length=%d expected=%d", invalidCompressedHashLenRows, expectedOptionalHashLen), nil)
+	}
+
+	var invalidPhysicalHashLenRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE physical_hash IS NOT NULL
+		  AND length(physical_hash) > 0
+		  AND length(physical_hash) != $1
+	`, expectedOptionalHashLen).Scan(&invalidPhysicalHashLenRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid physical_hash length rows", err)
+	}
+	if invalidPhysicalHashLenRows > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid physical_hash length=%d expected=%d", invalidPhysicalHashLenRows, expectedOptionalHashLen), nil)
+	}
+
 	var impossibleLocationRows int64
 	if err := dbconn.QueryRowContext(ctx, `
 		SELECT COUNT(*)
@@ -776,11 +805,36 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d load chunk hash for chunk %d", blockID, entry.ChunkID), err)
 		}
 
-		if !strings.EqualFold(strings.TrimSpace(expected), computed) {
-			return verifyStageError(verifyErrChunkHashMismatch, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected)), nil)
+		normalizedExpected := strings.TrimSpace(expected)
+		if err := validateSHA256HexDigest(fmt.Sprintf("verifyBlockPayloads: block %d chunk %d expected chunk_hash", blockID, entry.ChunkID), normalizedExpected); err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d invalid expected chunk_hash format", blockID, entry.ChunkID), err)
+		}
+
+		if !strings.EqualFold(normalizedExpected, computed) {
+			return verifyStageError(verifyErrChunkHashMismatch, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, normalizedExpected), nil)
 		}
 	}
 
+	return nil
+}
+
+func validateSHA256HexDigest(label, digest string) error {
+	if strings.TrimSpace(label) == "" {
+		label = "digest"
+	}
+	if digest == "" {
+		return fmt.Errorf("%s is required", label)
+	}
+	if len(digest) != sha256.Size*2 {
+		return fmt.Errorf("%s must be %d hex chars", label, sha256.Size*2)
+	}
+	decoded, err := hex.DecodeString(digest)
+	if err != nil {
+		return fmt.Errorf("%s must be valid hex: %w", label, err)
+	}
+	if len(decoded) != sha256.Size {
+		return fmt.Errorf("%s decoded length must be %d bytes", label, sha256.Size)
+	}
 	return nil
 }
 
