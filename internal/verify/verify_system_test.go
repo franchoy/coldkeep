@@ -2327,7 +2327,7 @@ func TestVerifyRepositoryRejectsUnsupportedStorageBlockCodec(t *testing.T) {
 
 	// Note: database schema CHECK constraint prevents directly setting invalid codec values.
 	// The guardrail is enforced at the schema level, not at the verify query level.
-	
+
 	t.Skip("Database schema CHECK constraint prevents invalid codec insertion; guardrail is at schema level")
 }
 
