@@ -29,9 +29,11 @@ No permanent suppressions recorded during Phase 7.
 
 Phase 7 may create matrix rows that are likely suppression candidates, but final suppression requires rationale.
 
-# Codacy Suppression Format
+# Codacy Suppression Format (Template Example)
 
 Codacy suppressions must use this format.
+
+The section below is a template example only; `TODO` fields are placeholders until a concrete suppression record is approved.
 
 ## CK-110-SUP-XXX - Short title
 
