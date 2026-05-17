@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -797,8 +798,13 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 		sum := sha256.Sum256(chunkBytes)
 		computed := hex.EncodeToString(sum[:])
 
+		chunkID, err := safeChunkIDToInt64(entry.ChunkID)
+		if err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk id conversion failed at entry=%d", blockID, i), err)
+		}
+
 		var expected string
-		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, int64(entry.ChunkID)).Scan(&expected); err != nil {
+		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, chunkID).Scan(&expected); err != nil {
 			if err == sql.ErrNoRows {
 				return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i), nil)
 			}
@@ -836,6 +842,13 @@ func validateSHA256HexDigest(label, digest string) error {
 		return fmt.Errorf("%s decoded length must be %d bytes", label, sha256.Size)
 	}
 	return nil
+}
+
+func safeChunkIDToInt64(chunkID uint64) (int64, error) {
+	if chunkID > math.MaxInt64 {
+		return 0, fmt.Errorf("chunk id exceeds int64 range: %d", chunkID)
+	}
+	return int64(chunkID), nil
 }
 
 func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, blockID int64, containerID int64, containerOffset int64, decoded *blocks.EncodedBlock, strictMode bool) error {
@@ -882,9 +895,13 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: iterate chunk refs for block %d", blockID), err)
 	}
 	decodedEntriesByKey := make(map[verifyChunkRefSegment]struct{}, len(decoded.Entries))
-	for _, e := range decoded.Entries {
+	for i, e := range decoded.Entries {
+		chunkID, err := safeChunkIDToInt64(e.ChunkID)
+		if err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk id conversion failed at entry=%d", blockID, i), err)
+		}
 		decodedEntriesByKey[verifyChunkRefSegment{
-			chunkID: int64(e.ChunkID),
+			chunkID: chunkID,
 			offset:  e.Offset,
 			size:    e.Size,
 		}] = struct{}{}
@@ -906,8 +923,12 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		}
 	}
 
-	for _, e := range decoded.Entries {
-		k := verifyChunkRefSegment{chunkID: int64(e.ChunkID), offset: e.Offset, size: e.Size}
+	for i, e := range decoded.Entries {
+		chunkID, err := safeChunkIDToInt64(e.ChunkID)
+		if err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk id conversion failed at entry=%d", blockID, i), err)
+		}
+		k := verifyChunkRefSegment{chunkID: chunkID, offset: e.Offset, size: e.Size}
 		if _, ok := refsByKey[k]; !ok {
 			return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
 		}
@@ -943,7 +964,11 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		for i := range decoded.Entries {
 			e := decoded.Entries[i]
 			s := segments[i]
-			if int64(e.ChunkID) != s.chunkID || e.Offset != s.offset || e.Size != s.size {
+			chunkID, err := safeChunkIDToInt64(e.ChunkID)
+			if err != nil {
+				return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk id conversion failed at entry=%d", blockID, i), err)
+			}
+			if chunkID != s.chunkID || e.Offset != s.offset || e.Size != s.size {
 				return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i), nil)
 			}
 		}
