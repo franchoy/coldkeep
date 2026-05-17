@@ -102,57 +102,87 @@ func verifyPackedManifestIndex(dbconn *sql.DB) error {
 	defer cancel()
 
 	log.Printf("Checking packed manifest/index metadata consistency...")
-
-	var blocksWithoutRefs int64
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM storage_blocks sb
-		WHERE NOT EXISTS (
-			SELECT 1
-			FROM chunk_block_refs r
-			WHERE r.block_id = sb.id
-		)
-	`).Scan(&blocksWithoutRefs); err != nil {
-		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: query storage_blocks without chunk_block_refs", err)
-	}
-	if blocksWithoutRefs > 0 {
-		return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyPackedManifestIndex: storage_blocks missing chunk_block_refs=%d", blocksWithoutRefs), nil)
-	}
-
-	var conflictingOffsetRows int64
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM (
-			SELECT block_id, offset_in_block
-			FROM chunk_block_refs
-			GROUP BY block_id, offset_in_block
-			HAVING COUNT(*) > 1
-		) t
-	`).Scan(&conflictingOffsetRows); err != nil {
-		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: query conflicting offsets", err)
-	}
-	if conflictingOffsetRows > 0 {
-		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedManifestIndex: conflicting chunk_block_refs offsets=%d", conflictingOffsetRows), nil)
-	}
-
-	var conflictingChunkRows int64
-	if err := dbconn.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM (
-			SELECT block_id, chunk_id
-			FROM chunk_block_refs
-			GROUP BY block_id, chunk_id
-			HAVING COUNT(*) > 1
-		) t
-	`).Scan(&conflictingChunkRows); err != nil {
-		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: query conflicting chunk entries", err)
-	}
-	if conflictingChunkRows > 0 {
-		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedManifestIndex: conflicting chunk_block_refs entries=%d", conflictingChunkRows), nil)
+	for _, check := range packedManifestIndexChecks() {
+		if err := runPackedManifestIndexCheck(ctx, dbconn, check); err != nil {
+			return err
+		}
 	}
 
 	log.Println(" SUCCESS ")
 	return nil
+}
+
+type packedManifestIndexCheck struct {
+	query      string
+	queryLabel string
+	errorCode  string
+	errorFmt   string
+}
+
+func packedManifestIndexChecks() []packedManifestIndexCheck {
+	return []packedManifestIndexCheck{
+		{
+			query: `
+				SELECT COUNT(*)
+				FROM storage_blocks sb
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM chunk_block_refs r
+					WHERE r.block_id = sb.id
+				)
+			`,
+			queryLabel: "query storage_blocks without chunk_block_refs",
+			errorCode:  verifyErrMetadataMissing,
+			errorFmt:   "storage_blocks missing chunk_block_refs=%d",
+		},
+		{
+			query: `
+				SELECT COUNT(*)
+				FROM (
+					SELECT block_id, offset_in_block
+					FROM chunk_block_refs
+					GROUP BY block_id, offset_in_block
+					HAVING COUNT(*) > 1
+				) t
+			`,
+			queryLabel: "query conflicting offsets",
+			errorCode:  verifyErrMetadataInvalid,
+			errorFmt:   "conflicting chunk_block_refs offsets=%d",
+		},
+		{
+			query: `
+				SELECT COUNT(*)
+				FROM (
+					SELECT block_id, chunk_id
+					FROM chunk_block_refs
+					GROUP BY block_id, chunk_id
+					HAVING COUNT(*) > 1
+				) t
+			`,
+			queryLabel: "query conflicting chunk entries",
+			errorCode:  verifyErrMetadataInvalid,
+			errorFmt:   "conflicting chunk_block_refs entries=%d",
+		},
+	}
+}
+
+func runPackedManifestIndexCheck(ctx context.Context, dbconn *sql.DB, check packedManifestIndexCheck) error {
+	rows, err := queryCountRows(ctx, dbconn, check.query)
+	if err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: "+check.queryLabel, err)
+	}
+	if rows > 0 {
+		return verifyCategoryError(check.errorCode, fmt.Sprintf("verifyPackedManifestIndex: "+check.errorFmt, rows), nil)
+	}
+	return nil
+}
+
+func queryCountRows(ctx context.Context, dbconn *sql.DB, query string, args ...any) (int64, error) {
+	var count int64
+	if err := dbconn.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // validatePackedRange checks that a numeric range [offset, offset+length) is
@@ -306,7 +336,6 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		SELECT COUNT(*)
 		FROM storage_blocks
 		WHERE compressed_hash IS NOT NULL
-		  AND length(compressed_hash) > 0
 		  AND length(compressed_hash) != $1
 	`, expectedOptionalHashLen).Scan(&invalidCompressedHashLenRows); err != nil {
 		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid compressed_hash length rows", err)
@@ -320,7 +349,6 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 		SELECT COUNT(*)
 		FROM storage_blocks
 		WHERE physical_hash IS NOT NULL
-		  AND length(physical_hash) > 0
 		  AND length(physical_hash) != $1
 	`, expectedOptionalHashLen).Scan(&invalidPhysicalHashLenRows); err != nil {
 		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid physical_hash length rows", err)

@@ -2104,6 +2104,40 @@ func TestVerifyRepositoryRejectsInvalidCompressedHashLength(t *testing.T) {
 	}
 }
 
+func TestVerifyRepositoryRejectsEmptyPhysicalHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-empty-physical")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = zeroblob(0) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set empty physical_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid physical_hash length") {
+		t.Fatalf("expected invalid physical_hash length error for empty blob, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsEmptyCompressedHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-empty-compressed")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = zeroblob(0) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set empty compressed_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid compressed_hash length") {
+		t.Fatalf("expected invalid compressed_hash length error for empty blob, got: %v", err)
+	}
+}
+
 func TestVerifyRepositoryRejectsMalformedChunkHashHex(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
