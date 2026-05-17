@@ -1,8 +1,8 @@
 # Coldkeep v1.10 Release Train
 
-Status: In progress  
+Status: Active (v1.10.3 release-ready)
 Release train: v1.10.x  
-Current release package: v1.10.2 — Validation & Security Hardening
+Current release package: v1.10.3 — Packed Storage & Metadata Integrity
 
 ## Purpose
 

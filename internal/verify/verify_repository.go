@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -56,6 +57,12 @@ func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 	if err := verifyChunkBlockRefs(dbconn); err != nil {
 		return err
 	}
+	if err := verifyPackedManifestIndex(dbconn); err != nil {
+		return err
+	}
+	if err := verifyPackedBounds(dbconn); err != nil {
+		return err
+	}
 	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
 		return err
 	}
@@ -78,9 +85,155 @@ func VerifyRepositoryFast(dbconn *sql.DB, containersDir string) error {
 	if err := verifyChunkBlockRefs(dbconn); err != nil {
 		return err
 	}
+	if err := verifyPackedManifestIndex(dbconn); err != nil {
+		return err
+	}
+	if err := verifyPackedBounds(dbconn); err != nil {
+		return err
+	}
 	if err := verifyBlockPayloadsFast(dbconn, containersDir); err != nil {
 		return err
 	}
+	return nil
+}
+
+func verifyPackedManifestIndex(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking packed manifest/index metadata consistency...")
+	for _, check := range packedManifestIndexChecks() {
+		if err := runPackedManifestIndexCheck(ctx, dbconn, check); err != nil {
+			return err
+		}
+	}
+
+	log.Println(" SUCCESS ")
+	return nil
+}
+
+type packedManifestIndexCheck struct {
+	query      string
+	queryLabel string
+	errorCode  string
+	errorFmt   string
+}
+
+func packedManifestIndexChecks() []packedManifestIndexCheck {
+	return []packedManifestIndexCheck{
+		{
+			query: `
+				SELECT COUNT(*)
+				FROM storage_blocks sb
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM chunk_block_refs r
+					WHERE r.block_id = sb.id
+				)
+			`,
+			queryLabel: "query storage_blocks without chunk_block_refs",
+			errorCode:  verifyErrMetadataMissing,
+			errorFmt:   "storage_blocks missing chunk_block_refs=%d",
+		},
+		{
+			query: `
+				SELECT COUNT(*)
+				FROM (
+					SELECT block_id, offset_in_block
+					FROM chunk_block_refs
+					GROUP BY block_id, offset_in_block
+					HAVING COUNT(*) > 1
+				) t
+			`,
+			queryLabel: "query conflicting offsets",
+			errorCode:  verifyErrMetadataInvalid,
+			errorFmt:   "conflicting chunk_block_refs offsets=%d",
+		},
+		{
+			query: `
+				SELECT COUNT(*)
+				FROM (
+					SELECT block_id, chunk_id
+					FROM chunk_block_refs
+					GROUP BY block_id, chunk_id
+					HAVING COUNT(*) > 1
+				) t
+			`,
+			queryLabel: "query conflicting chunk entries",
+			errorCode:  verifyErrMetadataInvalid,
+			errorFmt:   "conflicting chunk_block_refs entries=%d",
+		},
+	}
+}
+
+func runPackedManifestIndexCheck(ctx context.Context, dbconn *sql.DB, check packedManifestIndexCheck) error {
+	rows, err := queryCountRows(ctx, dbconn, check.query)
+	if err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: "+check.queryLabel, err)
+	}
+	if rows > 0 {
+		return verifyCategoryError(check.errorCode, fmt.Sprintf("verifyPackedManifestIndex: "+check.errorFmt, rows), nil)
+	}
+	return nil
+}
+
+func queryCountRows(ctx context.Context, dbconn *sql.DB, query string, args ...any) (int64, error) {
+	var count int64
+	if err := dbconn.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// validatePackedRange checks that a numeric range [offset, offset+length) is
+// valid within a container of the given size.
+// The overflow-safe check (length > size-offset) avoids int64 wraparound.
+func validatePackedRange(label string, offset, length, size int64) error {
+	if label == "" {
+		label = "packed range"
+	}
+	if offset < 0 {
+		return fmt.Errorf("%s offset must be non-negative", label)
+	}
+	if length < 0 {
+		return fmt.Errorf("%s length must be non-negative", label)
+	}
+	if size < 0 {
+		return fmt.Errorf("%s container size must be non-negative", label)
+	}
+	if offset > size {
+		return fmt.Errorf("%s offset exceeds container size", label)
+	}
+	if length > size-offset {
+		return fmt.Errorf("%s range exceeds container size", label)
+	}
+	return nil
+}
+
+// verifyPackedBounds validates that chunk_block_refs offset/length metadata is
+// within the bounds of the parent storage_block's plaintext_size.
+// This runs after verifyPackedManifestIndex and before verifyBlockPayloads so
+// that unsafe ranges fail before any read, seek, or allocation depends on them.
+func verifyPackedBounds(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking packed offset/length/bounds metadata...")
+
+	var outOfBoundsRefs int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM chunk_block_refs r
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		WHERE r.size_in_block > sb.plaintext_size - r.offset_in_block
+	`).Scan(&outOfBoundsRefs); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedBounds: query out-of-bounds chunk_block_refs", err)
+	}
+	if outOfBoundsRefs > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedBounds: chunk_block_refs range exceeds plaintext_size=%d", outOfBoundsRefs), nil)
+	}
+
+	log.Println(" SUCCESS ")
 	return nil
 }
 
@@ -175,6 +328,33 @@ func verifyStorageBlocks(dbconn *sql.DB) error {
 	}
 	if invalidHashLenRows > 0 {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid block_hash length=%d expected=%d", invalidHashLenRows, expectedBlockHashLen), nil)
+	}
+
+	const expectedOptionalHashLen = 32
+	var invalidCompressedHashLenRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE compressed_hash IS NOT NULL
+		  AND length(compressed_hash) != $1
+	`, expectedOptionalHashLen).Scan(&invalidCompressedHashLenRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid compressed_hash length rows", err)
+	}
+	if invalidCompressedHashLenRows > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid compressed_hash length=%d expected=%d", invalidCompressedHashLenRows, expectedOptionalHashLen), nil)
+	}
+
+	var invalidPhysicalHashLenRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks
+		WHERE physical_hash IS NOT NULL
+		  AND length(physical_hash) != $1
+	`, expectedOptionalHashLen).Scan(&invalidPhysicalHashLenRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyStorageBlocks: query invalid physical_hash length rows", err)
+	}
+	if invalidPhysicalHashLenRows > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyStorageBlocks: storage_blocks rows with invalid physical_hash length=%d expected=%d", invalidPhysicalHashLenRows, expectedOptionalHashLen), nil)
 	}
 
 	var impossibleLocationRows int64
@@ -646,20 +826,57 @@ func verifyDecodedChunkSliceHashes(ctx context.Context, dbconn *sql.DB, blockID 
 		sum := sha256.Sum256(chunkBytes)
 		computed := hex.EncodeToString(sum[:])
 
+		chunkID, err := safeChunkIDToInt64(entry.ChunkID)
+		if err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk id conversion failed at entry=%d", blockID, i), err)
+		}
+
 		var expected string
-		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, int64(entry.ChunkID)).Scan(&expected); err != nil {
+		if err := dbconn.QueryRowContext(ctx, `SELECT chunk_hash FROM chunk WHERE id = $1`, chunkID).Scan(&expected); err != nil {
 			if err == sql.ErrNoRows {
 				return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d from decoded entry=%d missing chunk row", blockID, entry.ChunkID, i), nil)
 			}
 			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d load chunk hash for chunk %d", blockID, entry.ChunkID), err)
 		}
 
-		if !strings.EqualFold(strings.TrimSpace(expected), computed) {
-			return verifyStageError(verifyErrChunkHashMismatch, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, strings.TrimSpace(expected)), nil)
+		normalizedExpected := strings.TrimSpace(expected)
+		if err := validateSHA256HexDigest(fmt.Sprintf("verifyBlockPayloads: block %d chunk %d expected chunk_hash", blockID, entry.ChunkID), normalizedExpected); err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d invalid expected chunk_hash format", blockID, entry.ChunkID), err)
+		}
+
+		if !strings.EqualFold(normalizedExpected, computed) {
+			return verifyStageError(verifyErrChunkHashMismatch, meta, fmt.Sprintf("verifyBlockPayloads: block %d chunk %d hash mismatch computed=%s expected=%s", blockID, entry.ChunkID, computed, normalizedExpected), nil)
 		}
 	}
 
 	return nil
+}
+
+func validateSHA256HexDigest(label, digest string) error {
+	if strings.TrimSpace(label) == "" {
+		label = "digest"
+	}
+	if digest == "" {
+		return fmt.Errorf("%s is required", label)
+	}
+	if len(digest) != sha256.Size*2 {
+		return fmt.Errorf("%s must be %d hex chars", label, sha256.Size*2)
+	}
+	decoded, err := hex.DecodeString(digest)
+	if err != nil {
+		return fmt.Errorf("%s must be valid hex: %w", label, err)
+	}
+	if len(decoded) != sha256.Size {
+		return fmt.Errorf("%s decoded length must be %d bytes", label, sha256.Size)
+	}
+	return nil
+}
+
+func safeChunkIDToInt64(chunkID uint64) (int64, error) {
+	if chunkID > math.MaxInt64 {
+		return 0, fmt.Errorf("chunk id exceeds int64 range: %d", chunkID)
+	}
+	return int64(chunkID), nil
 }
 
 func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, blockID int64, containerID int64, containerOffset int64, decoded *blocks.EncodedBlock, strictMode bool) error {
@@ -706,9 +923,13 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: iterate chunk refs for block %d", blockID), err)
 	}
 	decodedEntriesByKey := make(map[verifyChunkRefSegment]struct{}, len(decoded.Entries))
-	for _, e := range decoded.Entries {
+	for i, e := range decoded.Entries {
+		chunkID, err := safeChunkIDToInt64(e.ChunkID)
+		if err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk id conversion failed at entry=%d", blockID, i), err)
+		}
 		decodedEntriesByKey[verifyChunkRefSegment{
-			chunkID: int64(e.ChunkID),
+			chunkID: chunkID,
 			offset:  e.Offset,
 			size:    e.Size,
 		}] = struct{}{}
@@ -730,8 +951,12 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		}
 	}
 
-	for _, e := range decoded.Entries {
-		k := verifyChunkRefSegment{chunkID: int64(e.ChunkID), offset: e.Offset, size: e.Size}
+	for i, e := range decoded.Entries {
+		chunkID, err := safeChunkIDToInt64(e.ChunkID)
+		if err != nil {
+			return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk id conversion failed at entry=%d", blockID, i), err)
+		}
+		k := verifyChunkRefSegment{chunkID: chunkID, offset: e.Offset, size: e.Size}
 		if _, ok := refsByKey[k]; !ok {
 			return verifyStageError(verifyErrMetadataMissing, meta, fmt.Sprintf("verifyBlockPayloads: block %d encoded block table contains chunk not in chunk_block_refs chunk=%d offset=%d size=%d", blockID, e.ChunkID, e.Offset, e.Size), nil)
 		}
@@ -767,7 +992,11 @@ func verifyDecodedBlockSegmentsAgainstRefs(ctx context.Context, dbconn *sql.DB, 
 		for i := range decoded.Entries {
 			e := decoded.Entries[i]
 			s := segments[i]
-			if int64(e.ChunkID) != s.chunkID || e.Offset != s.offset || e.Size != s.size {
+			chunkID, err := safeChunkIDToInt64(e.ChunkID)
+			if err != nil {
+				return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: block %d decoded chunk id conversion failed at entry=%d", blockID, i), err)
+			}
+			if chunkID != s.chunkID || e.Offset != s.offset || e.Size != s.size {
 				return verifyStageError(verifyErrMetadataInvalid, meta, fmt.Sprintf("verifyBlockPayloads: strict mode block %d entry mismatch at index %d", blockID, i), nil)
 			}
 		}

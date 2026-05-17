@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/franchoy/coldkeep/internal/blocks"
@@ -239,6 +240,9 @@ func validateDecodedChunkLayout(decoded *blocks.EncodedBlock) error {
 		chunkSlice, err := blocks.SliceChunkFromPayload(decoded.Payload, entry)
 		if err != nil {
 			return fmt.Errorf("chunk entry index=%d out of bounds: %w", i, err)
+		}
+		if entry.Size > uint64(math.MaxInt) {
+			return fmt.Errorf("chunk entry index=%d size exceeds int range size=%d", i, entry.Size)
 		}
 		if len(chunkSlice) != int(entry.Size) {
 			return fmt.Errorf("chunk entry index=%d size mismatch entry=%d actual=%d", i, entry.Size, len(chunkSlice))

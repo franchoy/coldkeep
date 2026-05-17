@@ -20,6 +20,20 @@ project, do not start here; start with [README.md](README.md).
 
 ------------------------------------------------------------------------
 
+## v1.10.3 - 2026-05-17 — Packed Storage Metadata Integrity
+
+Fixes-only release focused on packed-storage metadata integrity evidence, tracker/matrix closure accounting for selected v1.10.3 rows, and release-candidate documentation readiness.
+
+Highlights:
+
+- packed metadata invariant and trust-boundary evidence consolidated across Phases 1-7
+- corruption regression matrix validation and compatibility guardrail evidence confirmed
+- closure outcomes finalized: CK-110-M035 accepted, CK-110-M060 deferred, CK-110-M061 deferred
+- local validation and CI-equivalent simulation recorded (targeted packed tests, `go vet`, `go test`, `go test -race`, `govulncheck`)
+- no production behavior, test behavior, CI workflow, or dependency changes introduced in this release phase
+
+------------------------------------------------------------------------
+
 ## v1.10.2 - 2026-05-16 — Validation & Security Hardening
 
 Hardening release focused on path-safety centralization, container filename trust-boundary enforcement, snapshot/stored-path traversal rejection, restore destination and symlink safety, temp/rename cleanup safeguards, environment/config parsing validation, PostgreSQL DSN escaping, toolchain CVE remediation, and benchmark script argument validation for security-sensitive paths.

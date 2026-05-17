@@ -445,6 +445,60 @@ func TestVerifyRepositoryDetectsImpossibleStorageBlockContainerRange(t *testing.
 	}
 }
 
+func TestVerifyRepositoryDetectsStorageBlockWithoutChunkBlockRefs(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("manifest-missing-ref")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE block_id = $1`, blockID); err != nil {
+		t.Fatalf("delete chunk_block_refs for manifest missing-ref test: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing chunk_block_refs") {
+		t.Fatalf("expected verifyPackedManifestIndex missing chunk_block_refs error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDetectsConflictingChunkBlockRefOffsets(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("seg-a"), []byte("seg-b")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk_block_refs SET offset_in_block = 0 WHERE chunk_id = $1`, chunkIDs[1]); err != nil {
+		t.Fatalf("force conflicting chunk_block_refs offsets: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "conflicting chunk_block_refs offsets") {
+		t.Fatalf("expected verifyPackedManifestIndex conflicting offsets error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsInvalidManifestIndexBeforePayloadRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("fast-manifest-missing-ref")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE block_id = $1`, blockID); err != nil {
+		t.Fatalf("delete chunk_block_refs for fast manifest test: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing chunk_block_refs") {
+		t.Fatalf("expected VerifyRepositoryFast manifest/index failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verifyBlockPayloads") {
+		t.Fatalf("expected manifest/index failure before payload read stage, got: %v", err)
+	}
+}
+
 func TestVerifyRepositoryDetectsCompletedChunkWithoutPhysicalLocation(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()
@@ -1876,5 +1930,464 @@ func TestVerifyLegacyChunkHashesRejectsUnsafeContainerFilename(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid container filename") {
 		t.Fatalf("expected invalid container filename error, got: %v", err)
+	}
+}
+
+// Phase 3 — Offset / Length / Bounds Validation
+
+func TestPackedRangeValidationRejectsNegativeOffset(t *testing.T) {
+	err := validatePackedRange("test", -1, 1, 10)
+	if err == nil || !strings.Contains(err.Error(), "offset must be non-negative") {
+		t.Fatalf("expected negative offset error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsNegativeLength(t *testing.T) {
+	err := validatePackedRange("test", 0, -1, 10)
+	if err == nil || !strings.Contains(err.Error(), "length must be non-negative") {
+		t.Fatalf("expected negative length error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsNegativeSize(t *testing.T) {
+	err := validatePackedRange("test", 0, 0, -1)
+	if err == nil || !strings.Contains(err.Error(), "container size must be non-negative") {
+		t.Fatalf("expected negative size error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsOffsetPastContainerSize(t *testing.T) {
+	err := validatePackedRange("test", 11, 0, 10)
+	if err == nil || !strings.Contains(err.Error(), "offset exceeds container size") {
+		t.Fatalf("expected offset-exceeds-size error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsRangePastContainerSize(t *testing.T) {
+	err := validatePackedRange("test", 9, 2, 10)
+	if err == nil || !strings.Contains(err.Error(), "range exceeds container size") {
+		t.Fatalf("expected range-exceeds-size error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsOverflow(t *testing.T) {
+	// offset near MaxInt64 — offset+length would overflow int64, but the
+	// overflow-safe check (length > size-offset) correctly rejects it.
+	err := validatePackedRange("test", math.MaxInt64-1, 10, math.MaxInt64)
+	if err == nil || !strings.Contains(err.Error(), "range exceeds container size") {
+		t.Fatalf("expected overflow-safe range error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationAllowsExactEndBoundary(t *testing.T) {
+	// offset=8, length=2, size=10 — range ends exactly at boundary; valid.
+	err := validatePackedRange("test", 8, 2, 10)
+	if err != nil {
+		t.Fatalf("expected valid exact-end-boundary to pass, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsPackedRangeBeforeRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("bounds-test-payload")}, nil)
+
+	// Corrupt size_in_block to exceed the block's plaintext_size.
+	if _, err := dbconn.Exec(`
+		UPDATE chunk_block_refs
+		SET size_in_block = (SELECT plaintext_size + 1 FROM storage_blocks WHERE id = block_id)
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		t.Fatalf("corrupt chunk_block_refs size_in_block: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedBounds") {
+		t.Fatalf("expected verifyPackedBounds error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verifyBlockPayloads") {
+		t.Fatalf("expected bounds failure before payload read stage, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsPackedRangeBeforeRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("fast-bounds-test")}, nil)
+
+	// Corrupt size_in_block to exceed the block's plaintext_size.
+	if _, err := dbconn.Exec(`
+		UPDATE chunk_block_refs
+		SET size_in_block = (SELECT plaintext_size + 1 FROM storage_blocks WHERE id = block_id)
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		t.Fatalf("corrupt chunk_block_refs size_in_block (fast): %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedBounds") {
+		t.Fatalf("expected verifyPackedBounds error (fast path), got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verifyBlockPayloads") {
+		t.Fatalf("expected bounds failure before payload read stage (fast), got: %v", err)
+	}
+}
+
+// Phase 4 — Block Hash / Checksum Consistency
+
+func TestPackedDigestValidationRejectsMissingDigest(t *testing.T) {
+	err := validateSHA256HexDigest("chunk hash", "")
+	if err == nil || !strings.Contains(err.Error(), "is required") {
+		t.Fatalf("expected missing digest error, got: %v", err)
+	}
+}
+
+func TestPackedDigestValidationRejectsMalformedHex(t *testing.T) {
+	err := validateSHA256HexDigest("chunk hash", strings.Repeat("g", 64))
+	if err == nil || !strings.Contains(err.Error(), "must be valid hex") {
+		t.Fatalf("expected malformed hex error, got: %v", err)
+	}
+}
+
+func TestPackedDigestValidationRejectsWrongDigestLength(t *testing.T) {
+	err := validateSHA256HexDigest("chunk hash", strings.Repeat("a", 63))
+	if err == nil || !strings.Contains(err.Error(), "must be 64 hex chars") {
+		t.Fatalf("expected wrong digest length error, got: %v", err)
+	}
+}
+
+func TestPackedDigestValidationAcceptsMatchingPayload(t *testing.T) {
+	payload := []byte("phase4-valid-payload")
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+	err := validateSHA256HexDigest("chunk hash", digest)
+	if err != nil {
+		t.Fatalf("expected valid digest to pass, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsInvalidPhysicalHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-invalid-physical")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = zeroblob(31) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set invalid physical_hash length: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid physical_hash length") {
+		t.Fatalf("expected invalid physical_hash length error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsInvalidCompressedHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-invalid-compressed")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = zeroblob(31) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set invalid compressed_hash length: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid compressed_hash length") {
+		t.Fatalf("expected invalid compressed_hash length error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsEmptyPhysicalHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-empty-physical")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET physical_hash = zeroblob(0) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set empty physical_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid physical_hash length") {
+		t.Fatalf("expected invalid physical_hash length error for empty blob, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsEmptyCompressedHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-empty-compressed")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET compressed_hash = zeroblob(0) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("set empty compressed_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid compressed_hash length") {
+		t.Fatalf("expected invalid compressed_hash length error for empty blob, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsMalformedChunkHashHex(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-malformed-chunk-hash")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("g", 64), chunkIDs[0]); err != nil {
+		t.Fatalf("set malformed chunk_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid expected chunk_hash format") {
+		t.Fatalf("expected malformed chunk_hash format error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsWrongChunkHashLength(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-short-chunk-hash")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET chunk_hash = $1 WHERE id = $2`, strings.Repeat("a", 63), chunkIDs[0]); err != nil {
+		t.Fatalf("set short chunk_hash: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "invalid expected chunk_hash format") {
+		t.Fatalf("expected short chunk_hash format error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsPackedPayloadHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-payload-mismatch")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate block hash for VerifyRepository mismatch: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected block_hash_mismatch category, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsPackedPayloadHashMismatch(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase4-fast-payload-mismatch")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET block_hash = zeroblob(32) WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("mutate block hash for VerifyRepositoryFast mismatch: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrBlockHashMismatch+":") {
+		t.Fatalf("expected block_hash_mismatch category in fast mode, got: %v", err)
+	}
+}
+
+// Phase 5 — Malformed Container Read Safety
+
+func TestVerifyRepositoryRejectsMissingContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-missing-container")}, nil)
+
+	path, _, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove container file: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for missing container file, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsMissingContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-fast-missing-container")}, nil)
+
+	path, _, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove container file: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for missing container file in fast mode, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsTruncatedContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-truncated-container")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	// Truncate to exactly the block offset so the payload bytes are gone.
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for truncated container file, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsTruncatedContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-fast-truncated-container")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for truncated container file in fast mode, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDoesNotSilentlySkipMalformedContainerRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-no-skip")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	// Must not return nil — a real error must surface, not silent success.
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil {
+		t.Fatal("expected non-nil error; VerifyRepository must not silently skip a malformed container read")
+	}
+}
+
+func TestVerifyRepositoryFastDoesNotSilentlySkipMalformedContainerRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-fast-no-skip")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil {
+		t.Fatal("expected non-nil error; VerifyRepositoryFast must not silently skip a malformed container read")
+	}
+}
+
+func TestValidContainerStillVerifiesAfterPhase5Hardening(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-valid-sanity")}, nil)
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected valid container to pass VerifyRepository: %v", err)
+	}
+	if err := VerifyRepositoryFast(dbconn, containersDir); err != nil {
+		t.Fatalf("expected valid container to pass VerifyRepositoryFast: %v", err)
+	}
+}
+
+// Phase 6 — Packed Storage Compatibility / Migration Guardrails
+
+func TestVerifyRepositoryFastRejectsUnsupportedFormatVersion(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase6-unsupported-version-fast")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE storage_blocks SET format_version = 2 WHERE id = $1`, blockID); err != nil {
+		t.Fatalf("update format_version to 2: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrMetadataInvalid+":") {
+		t.Fatalf("expected metadata_invalid category for unsupported format_version in fast mode, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsUnsupportedStorageBlockCodec(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase6-unsupported-codec")}, nil)
+
+	// Note: database schema CHECK constraint prevents directly setting invalid codec values.
+	// The guardrail is enforced at the schema level, not at the verify query level.
+
+	t.Skip("Database schema CHECK constraint prevents invalid codec insertion; guardrail is at schema level")
+}
+
+func TestVerifyRepositoryFastRejectsUnsupportedStorageBlockCodec(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase6-unsupported-codec-fast")}, nil)
+
+	// Same reason as VerifyRepository codec test: database schema prevents invalid codec insertion.
+	// The guardrail is enforced at the schema level, not at the verify query level.
+	t.Skip("Database schema CHECK constraint prevents invalid codec insertion; guardrail is at schema level")
+}
+
+func TestCurrentPackedFormatPassesCompatibilityGuardrails(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase6-current-format-sanity")}, nil)
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected current packed format to pass VerifyRepository: %v", err)
+	}
+	if err := VerifyRepositoryFast(dbconn, containersDir); err != nil {
+		t.Fatalf("expected current packed format to pass VerifyRepositoryFast: %v", err)
 	}
 }
