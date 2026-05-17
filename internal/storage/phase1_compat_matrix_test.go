@@ -502,21 +502,13 @@ func TestPhase1CompatRestoreDeterminismAfterConcurrentWrites(t *testing.T) {
 // reference measurement. The tests do NOT compare against a committed baseline
 // file (that is done by external CI tooling) — they assert that Phase 1 code
 // stays within a generous factor so egregious regressions are caught without
-// flakiness from CI hardware variance. The quality job runs these tests under
-// -race, so the floor is intentionally low enough to stay stable on hosted CI.
-const (
-	// storeThroughputMinMBps is the minimum acceptable store throughput (MB/s)
-	// for a 4 MiB payload on in-memory SQLite. Phase 0 reference: ~100 MB/s.
-	// We use 1 MB/s as a conservative floor to catch complete breakage only.
-	storeThroughputMinMBps = 1.0
+// flakiness from CI hardware variance. The minimum throughput floors are
+// build-tagged so race-enabled CI can stay conservative while non-race runs
+// enforce the stricter steady-state floor.
 
-	// restoreThroughputMinMBps is the minimum acceptable restore throughput.
-	restoreThroughputMinMBps = 1.0
-
-	// maxStoreDBInserts is the maximum number of storage_blocks rows we expect
-	// per 4 MiB file (generous upper bound to catch runaway INSERT loops).
-	maxStoreDBInsertsPerMiB = 100
-)
+// maxStoreDBInserts is the maximum number of storage_blocks rows we expect
+// per 4 MiB file (generous upper bound to catch runaway INSERT loops).
+const maxStoreDBInsertsPerMiB = 100
 
 // benchPayloadMiB is the payload size for parity benchmarks.
 const benchPayloadMiB = 4
