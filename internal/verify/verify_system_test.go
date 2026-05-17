@@ -2171,3 +2171,130 @@ func TestVerifyRepositoryFastRejectsPackedPayloadHashMismatch(t *testing.T) {
 		t.Fatalf("expected block_hash_mismatch category in fast mode, got: %v", err)
 	}
 }
+
+// Phase 5 — Malformed Container Read Safety
+
+func TestVerifyRepositoryRejectsMissingContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-missing-container")}, nil)
+
+	path, _, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove container file: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for missing container file, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsMissingContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-fast-missing-container")}, nil)
+
+	path, _, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove container file: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for missing container file in fast mode, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsTruncatedContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-truncated-container")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	// Truncate to exactly the block offset so the payload bytes are gone.
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for truncated container file, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsTruncatedContainerFile(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-fast-truncated-container")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.HasPrefix(err.Error(), verifyErrPhysicalMissing+":") {
+		t.Fatalf("expected physical_missing category for truncated container file in fast mode, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDoesNotSilentlySkipMalformedContainerRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-no-skip")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	// Must not return nil — a real error must surface, not silent success.
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil {
+		t.Fatal("expected non-nil error; VerifyRepository must not silently skip a malformed container read")
+	}
+}
+
+func TestVerifyRepositoryFastDoesNotSilentlySkipMalformedContainerRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-fast-no-skip")}, nil)
+
+	path, offset, _, _ := packedFixtureBlockStorageMeta(t, dbconn, blockID, containersDir)
+	if err := os.Truncate(path, offset); err != nil {
+		t.Fatalf("truncate container file: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil {
+		t.Fatal("expected non-nil error; VerifyRepositoryFast must not silently skip a malformed container read")
+	}
+}
+
+func TestValidContainerStillVerifiesAfterPhase5Hardening(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, _ = seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("phase5-valid-sanity")}, nil)
+
+	if err := VerifyRepository(dbconn, containersDir); err != nil {
+		t.Fatalf("expected valid container to pass VerifyRepository: %v", err)
+	}
+	if err := VerifyRepositoryFast(dbconn, containersDir); err != nil {
+		t.Fatalf("expected valid container to pass VerifyRepositoryFast: %v", err)
+	}
+}
