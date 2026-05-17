@@ -1932,3 +1932,107 @@ func TestVerifyLegacyChunkHashesRejectsUnsafeContainerFilename(t *testing.T) {
 		t.Fatalf("expected invalid container filename error, got: %v", err)
 	}
 }
+
+// Phase 3 — Offset / Length / Bounds Validation
+
+func TestPackedRangeValidationRejectsNegativeOffset(t *testing.T) {
+	err := validatePackedRange("test", -1, 1, 10)
+	if err == nil || !strings.Contains(err.Error(), "offset must be non-negative") {
+		t.Fatalf("expected negative offset error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsNegativeLength(t *testing.T) {
+	err := validatePackedRange("test", 0, -1, 10)
+	if err == nil || !strings.Contains(err.Error(), "length must be non-negative") {
+		t.Fatalf("expected negative length error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsNegativeSize(t *testing.T) {
+	err := validatePackedRange("test", 0, 0, -1)
+	if err == nil || !strings.Contains(err.Error(), "container size must be non-negative") {
+		t.Fatalf("expected negative size error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsOffsetPastContainerSize(t *testing.T) {
+	err := validatePackedRange("test", 11, 0, 10)
+	if err == nil || !strings.Contains(err.Error(), "offset exceeds container size") {
+		t.Fatalf("expected offset-exceeds-size error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsRangePastContainerSize(t *testing.T) {
+	err := validatePackedRange("test", 9, 2, 10)
+	if err == nil || !strings.Contains(err.Error(), "range exceeds container size") {
+		t.Fatalf("expected range-exceeds-size error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationRejectsOverflow(t *testing.T) {
+	// offset near MaxInt64 — offset+length would overflow int64, but the
+	// overflow-safe check (length > size-offset) correctly rejects it.
+	err := validatePackedRange("test", math.MaxInt64-1, 10, math.MaxInt64)
+	if err == nil || !strings.Contains(err.Error(), "range exceeds container size") {
+		t.Fatalf("expected overflow-safe range error, got: %v", err)
+	}
+}
+
+func TestPackedRangeValidationAllowsExactEndBoundary(t *testing.T) {
+	// offset=8, length=2, size=10 — range ends exactly at boundary; valid.
+	err := validatePackedRange("test", 8, 2, 10)
+	if err != nil {
+		t.Fatalf("expected valid exact-end-boundary to pass, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryRejectsPackedRangeBeforeRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("bounds-test-payload")}, nil)
+
+	// Corrupt size_in_block to exceed the block's plaintext_size.
+	if _, err := dbconn.Exec(`
+		UPDATE chunk_block_refs
+		SET size_in_block = (SELECT plaintext_size + 1 FROM storage_blocks WHERE id = block_id)
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		t.Fatalf("corrupt chunk_block_refs size_in_block: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedBounds") {
+		t.Fatalf("expected verifyPackedBounds error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verifyBlockPayloads") {
+		t.Fatalf("expected bounds failure before payload read stage, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsPackedRangeBeforeRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("fast-bounds-test")}, nil)
+
+	// Corrupt size_in_block to exceed the block's plaintext_size.
+	if _, err := dbconn.Exec(`
+		UPDATE chunk_block_refs
+		SET size_in_block = (SELECT plaintext_size + 1 FROM storage_blocks WHERE id = block_id)
+		WHERE block_id = $1
+	`, blockID); err != nil {
+		t.Fatalf("corrupt chunk_block_refs size_in_block (fast): %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedBounds") {
+		t.Fatalf("expected verifyPackedBounds error (fast path), got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verifyBlockPayloads") {
+		t.Fatalf("expected bounds failure before payload read stage (fast), got: %v", err)
+	}
+}

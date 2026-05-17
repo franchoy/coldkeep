@@ -59,6 +59,9 @@ func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 	if err := verifyPackedManifestIndex(dbconn); err != nil {
 		return err
 	}
+	if err := verifyPackedBounds(dbconn); err != nil {
+		return err
+	}
 	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
 		return err
 	}
@@ -82,6 +85,9 @@ func VerifyRepositoryFast(dbconn *sql.DB, containersDir string) error {
 		return err
 	}
 	if err := verifyPackedManifestIndex(dbconn); err != nil {
+		return err
+	}
+	if err := verifyPackedBounds(dbconn); err != nil {
 		return err
 	}
 	if err := verifyBlockPayloadsFast(dbconn, containersDir); err != nil {
@@ -142,6 +148,58 @@ func verifyPackedManifestIndex(dbconn *sql.DB) error {
 	}
 	if conflictingChunkRows > 0 {
 		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedManifestIndex: conflicting chunk_block_refs entries=%d", conflictingChunkRows), nil)
+	}
+
+	log.Println(" SUCCESS ")
+	return nil
+}
+
+// validatePackedRange checks that a numeric range [offset, offset+length) is
+// valid within a container of the given size.
+// The overflow-safe check (length > size-offset) avoids int64 wraparound.
+func validatePackedRange(label string, offset, length, size int64) error {
+	if label == "" {
+		label = "packed range"
+	}
+	if offset < 0 {
+		return fmt.Errorf("%s offset must be non-negative", label)
+	}
+	if length < 0 {
+		return fmt.Errorf("%s length must be non-negative", label)
+	}
+	if size < 0 {
+		return fmt.Errorf("%s container size must be non-negative", label)
+	}
+	if offset > size {
+		return fmt.Errorf("%s offset exceeds container size", label)
+	}
+	if length > size-offset {
+		return fmt.Errorf("%s range exceeds container size", label)
+	}
+	return nil
+}
+
+// verifyPackedBounds validates that chunk_block_refs offset/length metadata is
+// within the bounds of the parent storage_block's plaintext_size.
+// This runs after verifyPackedManifestIndex and before verifyBlockPayloads so
+// that unsafe ranges fail before any read, seek, or allocation depends on them.
+func verifyPackedBounds(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking packed offset/length/bounds metadata...")
+
+	var outOfBoundsRefs int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM chunk_block_refs r
+		JOIN storage_blocks sb ON sb.id = r.block_id
+		WHERE r.size_in_block > sb.plaintext_size - r.offset_in_block
+	`).Scan(&outOfBoundsRefs); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedBounds: query out-of-bounds chunk_block_refs", err)
+	}
+	if outOfBoundsRefs > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedBounds: chunk_block_refs range exceeds plaintext_size=%d", outOfBoundsRefs), nil)
 	}
 
 	log.Println(" SUCCESS ")
