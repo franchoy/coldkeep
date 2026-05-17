@@ -445,6 +445,60 @@ func TestVerifyRepositoryDetectsImpossibleStorageBlockContainerRange(t *testing.
 	}
 }
 
+func TestVerifyRepositoryDetectsStorageBlockWithoutChunkBlockRefs(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("manifest-missing-ref")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE block_id = $1`, blockID); err != nil {
+		t.Fatalf("delete chunk_block_refs for manifest missing-ref test: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing chunk_block_refs") {
+		t.Fatalf("expected verifyPackedManifestIndex missing chunk_block_refs error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryDetectsConflictingChunkBlockRefOffsets(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	_, chunkIDs := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("seg-a"), []byte("seg-b")}, nil)
+
+	if _, err := dbconn.Exec(`UPDATE chunk_block_refs SET offset_in_block = 0 WHERE chunk_id = $1`, chunkIDs[1]); err != nil {
+		t.Fatalf("force conflicting chunk_block_refs offsets: %v", err)
+	}
+
+	err := VerifyRepository(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "conflicting chunk_block_refs offsets") {
+		t.Fatalf("expected verifyPackedManifestIndex conflicting offsets error, got: %v", err)
+	}
+}
+
+func TestVerifyRepositoryFastRejectsInvalidManifestIndexBeforePayloadRead(t *testing.T) {
+	dbconn := openVerifyTestDB(t)
+	defer func() { _ = dbconn.Close() }()
+
+	containersDir := t.TempDir()
+	blockID, _ := seedVerifyPackedBlockFixture(t, dbconn, containersDir, [][]byte{[]byte("fast-manifest-missing-ref")}, nil)
+
+	if _, err := dbconn.Exec(`DELETE FROM chunk_block_refs WHERE block_id = $1`, blockID); err != nil {
+		t.Fatalf("delete chunk_block_refs for fast manifest test: %v", err)
+	}
+
+	err := VerifyRepositoryFast(dbconn, containersDir)
+	if err == nil || !strings.Contains(err.Error(), "verifyPackedManifestIndex") || !strings.Contains(err.Error(), "missing chunk_block_refs") {
+		t.Fatalf("expected VerifyRepositoryFast manifest/index failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "verifyBlockPayloads") {
+		t.Fatalf("expected manifest/index failure before payload read stage, got: %v", err)
+	}
+}
+
 func TestVerifyRepositoryDetectsCompletedChunkWithoutPhysicalLocation(t *testing.T) {
 	dbconn := openVerifyTestDB(t)
 	defer func() { _ = dbconn.Close() }()

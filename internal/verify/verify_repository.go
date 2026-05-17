@@ -56,6 +56,9 @@ func VerifyRepository(dbconn *sql.DB, containersDir string) error {
 	if err := verifyChunkBlockRefs(dbconn); err != nil {
 		return err
 	}
+	if err := verifyPackedManifestIndex(dbconn); err != nil {
+		return err
+	}
 	if err := verifyBlockPayloads(dbconn, containersDir); err != nil {
 		return err
 	}
@@ -78,9 +81,70 @@ func VerifyRepositoryFast(dbconn *sql.DB, containersDir string) error {
 	if err := verifyChunkBlockRefs(dbconn); err != nil {
 		return err
 	}
+	if err := verifyPackedManifestIndex(dbconn); err != nil {
+		return err
+	}
 	if err := verifyBlockPayloadsFast(dbconn, containersDir); err != nil {
 		return err
 	}
+	return nil
+}
+
+func verifyPackedManifestIndex(dbconn *sql.DB) error {
+	ctx, cancel := db.NewOperationContext(context.Background())
+	defer cancel()
+
+	log.Printf("Checking packed manifest/index metadata consistency...")
+
+	var blocksWithoutRefs int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM storage_blocks sb
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM chunk_block_refs r
+			WHERE r.block_id = sb.id
+		)
+	`).Scan(&blocksWithoutRefs); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: query storage_blocks without chunk_block_refs", err)
+	}
+	if blocksWithoutRefs > 0 {
+		return verifyCategoryError(verifyErrMetadataMissing, fmt.Sprintf("verifyPackedManifestIndex: storage_blocks missing chunk_block_refs=%d", blocksWithoutRefs), nil)
+	}
+
+	var conflictingOffsetRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT block_id, offset_in_block
+			FROM chunk_block_refs
+			GROUP BY block_id, offset_in_block
+			HAVING COUNT(*) > 1
+		) t
+	`).Scan(&conflictingOffsetRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: query conflicting offsets", err)
+	}
+	if conflictingOffsetRows > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedManifestIndex: conflicting chunk_block_refs offsets=%d", conflictingOffsetRows), nil)
+	}
+
+	var conflictingChunkRows int64
+	if err := dbconn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT block_id, chunk_id
+			FROM chunk_block_refs
+			GROUP BY block_id, chunk_id
+			HAVING COUNT(*) > 1
+		) t
+	`).Scan(&conflictingChunkRows); err != nil {
+		return verifyCategoryError(verifyErrMetadataInvalid, "verifyPackedManifestIndex: query conflicting chunk entries", err)
+	}
+	if conflictingChunkRows > 0 {
+		return verifyCategoryError(verifyErrMetadataInvalid, fmt.Sprintf("verifyPackedManifestIndex: conflicting chunk_block_refs entries=%d", conflictingChunkRows), nil)
+	}
+
+	log.Println(" SUCCESS ")
 	return nil
 }
 
