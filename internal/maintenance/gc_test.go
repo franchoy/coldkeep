@@ -139,6 +139,79 @@ func TestRunGCWithAdvisoryUnlockFailureStillSucceeds(t *testing.T) {
 	}
 }
 
+func TestRunGCRefusesWhenAdvisoryLockAlreadyHeld(t *testing.T) {
+	requireDB(t)
+
+	lockerDB, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect locker db: %v", err)
+	}
+	defer lockerDB.Close()
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+
+	applySchema(t, dbconn)
+	resetDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	originalContainersDir := container.ContainersDir
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+	container.ContainersDir = containersDir
+
+	filename := "gc-lock-held.bin"
+	containerPath := filepath.Join(containersDir, filename)
+	if err := os.WriteFile(containerPath, []byte("gc lock held"), 0o644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)`,
+		filename,
+		int64(len("gc lock held")),
+		container.GetContainerMaxSize(),
+	); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	var locked bool
+	if err := lockerDB.QueryRow(`SELECT pg_try_advisory_lock($1)`, gcAdvisoryLockID).Scan(&locked); err != nil {
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+	if !locked {
+		t.Fatal("expected to acquire advisory lock in test setup")
+	}
+	t.Cleanup(func() {
+		_, _ = lockerDB.Exec(`SELECT pg_advisory_unlock($1)`, gcAdvisoryLockID)
+	})
+
+	_, gcErr := RunGCWithContainersDirResult(false, containersDir)
+	if gcErr == nil {
+		t.Fatal("expected gc refusal when advisory lock is held")
+	}
+	if !strings.Contains(gcErr.Error(), "already running") {
+		t.Fatalf("expected lock-held refusal message, got: %v", gcErr)
+	}
+
+	if _, err := os.Stat(containerPath); err != nil {
+		t.Fatalf("expected container file to remain after lock-held refusal, stat err=%v", err)
+	}
+
+	var remaining int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE filename = $1`, filename).Scan(&remaining); err != nil {
+		t.Fatalf("count remaining container rows: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("expected metadata to remain after lock-held refusal, got %d rows", remaining)
+	}
+}
+
 func TestRunGCRefusesOnPhysicalIntegrityIssues(t *testing.T) {
 	// This test stubs gcPhysicalIntegrityCheck to simulate a drifted graph.
 	// No DB connection required — the refusal path is exercised before any

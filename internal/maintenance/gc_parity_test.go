@@ -350,6 +350,103 @@ func TestRunGCDryRunCandidateCountMatchesDestructiveGC(t *testing.T) {
 	}
 }
 
+// TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation verifies that
+// a dry-run candidate result is only a point-in-time preview. If repository
+// liveness mutates before destructive GC, the destructive pass must re-evaluate
+// safety and avoid deletion of now-live data.
+func TestRunGCDryRunDoesNotAuthorizeLaterDeletionAfterMutation(t *testing.T) {
+	requireParityDB(t)
+
+	dbconn, err := db.ConnectDB()
+	if err != nil {
+		t.Fatalf("connect db: %v", err)
+	}
+	defer dbconn.Close()
+
+	applyParitySchema(t, dbconn)
+	resetParityDB(t, dbconn)
+
+	containersDir := t.TempDir()
+	originalContainersDir := container.ContainersDir
+	t.Cleanup(func() {
+		container.ContainersDir = originalContainersDir
+	})
+	container.ContainersDir = containersDir
+
+	payload := []byte("dry-run-authorization-boundary")
+	filename := "dry-run-not-authorization.bin"
+	containerPath := filepath.Join(containersDir, filename)
+	if err := os.WriteFile(containerPath, payload, 0o644); err != nil {
+		t.Fatalf("write container file: %v", err)
+	}
+
+	var containerID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO container (filename, current_size, max_size, sealed, quarantine)
+		 VALUES ($1, $2, $3, TRUE, FALSE)
+		 RETURNING id`,
+		filename,
+		int64(len(payload)),
+		container.GetContainerMaxSize(),
+	).Scan(&containerID); err != nil {
+		t.Fatalf("insert container row: %v", err)
+	}
+
+	var chunkID int64
+	if err := dbconn.QueryRow(
+		`INSERT INTO chunk (chunk_hash, size, status, live_ref_count, pin_count, chunker_version)
+		 VALUES ($1, $2, 'COMPLETED', 0, 0, 'v2-fastcdc')
+		 RETURNING id`,
+		"dry-run-not-authorization-chunk",
+		int64(len(payload)),
+	).Scan(&chunkID); err != nil {
+		t.Fatalf("insert chunk row: %v", err)
+	}
+
+	if _, err := dbconn.Exec(
+		`INSERT INTO blocks (chunk_id, codec, format_version, plaintext_size, stored_size, container_id, block_offset)
+		 VALUES ($1, 'plain', 1, $2, $3, $4, 0)`,
+		chunkID,
+		int64(len(payload)),
+		int64(len(payload)),
+		containerID,
+	); err != nil {
+		t.Fatalf("insert block row: %v", err)
+	}
+
+	dryResult, err := maintenance.RunGCWithContainersDirResult(true, containersDir)
+	if err != nil {
+		t.Fatalf("dry-run gc: %v", err)
+	}
+	if dryResult.AffectedContainers != 1 {
+		t.Fatalf("dry-run AffectedContainers = %d, want 1", dryResult.AffectedContainers)
+	}
+
+	if _, err := dbconn.Exec(`UPDATE chunk SET live_ref_count = 1 WHERE id = $1`, chunkID); err != nil {
+		t.Fatalf("mutate chunk liveness between runs: %v", err)
+	}
+
+	destructiveResult, err := maintenance.RunGCWithContainersDirResult(false, containersDir)
+	if err != nil {
+		t.Fatalf("destructive gc after mutation: %v", err)
+	}
+	if destructiveResult.AffectedContainers != 0 {
+		t.Fatalf("destructive AffectedContainers = %d, want 0 after liveness mutation", destructiveResult.AffectedContainers)
+	}
+
+	if _, err := os.Stat(containerPath); err != nil {
+		t.Fatalf("expected container file to remain after liveness mutation, stat err=%v", err)
+	}
+
+	var remaining int
+	if err := dbconn.QueryRow(`SELECT COUNT(*) FROM container WHERE id = $1`, containerID).Scan(&remaining); err != nil {
+		t.Fatalf("count container rows after destructive gc: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("expected metadata row to remain after liveness mutation, got %d", remaining)
+	}
+}
+
 // TestRunGCDeletesMetadataWhenContainerFileIsMissing verifies that destructive GC
 // still deletes the container metadata row when the physical container file is already
 // missing on disk. The run should remain successful and report the container as reclaimed.
